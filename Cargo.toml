@@ -1,0 +1,12 @@
+[package]
+name = "vector-field-explorer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "persistence", "wayland", "x11", "accesskit", "system_fonts"] }
+meval = "0.2"
+glam = "0.30"
+colorous = "1"
+image = "0.25"
+rfd = "0.15"
