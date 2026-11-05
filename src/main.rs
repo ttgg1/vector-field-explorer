@@ -1,4 +1,5 @@
 mod app;
+pub mod colormap;
 pub mod domain;
 mod field;
 pub mod presets;
