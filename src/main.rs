@@ -1,4 +1,5 @@
 mod app;
+mod field;
 mod ui;
 
 use app::VfApp;
