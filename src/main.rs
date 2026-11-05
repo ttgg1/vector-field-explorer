@@ -1,5 +1,7 @@
 mod app;
+pub mod domain;
 mod field;
+pub mod presets;
 mod ui;
 
 use app::VfApp;
