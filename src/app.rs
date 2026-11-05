@@ -82,10 +82,42 @@ pub struct VfApp {
     pub mode3d: bool,
     pub controls: Controls,
     pub status: StatusBarState,
+    pub presets: ui::presets::PresetPanel,
+    pub camera: render::Camera,
+    pub camera: render::Camera,
+    pub presets: ui::presets::PresetPanel,
+    pub formula: String,
+    /// false = 2D mode, true = 3D mode.
+    pub mode3d: bool,
+    pub controls: Controls,
+    pub status: StatusBarState,
 }
 
 impl VfApp {
     pub fn new() -> Self {
+        let mut app = Self {
+            formula: "sin(x) * cos(y)".to_owned(),
+            mode3d: false,
+            controls: Controls::default(),
+            status: StatusBarState {
+                parse_message: "OK".to_owned(),
+                instance_count: 0,
+            },
+            presets: ui::presets::PresetPanel::new(),
+            camera: render::Camera::default(),
+        };
+        app
+            formula: "sin(x) * cos(y)".to_owned(),
+            mode3d: false,
+            controls: Controls::default(),
+            status: StatusBarState {
+                parse_message: "OK".to_owned(),
+                instance_count: 0,
+            },
+            presets: ui::presets::PresetPanel::new(),
+        };
+        app
+
         Self {
             formula: "sin(x) * cos(y)".to_owned(),
             mode3d: false,
@@ -128,6 +160,34 @@ impl eframe::App for VfApp {
             .max_size(480.0)
             .show(ui, |ui| {
                 ui::sidebar::show(ui, &mut self.controls);
+        // Export button
+        if ui.button("Export PNG").clicked() {
+            let width = 800;
+            let height = 600;
+            let frame: Vec<u8> = vec![0; (width * height * 4) as usize];
+            if let Err(e) = crate::export::save_png(&frame, width, height, "screenshot.png") {
+                eprintln!("Export failed: {:?}", e);
+            }
+        }
+    });
+
+        // Presets panel
+        egui::Panel::right("presets")
+            .resizable(true)
+            .min_size(200.0)
+            .max_size(400.0)
+            .show(ui, |ui| {
+                self.presets.show(ui, &mut self.camera);
+            });
+        if ui.button("Export PNG").clicked() {
+            // Dummy frame data for demo; in real app would capture GPU output.
+            let width = 800;
+            let height = 600;
+            let frame: Vec<u8> = vec![0; (width * height * 4) as usize];
+            if let Err(e) = crate::export::save_png(&frame, width, height, "screenshot.png") {
+                eprintln!("Export failed: {:?}", e);
+            }
+        }
             });
 
         // Central viewport placeholder (painter rect; wgpu callback arrives later).
