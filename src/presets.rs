@@ -12,10 +12,12 @@ pub struct Preset {
     pub dimension: usize,
 }
 
-/// Source at (-0.5, 0.1) and sink at (0.5, -0.1): flow leaves the first
-/// point and converges on the second.
+/// Source at (-0.5, 0.1) and sink at (+0.5, 0.1): flow leaves the first
+/// point and converges on the second. Both terms are radial outflow
+/// forms, each with the same center point in numerator and denominator;
+/// the sink term is negated so flow points into it.
 const SOURCE_AND_SINK: &str = "((x+0.5)/((x+0.5)^2+(y-0.1)^2+0.05) - (x-0.5)/((x-0.5)^2+(y-0.1)^2+0.05),\
- (y-0.1)/((x+0.5)^2+(y-0.1)^2+0.05) - (y+0.1)/((x-0.5)^2+(y-0.1)^2+0.05))";
+ (y-0.1)/((x+0.5)^2+(y-0.1)^2+0.05) - (y-0.1)/((x-0.5)^2+(y-0.1)^2+0.05))";
 
 /// Dipole: source at (0.5, 0.1) minus the mirrored charge at (-0.5, 0.1).
 const DIPOLE: &str = "((x-0.5)/((x-0.5)^2+(y-0.1)^2+0.05) - (x+0.5)/((x+0.5)^2+(y-0.1)^2+0.05),\
