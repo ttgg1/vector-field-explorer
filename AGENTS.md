@@ -11,8 +11,8 @@ colormaps. Vision spec: `docs/superpowers/specs/2026-11-05-vector-field-explorer
 
 | Plan | Scope | Status |
 |------|-------|--------|
-| `docs/superpowers/plans/2026-11-05-preset-persistence.md` | Camera presets: `export::Preset` serde, save/load/delete to `presets.json`, sidebar Preset panel, app data-dir config | **COMPLETE** (Tasks 1–3; commits `037825f`, `40f98f4`, `87c4e23`, `2dcb1a6` on `feature/preset-persistence`) |
-| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T4 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps). **T5–T14 remain** (sampling, OrbitCamera, GPU renderer, UI wiring, streamlines, particles, 3D seeding, style panel, screenshot, README/cleanup) |
+| `docs/superpowers/plans/2026-11-05-preset-persistence.md` | Camera presets: `export::Preset` serde, save/load/delete to `presets.json`, sidebar Preset panel, app data-dir config | **COMPLETE** (Tasks 1–3; commits `037825f`, `40f98f4`, `87c4e23`, `2dcb1a6` on `feature/preset-persistence`; final review pass done → fix commit `331d72e`, no re-review needed per skill). Ruled behaviors: duplicate-name save replaces, corrupt `presets.json` fails fast with io::Error; RGBA (not BGRA) PNG contract pinned by test |
+| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T5 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`). **T6 in progress** (`src/camera.rs` OrbitCamera RED stage written; tests+impl to follow). **T7–T14 remain** (GPU renderer+shaders.wgsl, UI wiring incl. rebuilding the `Controls` struct — check `task-1-brief.md` for the original shape, streamlines, particles, 3D seeding, style panel, screenshot, README/cleanup) |
 
 Ledgers (git-ignored SDD workspaces, authoritative progress record):
 - `.superpowers/sdd/2026-11-05-preset-persistence/progress.md`
@@ -25,8 +25,10 @@ Module map (branch state may lag; trust `git log` + ledger for what's merged):
 `src/field.rs` (parse/eval via meval), `src/domain.rs` (grid), `src/colormap.rs`
 (Viridis/Turbo/Mono via colorous), `src/presets.rs` (field-preset table — note:
 a *different* `Preset` type than `export::Preset`, which is the camera preset),
+`src/sampling.rs` (`sample_field`, `ArrowData`, `ViewOptions`, `magnitude_range`),
 `src/export.rs` (PNG/presets), `src/i18n.rs` (locale JSONs in `data/locales/`),
-`src/render.rs` (2D pan/zoom `Camera`), `src/ui/presets.rs` (PresetPanel).
+`src/render.rs` (2D pan/zoom `Camera`), `src/camera.rs` (3D `OrbitCamera`),
+`src/ui/presets.rs` (PresetPanel).
 
 ## Conventions (mandatory)
 
@@ -38,6 +40,8 @@ a *different* `Preset` type than `export::Preset`, which is the camera preset),
   never in memory or todos alone.
 - Isolated work: feature branch (`feature/<topic>`) or git worktree; never on `main`.
 - Resolution ledgering (`Ruling: <decision> — <why>` in the ledger) is mandatory.
+- CI (`.github/workflows/ci.yml`, Rust-based) gates on `cargo clippy --all-targets -- -D warnings`,
+  `cargo test --all-targets`, `cargo build --all-targets` — keep code clippy-clean.
 
 ## Egui / Rust API notes (learned the hard way)
 
