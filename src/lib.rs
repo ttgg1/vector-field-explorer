@@ -10,6 +10,7 @@ pub mod render;
 pub mod renderer;
 pub mod sampling;
 pub mod ui;
+pub mod viewmodel;
 
 // Re-export key types for tests and external use
 pub use app::VfApp;

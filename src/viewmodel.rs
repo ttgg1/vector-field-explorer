@@ -1,0 +1,538 @@
+//! The viewmodel seam: the app's whole visible state and the pure snapshot
+//! builder that turns it into the GPU scene.
+//!
+//! Spec ruling: exactly ONE new seam — pure functions state→SceneGPU and
+//! input→camera actions, so the UI layer stays thin and the wiring logic is
+//! testable without a window. No GPU types beyond the plain `SceneGPU`
+//! instance layouts.
+
+use super::camera::OrbitCamera;
+use super::colormap::Colormap;
+use super::domain::Domain;
+use super::field::FieldExpr;
+use super::renderer::{ArrowInstanceGPU, SceneGPU};
+use super::sampling::{ArrowData, ViewOptions, sample_field};
+
+use std::sync::Arc;
+
+use glam::{UVec3, Vec3};
+
+/// Number of samples along one axis of a 2D grid.
+pub const DEFAULT_DENSITY_2D: u32 = 24;
+/// Number of samples along one axis of the default 3D grid.
+pub const DEFAULT_DENSITY_3D: u32 = 16;
+/// Density the sidebar clamps the 2D grid to.
+pub const MAX_DENSITY_2D: u32 = 200;
+/// Density the sidebar clamps the 3D grid to.
+pub const MAX_DENSITY_3D: u32 = 40;
+/// The smallest density the sidebar offers.
+pub const MIN_DENSITY: u32 = 4;
+/// The 2D plane is the domain this much wider, so the field fills the window.
+pub const PLANE_MARGIN: f32 = 1.35;
+/// Bounds of the arrow-length slider.
+pub const MIN_ARROW_SCALE: f32 = 0.1;
+pub const MAX_ARROW_SCALE: f32 = 4.0;
+/// Bounds of the particle and streamline speed slider.
+pub const MIN_SPEED: f32 = 0.1;
+pub const MAX_SPEED: f32 = 3.0;
+
+/// The starting field for each mode: the Pump preset (2D) and the 3D radial
+/// preset, so a fresh app shows something immediately.
+pub const FORMULA_2D: &str = "(x, y)";
+pub const FORMULA_3D: &str = "(x, y, z)";
+
+/// The state the user can touch: what field, how dense, how coloured, how
+/// projected, from where.
+pub struct State {
+    pub mode_3d: bool,
+    pub formula: String,
+    pub field: FieldExpr,
+    pub parse_error: String,
+    pub density: u32,
+    pub domain: Domain,
+    pub arrow_scale: f32,
+    pub normalize: bool,
+    pub colormap: Colormap,
+    pub auto_fit: bool,
+    pub color_min: f32,
+    pub color_max: f32,
+    pub arrows: bool,
+    pub streamlines: bool,
+    pub particles: bool,
+    pub speed: f32,
+    pub dirty: bool,
+}
+
+impl State {
+    /// Flag the state as needing a fresh scene, and report that it did.
+    pub fn mark_dirty(self: &mut State) -> bool {
+        self.dirty = true;
+        true
+    }
+
+    /// Sampling runs three-dimensional only when the mode is 3D and the
+    /// field actually carries three components.
+    pub fn is_3d(self: &State) -> bool {
+        self.mode_3d && self.field.dimension == 3
+    }
+
+    /// A fresh state for a 2D or 3D field at the defaults.
+    pub fn new(mode_3d: bool) -> State {
+        let formula = if mode_3d { FORMULA_3D } else { FORMULA_2D };
+        let field = FieldExpr::parse(formula).expect("default formula must parse");
+        State {
+            mode_3d,
+            formula: formula.to_string(),
+            field,
+            parse_error: String::new(),
+            density: if mode_3d { DEFAULT_DENSITY_3D } else { DEFAULT_DENSITY_2D },
+            domain: Domain::default(),
+            arrow_scale: 1.0,
+            normalize: false,
+            colormap: Colormap::Viridis,
+            auto_fit: true,
+            color_min: 0.0,
+            color_max: 1.0,
+            arrows: true,
+            streamlines: false,
+            particles: false,
+            speed: 1.0,
+            dirty: true,
+        }
+    }
+
+    /// The formula the field bar holds. Re-parsing it marks the scene dirty
+    /// when the field actually changed; a formula that does not parse is
+    /// reported in [`parse_error`] and leaves [`field`] at the last one that
+    /// parsed, so the viewport keeps showing the previous field.
+    pub fn set_formula(self: &mut State, formula: String) -> bool {
+        if self.formula == formula {
+            return false;
+        }
+        let parsed = FieldExpr::parse(formula.as_str());
+        self.formula = formula;
+        match parsed {
+            Ok(field) => {
+                self.field = field;
+                self.parse_error = String::new();
+                self.mark_dirty()
+            }
+            Err(error) => {
+                self.parse_error = error.to_string();
+                self.mark_dirty()
+            }
+        }
+    }
+
+    /// The projection: an orthographic front view for 2D, the orbiting
+    /// perspective camera for 3D.
+    pub fn set_mode(self: &mut State, mode_3d: bool) -> bool {
+        if self.mode_3d == mode_3d {
+            return false;
+        }
+        self.mode_3d = mode_3d;
+        self.mark_dirty()
+    }
+
+    /// Samples per axis, clamped to what this mode can afford.
+    pub fn set_density(self: &mut State, density: u32) -> bool {
+        let max = if self.mode_3d { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
+        let density = density.clamp(MIN_DENSITY, max);
+        if self.density == density {
+            return false;
+        }
+        self.density = density;
+        self.mark_dirty()
+    }
+
+    /// The domain to explore, with the corners normalised so that min is
+    /// actually the minimum: dragging the sliders past each other swaps them
+    /// rather than producing an empty domain.
+    pub fn set_domain(self: &mut State, min: Vec3, max: Vec3) -> bool {
+        let domain = domain_between(min, max);
+        if self.domain == domain {
+            return false;
+        }
+        self.domain = domain;
+        self.mark_dirty()
+    }
+
+    /// How long to draw arrows, as a multiple of the grid spacing.
+    pub fn set_arrow_scale(self: &mut State, scale: f32) -> bool {
+        let scale = scale.clamp(MIN_ARROW_SCALE, MAX_ARROW_SCALE);
+        if self.arrow_scale == scale {
+            return false;
+        }
+        self.arrow_scale = scale;
+        self.mark_dirty()
+    }
+
+    /// Draw every arrow the same length, keeping only its direction.
+    pub fn set_normalize(self: &mut State, normalize: bool) -> bool {
+        if self.normalize == normalize {
+            return false;
+        }
+        self.normalize = normalize;
+        self.mark_dirty()
+    }
+
+    /// The palette that maps magnitude to colour.
+    pub fn set_colormap(self: &mut State, colormap: Colormap) -> bool {
+        if self.colormap == colormap {
+            return false;
+        }
+        self.colormap = colormap;
+        self.mark_dirty()
+    }
+
+    /// Whether to colour by the field's own magnitude range, or by one the
+    /// user set.
+    pub fn set_auto_fit(self: &mut State, auto_fit: bool) -> bool {
+        if self.auto_fit == auto_fit {
+            return false;
+        }
+        self.auto_fit = auto_fit;
+        self.mark_dirty()
+    }
+
+    /// A magnitude range the user set, used when [`auto_fit`] is off. The
+    /// bounds are swapped if given the wrong way round.
+    pub fn set_color_range(self: &mut State, min: f32, max: f32) -> bool {
+        let lo = min.min(max);
+        let hi = min.max(max);
+        if self.color_min == lo && self.color_max == hi {
+            return false;
+        }
+        self.color_min = lo;
+        self.color_max = hi;
+        self.mark_dirty()
+    }
+
+    /// The field's arrows.
+    pub fn set_arrows(self: &mut State, arrows: bool) -> bool {
+        if self.arrows == arrows {
+            return false;
+        }
+        self.arrows = arrows;
+        self.mark_dirty()
+    }
+
+    /// Stream tracing, not yet drawn.
+    pub fn set_streamlines(self: &mut State, on: bool) -> bool {
+        if self.streamlines == on {
+            return false;
+        }
+        self.streamlines = on;
+        self.mark_dirty()
+    }
+
+    /// Particle tracing, not yet drawn.
+    pub fn set_particles(self: &mut State, on: bool) -> bool {
+        if self.particles == on {
+            return false;
+        }
+        self.particles = on;
+        self.mark_dirty()
+    }
+
+    /// How fast traces move, a multiple of the grid spacing per second.
+    pub fn set_speed(self: &mut State, speed: f32) -> bool {
+        let speed = speed.clamp(MIN_SPEED, MAX_SPEED);
+        if self.speed == speed {
+            return false;
+        }
+        self.speed = speed;
+        self.mark_dirty()
+    }
+
+    /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
+    /// `n`×`n`×`n` when sampling runs three-dimensional.
+    pub fn grid(self: &State) -> UVec3 {
+        let n = self.density.max(MIN_DENSITY);
+        if self.is_3d() {
+            UVec3::new(n, n, n)
+        } else {
+            UVec3::new(n, n, 1)
+        }
+    }
+
+    /// The colour settings projected onto what the sampler consumes: with
+    /// auto-fit on the range is `None` so the sampler fits the sampled
+    /// magnitudes itself.
+    pub fn view_options(self: &State) -> ViewOptions {
+        ViewOptions {
+            colormap: self.colormap,
+            color_range: if self.auto_fit { None } else { Some((self.color_min, self.color_max)) },
+        }
+    }
+
+    /// Resample the field with this state's grid and colour settings.
+    pub fn sample(self: &State) -> Vec<ArrowData> {
+        sample_field(&self.field, &self.domain, self.grid(), &self.view_options())
+    }
+
+    /// Size of one grid cell along the tightest axis: arrow lengths are
+    /// multiples of this, so a denser grid keeps arrows the same relative
+    /// size instead of piling them up.
+    pub fn spacing(self: &State) -> f32 {
+        let grid = self.grid();
+        let size = self.domain.domain_size();
+        let cell = |extent, n| if n <= 1 { extent } else { extent / (n - 1) as f32 };
+        let tightest = cell(size.x, grid.x).min(cell(size.y, grid.y));
+        if grid.z > 1 {
+            tightest.min(cell(size.z, grid.z))
+        } else {
+            tightest
+        }
+    }
+
+    /// Convert sampled arrows into GPU instances at this state's arrow
+    /// lengths: with `normalize` off, lengths are proportional to magnitude
+    /// and the longest arrow is exactly `arrow_scale` grid cells; with it on
+    /// every arrow is exactly `arrow_scale` cells.
+    pub fn arrow_instances(self: &State, arrows: &[ArrowData]) -> Vec<ArrowInstanceGPU> {
+        let unit = self.arrow_scale * self.spacing();
+        let max_mag = arrows.iter().fold(0.0_f32, |m, a| m.max(a.mag));
+        arrows
+            .iter()
+            .map(|a| {
+                let len = if self.normalize || max_mag <= 0.0 { unit } else { unit * (a.mag / max_mag) };
+                ArrowInstanceGPU {
+                    origin: [a.position.x, a.position.y, a.position.z, 1.0],
+                    dir_len: [a.dir.x, a.dir.y, a.dir.z, len],
+                    color: [
+                        a.color[0] as f32 / 255.0,
+                        a.color[1] as f32 / 255.0,
+                        a.color[2] as f32 / 255.0,
+                        1.0,
+                    ],
+                }
+            })
+            .collect()
+    }
+
+    /// The whole GPU scene for this state: arrows only — streamline and
+    /// particle tasks add `lines` and `dots` later. Pure: no GPU resources
+    /// touched, so the UI layer just stores the result.
+    pub fn snapshot(self: &State) -> SceneGPU {
+        let arrows = if self.arrows { self.arrow_instances(&self.sample()) } else { Vec::new() };
+        SceneGPU {
+            arrows: Arc::new(arrows),
+            lines: Arc::new(Vec::new()),
+            dots: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Rebuild the scene only when the state has been marked dirty since the
+    /// last rebuild: `Some` means the caller must replace its scene, `None`
+    /// means the last snapshot is still current.
+    pub fn snapshot_if_dirty(self: &mut State) -> Option<SceneGPU> {
+        if !self.dirty {
+            return None;
+        }
+        self.dirty = false;
+        Some(self.snapshot())
+    }
+}
+
+/// The axis-aligned box between two corners, swapping per axis so `min`
+/// really is the minimum (brief Step 2: "swap if violated").
+pub fn domain_between(min: Vec3, max: Vec3) -> Domain {
+    Domain::new(
+        Vec3::new(min.x.min(max.x), min.y.min(max.y), min.z.min(max.z)),
+        Vec3::new(min.x.max(max.x), min.y.max(max.y), min.z.max(max.z)),
+    )
+}
+
+/// Pure camera action for an input event: a left-drag delta `(dx, dy)` orbits
+/// in 3D mode only (2D keeps its fixed front view), a scroll `zoom` factor
+/// zooms in both modes (the camera clamps it). Returns the new camera.
+pub fn apply_camera_input(camera: OrbitCamera, mode_3d: bool, dx: f32, dy: f32, zoom: f32) -> OrbitCamera {
+    let mut camera = camera;
+    if mode_3d {
+        camera.orbit(dx, dy);
+    }
+    camera.zoom(zoom);
+    camera
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::camera::OrbitCamera;
+    use crate::colormap::Colormap;
+    use glam::Vec3;
+
+    #[test]
+    fn new_state_starts_at_default_density() {
+        let s2 = State::new(false);
+        assert_eq!(s2.density, DEFAULT_DENSITY_2D);
+        assert_eq!(s2.field.dimension, 2);
+        assert_eq!(s2.formula, FORMULA_2D);
+        assert_eq!(s2.parse_error, "");
+        assert!(s2.dirty, "a fresh state must ask for a scene");
+        let s3 = State::new(true);
+        assert_eq!(s3.density, DEFAULT_DENSITY_3D);
+        assert_eq!(s3.field.dimension, 3);
+    }
+
+    #[test]
+    fn domain_extrema_swap_makes_valid_box() {
+        let low = Vec3::new(1.0, -5.0, 3.0);
+        let high = Vec3::new(-2.0, 7.0, 0.0);
+        let d = domain_between(low, high);
+        assert_eq!(d.min, Vec3::new(-2.0, -5.0, 0.0));
+        assert_eq!(d.max, Vec3::new(1.0, 7.0, 3.0));
+        let size = d.domain_size();
+        assert!(size.x > 0.0 && size.y > 0.0 && size.z > 0.0, "swapped box must not be empty");
+        let mut s = State::new(false);
+        let changed = s.set_domain(low, high);
+        assert!(changed, "domain actually moved");
+        assert_eq!(s.domain.min, d.min);
+    }
+
+    #[test]
+    fn density_clamped_per_mode() {
+        let mut s2 = State::new(false);
+        assert!(s2.set_density(2), "below floor clamps up");
+        assert_eq!(s2.density, MIN_DENSITY);
+        assert!(s2.set_density(999), "above ceiling clamps down");
+        assert_eq!(s2.density, MAX_DENSITY_2D);
+        assert!(!s2.set_density(1000), "already at the cap");
+        let mut s3 = State::new(true);
+        assert!(s3.set_density(1), "below floor clamps up");
+        assert_eq!(s3.density, MIN_DENSITY);
+        assert!(s3.set_density(999), "above ceiling clamps down");
+        assert_eq!(s3.density, MAX_DENSITY_3D);
+        assert!(!s3.set_density(40), "already at the cap");
+    }
+
+    #[test]
+    fn garbage_formula_keeps_field_and_reports_error() {
+        let mut s = State::new(false);
+        let before = s.field.clone();
+        let probe = Vec3::new(0.5, -0.25, 0.0);
+        assert!(s.set_formula(")(".to_string()), "an invalid edit still marks the state dirty");
+        assert!(!s.parse_error.is_empty(), "the parse failure is reported");
+        assert!(
+            s.field.eval3(probe) == before.eval3(probe),
+            "the last good field must stay in place"
+        );
+        assert!(s.dirty);
+    }
+
+    #[test]
+    fn valid_formula_replaces_field_and_clears_error() {
+        let mut s = State::new(false);
+        assert!(s.set_formula(")(".to_string()), "invalid edit reports…");
+        assert!(!s.parse_error.is_empty(), "…and sets an error");
+        assert!(s.set_formula("(-y, x)".to_string()), "a valid replacement applies");
+        assert_eq!(s.parse_error, "", "the error clears");
+        assert_eq!(s.field.dimension, 2);
+        assert_eq!(s.field.eval3(Vec3::new(2.0, 1.0, 0.0)), Some(Vec3::new(-1.0, 2.0, 0.0)));
+        assert!(s.dirty, "a valid replacement marks the scene dirty");
+    }
+
+    #[test]
+    fn unchanged_setters_report_false_and_stay_clean() {
+        let mut s = State::new(false);
+        assert!(s.snapshot_if_dirty().is_some(), "fresh state snapshots once");
+        assert!(!s.dirty, "rebuild consumes the dirty flag");
+        assert!(!s.set_colormap(s.colormap));
+        assert!(!s.set_density(s.density));
+        assert!(!s.set_formula(s.formula.clone()), "same text is not a change");
+        assert!(!s.set_domain(s.domain.min, s.domain.max));
+        assert!(!s.set_arrow_scale(s.arrow_scale));
+        assert!(!s.set_normalize(s.normalize));
+        assert!(!s.set_mode(s.mode_3d));
+        assert!(!s.dirty, "a failed setter must not re-dirty the state");
+        assert!(s.snapshot_if_dirty().is_none(), "no rebuild when nothing changed");
+    }
+
+    #[test]
+    fn snapshot_rebuilds_only_when_dirty() {
+        let mut s = State::new(false);
+        assert!(s.snapshot_if_dirty().is_some());
+        assert!(s.set_colormap(Colormap::Turbo), "a real change marks dirty");
+        assert!(s.snapshot_if_dirty().is_some(), "a real change rebuilds once");
+        assert!(s.snapshot_if_dirty().is_none(), "and only once");
+    }
+
+    #[test]
+    fn pump_snapshot_has_the_whole_grid() {
+        let s = State::new(false);
+        let arrows = s.sample();
+        assert_eq!(arrows.len(), 576, "24x24 pump grid: 576 sampled arrows");
+        let scene = s.snapshot();
+        assert_eq!(scene.arrows.len(), 576, "the scene carries the whole grid");
+        assert!(scene.lines.is_empty(), "streamlines join in Task 9");
+        assert!(scene.dots.is_empty(), "particles join in Task 10");
+    }
+
+    #[test]
+    fn normalized_arrows_share_one_length() {
+        let mut s = State::new(false);
+        assert!(s.set_normalize(true), "normalize toggle marks dirty");
+        let inst = s.arrow_instances(&s.sample());
+        let expected = s.arrow_scale * s.spacing();
+        assert!(expected > 0.0);
+        for a in &inst {
+            assert!((a.dir_len[3] - expected).abs() < 1e-5, "every normalized arrow is arrow_scale cells long");
+        }
+    }
+
+    #[test]
+    fn speaking_arrows_are_magnitude_proportional() {
+        let s = State::new(false);
+        let arrows = s.sample();
+        let inst = s.arrow_instances(&arrows);
+        let lengths: Vec<f32> = inst.iter().map(|a| a.dir_len[3]).collect();
+        let expected_max = s.arrow_scale * s.spacing();
+        let max_len = lengths.iter().fold(0.0_f32, |m, l| m.max(*l));
+        assert!((max_len - expected_max).abs() < 1e-5, "longest arrow is exactly arrow_scale cells");
+        for l in &lengths {
+            assert!(*l <= expected_max + 1e-5, "no arrow exceeds arrow_scale cells");
+        }
+        let by_mag: Vec<(f32, f32)> = arrows
+            .iter()
+            .zip(lengths)
+            .map(|(a, l)| (a.mag, l))
+            .collect();
+        let mut sorted = by_mag.clone();
+        sorted.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        assert!(sorted.len() > 1, "need at least two arrows to compare");
+        for i in 1..sorted.len() {
+            assert!(
+                sorted[i - 1].1 <= sorted[i].1 + 1e-5,
+                "length must follow magnitude (speaking arrows)",
+            );
+        }
+    }
+
+    #[test]
+    fn color_range_follows_auto_fit() {
+        let mut s = State::new(false);
+        let v = s.view_options();
+        assert!(v.color_range.is_none(), "auto-fit lets the sampler fit colors");
+        assert_eq!(v.colormap, Colormap::Viridis);
+        assert!(s.set_auto_fit(false), "auto-fit off marks dirty");
+        assert!(s.set_color_range(2.0, -3.0), "bounds swap and apply");
+        assert_eq!(s.color_min, -3.0);
+        assert_eq!(s.color_max, 2.0);
+        assert_eq!(s.view_options().color_range, Some((-3.0, 2.0)));
+    }
+
+    #[test]
+    fn camera_input_orbits_only_in_3d() {
+        let flat = apply_camera_input(OrbitCamera::default(), false, 0.5, 0.3, 0.5);
+        let home = OrbitCamera::default();
+        assert!((flat.yaw - home.yaw).abs() < 1e-6, "2D mode ignores drag deltas");
+        assert!((flat.pitch - home.pitch).abs() < 1e-6);
+        assert!((flat.distance - 1.6).abs() < 1e-6, "zoom still applies in 2D");
+        let cube = apply_camera_input(OrbitCamera::default(), true, 0.5, 0.3, 1.0);
+        assert!((cube.yaw - (0.8 - 0.5)).abs() < 1e-6, "3D mode orbits by the drag delta");
+        assert!((cube.pitch - (0.9 - 0.3)).abs() < 1e-6);
+        let pulled = apply_camera_input(OrbitCamera::default(), true, 0.0, 0.0, 100.0);
+        assert!((pulled.distance - 20.0).abs() < 1e-6, "zoom clamp stays at 20");
+    }
+}
