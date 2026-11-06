@@ -7,6 +7,7 @@ pub mod field;
 pub mod i18n;
 pub mod presets;
 pub mod render;
+pub mod renderer;
 pub mod sampling;
 pub mod ui;
 

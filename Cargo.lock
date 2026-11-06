@@ -3729,6 +3729,7 @@ dependencies = [
 name = "vector-field-explorer"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "colorous",
  "dirs-next",
  "eframe",
