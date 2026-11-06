@@ -72,25 +72,16 @@ Skill location (scripts + prompt templates):
 templates; `scripts/task-brief`, `scripts/review-package` generate the brief
 and diff-package artifacts; never make a subagent read the whole plan.
 
-**Model policy (user-selected 2026-11-06, updated 2026-11-06): PREFER LOCAL MODELS.**
-Always try an LM Studio local model first for every subagent seat
-(implementer, reviewer, research); fall back to a cloud model only if no
-local model can run the seat (context too small, engine crash, or known
-inadequate judgment for the seat). LM Studio GUI must be running for the
-server (`lms server start` fails without the desktop app); load models
-explicitly with `--context-length 32768` — JIT default loads are 8192 and
-reject OpenCode dispatches.
-- **Implementer subagents: `qwen3.8-27b`** — subagent model id
-  `lmstudio/unsloth/qwen3.8-27b` or `lmstudio/mistralai/devstral-small-2-2512`
-  ("devstral2"; LM Studio local; always pass the model explicitly — subagents
-  never silently inherit the session model). Note `lmstudio/qwen/qwen3.8-27b`
-  is an older loader id; unsloth is the preferred build.
-- Reviewer subagents and the final whole-branch review: prefer the most
-  capable local model if it gives the seat adequate judgment; otherwise a
-  cloud model (e.g. `opencode/nemotron-3.5-super-vl-free`).
-- If an implementer status is BLOCKED/NEEDS_CONTEXT twice, escalate that task
-  to a more capable model (local if possible, else the most capable cloud
-  model) instead of looping.
+**Model policy (user-selected 2026-11-06, supersedes all earlier policies): ONLY
+`qwen3.8-flash-next` from provider `strata`, for ALL subagent seats.**
+Every seat — implementer, task reviewer, scoped re-review, research, and the
+final whole-branch review — uses `strata/coder-iq1_m` ("Qwen3.8-Flash-Next
+(local)"; always pass the model explicitly — subagents never silently inherit
+the session model). No LM Studio seats, no cloud fallbacks (qwen3.8-27b,
+devstral2, nemotron are retired). If a seat needs more judgment, raise the
+*variant* of the same model: `strata/coder-iq1_m#medium` / `#high`
+(available variants: low, medium, high). Escalation for stuck implementers
+(BLOCKED/NEEDS_CONTEXT twice) bumps the variant, not the model.
 
 **Implementer contract (in every dispatch):** work from the task brief file
 only (never the whole plan); TDD when the brief requires tests (RED→GREEN
@@ -103,7 +94,7 @@ summary, full report to `…/task-N-report.md`.
 Dispatch flow per task:
 1. Record BASE (`git rev-parse HEAD`).
 2. `bash scripts/task-brief PLAN_FILE N` → brief path.
-3. Dispatch implementer (local model — unsloth/qwen3.8-27b or devstral2) with:
+3. Dispatch implementer (`strata/coder-iq1_m`) with:
    how the task fits, brief path,
    interfaces/decisions earlier tasks established, ambiguity resolutions,
    report-file path + report contract.
