@@ -6,6 +6,7 @@ pub mod field;
 pub mod i18n;
 pub mod presets;
 pub mod render;
+pub mod sampling;
 pub mod ui;
 
 // Re-export key types for tests and external use
