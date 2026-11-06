@@ -36,6 +36,16 @@ pub fn save_preset<P: AsRef<std::path::Path>>(dir: P, name: &str, cam: &Camera) 
     Ok(())
 }
 
+/// Delete the named preset from the given directory's presets.json.
+/// The update is written back even when the list becomes empty.
+pub fn delete_preset<P: AsRef<std::path::Path>>(dir: P, name: &str) -> io::Result<()> {
+    let mut presets = load_presets(&dir)?;
+    presets.retain(|p| p.name != name);
+    let data = serde_json::to_string_pretty(&presets).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fs::write(dir.as_ref().join("presets.json"), data)?;
+    Ok(())
+}
+
 /// Load all presets from the given directory.
 pub fn load_presets<P: AsRef<std::path::Path>>(dir: P) -> io::Result<Vec<Preset>> {
     let path = dir.as_ref().join("presets.json");
