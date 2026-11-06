@@ -108,7 +108,8 @@ fn vs_arrow(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
     }
 
     let world = inst.origin.xyz + b * local;
-    let nl = clamp(dot(normal, globals.light_dir.xyz) * 0.5 + 0.5, 0.0, 1.0);
+    // b is orthonormal, so b * normal is the world-space normal (no inverse-transpose needed).
+    let nl = clamp(dot(b * normal, globals.light_dir.xyz) * 0.5 + 0.5, 0.0, 1.0);
 
     return VertexOut(
         globals.view_proj * vec4<f32>(world, 1.0),
