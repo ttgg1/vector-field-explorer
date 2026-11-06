@@ -103,3 +103,13 @@ Dispatch flow per task:
 New feature modules follow the plans; write tests automatically alongside;
 run `cargo test` (and later `cargo clippy -- -D warnings`) before claiming done.
 All generated code lives under `src/` or `tests/`.
+
+## Agent skills
+
+### Issue tracker
+Issues live as local markdown under `.scratch/<feature-slug>/` — no git
+remote, no gh/glab. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+Single-context: `GLOSSARY.md` at repo root + `docs/adr/`, created lazily by
+`/domain-modeling`. See `docs/agents/domain.md`.
