@@ -4,11 +4,11 @@ use std::io;
 ///
 /// The frame is packed RGBA8 bytes (row-major, as produced by eframe/wgpu
 /// readbacks); channels are written through unchanged.
-pub fn save_png(frame: &Vec<u8>, width: u32, height: u32, path: &str) -> io::Result<()> {
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, frame.clone())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "invalid frame size"))?;
+pub fn save_png(frame: &[u8], width: u32, height: u32, path: &str) -> io::Result<()> {
+    let buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, frame.to_vec())
+        .ok_or_else(|| io::Error::other("invalid frame size"))?;
     buffer.save_with_format(path, image::ImageFormat::Png)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     Ok(())
 }
 
@@ -33,7 +33,7 @@ pub fn save_preset<P: AsRef<std::path::Path>>(dir: P, name: &str, cam: &Camera) 
     let mut presets = load_presets(&dir)?;
     presets.retain(|p| p.name != name);
     presets.push(Preset { name: name.to_string(), position: cam.position, scale: cam.scale });
-    let data = serde_json::to_string_pretty(&presets).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let data = serde_json::to_string_pretty(&presets).map_err(io::Error::other)?;
     fs::create_dir_all(dir.as_ref())?;
     fs::write(dir.as_ref().join("presets.json"), data)?;
     Ok(())
@@ -44,7 +44,7 @@ pub fn save_preset<P: AsRef<std::path::Path>>(dir: P, name: &str, cam: &Camera) 
 pub fn delete_preset<P: AsRef<std::path::Path>>(dir: P, name: &str) -> io::Result<()> {
     let mut presets = load_presets(&dir)?;
     presets.retain(|p| p.name != name);
-    let data = serde_json::to_string_pretty(&presets).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let data = serde_json::to_string_pretty(&presets).map_err(io::Error::other)?;
     fs::create_dir_all(dir.as_ref())?;
     fs::write(dir.as_ref().join("presets.json"), data)?;
     Ok(())
@@ -55,7 +55,7 @@ pub fn load_presets<P: AsRef<std::path::Path>>(dir: P) -> io::Result<Vec<Preset>
     let path = dir.as_ref().join("presets.json");
     if !path.exists() { return Ok(vec![]); }
     let data = fs::read_to_string(path)?;
-    let presets: Vec<Preset> = serde_json::from_str(&data).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let presets: Vec<Preset> = serde_json::from_str(&data).map_err(io::Error::other)?;
     Ok(presets)
 }
 

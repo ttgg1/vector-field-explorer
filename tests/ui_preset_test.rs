@@ -41,7 +41,7 @@ fn test_load_restores_exact_camera_state() {
     assert_eq!(camera.position, [1.0, 2.0]);
     assert_eq!(camera.scale, 3.0);
 
-    assert!(panel.load("missing", &mut camera) == false, "unknown preset leaves camera unchanged");
+    assert!(!panel.load("missing", &mut camera), "unknown preset leaves camera unchanged");
     assert_eq!(camera.position, [1.0, 2.0]);
 }
 

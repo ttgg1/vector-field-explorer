@@ -31,6 +31,12 @@ pub struct PresetPanel {
     new_name: String,
 }
 
+impl Default for PresetPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PresetPanel {
     /// Panel pointed at the default data directory.
     pub fn new() -> Self {
@@ -103,10 +109,10 @@ impl PresetPanel {
                 if ui.button("Load").clicked() {
                     self.load(name, camera);
                 }
-                if ui.button("Delete").clicked() {
-                    if let Err(e) = self.delete(name) {
-                        eprintln!("Preset delete failed: {e:?}");
-                    }
+                if ui.button("Delete").clicked()
+                    && let Err(e) = self.delete(name)
+                {
+                    eprintln!("Preset delete failed: {e:?}");
                 }
             });
         }

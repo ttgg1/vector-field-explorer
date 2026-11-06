@@ -1,4 +1,5 @@
 pub mod app;
+pub mod camera;
 pub mod colormap;
 pub mod domain;
 pub mod export;
