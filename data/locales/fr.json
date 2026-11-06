@@ -1,1 +1,4 @@
-{\n  \"hello\": \"Bonjour\",\n  \"goodbye\": \"Au revoir\"\n}
+{
+  "hello": "Bonjour",
+  "goodbye": "Au revoir"
+}

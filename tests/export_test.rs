@@ -1,6 +1,6 @@
 use std::fs;
 use tempfile::NamedTempFile;
-use crate::export::save_png;
+use vector_field_explorer::export::save_png;
 
 #[test]
 fn test_save_png_creates_file() {

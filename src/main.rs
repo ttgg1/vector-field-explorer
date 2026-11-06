@@ -1,21 +1,10 @@
-mod app;
-pub mod colormap;
-pub mod domain;
-mod field;
-pub mod presets;
-mod ui;
-
-use app::VfApp;
+use vector_field_explorer::VfApp;
 
 fn main() -> eframe::Result {
-    let native_options = eframe::NativeOptions {
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
-
+    let options = eframe::NativeOptions::default();
     eframe::run_native(
         "Vector Field Explorer",
-        native_options,
-        Box::new(|_cc| Ok(Box::new(VfApp::new()))),
+        options,
+        Box::new(|_cc| Ok(Box::new(VfApp::default()))),
     )
 }

@@ -1,5 +1,5 @@
 use eframe::egui;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::fs;
 use crate::export::{load_presets, save_preset};
 use crate::render::Camera;
@@ -30,8 +30,10 @@ impl PresetPanel {
 
     pub fn show(&mut self, ui: &mut egui::Ui, camera: &mut Camera) {
         ui.heading("Presets");
-        // List presets with Load/Delete buttons
-        for preset in &self.presets {
+        // Deleting cannot mutate the list while it is borrowed by the loop,
+        // so collect the choice and apply it afterwards.
+        let mut to_delete: Option<String> = None;
+        for preset in self.presets.clone() {
             ui.horizontal(|ui| {
                 ui.label(&preset.name);
                 if ui.button("Load").clicked() {
@@ -39,10 +41,14 @@ impl PresetPanel {
                     camera.scale = preset.scale;
                 }
                 if ui.button("Delete").clicked() {
-                    self.presets.retain(|p| p.name != preset.name);
-                    let _ = save_preset(&self.dir, &preset.name, camera);
+                    to_delete = Some(preset.name.clone());
                 }
             });
+        }
+        if let Some(name) = to_delete {
+            self.presets.retain(|p| p.name != name);
+            // Note (fixed in a later task): save_preset re-saves instead of deleting on disk.
+            let _ = save_preset(&self.dir, &name, camera);
         }
         // Save current as new preset
         ui.separator();

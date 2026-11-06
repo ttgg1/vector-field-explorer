@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use vector_field_explorer::i18n;
     #[test]
     fn test_locale_loading() {
         // ensure en locale has expected keys

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use vector_field_explorer::{Camera, export};
     use tempfile::tempdir;
 
     #[test]

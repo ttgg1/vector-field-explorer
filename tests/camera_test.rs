@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::render::Camera;
+    use vector_field_explorer::render::Camera;
 
     #[test]
     fn world_to_ndc_basic() {

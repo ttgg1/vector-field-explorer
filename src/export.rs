@@ -1,5 +1,4 @@
 use std::io;
-use image::{ImageBuffer, ImageFormat, ColorType};
 
 /// Save a rendered frame buffer as PNG.
 pub fn save_png(frame: &Vec<u8>, width: u32, height: u32, path: &str) -> io::Result<()> {

@@ -1,5 +1,4 @@
 // Basic rendering utilities and Camera abstraction.
-use std::ops::{Mul, Sub};
 
 /// Simple 2D camera for zoom & pan.
 pub struct Camera {
