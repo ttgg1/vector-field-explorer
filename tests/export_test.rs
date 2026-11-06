@@ -1,6 +1,6 @@
 use std::fs;
 use tempfile::NamedTempFile;
-use vector_field_explorer::export::save_png;
+use vector_field_explorer::export::{delete_preset, save_preset, save_png};
 
 #[test]
 fn test_save_png_creates_file() {
@@ -19,4 +19,34 @@ fn test_save_png_creates_file() {
 
     // check file exists and not empty
     assert!(fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false));
+}
+
+#[test]
+fn test_save_preset_creates_missing_dir() {
+    // review fix: the export API must tolerate a not-yet-existing directory
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join("nested/not-yet-created");
+    let cam = vector_field_explorer::Camera::default();
+    save_preset(&dir, "a", &cam).expect("save_preset must create the missing dir");
+    assert!(dir.join("presets.json").exists());
+}
+
+#[test]
+fn test_delete_preset_creates_missing_dir() {
+    // symmetry with save_preset after the review fix
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join("nested/not-yet-created");
+    delete_preset(&dir, "a").expect("delete_preset must create the missing dir");
+    assert!(dir.join("presets.json").exists());
+}
+
+#[test]
+fn test_save_png_preserves_rgba_byte_order() {
+    // one pure-red pixel in RGBA order; decoded PNG pixel must stay red
+    let frame = vec![255u8, 0, 0, 255];
+    let base = tempfile::tempdir().unwrap();
+    let out = base.path().join("frame.png");
+    save_png(&frame, 1, 1, out.to_str().unwrap()).expect("save_png failed");
+    let img = image::open(&out).unwrap().to_rgba8();
+    assert_eq!(img.get_pixel(0, 0), &image::Rgba([255, 0, 0, 255]));
 }

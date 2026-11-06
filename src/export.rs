@@ -1,8 +1,10 @@
 use std::io;
 
 /// Save a rendered frame buffer as PNG.
+///
+/// The frame is packed RGBA8 bytes (row-major, as produced by eframe/wgpu
+/// readbacks); channels are written through unchanged.
 pub fn save_png(frame: &Vec<u8>, width: u32, height: u32, path: &str) -> io::Result<()> {
-    // Assume frame is BGRA8 packed bytes
     let buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, frame.clone())
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "invalid frame size"))?;
     buffer.save_with_format(path, image::ImageFormat::Png)
@@ -32,6 +34,7 @@ pub fn save_preset<P: AsRef<std::path::Path>>(dir: P, name: &str, cam: &Camera) 
     presets.retain(|p| p.name != name);
     presets.push(Preset { name: name.to_string(), position: cam.position, scale: cam.scale });
     let data = serde_json::to_string_pretty(&presets).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fs::create_dir_all(dir.as_ref())?;
     fs::write(dir.as_ref().join("presets.json"), data)?;
     Ok(())
 }
@@ -42,6 +45,7 @@ pub fn delete_preset<P: AsRef<std::path::Path>>(dir: P, name: &str) -> io::Resul
     let mut presets = load_presets(&dir)?;
     presets.retain(|p| p.name != name);
     let data = serde_json::to_string_pretty(&presets).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fs::create_dir_all(dir.as_ref())?;
     fs::write(dir.as_ref().join("presets.json"), data)?;
     Ok(())
 }

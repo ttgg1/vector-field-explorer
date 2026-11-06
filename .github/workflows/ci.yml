@@ -9,20 +9,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [16, 18]
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-      - run: npm ci
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Lint
-        run: npm run lint
+        run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: npm test -- --ci
-      - name: Build
-        run: npm run build
+        run: cargo test --all-targets
+      - name: Build (debug)
+        run: cargo build --all-targets
