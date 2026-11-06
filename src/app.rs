@@ -1,7 +1,13 @@
 use eframe::egui;
 
 use crate::render::Camera;
-use crate::ui::presets::PresetPanel;
+use crate::ui::presets::{PresetPanel, default_preset_dir};
+
+/// Directory where the app persists camera presets. Kept in one place so the
+/// panel and any export helper always agree (preset-persistence plan Task 3).
+pub fn presets_data_dir() -> std::path::PathBuf {
+    default_preset_dir()
+}
 
 /// Application root state: formula bar, camera viewport, preset manager.
 pub struct VfApp {
@@ -17,7 +23,8 @@ impl VfApp {
             formula: "sin(x) * cos(y)".to_owned(),
             parse_message: "OK".to_owned(),
             camera: Camera::default(),
-            presets: PresetPanel::new(),
+            presets: PresetPanel::new_with_dir(presets_data_dir())
+                .unwrap_or_else(|_| PresetPanel::new()),
         }
     }
 }
