@@ -81,7 +81,9 @@ fn integrate(field: &FieldExpr, start: Vec3, domain: &Domain, budget: usize, ste
 
 /// Trace a streamline from `start`. Returns points along the line (possibly
 /// just `[start]`), empty when the seed is outside the domain or the budget is
-/// zero.
+/// zero. With `both_directions` the result is one continuous ordered path
+/// running farthest-upstream → seed → farthest-downstream: the seed is
+/// counted exactly once, so no zero-length segment can reach the renderer.
 pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineOpts) -> Vec<Vec3> {
     let cap = opts.max_len.min(MAX_STREAMLINE_POINTS);
     if cap == 0 || !inside(domain, start) {
@@ -96,13 +98,15 @@ pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineO
         return integrate(field, start, domain, cap, step_scale, 1.0);
     }
     // Spend the budget half upstream (rounded up), the rest downstream; the
-    // seed itself is counted once, at the seam.
+    // seed itself is counted once, at the seam. The upstream walk runs
+    // seed-outward, so reverse everything past the seed to lay the polyline
+    // farthest-backward first, then append the downstream walk (which starts
+    // at the seed).
     let back = integrate(field, start, domain, cap.div_ceil(2), step_scale, -1.0);
+    let forward = integrate(field, start, domain, cap + 1 - back.len(), step_scale, 1.0);
     let mut line: Vec<Vec3> = Vec::new();
-    for p in back[..back.len() - 1].iter().rev() {
-        line.push(*p);
-    }
-    line.extend(integrate(field, start, domain, cap + 1 - back.len(), step_scale, 1.0));
+    line.extend(back[1..].iter().rev().copied());
+    line.extend(forward);
     line
 }
 
@@ -223,6 +227,34 @@ mod tests {
         for p in &line {
             let r = Vec2::new(p.x, p.y).length();
             assert!((0.45..=0.55).contains(&r), "radius conserved near the seed's 0.5");
+        }
+    }
+
+    #[test]
+    fn vortex_stays_bounded() {
+        // Binding plan-task-9 test: vortex (-y, x, 0) on [-1,1]², traced from
+        // (1, 0) with `both_directions`, keeps every point of the polyline at
+        // |pos| <= 1.3 and spends at least 50 points. Plus sequence validity:
+        // no consecutive duplicates (a zero-length segment would normalise a
+        // zero vector in the shader) and every consecutive chord turns CCW —
+        // one continuous farthest-backward -> seed -> farthest-forward ribbon,
+        // not a reversed leg with a seed pasted in the middle.
+        let f = FieldExpr::parse("(-y, x)").expect("vortex field parses");
+        let d = Domain::new(Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 0.0));
+        let opts = StreamlineOpts { max_len: 200, step_scale: 0.05, both_directions: true };
+        let line = trace(&f, Vec3::new(1.0, 0.0, 0.0), &d, &opts);
+        assert!(line.len() >= 50, "both directions spend the budget: >= 50 points");
+        for p in &line {
+            assert!(p.is_finite(), "no NaN anywhere on the polyline");
+            assert!(p.length() <= 1.3, "every point bounded: the circle at radius 1 stays well inside 1.3");
+        }
+        for i in 1..line.len() {
+            let chord = line[i] - line[i - 1];
+            assert!(chord.length() > 1e-3, "no duplicate points: every segment is real (steps are ~0.05)");
+            if i > 1 {
+                let prev = line[i - 1] - line[i - 2];
+                assert!(prev.cross(chord).z > 1e-6, "ordered path: consecutive chords keep turning CCW");
+            }
         }
     }
 
