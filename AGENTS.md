@@ -42,7 +42,10 @@ a *different* `Preset` type than `export::Preset`, which is the camera preset),
 - Record progress in the plan's SDD ledger (`task-start` / `task-done` scripts
   under `~/.cache/opencode/npm/git-superpowers-*/…/skills/{executing-plans,subagent-driven-development}/scripts/`),
   never in memory or todos alone.
-- Isolated work: feature branch (`feature/<topic>`) or git worktree; never on `main`.
+- Isolated work (trunk-based): one feature branch (`feature/<topic>`) or git worktree per
+  feature; develop the whole feature on that branch, then merge it into `main` once the
+  feature is reviewed (whole-branch review clean). `main` is the trunk: only reviewed,
+  merged work lands there.
 - Resolution ledgering (`Ruling: <decision> — <why>` in the ledger) is mandatory.
 - CI (`.github/workflows/ci.yml`, Rust-based) gates on `cargo clippy --all-targets -- -D warnings`,
   `cargo test --all-targets`, `cargo build --all-targets` — keep code clippy-clean.
@@ -150,8 +153,8 @@ Workflow this repo uses, in order:
    completion → `requesting-code-review`; consume feedback → `receiving-code-review`
    (verify, don't blind-implement). PR body → `pr` (mattpocock).
 6. **Finish** → `verification-before-completion` before any "done" claim;
-   integrate via `finishing-a-development-branch`; isolated workspace via
-   `using-git-worktrees` (feature branch/worktree, never `main`).
+   integrate via `finishing-a-development-branch` (trunk-based: reviewed feature branch
+   merged → `main`); isolated workspace via `using-git-worktrees` (one branch per feature).
 7. **Docs/meta** → `writing-for-agents` when editing AGENTS.md/skills;
    `domain-modeling` for GLOSSARY.md + ADRs; `research` for primary-source facts;
    `find-skills` to discover more skills.
