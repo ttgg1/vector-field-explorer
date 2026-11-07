@@ -299,6 +299,15 @@ impl State {
         }
     }
 
+    /// The colour range the painted field geometry shares: the state's explicit
+    /// bounds when auto-fit is off, otherwise the magnitudes of `sampled`. The
+    /// streamlines built from `sampled` and the app's live dot cloud both ask
+    /// for this, so dots always ramp the same colours as the arrows and
+    /// streamline segments next to them.
+    pub fn color_range(self: &State, sampled: &[ArrowData]) -> (f32, f32) {
+        self.view_options().color_range.unwrap_or_else(|| magnitude_range(sampled))
+    }
+
     /// Convert sampled arrows into GPU instances at this state's arrow
     /// lengths: with `normalize` off, lengths are proportional to magnitude
     /// and the longest arrow is exactly `arrow_scale` grid cells; with it on
@@ -351,7 +360,7 @@ impl State {
             step_scale: 0.5 * self.spacing(),
             both_directions: true,
         };
-        let (lo, hi) = self.view_options().color_range.unwrap_or_else(|| magnitude_range(sampled));
+        let (lo, hi) = self.color_range(sampled);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for seed in seeds {
             let path = trace(&self.field, seed, &self.domain, &opts);

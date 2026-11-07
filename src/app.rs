@@ -10,6 +10,19 @@ use crate::ui::presets::{PresetPanel, default_preset_dir};
 use crate::ui::sidebar::Controls;
 use crate::viewmodel::{State, apply_camera_input};
 
+// Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
+// the app owns the cloud and decides when to run these pure functions.
+use crate::particles::{
+    Particles,
+    DOT_SPACING_FRACTION,
+    advect,
+    clear,
+    dot_instances,
+    spawn,
+    target_count,
+    count as particle_count,
+};
+
 /// Directory where the app persists camera presets. Kept in one place so the
 /// panel and any export helper always agree (preset-persistence plan Task 3).
 pub fn presets_data_dir() -> std::path::PathBuf {
@@ -44,6 +57,11 @@ pub struct VfApp {
     scene: SceneGPU,
     renderer_ready: bool,
     streamline_count: usize,
+    /// The advected cloud behind the "Particles" toggle (ticket 05): 3D-view
+    /// only; its per-frame dots ramp with `dots_range`, the same magnitude
+    /// range the arrows were coloured with at the last scene rebuild.
+    particles: Particles,
+    dots_range: (f32, f32),
 }
 
 impl VfApp {
@@ -69,6 +87,8 @@ impl VfApp {
             },
             renderer_ready: false,
             streamline_count: 0,
+            particles: Particles::default(),
+            dots_range: (0.0, 1.0),
         }
     }
 }
@@ -135,11 +155,44 @@ impl eframe::App for VfApp {
         if let Some(fresh) = self.state.snapshot_if_dirty() {
             self.scene.arrows = fresh.arrows;
             self.scene.dots = fresh.dots;
+            // A rebuild refreshes the magnitude range the per-frame dots ramp
+            // with (one extra sample pass on rebuild frames only), so dots
+            // keep matching the arrows' colours.
+            self.dots_range = self.state.color_range(&self.state.sample());
             let fresh_lines = Arc::unwrap_or_clone(fresh.lines);
             self.streamline_count = fresh_lines.len();
             let mut backdrop = reference_lines();
             backdrop.extend(fresh_lines);
             self.scene.lines = Arc::new(backdrop);
+        }
+
+        // Particle cloud: while the toggle is on (3D view only — the 2D
+        // camera has no depth for the dots to sit in), keep the cloud alive,
+        // advect it by the frame's stable dt and rebuild the dot instances so
+        // they ride the same color_range as the arrows. Placed after the
+        // dirty-rebuild block so this frame's dots already see a fresh
+        // density/speed, and before the status bar so its count includes them.
+        if self.state.particles && self.state.mode_3d {
+            if particle_count(&self.particles) == 0 {
+                spawn(&mut self.particles, &self.state.domain, target_count(self.state.density));
+            }
+            let dt = ui.ctx().input(|i| i.stable_dt).max(0.0);
+            advect(&mut self.particles, &self.state.field, &self.state.domain, dt, self.state.speed);
+            self.scene.dots = Arc::new(
+                dot_instances(
+                    &self.particles,
+                    &self.state.field,
+                    &self.state.domain,
+                    self.state.colormap,
+                    self.dots_range,
+                    DOT_SPACING_FRACTION * self.state.spacing(),
+                ),
+            );
+        } else if particle_count(&self.particles) > 0 {
+            // Toggle off (or the 2D view): drop the cloud so switching back
+            // spawns fresh at the fixed seed; the dots were already emptied
+            // because the toggle marks the state dirty.
+            clear(&mut self.particles);
         }
 
         // Bottom status bar: the parse state (red when bad) plus how many

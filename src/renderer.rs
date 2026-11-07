@@ -1,6 +1,6 @@
 //! Instanced wgpu renderer for arrows and lines (main plan Task 7).
 //!
-//! Two pipelines (arrow + line) share one bind-group layout holding the
+//! Three pipelines (arrow + line + dot) share one bind-group layout holding the
 //! `Globals` uniform and the per-mode instance storage array. The `DrawState`
 //! lives in the egui_wgpu callback_resources TypeMap (installed once by the
 //! app); each frame a `DrawCallback` uploads the current `SceneGPU` and draws.
@@ -72,11 +72,14 @@ pub struct DrawState {
     bind_layout: wgpu::BindGroupLayout,
     arrow_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    dot_pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
     arrow_buf: wgpu::Buffer,
     line_buf: wgpu::Buffer,
+    dot_buf: wgpu::Buffer,
     arrow_bind: wgpu::BindGroup,
     line_bind: wgpu::BindGroup,
+    dot_bind: wgpu::BindGroup,
     light_dir: [f32; 4],
 }
 
@@ -89,6 +92,10 @@ impl DrawState {
         let shader_line = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vfe line shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders.line.wgsl").into()),
+        });
+        let shader_dot = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vfe dot shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders.dot.wgsl").into()),
         });
 
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -184,6 +191,36 @@ impl DrawState {
             cache: None,
         });
 
+        let dot_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vfe dot pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_dot,
+                entry_point: Some("vs_dot"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_dot,
+                entry_point: Some("fs_dot"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // Placeholder buffers (zero-length upload is illegal; start with one
         // instance each and let the first prepare() resize them).
         let globals_buf = wgpu::util::DeviceExt::create_buffer_init(
@@ -208,6 +245,12 @@ impl DrawState {
         let line_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vfe lines"),
             size: std::mem::size_of::<LineInstanceGPU>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dot_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vfe dots"),
+            size: std::mem::size_of::<ArrowInstanceGPU>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -240,29 +283,47 @@ impl DrawState {
                 },
             ],
         });
+        let dot_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vfe dot bind"),
+            layout: &bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: dot_buf.as_entire_binding(),
+                },
+            ],
+        });
 
         Self {
             bind_layout,
             arrow_pipeline,
             line_pipeline,
+            dot_pipeline,
             globals_buf,
             arrow_buf,
             line_buf,
+            dot_buf,
             arrow_bind,
             line_bind,
+            dot_bind,
             light_dir: LIGHT_DIR,
         }
     }
 
     /// Rebuild instance buffers + write uniforms for this frame's scene.
+    /// Takes the whole [`SceneGPU`]: its instance slices are the payload, and
+    /// bundling them keeps the argument list clippy-clean.
     fn upload(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view_proj: Mat4,
         camera_pos: Vec3,
-        arrows: &[ArrowInstanceGPU],
-        lines: &[LineInstanceGPU],
+        scene: &SceneGPU,
     ) {
         let globals = Globals {
             view_proj: mat4_to_mats(view_proj),
@@ -274,7 +335,7 @@ impl DrawState {
 
         self.arrow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vfe arrows (frame)"),
-            contents: bytemuck::cast_slice(arrows),
+            contents: bytemuck::cast_slice(scene.arrows.as_slice()),
             usage: wgpu::BufferUsages::STORAGE,
         });
         self.arrow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -294,7 +355,7 @@ impl DrawState {
 
         self.line_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vfe lines (frame)"),
-            contents: bytemuck::cast_slice(lines),
+            contents: bytemuck::cast_slice(scene.lines.as_slice()),
             usage: wgpu::BufferUsages::STORAGE,
         });
         self.line_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -308,6 +369,26 @@ impl DrawState {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: self.line_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        self.dot_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vfe dots (frame)"),
+            contents: bytemuck::cast_slice(scene.dots.as_slice()),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        self.dot_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vfe dot bind (frame)"),
+            layout: &self.bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.dot_buf.as_entire_binding(),
                 },
             ],
         });
@@ -333,14 +414,7 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
         let ds = callback_resources
             .get_mut::<DrawState>()
             .expect("DrawState must be installed before the first paint callback");
-        ds.upload(
-            device,
-            queue,
-            self.view_proj,
-            self.camera_pos,
-            &self.scene.arrows,
-            &self.scene.lines,
-        );
+        ds.upload(device, queue, self.view_proj, self.camera_pos, &self.scene);
         Vec::new()
     }
 
@@ -360,17 +434,16 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
             render_pass.draw(0..(self.scene.lines.len() as u32) * 6, 0..1);
         }
 
-        let arrows_total = self.scene.arrows.len() + self.scene.dots.len();
-        if arrows_total > 0 {
+        if !self.scene.arrows.is_empty() {
             render_pass.set_pipeline(&ds.arrow_pipeline);
             render_pass.set_bind_group(0, &ds.arrow_bind, &[]);
             render_pass.draw(0..(self.scene.arrows.len() as u32) * 54, 0..1);
-            // Dots reuse the arrow pipeline; uploaded separately once scenes
-            // carry them (they stay empty until the particles task).
-            if !self.scene.dots.is_empty() {
-                // TODO(particles task): dots need their own bind group; for
-                // now dots always arrive empty so this branch is unreachable.
-            }
+        }
+
+        if !self.scene.dots.is_empty() {
+            render_pass.set_pipeline(&ds.dot_pipeline);
+            render_pass.set_bind_group(0, &ds.dot_bind, &[]);
+            render_pass.draw(0..(self.scene.dots.len() as u32) * 24, 0..1);
         }
     }
 }

@@ -5,6 +5,7 @@ pub mod domain;
 pub mod export;
 pub mod field;
 pub mod i18n;
+pub mod particles;
 pub mod presets;
 pub mod render;
 pub mod renderer;
