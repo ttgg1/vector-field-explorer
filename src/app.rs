@@ -122,16 +122,25 @@ impl eframe::App for VfApp {
                 crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
             });
 
-        // Rebuild the scene only when a setter marked the state dirty.
+        // Rebuild the scene only when a setter marked the state dirty. The
+        // app keeps owning the backdrop lines: fresh snapshots arrive on top
+        // of a rebuilt grid + axes, and the streamline segments the viewmodel
+        // seam emitted join them.
         if let Some(fresh) = self.state.snapshot_if_dirty() {
             self.scene.arrows = fresh.arrows;
             self.scene.dots = fresh.dots;
+            let fresh_lines = Arc::unwrap_or_clone(fresh.lines);
+            let mut backdrop = reference_lines();
+            backdrop.extend(fresh_lines);
+            self.scene.lines = Arc::new(backdrop);
         }
 
         // Bottom status bar: the parse state (red when bad) plus how many
-        // arrow instances the scene currently being painted holds.
+        // instances the scene currently being painted holds — arrows, lines
+        // (the app's backdrop plus any streamline segments) and dots.
         self.status.parse_message = self.state.parse_error.clone();
-        self.status.instance_count = self.scene.arrows.len();
+        self.status.instance_count =
+            self.scene.arrows.len() + self.scene.lines.len() + self.scene.dots.len();
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             crate::ui::status_bar::show(ui, &self.status);
         });
