@@ -9,6 +9,7 @@ pub mod presets;
 pub mod render;
 pub mod renderer;
 pub mod sampling;
+pub mod streamlines;
 pub mod ui;
 pub mod viewmodel;
 

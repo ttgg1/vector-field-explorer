@@ -10,8 +10,9 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
-use super::renderer::{ArrowInstanceGPU, SceneGPU};
-use super::sampling::{ArrowData, ViewOptions, sample_field};
+use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
+use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
+use super::streamlines::{seed_grid, trace, StreamlineOpts};
 
 use std::sync::Arc;
 
@@ -35,6 +36,11 @@ pub const MAX_ARROW_SCALE: f32 = 4.0;
 /// Bounds of the particle and streamline speed slider.
 pub const MIN_SPEED: f32 = 0.1;
 pub const MAX_SPEED: f32 = 3.0;
+/// Line width streamlines are painted with, world units.
+pub const STREAMLINE_WIDTH: f32 = 0.012;
+/// Seed jitter as a fraction of a seed-grid cell (`seed_grid` caps it below
+/// half a cell so lattice neighbours never swap).
+pub const STREAMLINE_JITTER: f32 = 0.45;
 
 /// The starting field for each mode: the Pump preset (2D) and the 3D radial
 /// preset, so a fresh app shows something immediately.
@@ -318,14 +324,70 @@ impl State {
             .collect()
     }
 
-    /// The whole GPU scene for this state: arrows only — streamline and
-    /// particle tasks add `lines` and `dots` later. Pure: no GPU resources
-    /// touched, so the UI layer just stores the result.
+    /// Line instances for the 2D streamlines: a jittered seed grid (deterministic
+    /// across rebuilds, salt-keyed to the sampling grid so a density change
+    /// reseeds), each seed RK4-traced through the field, one instance per
+    /// segment coloured like the arrows it crosses — same magnitude range as
+    /// the arrows. The speed slider sets the per-line point budget and the
+    /// grid spacing sets the step scale, so streamlines advance at a
+    /// spacing-multiple per second comparable with arrows and particles.
+    /// 2D only this ticket: 3D seeds and click-to-seed are ticket 6.
+    pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
+        if !self.streamlines || self.mode_3d {
+            return Vec::new();
+        }
+        // Half the grid density seeds the plane: enough lines to read the flow
+        // without tracing one per sampled point.
+        let axis = (self.density / 2).clamp(4, 24);
+        let grid = self.grid();
+        let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
+        let seeds = seed_grid(&self.domain, axis, STREAMLINE_JITTER, salt);
+        let speed = if self.speed.is_finite() { self.speed.clamp(MIN_SPEED, MAX_SPEED) } else { 1.0 };
+        // The slider bounds keep the budget inside [12, 360] points, below the
+        // tracer's 400-point cap.
+        let max_len = (120.0 * speed).round() as usize;
+        let opts = StreamlineOpts {
+            max_len,
+            step_scale: 0.5 * self.spacing(),
+            both_directions: true,
+        };
+        let (lo, hi) = self.view_options().color_range.unwrap_or_else(|| magnitude_range(sampled));
+        let mut lines: Vec<LineInstanceGPU> = Vec::new();
+        for seed in seeds {
+            let path = trace(&self.field, seed, &self.domain, &opts);
+            for i in 0..path.len().saturating_sub(1) {
+                let pa = path[i];
+                let pb = path[i + 1];
+                let mag = match self.field.eval3(pa) {
+                    Some(v) => v.length(),
+                    None => 0.0,
+                };
+                let rgb = self.colormap.colormap(mag, lo, hi);
+                lines.push(LineInstanceGPU {
+                    a: [pa.x, pa.y, pa.z, 1.0],
+                    b: [pb.x, pb.y, pb.z, STREAMLINE_WIDTH],
+                    color: [
+                        rgb[0] as f32 / 255.0,
+                        rgb[1] as f32 / 255.0,
+                        rgb[2] as f32 / 255.0,
+                        1.0,
+                    ],
+                });
+            }
+        }
+        lines
+    }
+
+    /// The whole GPU scene for this state: arrows plus 2D streamlines —
+    /// particle tasks add `dots` later. Pure: no GPU resources touched, so
+    /// the UI layer just stores the result; the field is sampled once and
+    /// reused for the arrows and the streamline colour range.
     pub fn snapshot(self: &State) -> SceneGPU {
-        let arrows = if self.arrows { self.arrow_instances(&self.sample()) } else { Vec::new() };
+        let sampled = self.sample();
+        let arrows = if self.arrows { self.arrow_instances(&sampled) } else { Vec::new() };
         SceneGPU {
             arrows: Arc::new(arrows),
-            lines: Arc::new(Vec::new()),
+            lines: Arc::new(self.streamlines_snapshot(&sampled)),
             dots: Arc::new(Vec::new()),
         }
     }
@@ -582,5 +644,50 @@ mod tests {
         );
         let flat = scene.arrows.iter().all(|a| a.origin[2] == 0.0);
         assert!(flat, "every arrow origin sits on the z = 0 plane when sampling runs flat");
+    }
+
+    #[test]
+    fn two_d_streamlines_snapshot_emits_line_segments() {
+        let mut s = State::new(false);
+        assert!(s.set_streamlines(true), "enabling streamlines marks the scene dirty");
+        let scene = s.snapshot();
+        assert!(!scene.lines.is_empty(), "enabled streamlines paint at least one line segment");
+        assert!(scene.dots.is_empty(), "particles still wait for their task");
+    }
+
+    #[test]
+    fn streamlines_stay_2d_and_off_by_default() {
+        let mut s3 = State::new(true);
+        assert!(s3.set_streamlines(true), "the toggle still works in 3D");
+        assert!(s3.snapshot().lines.is_empty(), "3D streamlines wait for ticket 6");
+        let s2 = State::new(false);
+        assert!(s2.snapshot().lines.is_empty(), "streamlines are off at the defaults");
+    }
+
+    #[test]
+    fn speed_slider_changes_streamline_length() {
+        let mut slow = State::new(false);
+        assert!(slow.set_formula("(-y, x)".to_string()), "switch the plane to a vortex");
+        assert!(slow.set_streamlines(true));
+        assert!(slow.set_speed(0.1), "crawling speed gives each line a small budget");
+        let mut fast = State::new(false);
+        assert!(fast.set_formula("(-y, x)".to_string()));
+        assert!(fast.set_streamlines(true));
+        assert!(fast.set_speed(3.0), "top speed grows the point budget per line");
+        let slow_lines = slow.snapshot().lines.len();
+        let fast_lines = fast.snapshot().lines.len();
+        assert!(fast_lines > slow_lines, "the budget, and so the length, follows the speed slider");
+    }
+
+    #[test]
+    fn streamline_seeds_survive_identical_rebuilds() {
+        let mut s = State::new(false);
+        assert!(s.set_formula("(-y, x)".to_string()));
+        assert!(s.set_streamlines(true));
+        let first = s.snapshot().lines.len();
+        let second = s.snapshot().lines.len();
+        let third = s.snapshot().lines.len();
+        assert_eq!(first, second, "seeds are deterministic: rebuilds agree");
+        assert_eq!(second, third, "and again, with no state change in between");
     }
 }
