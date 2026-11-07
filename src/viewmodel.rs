@@ -351,15 +351,16 @@ pub fn domain_between(min: Vec3, max: Vec3) -> Domain {
     )
 }
 
-/// Pure camera action for an input event: a left-drag delta `(dx, dy)` orbits
-/// in 3D mode only (2D keeps its fixed front view), a scroll `zoom` factor
-/// zooms in both modes (the camera clamps it). Returns the new camera.
+/// Pure camera action for an input event: in 3D mode a left-drag delta `(dx, dy)`
+/// orbits and a scroll `zoom` factor zooms (the camera clamps it); in 2D mode
+/// gestures change nothing at all, keeping the fixed orthographic front view.
+/// Returns the new camera.
 pub fn apply_camera_input(camera: OrbitCamera, mode_3d: bool, dx: f32, dy: f32, zoom: f32) -> OrbitCamera {
     let mut camera = camera;
     if mode_3d {
         camera.orbit(dx, dy);
+        camera.zoom(zoom);
     }
-    camera.zoom(zoom);
     camera
 }
 
@@ -530,12 +531,17 @@ mod tests {
     }
 
     #[test]
-    fn camera_input_orbits_only_in_3d() {
+    fn camera_input_orbits_and_zooms_only_in_3d() {
         let flat = apply_camera_input(OrbitCamera::default(), false, 0.5, 0.3, 0.5);
         let home = OrbitCamera::default();
         assert!((flat.yaw - home.yaw).abs() < 1e-6, "2D mode ignores drag deltas");
         assert!((flat.pitch - home.pitch).abs() < 1e-6);
-        assert!((flat.distance - 1.6).abs() < 1e-6, "zoom still applies in 2D");
+        assert!(
+            (flat.distance - home.distance).abs() < 1e-6,
+            "2D mode ignores scroll zoom too",
+        );
+        let zoomed = apply_camera_input(OrbitCamera::default(), true, 0.0, 0.0, 0.5);
+        assert!((zoomed.distance - 1.6).abs() < 1e-6, "3D mode applies the scroll zoom");
         let cube = apply_camera_input(OrbitCamera::default(), true, 0.5, 0.3, 1.0);
         assert!((cube.yaw - (0.8 - 0.5)).abs() < 1e-6, "3D mode orbits by the drag delta");
         assert!((cube.pitch - (0.9 - 0.3)).abs() < 1e-6);
