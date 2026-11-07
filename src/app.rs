@@ -26,10 +26,10 @@ pub struct StatusBarState {
 /// Radians of orbit per point of left-drag on the viewport.
 const ORBIT_SENSITIVITY: f32 = 0.005;
 
-/// Application root state: the viewmodel (the single source of truth for what
-/// is on screen), the formula bar's local widgets, the sidebar's local controls,
-/// the status readouts, both cameras, the preset manager and the GPU scene
-/// cameras, the preset manager and the GPU scene currently being painted.
+/// Application root state: the viewmodel State (the single source of truth for
+/// what is on screen), the formula bar's local widgets, the sidebar's local
+/// Controls, the status readouts, both cameras (the 2D `Camera` and the
+/// `OrbitCamera`), the preset manager and the GPU scene currently being painted.
 pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
