@@ -17,10 +17,13 @@ pub fn presets_data_dir() -> std::path::PathBuf {
 }
 
 /// What the status bar reports this frame: the latest formula parse state
-/// (empty when the field is good) and the size of the scene being painted.
+/// (empty when the field is good) and the size of the scene being painted —
+/// field geometry only (arrows + streamline segments + dots; the app's
+/// backdrop lines are decoration and are excluded from the count).
 pub struct StatusBarState {
     pub parse_message: String,
     pub instance_count: usize,
+    pub streamline_count: usize,
 }
 
 /// Radians of orbit per point of left-drag on the viewport.
@@ -40,6 +43,7 @@ pub struct VfApp {
     pub presets: PresetPanel,
     scene: SceneGPU,
     renderer_ready: bool,
+    streamline_count: usize,
 }
 
 impl VfApp {
@@ -52,6 +56,7 @@ impl VfApp {
             status: StatusBarState {
                 parse_message: String::new(),
                 instance_count: 0,
+                streamline_count: 0,
             },
             camera: Camera::default(),
             orbit: OrbitCamera::default(),
@@ -63,6 +68,7 @@ impl VfApp {
                 dots: Arc::new(Vec::new()),
             },
             renderer_ready: false,
+            streamline_count: 0,
         }
     }
 }
@@ -130,17 +136,21 @@ impl eframe::App for VfApp {
             self.scene.arrows = fresh.arrows;
             self.scene.dots = fresh.dots;
             let fresh_lines = Arc::unwrap_or_clone(fresh.lines);
+            self.streamline_count = fresh_lines.len();
             let mut backdrop = reference_lines();
             backdrop.extend(fresh_lines);
             self.scene.lines = Arc::new(backdrop);
         }
 
         // Bottom status bar: the parse state (red when bad) plus how many
-        // instances the scene currently being painted holds — arrows, lines
-        // (the app's backdrop plus any streamline segments) and dots.
+        // field-geometry instances are being painted — arrows, streamline
+        // segments and dots; the app's backdrop lines are decoration and
+        // stay out of the count, while the streamline portion gets its own
+        // readout so toggling streamlines moves a visible number.
         self.status.parse_message = self.state.parse_error.clone();
         self.status.instance_count =
-            self.scene.arrows.len() + self.scene.lines.len() + self.scene.dots.len();
+            self.scene.arrows.len() + self.streamline_count + self.scene.dots.len();
+        self.status.streamline_count = self.streamline_count;
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             crate::ui::status_bar::show(ui, &self.status);
         });
