@@ -7,6 +7,7 @@ use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::presets::{PresetPanel, default_preset_dir};
+use crate::ui::sidebar::Controls;
 use crate::viewmodel::{State, apply_camera_input};
 
 /// Directory where the app persists camera presets. Kept in one place so the
@@ -26,11 +27,13 @@ pub struct StatusBarState {
 const ORBIT_SENSITIVITY: f32 = 0.005;
 
 /// Application root state: the viewmodel (the single source of truth for what
-/// is on screen), the formula bar's local widgets, the status readouts, both
+/// is on screen), the formula bar's local widgets, the sidebar's local controls,
+/// the status readouts, both cameras, the preset manager and the GPU scene
 /// cameras, the preset manager and the GPU scene currently being painted.
 pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
+    pub sidebar: Controls,
     pub status: StatusBarState,
     pub camera: Camera,
     pub orbit: OrbitCamera,
@@ -45,6 +48,7 @@ impl VfApp {
         Self {
             state,
             bar: FormulaBarState::new(),
+            sidebar: Controls::new(),
             status: StatusBarState {
                 parse_message: String::new(),
                 instance_count: 0,
@@ -105,6 +109,18 @@ impl eframe::App for VfApp {
         egui::Panel::top("formula_bar").show(ui, |ui| {
             crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
         });
+
+        // Left sidebar: every scene knob, handed to the viewmodel setters
+        // once per frame (the setters own clamping and the dirty flag). Shown
+        // before the rebuild below so a control edit is reflected in this
+        // frame's snapshot and in the status-bar count.
+        egui::Panel::left("sidebar")
+            .resizable(true)
+            .min_size(220.0)
+            .max_size(420.0)
+            .show(ui, |ui| {
+                crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+            });
 
         // Rebuild the scene only when a setter marked the state dirty.
         if let Some(fresh) = self.state.snapshot_if_dirty() {
