@@ -151,9 +151,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         });
     });
 
-    // Hand the mirror to the seam; each setter that actually changes
-    // something marks the state dirty, which feeds the snapshot and the
-    // status-bar instance count rebuilt right after this panel in app.rs.
+    // Hand the whole mirror to the seam (below); the rebuild that the dirty
+    // flag asks for happens in app.rs right after this panel, so this frame's
+    // snapshot and status-bar count already reflect the edits.
+    apply(state, controls);
+}
+
+/// The whole edit→seam handoff, kept pure (no egui types) so `show` stays
+/// thin and the wiring is testable without a window (the spec's testing rule,
+/// and the ledger ruling that the sidebar must call seam setters, never
+/// mutate scene state). Every seam setter owns its own clamping / swap rule
+/// and marks the state dirty only if the value actually moved; afterwards the
+/// mirror is refreshed from the effective state, so next frame's widgets
+/// start from truth (clamped density, swapped extrema, …).
+pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_density(controls.density);
     state.set_arrow_scale(controls.arrow_scale);
     state.set_normalize(controls.normalize);
@@ -165,8 +176,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     state.set_speed(controls.speed);
     state.set_domain(controls.domain_min, controls.domain_max);
 
-    // Refresh the mirror from the effective state so next frame starts
-    // from truth (clamped density for this mode, swapped extrema, …).
     controls.density = state.density;
     controls.arrow_scale = state.arrow_scale;
     controls.normalize = state.normalize;
