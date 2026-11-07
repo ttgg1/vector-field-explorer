@@ -136,7 +136,7 @@ impl State {
 
     /// Samples per axis, clamped to what this mode can afford.
     pub fn set_density(self: &mut State, density: u32) -> bool {
-        let max = if self.mode_3d { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
+        let max = if self.is_3d() { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
         let density = density.clamp(MIN_DENSITY, max);
         if self.density == density {
             return false;
@@ -243,6 +243,13 @@ impl State {
         }
         self.speed = speed;
         self.mark_dirty()
+    }
+
+    /// The world half-height the 2D orthographic window covers: the domain's
+    /// larger horizontal extent, padded so the field fills the window.
+    pub fn plane_size(self: &State) -> f32 {
+        let size = self.domain.domain_size();
+        size.x.max(size.y) * PLANE_MARGIN
     }
 
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
@@ -534,5 +541,40 @@ mod tests {
         assert!((cube.pitch - (0.9 - 0.3)).abs() < 1e-6);
         let pulled = apply_camera_input(OrbitCamera::default(), true, 0.0, 0.0, 100.0);
         assert!((pulled.distance - 20.0).abs() < 1e-6, "zoom clamp stays at 20");
+    }
+    #[test]
+    fn density_clamps_to_dimension_being_sampled() {
+        let mut s = State::new(false);
+        assert!(s.set_mode(true), "switching to 3D mode marks dirty");
+        assert!(s.set_density(MAX_DENSITY_2D), "a flat field still affords the 2D cap");
+        assert_eq!(s.density, MAX_DENSITY_2D, "cap keys to the sampled dimension, not the mode");
+        assert_eq!(s.grid().z, 1, "a 2D field still samples flat in 3D mode");
+    }
+
+    #[test]
+    fn plane_size_scales_with_largest_extent() {
+        let mut s = State::new(false);
+        let size = s.plane_size();
+        assert!((size - 2.7).abs() < 1e-4, "default 2-unit domain times the margin");
+        assert!(
+            s.set_domain(Vec3::new(-2.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 0.0)),
+            "a wider-than-tall domain applies",
+        );
+        let grown = s.plane_size();
+        assert!((grown - 5.4).abs() < 1e-4, "follows the x extent once it is largest");
+    }
+
+    #[test]
+    fn snapshot_reports_active_mode() {
+        let mut s = State::new(false);
+        assert!(s.set_mode(true), "3D mode on a 2D field marks dirty");
+        let scene = s.snapshot();
+        assert_eq!(
+            scene.arrows.len(),
+            (DEFAULT_DENSITY_2D * DEFAULT_DENSITY_2D) as usize,
+            "the flat sample count, not the cubic one",
+        );
+        let flat = scene.arrows.iter().all(|a| a.origin[2] == 0.0);
+        assert!(flat, "every arrow origin sits on the z = 0 plane when sampling runs flat");
     }
 }

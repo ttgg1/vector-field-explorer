@@ -1,15 +1,18 @@
+//! Bottom status bar: the formula parse state and the instance count of the
+//! snapshot currently being painted.
+
 use eframe::egui;
 
 use crate::app::StatusBarState;
 
-/// Bottom status bar showing the parse message and instance count.
-pub fn show(ui: &mut egui::Ui, status: &mut StatusBarState) {
+/// Draw the status bar: green-ish "ready" or the parse error in red, plus
+/// how many arrow instances the current snapshot holds.
+pub fn show(ui: &mut egui::Ui, status: &StatusBarState) {
     ui.horizontal(|ui| {
-        let message = status.parse_message.clone();
-        if message.is_empty() {
+        if status.parse_message.is_empty() {
             ui.weak("ready");
         } else {
-            ui.colored_label(egui::Color32::from_rgb(140, 200, 150), message);
+            ui.colored_label(egui::Color32::from_rgb(230, 70, 70), status.parse_message.clone());
         }
 
         ui.separator();

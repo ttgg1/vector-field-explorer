@@ -1,17 +1,13 @@
 use std::sync::Arc;
 
 use eframe::egui;
-use glam::{Mat4, UVec3, Vec3};
 
 use crate::camera::OrbitCamera;
-use crate::domain::Domain;
-use crate::field::FieldExpr;
 use crate::render::Camera;
-use crate::renderer::{
-    ArrowInstanceGPU, DrawCallback, DrawState, LineInstanceGPU, SceneGPU,
-};
-use crate::sampling::{ViewOptions, sample_field};
+use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
+use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::presets::{PresetPanel, default_preset_dir};
+use crate::viewmodel::{State, apply_camera_input};
 
 /// Directory where the app persists camera presets. Kept in one place so the
 /// panel and any export helper always agree (preset-persistence plan Task 3).
@@ -19,31 +15,49 @@ pub fn presets_data_dir() -> std::path::PathBuf {
     default_preset_dir()
 }
 
-/// Arrow-grid resolution for the initial viewport (main plan cap: 200x200,
-/// default 24; task 8 makes this a sidebar control).
-const SAMPLE_GRID: u32 = 24;
-
-/// Application root state: formula bar, camera viewport, preset manager.
-pub struct VfApp {
-    pub formula: String,
+/// What the status bar reports this frame: the latest formula parse state
+/// (empty when the field is good) and the size of the scene being painted.
+pub struct StatusBarState {
     pub parse_message: String,
+    pub instance_count: usize,
+}
+
+/// Radians of orbit per point of left-drag on the viewport.
+const ORBIT_SENSITIVITY: f32 = 0.005;
+
+/// Application root state: the viewmodel (the single source of truth for what
+/// is on screen), the formula bar's local widgets, the status readouts, both
+/// cameras, the preset manager and the GPU scene currently being painted.
+pub struct VfApp {
+    pub state: State,
+    pub bar: FormulaBarState,
+    pub status: StatusBarState,
     pub camera: Camera,
     pub orbit: OrbitCamera,
     pub presets: PresetPanel,
-    field: Option<FieldExpr>,
+    scene: SceneGPU,
     renderer_ready: bool,
 }
 
 impl VfApp {
     pub fn new() -> Self {
+        let state = State::new(false);
         Self {
-            formula: "x, y".to_owned(),
-            parse_message: "OK".to_owned(),
+            state,
+            bar: FormulaBarState::new(),
+            status: StatusBarState {
+                parse_message: String::new(),
+                instance_count: 0,
+            },
             camera: Camera::default(),
             orbit: OrbitCamera::default(),
             presets: PresetPanel::new_with_dir(presets_data_dir())
                 .unwrap_or_else(|_| PresetPanel::new()),
-            field: None,
+            scene: SceneGPU {
+                arrows: Arc::new(Vec::new()),
+                lines: Arc::new(reference_lines()),
+                dots: Arc::new(Vec::new()),
+            },
             renderer_ready: false,
         }
     }
@@ -55,22 +69,8 @@ impl Default for VfApp {
     }
 }
 
-/// Re-parses the formula, reporting the parse state. Keeps the last good
-/// field when a new parse fails so the viewport stays up while editing (the
-/// status bar shows the error instead).
-fn refresh_field(app: &mut VfApp) {
-    match FieldExpr::parse(&app.formula) {
-        Ok(f) => {
-            app.field = Some(f);
-            app.parse_message = "OK".to_owned();
-        }
-        Err(e) => {
-            app.parse_message = e.to_string();
-        }
-    }
-}
-
-/// Grid + axes backdrop on the z = 0 plane (thin unlit lines).
+/// Grid + axes backdrop on the z = 0 plane (thin unlit lines). App-side
+/// decoration: the viewmodel snapshot only owns the sampled field geometry.
 fn reference_lines() -> Vec<LineInstanceGPU> {
     let mut lines = Vec::new();
     let half = 6f32;
@@ -97,79 +97,27 @@ fn reference_lines() -> Vec<LineInstanceGPU> {
     lines
 }
 
-/// Builds the scene for the viewport: sampled arrows (sorted back-to-front),
-/// reference grid, and the camera view-projection for this frame.
-fn build_scene(app: &VfApp, aspect: f32) -> (SceneGPU, Mat4) {
-    let field = app
-        .field
-        .as_ref()
-        .expect("refresh_field must run before build_scene in the same frame");
-    let domain = Domain::default();
-    let view_options = ViewOptions::default();
-    let mut sampled =
-        sample_field(field, &domain, UVec3::new(SAMPLE_GRID, SAMPLE_GRID, 1), &view_options);
-
-    let view = app.orbit.view();
-    sort_back_to_front_sampled(&mut sampled, &view);
-
-    let arrows: Vec<ArrowInstanceGPU> = sampled
-        .iter()
-        .map(|d| ArrowInstanceGPU {
-            origin: [d.position.x, d.position.y, d.position.z, 1.0],
-            dir_len: [d.dir.x, d.dir.y, d.dir.z, d.mag],
-            color: [
-                d.color[0] as f32 / 255.0,
-                d.color[1] as f32 / 255.0,
-                d.color[2] as f32 / 255.0,
-                1.0,
-            ],
-        })
-        .collect();
-
-    let scene = SceneGPU {
-        arrows: Arc::new(arrows),
-        lines: Arc::new(reference_lines()),
-        dots: Arc::new(Vec::new()),
-    };
-    // Broad enough to always cover the default [-1, 1] domain plus margins.
-    let plane_size = 6.5;
-    (scene, app.orbit.vp_matrix(aspect, Some(plane_size)))
-}
-
-/// Reorders sampled arrow data far-to-near along the view direction before
-/// instance conversion (the renderer's `sort_back_to_front` works on
-/// instances; this variant avoids needing instance key math twice).
-fn sort_back_to_front_sampled(
-    sampled: &mut [crate::sampling::ArrowData],
-    view: &Mat4,
-) {
-    sampled.sort_by(|a, b| {
-        let pa = (view * a.position.extend(1.0)).z;
-        let pb = (view * b.position.extend(1.0)).z;
-        pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
-    });
-}
-
 impl eframe::App for VfApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        // Top formula bar.
+        // Top formula bar: live edits, the field-preset ComboBox and the
+        // 2D/3D toggle. Every edit goes through a viewmodel setter, which owns
+        // parsing, clamping and the dirty flag.
         egui::Panel::top("formula_bar").show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.formula)
-                    .desired_width(f32::INFINITY),
-            );
+            crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
         });
 
-        // Bottom status bar.
+        // Rebuild the scene only when a setter marked the state dirty.
+        if let Some(fresh) = self.state.snapshot_if_dirty() {
+            self.scene.arrows = fresh.arrows;
+            self.scene.dots = fresh.dots;
+        }
+
+        // Bottom status bar: the parse state (red when bad) plus how many
+        // arrow instances the scene currently being painted holds.
+        self.status.parse_message = self.state.parse_error.clone();
+        self.status.instance_count = self.scene.arrows.len();
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.parse_message);
-                ui.separator();
-                ui.label(format!(
-                    "camera at ({:.1}, {:.1}), scale {:.2}",
-                    self.camera.position[0], self.camera.position[1], self.camera.scale
-                ));
-            });
+            crate::ui::status_bar::show(ui, &self.status);
         });
 
         // Presets panel on the right.
@@ -181,12 +129,11 @@ impl eframe::App for VfApp {
                 self.presets.show(ui, &mut self.camera);
             });
 
-        // Central viewport: the wgpu field renderer.
+        // Central viewport: the wgpu field renderer, driven by the same state.
         egui::CentralPanel::default_margins().show(ui, |ui| {
             let rect = ui.max_rect().shrink(2.0);
             let Some(render_state) = frame.wgpu_render_state() else {
-                ui.painter()
-                    .rect_filled(rect, 8.0, egui::Color32::from_rgb(30, 33, 41));
+                ui.painter().rect_filled(rect, 8.0, egui::Color32::from_rgb(30, 33, 41));
                 return;
             };
 
@@ -198,17 +145,42 @@ impl eframe::App for VfApp {
                 self.renderer_ready = true;
             }
 
-            refresh_field(self);
+            // Camera gestures feed the seam's pure camera action: a left-drag
+            // orbits in 3D mode only (2D keeps its fixed front view), and a
+            // ctrl-scroll or pinch zoom factor zooms in both (the camera clamps
+            // it).
+            let resp = ui.allocate_response(rect.size(), egui::Sense::drag());
+            let drag = resp.drag_delta() * ORBIT_SENSITIVITY;
+            let zoom = ui.ctx().input(|i| i.zoom_delta());
+            self.orbit = apply_camera_input(self.orbit, self.state.mode_3d, drag.x, drag.y, zoom);
+
+            // Painter's algorithm: the wgpu pass has no depth attachment, so
+            // order the instances far-to-near along this frame's view.
+            let view = self.orbit.view();
+            let mut arrows = Arc::unwrap_or_clone(Arc::clone(&self.scene.arrows));
+            crate::renderer::sort_back_to_front(arrows.as_mut_slice(), &view);
+            self.scene.arrows = Arc::new(arrows);
+
+            let scene = SceneGPU {
+                arrows: Arc::clone(&self.scene.arrows),
+                lines: Arc::clone(&self.scene.lines),
+                dots: Arc::clone(&self.scene.dots),
+            };
+
+            // 2D mode covers the domain's plane orthographically; 3D mode is
+            // the orbiting perspective camera.
             let aspect = rect.width() / rect.height().max(1.0);
-            let (scene, view_proj) = build_scene(self, aspect);
-            let camera_pos = self.orbit.position();
+            let view_proj = self.orbit.vp_matrix(
+                aspect,
+                if self.state.mode_3d { None } else { Some(self.state.plane_size()) },
+            );
 
             let callback = eframe::egui_wgpu::Callback::new_paint_callback(
                 rect,
                 DrawCallback {
                     scene,
                     view_proj,
-                    camera_pos: Vec3::new(camera_pos[0], camera_pos[1], camera_pos[2]),
+                    camera_pos: self.orbit.position(),
                 },
             );
             ui.painter().add(callback);

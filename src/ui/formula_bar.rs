@@ -1,38 +1,66 @@
+//! Top formula bar: editable formula text, a field-preset ComboBox and the
+//! 2D/3D toggle. All edits hand their values to the viewmodel setters, which
+//! own parsing and the dirty flag.
+
 use eframe::egui;
 
-use crate::app::StatusBarState;
+use crate::presets::presets;
+use crate::viewmodel::State;
 
-/// Top horizontal formula bar: text edit + 2D/3D toggle buttons (stubs).
-pub fn show(
-    ui: &mut egui::Ui,
-    formula: &mut String,
-    mode3d: &mut bool,
-    status: &mut StatusBarState, // formula parsing wires into this in a later task
-) {
-    _ = status;
+/// Bar-local state kept out of [`State`]: the text the user has typed and
+/// the preset the ComboBox currently selects (an index so the ComboBox can
+/// remember its own selection across frames).
+#[derive(Debug, Clone, Default)]
+pub struct FormulaBarState {
+    pub text: String,
+    pub preset_index: usize,
+}
+
+impl FormulaBarState {
+    pub fn new() -> FormulaBarState {
+        FormulaBarState::default()
+    }
+}
+
+/// Draw the bar and apply every edit to `state`. The ComboBox may switch the
+/// mode when the selected preset is three-dimensional; typed garbage keeps
+/// the last good field (the setter's rule) and shows up in the status bar.
+pub fn show(ui: &mut egui::Ui, state: &mut State, bar: &mut FormulaBarState) {
+    let all = presets();
+    if bar.preset_index >= all.len() {
+        bar.preset_index = 0;
+    }
+
     ui.horizontal(|ui| {
-        ui.label("f(x, y) =");
+        ui.label("Field preset");
+        let before = bar.preset_index;
+        egui::ComboBox::from_id_salt("field_preset_combo")
+            .selected_text(all[before].name)
+            .show_index(ui, &mut bar.preset_index, all.len(), |i| all[i].name);
+        if bar.preset_index != before {
+            let preset = &all[bar.preset_index];
+            state.set_mode(preset.dimension == 3);
+            state.set_formula(preset.formula.to_string());
+            bar.text = state.formula.clone();
+        }
 
-        let response = ui.add(
-            egui::TextEdit::singleline(formula)
-                .hint_text("e.g. sin(x) + cos(y)")
-                .desired_width(ui.available_width() - 120.0),
+        if ui.selectable_label(state.mode_3d, "3D view").clicked() {
+            state.set_mode(true);
+        }
+        if ui.selectable_label(!state.mode_3d, "2D view").clicked() {
+            state.set_mode(false);
+        }
+
+        if bar.text != state.formula {
+            bar.text = state.formula.clone();
+        }
+        ui.add(
+            egui::TextEdit::singleline(&mut bar.text)
+                .hint_text("(x, y)")
+                .desired_width(f32::INFINITY),
         );
-        _ = &response;
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .selectable_label(*mode3d, "3D")
-                .clicked()
-            {
-                *mode3d = true;
-            }
-            if ui
-                .selectable_label(!*mode3d, "2D")
-                .clicked()
-            {
-                *mode3d = false;
-            }
-        });
+        if bar.text != state.formula {
+            state.set_formula(bar.text.clone());
+        }
     });
 }
