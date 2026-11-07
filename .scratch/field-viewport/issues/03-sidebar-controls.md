@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (bottom-bar/mode/status wiring must exist; sidebar rewrites build on the same status-bar dirty-flag plumbing).
 
-**Status:** ready-for-agent
+**Status:** in-progress (implementer dispatched 2026-11-07, BASE c62507a)
 
 - [ ] Density clamp keys to the dimension BEING SAMPLED (ledger ruling: 4..=40 / n³ only when sampling 3D; else 4..=200 / n²) — seam already carries a test for this; UI must expose it consistently
 - [ ] Domain extrema drag values: reversed pairs accepted and swapped (seam enforces; no UI error path needed)

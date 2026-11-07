@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately) — the viewmodel seam landed with Task 8A (ledger: commit `522d011`).
 
-**Status:** ready-for-agent
+**Status:** done (2026-11-07; commits c5cfd95..c62507a; task review clean after fix round 1 — zoom gated to 3D; 4 minors parked for final whole-branch review)
 
 - [ ] Live edit: a valid formula edit marks the scene dirty and rebuilds the snapshot; status-bar count updates accordingly
 - [ ] Invalid formula: old field preserved, parse error rendered RED in the status bar (seam behavior already unit-tested there; UI wiring needs build/clippy green, plus real tests for any NEW pure helper)
