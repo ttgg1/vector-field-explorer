@@ -12,7 +12,7 @@ colormaps. Vision spec: `docs/superpowers/specs/2026-11-05-vector-field-explorer
 | Plan | Scope | Status |
 |------|-------|--------|
 | `docs/superpowers/plans/2026-11-05-preset-persistence.md` | Camera presets: `export::Preset` serde, save/load/delete to `presets.json`, sidebar Preset panel, app data-dir config | **COMPLETE** (Tasks 1–3; commits `037825f`, `40f98f4`, `87c4e23`, `2dcb1a6` on `feature/preset-persistence`; final review pass done → fix commit `331d72e`, no re-review needed per skill). Ruled behaviors: duplicate-name save replaces, corrupt `presets.json` fails fast with io::Error; RGBA (not BGRA) PNG contract pinned by test |
-| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T6 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`; T6 `7e37254` OrbitCamera → `src/camera.rs`); **T7 complete** (`81d1b30` instanced wgpu renderer + fix round 1 `2020a31` arrow-shader world-space normal `b * normal`, scoped re-review clean); **T8A complete** (`522d011` viewmodel seam `src/viewmodel.rs` — pure State/dirty-flag/snapshot builder, 12 unit tests); **T8B + T9–T14 tracked as TICKETS 02–09** under `.scratch/field-viewport/issues/` (02 = formula bar/mode/status wiring — the only frontier ticket; 03 = sidebar controls ← 02; 04 streamlines ← 03 ∥ 05 particles ← 03; 06 3D+click-seed ← 04,05; 07 style persistence ← 03; 08 screenshot ← 06; 09 README+cleanup+final whole-branch review ← 02–08). ⚠ working tree at handoff 2026-11-07: DIRTY uncommitted dispatch-B WIP in `src/ui/*` + `src/viewmodel.rs` (~226 lines, **does not compile** — 22 errors; salvage-or-restore is the ticket-02 implementer's call; see ledger "Ledger correction — 2026-11-07"). Issue 01's "Related minors" still routed to final whole-branch review
+| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T6 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`; T6 `7e37254` OrbitCamera → `src/camera.rs`); **T7 complete** (`81d1b30` instanced wgpu renderer + fix round 1 `2020a31` arrow-shader world-space normal `b * normal`, scoped re-review clean); **T8A complete** (`522d011` viewmodel seam `src/viewmodel.rs` — pure State/dirty-flag/snapshot builder, 12 unit tests); **T8B + T9–T14 tracked as TICKETS 02–09** under `.scratch/field-viewport/issues/` (02 = formula bar/mode/status wiring — the only frontier ticket; 03 = sidebar controls ← 02; 04 streamlines ← 03 ∥ 05 particles ← 03; 06 3D+click-seed ← 04,05; 07 style persistence ← 03; 08 screenshot ← 06; 09 README+cleanup+final whole-branch review ← 02–08; 10 full-codebase documentation ← 09 (user-added 2026-11-07)). ⚠ working tree (re-verified 2026-11-07 after the interrupted dispatch-B seat): DIRTY uncommitted WIP in `src/app.rs` + `src/ui/*` + `src/viewmodel.rs` — **now compiles and is clippy-clean, but `cargo test` carries 2 RED viewmodel tests** (`density_clamps_to_dimension_being_sampled`, `plane_size_scales_with_largest_extent`); salvage-or-restore is still the ticket-02 implementer's call; never commit a red gate; see ledger tail "Dispatch bookkeeping — 2026-11-07". Issue 01's "Related minors" still routed to final whole-branch review
 
 **Spec for the remaining work (published, ready-for-agent):** `.scratch/field-viewport/spec.md` — seams confirmed with the user: existing pure-module seams + exactly ONE new seam (viewmodel/scene-builder of pure functions state→SceneGPU, input→camera actions); GPU paint stays behind SceneGPU, no unit tests. Issue tracker: local markdown under `.scratch/field-viewport/issues/`. |
 
@@ -83,6 +83,12 @@ devstral2, nemotron are retired). If a seat needs more judgment, raise the
 (available variants: low, medium, high). Escalation for stuck implementers
 (BLOCKED/NEEDS_CONTEXT twice) bumps the variant, not the model.
 
+**Erratum 2026-11-07 (user):** implementer seats stay `strata/coder-iq1_m`
+(local); REVIEW seats may use a FREE OpenCode model (e.g.
+`opencode/flint-40b-free`, `opencode/glm-5.3-flash-free`) instead of the
+strata seat — scale the free model to the diff's size/complexity. Still
+always pass the model explicitly.
+
 **Implementer contract (in every dispatch):** work from the task brief file
 only (never the whole plan); TDD when the brief requires tests (RED→GREEN
 watched); run the full `cargo test` suite before committing; commits
@@ -108,6 +114,51 @@ Dispatch flow per task:
 New feature modules follow the plans; write tests automatically alongside;
 run `cargo test` (and later `cargo clippy -- -D warnings`) before claiming done.
 All generated code lives under `src/` or `tests/`.
+
+## Skills & Workflow map (future agents — start here)
+
+Two skill families are installed:
+- **superpowers** — `~/.cache/opencode/npm/git-superpowers-*/…/skills/`
+  (brainstorming, writing-plans, executing-plans, subagent-driven-development,
+  test-driven-development, systematic-debugging, using-git-worktrees,
+  finishing-a-development-branch, requesting-code-review, receiving-code-review,
+  verification-before-completion, writing-skills, dispatching-parallel-agents, …)
+- **Matt Pocock skills** — `~/.agents/skills/` (code-review, codebase-design,
+  domain-modeling, to-tickets, implement-spec, implement, tdd, diagnosing-bugs,
+  grilling / grill-me / grill-with-docs, pr, research, prototype, wizard,
+  writing-for-agents, find-skills, setup-pre-commit, …)
+
+Skill rule: if a skill plausibly applies (even 1%), invoke it BEFORE acting.
+Process skills first (they set the approach), implementation skills carry it out.
+
+Workflow this repo uses, in order:
+1. **New feature/design** → `brainstorming` (superpowers) before any creative work;
+   stress-test the plan with `grilling` (mattpocock) if the user asks to "grill".
+2. **Spec/plan** → `writing-plans` (superpowers) → plan under `docs/superpowers/plans/`;
+   spec under `docs/superpowers/specs/`. Break a plan into tracker tickets with
+   `to-tickets` (mattpocock) — tickets land in `.scratch/<feature-slug>/issues/`.
+3. **Execution** → SDD loop: `subagent-driven-development` (superpowers) — controller
+   dispatches one implementer subagent at a time, then a task reviewer; or
+   `executing-plans` inline if the user chose that. Never both in parallel.
+4. **Per task** → `test-driven-development` (TDD, RED first) gates every change;
+   bugs/regressions → `systematic-debugging` (superpowers) or `diagnosing-bugs`
+   (mattpocock) BEFORE proposing fixes.
+5. **Reviews** → per-task review via SDD `task-reviewer-prompt.md`; branch/PR
+   standards+spec review → `code-review` (mattpocock); request review at
+   completion → `requesting-code-review`; consume feedback → `receiving-code-review`
+   (verify, don't blind-implement). PR body → `pr` (mattpocock).
+6. **Finish** → `verification-before-completion` before any "done" claim;
+   integrate via `finishing-a-development-branch`; isolated workspace via
+   `using-git-worktrees` (feature branch/worktree, never `main`).
+7. **Docs/meta** → `writing-for-agents` when editing AGENTS.md/skills;
+   `domain-modeling` for GLOSSARY.md + ADRs; `research` for primary-source facts;
+   `find-skills` to discover more skills.
+
+**Context management (mandatory):** this harness runs the `@tarquinen/opencode-dcp`
+plugin. Keep a fresh context window by calling the `compress` tool itself (DCP
+compression) as soon as a phase closes — do NOT rely on, wait for, or configure
+around OpenCode's built-in auto-compaction. Summaries are authoritative records:
+file paths, rulings, commit hashes.
 
 ## Agent skills
 
