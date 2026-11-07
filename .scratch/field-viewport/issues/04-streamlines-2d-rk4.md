@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 (the feature checkbox and speed slider must exist).
 
-**Status:** ready-for-agent
+**Status:** COMPLETE (commits `00c4ee5`..`13fa5dc` on `feature/preset-persistence`; task review clean after fix round 1: `both_directions` polyline composition fixed, mandated `vortex_stays_bounded` delivered verbatim, status bar splits streamline count from backdrop; 2 minors parked for final review: `set_streamlines` doc drift "not yet drawn", asymmetric `both_directions` step budget)
 
 - [ ] Pure RK4 stepper, RED→GREEN watched: constant field ⇒ straight streamline; zero-magnitude field ⇒ no advance (no NaN/inf path)
 - [ ] Jittered seed grid with seeded/deterministic RNG — a test asserts reproducible seeds
