@@ -21,6 +21,11 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+if [ ! -f Cargo.toml ]; then
+  echo "check-version: could not read Cargo.toml in $root" >&2
+  exit 1
+fi
+
 # First `version = "..."` inside [package]. Workspace-inherited versions are
 # not used by this crate; an empty read is reported as an error below.
 version="$(

@@ -13,12 +13,17 @@ name: Release
 #   * the tag must be `v` + the Cargo.toml [package] version (v0.1.0)
 #   * the tag commit must be reachable from main
 #
-# macOS builds are unsigned and not notarized in v1, so Gatekeeper blocks the
-# first launch: right-click (or Control-click) the .app and choose Open. That
-# note is prepended to every release's generated notes.
+# macOS builds are unsigned and not notarized in v1. On macOS 15 (Sequoia) and
+# later, approve the first launch in System Settings -> Privacy & Security ->
+# "Open Anyway"; on older macOS, right-click (or Control-click) the .app and
+# choose Open. That note is prepended to every release's generated notes.
 #
 # A semver pre-release tag (v0.1.0-rc.1) is published with --prerelease, so a
-# dry run does not become the "latest" release.
+# test tag does not become the "latest" release.
+#
+# workflow_dispatch takes the tag to release and a `publish` flag: with
+# publish=false the run still verifies and builds all three archives (useful as
+# a dry run) but skips the release job.
 #
 # Runner images: the ticket named macos-13 for x86_64, but that image was
 # retired in Dec 2025 and macos-14 followed on 2026-11-02. The matrix therefore
@@ -35,6 +40,11 @@ on:
         description: 'Existing tag to release (for example v0.1.0)'
         required: true
         type: string
+      publish:
+        description: 'Publish a GitHub Release'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -218,6 +228,9 @@ jobs:
   release:
     name: Publish release
     needs: [verify, build]
+    # Tag pushes always publish. A manual run is a dry run unless publish is
+    # true: verify and all three builds still run and upload their archives.
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -247,10 +260,11 @@ jobs:
           cat > release-notes.md <<'NOTES'
           ### macOS: first launch
 
-          These builds are unsigned and not notarized. On first launch,
+          These builds are unsigned and not notarized. On macOS 15 (Sequoia)
+          and later, the first launch is blocked; approve it in System Settings
+          -> Privacy & Security, then choose "Open Anyway". On older macOS,
           right-click (or Control-click) `vector-field-explorer.app` and choose
-          **Open**, then confirm. Double-clicking a freshly downloaded app shows
-          "Apple could not verify..." instead.
+          **Open**.
 
           Linux: the tarball needs a Vulkan-capable driver (or a software
           implementation such as `mesa-vulkan-drivers`).
