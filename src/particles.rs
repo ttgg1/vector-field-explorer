@@ -298,6 +298,28 @@ pub fn dot_instances(
     dots
 }
 
+/// The billboard quad's six corners in dot-local space: a camera-facing square
+/// with half-extent 1, in triangle-list order (two triangles, no index buffer).
+/// The dot shader mirrors this table; its fragment keeps only the unit circle
+/// inscribed in the square, so a dot reads as a round disc rather than the old
+/// octahedron's diamond (ticket 29).
+pub const DOT_QUAD_CORNERS: [[f32; 2]; 6] = [
+    [-1.0, -1.0],
+    [1.0, -1.0],
+    [1.0, 1.0],
+    [-1.0, -1.0],
+    [1.0, 1.0],
+    [-1.0, 1.0],
+];
+
+/// World-space corners of one dot's camera-facing billboard: `origin` offset by
+/// `right * x + up * y` scaled by the instance's world-space `radius` (the
+/// `dir_len.w` the dot shader reads). This is the CPU mirror of the vertex
+/// shader's billboard expansion, so the geometry is checkable without a GPU.
+pub fn dot_billboard_corners(origin: Vec3, radius: f32, right: Vec3, up: Vec3) -> [Vec3; 6] {
+    DOT_QUAD_CORNERS.map(|[x, y]| origin + (right * x + up * y) * radius)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, MAX_PARTICLES, PARTICLES_PER_DENSITY, Particles, advect, clear, count, dot_instances, spawn, spawn_at, target_count};

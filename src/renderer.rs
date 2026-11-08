@@ -42,6 +42,29 @@ pub struct Globals {
     pub inv_view_proj: [[f32; 4]; 4],
     pub camera_pos: [f32; 4],
     pub light_dir: [f32; 4],
+    /// World-space camera right axis, w = 0. Dot billboards expand along it.
+    pub camera_right: [f32; 4],
+    /// World-space camera up axis, w = 0.
+    pub camera_up: [f32; 4],
+}
+
+/// Vertices the dot shader emits per instance: the two triangles of a
+/// camera-facing billboard quad. Kept in step with
+/// [`crate::particles::DOT_QUAD_CORNERS`] (the CPU mirror of the same table).
+pub const DOT_VERTS_PER_INSTANCE: u32 = 6;
+
+/// The world-space camera right/up axes a billboard needs, recovered from the
+/// view-projection's first two rows.
+///
+/// Rows 0/1 of a standard perspective or orthographic projection are scaled
+/// copies of the view matrix's right/up rows (both projections are diagonal in
+/// x and y), so normalising them gives the camera basis for either projection
+/// mode. That matters: the orbit camera's own `view_basis()` only describes the
+/// 3D orbit, while 2D mode paints through the front view.
+pub fn camera_basis_from_view_proj(view_proj: &Mat4) -> (Vec3, Vec3) {
+    let right = view_proj.row(0).truncate().normalize_or_zero();
+    let up = view_proj.row(1).truncate().normalize_or_zero();
+    (right, up)
 }
 
 /// The GPU scene uploaded each frame. `Arc` lets the app skip re-uploads when
@@ -210,7 +233,11 @@ impl DrawState {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    // The rim is antialiased by fading the fragment's alpha
+                    // over one pixel, so the dot pipeline blends; fully covered
+                    // interior pixels (alpha 1) are indistinguishable from the
+                    // arrows' REPLACE blend.
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -236,6 +263,8 @@ impl DrawState {
                     inv_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
                     camera_pos: [0.0; 4],
                     light_dir: LIGHT_DIR,
+                    camera_right: [1.0, 0.0, 0.0, 0.0],
+                    camera_up: [0.0, 1.0, 0.0, 0.0],
                 }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
@@ -330,11 +359,14 @@ impl DrawState {
         camera_pos: Vec3,
         scene: &SceneGPU,
     ) {
+        let (camera_right, camera_up) = camera_basis_from_view_proj(&view_proj);
         let globals = Globals {
             view_proj: mat4_to_mats(view_proj),
             inv_view_proj: mat4_to_mats(view_proj.inverse()),
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 1.0],
             light_dir: self.light_dir,
+            camera_right: camera_right.extend(0.0).to_array(),
+            camera_up: camera_up.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
@@ -428,7 +460,7 @@ impl DrawState {
         if !scene.dots.is_empty() {
             pass.set_pipeline(&self.dot_pipeline);
             pass.set_bind_group(0, &self.dot_bind, &[]);
-            pass.draw(0..(scene.dots.len() as u32) * 24, 0..1);
+            pass.draw(0..(scene.dots.len() as u32) * DOT_VERTS_PER_INSTANCE, 0..1);
         }
     }
 

@@ -13,7 +13,9 @@ struct Globals {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    light_dir: vec4<f32>, // xyz: direction *toward* the light (normalized)
+    light_dir: vec4<f32>,    // xyz: direction *toward* the light (normalized)
+    camera_right: vec4<f32>, // xyz: world-space camera right axis (dot billboards)
+    camera_up: vec4<f32>,    // xyz: world-space camera up axis (dot billboards)
 };
 
 @group(0) @binding(0)
