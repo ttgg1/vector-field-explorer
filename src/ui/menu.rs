@@ -30,8 +30,10 @@ pub const HELP_SHORTCUT: &str = "F1";
 pub const SETTINGS_TITLE: &str = "Settings";
 
 /// About dialog facts, all from the package metadata except the display name.
+/// The version is the compile-time seam, so a nightly build reports its
+/// `<version>-nightly.<date>+<sha>` string (ticket 42).
 pub const ABOUT_NAME: &str = "Vector Field Explorer";
-pub const ABOUT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const ABOUT_VERSION: &str = crate::version::VERSION;
 pub const ABOUT_LICENSE: &str = "GPL-3.0-only";
 pub const ABOUT_URL: &str = "https://github.com/ttgg1/vector-field-explorer";
 

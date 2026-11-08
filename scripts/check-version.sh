@@ -21,25 +21,9 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-if [ ! -f Cargo.toml ]; then
-  echo "check-version: could not read Cargo.toml in $root" >&2
-  exit 1
-fi
-
-# First `version = "..."` inside [package]. Workspace-inherited versions are
-# not used by this crate; an empty read is reported as an error below.
-version="$(
-  awk '
-    /^\[/ { in_package = ($0 == "[package]"); next }
-    in_package && /^[[:space:]]*version[[:space:]]*=/ {
-      line = $0
-      sub(/^[^=]*=[[:space:]]*"/, "", line)
-      sub(/".*$/, "", line)
-      print line
-      exit
-    }
-  ' Cargo.toml
-)"
+# One reader for the crate version: the nightly workflow uses the same script
+# as its base version (ticket 42).
+version="$("$root/scripts/crate-version.sh")"
 
 if [ -z "$version" ]; then
   echo "check-version: could not read [package] version from Cargo.toml" >&2

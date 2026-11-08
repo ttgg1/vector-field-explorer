@@ -383,8 +383,10 @@ fn extra_modifiers_do_not_fire_the_plain_shortcuts() {
 }
 
 #[test]
-fn about_reports_the_package_version_and_gpl_license() {
-    assert_eq!(ABOUT_VERSION, env!("CARGO_PKG_VERSION"));
+fn about_reports_the_build_version_and_gpl_license() {
+    // Ticket 42: About shows the compile-time version seam, which is the
+    // crate version unless a nightly build stamped VFE_BUILD_VERSION.
+    assert_eq!(ABOUT_VERSION, vector_field_explorer::version::VERSION);
     assert_eq!(ABOUT_LICENSE, "GPL-3.0-only");
     assert_eq!(ABOUT_URL, "https://github.com/ttgg1/vector-field-explorer");
 }
