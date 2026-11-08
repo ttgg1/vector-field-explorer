@@ -50,7 +50,7 @@ fn basis(axis: vec3<f32>) -> mat3x3<f32> {
 }
 
 fn ring_point(theta: f32, y: f32, radius: f32) -> vec3<f32> {
-    vec3<f32>(cos(theta) * radius, y, sin(theta) * radius)
+    return vec3<f32>(cos(theta) * radius, y, sin(theta) * radius);
 }
 
 // Side-quad corner order for a triangle list: two triangles, six vertices.
