@@ -46,8 +46,8 @@ Never trust an unverified status line over those two.
 
 ## Status and frontier
 
-Completed: plan tasks T1–T8A; tickets 02–08, 11, 12, 14, 20. See the ledger's
-latest dated section before resuming.
+Completed: plan tasks T1–T8A; tickets 02–08, 11, 12, 14, 20, 24. See the
+ledger's latest dated section before resuming.
 
 Next order: **15 top-bar menus → 18 right-drag orbit + expanded controls → 22
 sidebar rail legibility → 23 3D cube + plane view → 13 test/source separation →
@@ -102,7 +102,8 @@ Production code is under `src/`, tests under `tests/`.
 - **Push after merge:** `git push origin main`, then confirm GitHub CI and smoke
   are green. Never force-push `main`.
 - **Background seats:** dispatch implementer/reviewer subagents with
-  `background=true`; one implementer at a time.
+  `background=true`; one implementer per worktree at a time, only on
+  file-disjoint tickets; the controller serializes merges.
 - **Scope guard:** keep GPU paint behind `SceneGPU`; pure logic in testable
   seams; no test-only API widening without a ledger ruling.
 
