@@ -1,0 +1,12 @@
+# Build throughput tuning for this repo (2026-11-08).
+#
+# `--all-targets` links ~18 test binaries at once. With full debug info each
+# binary is 200-400 MB, and parallel `ld.lld` writes saturate the disk before
+# they saturate the CPU. Line-tables-only debug info cuts that write volume
+# sharply; 25 jobs uses the available cores without the old default of one
+# linker per target.
+[build]
+jobs = 25
+
+[profile.dev]
+debug = 1

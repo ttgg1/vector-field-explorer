@@ -23,7 +23,7 @@ jobs:
       - name: Test
         run: cargo test --all-targets
       - name: Build (debug)
-        run: cargo build --all-targets
+        run: cargo build
 
   # Shader parse / device-init errors only appear at runtime, so actually
   # launch the app on a headless X server with software Vulkan (lavapipe).
