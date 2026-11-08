@@ -12,4 +12,4 @@
 - [ ] Review fix commits (if any) get a scoped re-review per fix-loop reference
 - [ ] Ledger closes the plan: per-task commit ranges + final review verdict
 
-**Dispatch notes:** brief = plan task 14 via `scripts/task-brief … 14`. Review seat on the mandated model (policy: strata/coder-iq1_m, bump variant if needed).
+**Dispatch notes:** brief = plan task 14 via `scripts/task-brief … 14`. Review seat per current policy (`opencode-go/claude-haiku-5-5#high`, `#max` for the final whole-branch review).
