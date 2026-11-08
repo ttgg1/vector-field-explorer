@@ -124,6 +124,9 @@ impl State {
                 self.mark_dirty()
             }
             Err(error) => {
+                // Once per formula change, never per frame: the status bar
+                // still shows the message; this is the stderr/console trail.
+                log::debug!("field parse failed: {error}");
                 self.parse_error = error.to_string();
                 self.mark_dirty()
             }

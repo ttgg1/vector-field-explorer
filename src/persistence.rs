@@ -144,10 +144,14 @@ pub fn load(storage: Option<&dyn eframe::Storage>) -> AppSettings {
         return settings.sanitized();
     }
     if let Some(style) = eframe::get_value::<AppStyle>(storage, eframe::APP_KEY) {
+        log::warn!("persisted settings use the ticket-07 shape; migrating appearance only");
         return AppSettings {
             style,
             ..AppSettings::default()
         };
+    }
+    if storage.get_string(eframe::APP_KEY).is_some() {
+        log::warn!("persisted settings are corrupt; falling back to defaults");
     }
     AppSettings::default()
 }

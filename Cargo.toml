@@ -20,3 +20,13 @@ tempfile = "3.10"
 image = "0.25"
 rfd = "0.15"
 once_cell = "1.19"
+log = "0.4"
+
+# Ticket 20: standard sinks only. Native logs to stderr with `RUST_LOG`
+# (default `info`); wasm logs to the browser console via `console_log`
+# (initialized in ticket 16's entry point).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_log = "1"

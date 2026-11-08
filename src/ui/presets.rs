@@ -1,4 +1,5 @@
 use eframe::egui;
+use log::{debug, warn};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -52,8 +53,16 @@ impl PresetPanel {
     /// Panel pointed at the default data directory.
     pub fn new() -> Self {
         let dir = default_preset_dir();
-        let _ = fs::create_dir_all(&dir);
-        let presets = load_presets(&dir).unwrap_or_default();
+        if let Err(error) = fs::create_dir_all(&dir) {
+            warn!("could not create preset directory {}: {error}", dir.display());
+        }
+        let presets = match load_presets(&dir) {
+            Ok(presets) => presets,
+            Err(error) => {
+                warn!("preset load failed from {}: {error}", dir.display());
+                Vec::new()
+            }
+        };
         Self {
             dir,
             presets,
@@ -67,8 +76,16 @@ impl PresetPanel {
     /// Panel pointed at an explicit directory (used by tests and by the app
     /// once it owns the data-directory configuration).
     pub fn new_with_dir(dir: PathBuf) -> io::Result<Self> {
-        let _ = fs::create_dir_all(&dir);
-        let presets = load_presets(&dir).unwrap_or_default();
+        if let Err(error) = fs::create_dir_all(&dir) {
+            warn!("could not create preset directory {}: {error}", dir.display());
+        }
+        let presets = match load_presets(&dir) {
+            Ok(presets) => presets,
+            Err(error) => {
+                warn!("preset load failed from {}: {error}", dir.display());
+                Vec::new()
+            }
+        };
         Ok(Self {
             dir,
             presets,
@@ -122,6 +139,7 @@ impl PresetPanel {
             scale: camera.scale,
         });
         self.active = Some(name.to_owned());
+        debug!("preset saved: {name}");
         Ok(())
     }
 
@@ -135,9 +153,13 @@ impl PresetPanel {
                 camera.scale = p.scale;
                 self.active = Some(name.to_owned());
                 self.applied = Some(Camera { position: p.position, scale: p.scale });
+                debug!("preset loaded: {name}");
                 true
             }
-            None => false,
+            None => {
+                warn!("preset load failed: no preset named {name}");
+                false
+            }
         }
     }
 
@@ -162,6 +184,7 @@ impl PresetPanel {
         if self.pending_delete.as_deref() == Some(name) {
             self.pending_delete = None;
         }
+        debug!("preset deleted: {name}");
         Ok(())
     }
 
@@ -205,7 +228,7 @@ impl PresetPanel {
                     if ui.button("Delete").clicked()
                         && let Err(e) = self.delete(name)
                     {
-                        eprintln!("Preset delete failed: {e:?}");
+                        warn!("preset delete failed: {e}");
                     }
                     if ui.button("Cancel").clicked() {
                         self.cancel_delete();
@@ -232,7 +255,7 @@ impl PresetPanel {
                 .clicked()
             {
                 if let Err(e) = self.save_current(&name, camera) {
-                    eprintln!("Preset save failed: {e:?}");
+                    warn!("preset save failed: {e}");
                 }
                 self.new_name.clear();
             }

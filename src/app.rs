@@ -398,6 +398,12 @@ impl eframe::App for VfApp {
             self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
             self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+            log::trace!(
+                "scene rebuilt: {} arrows, {} streamline segments, {} dots",
+                self.scene.arrows.len(),
+                self.streamline_count,
+                self.scene.dots.len()
+            );
         }
 
         // Particle cloud: while the toggle is on (3D view only — the 2D
@@ -421,6 +427,11 @@ impl eframe::App for VfApp {
                     self.dots_range,
                     DOT_SPACING_FRACTION * self.state.spacing(),
                 ),
+            );
+            log::trace!(
+                "particles: {} advected, {} dot instances",
+                particle_count(&self.particles),
+                self.scene.dots.len()
             );
         } else if particle_count(&self.particles) > 0 {
             // Toggle off (or the 2D view): drop the cloud so switching back
@@ -457,6 +468,7 @@ impl eframe::App for VfApp {
                     .callback_resources
                     .insert(DrawState::new(&render_state.device, render_state.target_format));
                 self.renderer_ready = true;
+                log::info!("wgpu renderer initialized");
             }
 
             // Camera gestures feed the seam's pure camera action: a left-drag
@@ -534,6 +546,12 @@ impl eframe::App for VfApp {
                     self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
                     self.streamline_count = self.flow_lines.len() + self.click_lines.len();
                     self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+                    log::trace!(
+                        "click seed {} of {} at {seed:?}: {} click streamline segments",
+                        self.click_seeds.len(),
+                        MAX_CLICK_SEEDS,
+                        self.click_lines.len()
+                    );
                     // Particles only exist in the 3D view; a click adds a
                     // capped burst around the pick (the per-frame dot
                     // rebuild picks it up on the next frame). If the cloud

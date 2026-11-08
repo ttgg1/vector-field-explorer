@@ -117,6 +117,10 @@ Production code is under `src/`, tests under `tests/`.
 - Persistence uses one RON envelope under `eframe::APP_KEY`; camera state resets
   on launch by design. Corrupt UI settings fall back/clamp; camera presets stay
   fail-fast.
+- **Logging:** use the `log` facade macros at the call site. Native initializes
+  `env_logger` in `main` (stderr, `RUST_LOG` filter, default `info`); wasm uses
+  `console_log` to the browser console once ticket 16 lands. Per-frame output is
+  `trace` only.
 
 ## SDD workflow
 

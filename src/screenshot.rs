@@ -312,9 +312,18 @@ impl Screenshot {
     /// Turn a report into the toast text the sidebar shows.
     fn set_outcome(&mut self, outcome: SaveOutcome, now: Instant) {
         let (text, failed) = match outcome {
-            SaveOutcome::Saved(path) => (format!("saved {}", path.display()), false),
-            SaveOutcome::Cancelled => ("screenshot cancelled".to_string(), false),
-            SaveOutcome::Failed(error) => (format!("screenshot failed: {error}"), true),
+            SaveOutcome::Saved(path) => {
+                log::info!("screenshot saved to {}", path.display());
+                (format!("saved {}", path.display()), false)
+            }
+            SaveOutcome::Cancelled => {
+                log::debug!("screenshot cancelled");
+                ("screenshot cancelled".to_string(), false)
+            }
+            SaveOutcome::Failed(error) => {
+                log::warn!("screenshot failed: {error}");
+                (format!("screenshot failed: {error}"), true)
+            }
         };
         self.toast = Some(Toast {
             text,
