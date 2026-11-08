@@ -10,11 +10,18 @@ name: Nightly
 #
 # Failure behaviour: the release job needs verify *and* build, so a failing
 # test, lint or build publishes nothing and the previous nightly stays intact.
-# The release job uploads the new assets before deleting the old ones.
+# Inside the release job the tag is the *last* thing to move: assets are
+# uploaded, stale assets deleted and the title/notes updated while `nightly`
+# still points at the previous commit. A first nightly is created as a draft
+# and published only after its assets are attached, so a failure leaves the
+# draft unpublished (the job also deletes it) rather than a public release with
+# missing binaries.
 #
-# Cost: two macOS builds a day bill at 10x on a private repo. If that becomes
-# unacceptable, gate the macOS targets on `workflow_dispatch` (or a weekly
-# schedule) and keep the Linux nightly; the ticket asks for a ruling first.
+# Cost ruling (controller, ticket 42 review): both macOS targets stay on the
+# daily schedule. The repository becomes public before v0.1.0, where macOS
+# minutes are free; until then the private-repo cost (10x) is accepted and will
+# be revisited only if billing becomes material. Do not gate macOS on
+# `workflow_dispatch` without a new ruling.
 #
 # The tag push uses the job's `contents: write` token. GITHUB_TOKEN pushes do
 # not trigger other workflows, and release.yml only listens for `v*` tags, so
@@ -70,12 +77,15 @@ jobs:
           set -euo pipefail
           base="$(scripts/crate-version.sh)"
           sha="$(git rev-parse HEAD)"
-          date="$(date -u +%Y%m%d)"
-          version="$(scripts/nightly-version.sh "$base" "$date" "$sha")"
+          # One clock read: the version date and the display date in the title
+          # must agree even if the job crosses midnight UTC.
+          day="$(date -u +%Y%m%d)"
+          version="$(scripts/nightly-version.sh "$base" "$day" "$sha")"
+          display_date="${day:0:4}-${day:4:2}-${day:6:2}"
           echo "nightly version: ${version}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
-          echo "display_date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "display_date=${display_date}" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -123,21 +133,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Move the nightly tag to the built commit
-        env:
-          SHA: ${{ needs.verify.outputs.sha }}
-        run: |
-          set -euo pipefail
-          case "$SHA" in
-            ''|*[!0-9a-f]*)
-              echo "::error::not a full commit SHA: '${SHA}'"
-              exit 1
-              ;;
-          esac
-          # Force-update the rolling tag. Never a `v*` tag.
-          git tag -f nightly "$SHA"
-          git push --force origin refs/tags/nightly
-
       - name: Create or update the nightly prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,9 +143,10 @@ jobs:
         run: |
           set -euo pipefail
           tag=nightly
-          case "$tag" in
-            v*)
-              echo "::error::refusing to publish a versioned tag from the nightly workflow"
+
+          case "$SHA" in
+            ''|*[!0-9a-f]*)
+              echo "::error::not a full commit SHA: '${SHA}'"
               exit 1
               ;;
           esac
@@ -182,35 +178,103 @@ jobs:
           implementation such as \`mesa-vulkan-drivers\`).
           NOTES
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release ${tag} exists; updating title, notes and assets"
+          # A first nightly is a draft: the public release (and its tag) appears
+          # only when the assets are already attached. If anything fails before
+          # the publish, remove the draft so it can never become the nightly.
+          draft_created=0
+          published=0
+          cleanup_draft() {
+            status=$?
+            trap - EXIT
+            if [ "$status" -ne 0 ] && [ "$draft_created" -eq 1 ] && [ "$published" -eq 0 ]; then
+              echo "::warning::deleting the unpublished nightly draft after a failure"
+              gh release delete "$tag" --yes || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_draft EXIT
+
+          # A draft left behind by an earlier failed run is removed, not
+          # treated as the live nightly: it must never become public without
+          # this run's assets.
+          existing=0
+          case "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)" in
+            false) existing=1 ;;
+            true)
+              echo "removing a draft left by an earlier failed run"
+              gh release delete "$tag" --yes
+              ;;
+          esac
+
+          if [ "$existing" -eq 1 ]; then
+            echo "release ${tag} exists; replacing assets before the tag moves"
+
+            # Upload first, then drop assets from older nightlies: each run
+            # replaces the set, and a failed upload leaves the previous set
+            # whole.
+            gh release upload "$tag" "${assets[@]}" --clobber
+
+            declare -A keep=()
+            for asset in "${assets[@]}"; do
+              keep["$(basename "$asset")"]=1
+            done
+            # Capture the list first: a failing `gh release view` inside a
+            # process substitution would end the loop silently under
+            # `set -e` and leave stale assets behind.
+            asset_names="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              if [ -z "${keep[$name]:-}" ]; then
+                echo "removing stale asset ${name}"
+                gh release delete-asset "$tag" "$name" --yes
+              fi
+            done <<< "$asset_names"
+
             gh release edit "$tag" \
               --title "Nightly ${NIGHTLY_DATE}" \
               --prerelease \
               --latest=false \
               --notes-file release-notes.md
           else
-            echo "release ${tag} does not exist; creating it"
+            echo "release ${tag} does not exist; creating a draft"
             gh release create "$tag" \
+              --draft \
+              --target "$SHA" \
               --title "Nightly ${NIGHTLY_DATE}" \
-              --verify-tag \
               --prerelease \
               --latest=false \
               --notes-file release-notes.md
+            draft_created=1
+
+            gh release upload "$tag" "${assets[@]}" --clobber
+
+            # Publishing creates the tag at --target, so the public nightly
+            # appears only once its assets are in place.
+            gh release edit "$tag" \
+              --draft=false \
+              --title "Nightly ${NIGHTLY_DATE}" \
+              --prerelease \
+              --latest=false \
+              --notes-file release-notes.md
+            published=1
           fi
 
-          # Upload first, then drop assets from older nightlies: each run
-          # replaces the set, and a failed upload leaves the previous set whole.
-          gh release upload "$tag" "${assets[@]}" --clobber
+          # Last: point the rolling tag at the commit whose assets are live. In
+          # the draft path publish normally creates it already; the force push
+          # also covers a tag that outlived a deleted release.
+          git tag -f nightly "$SHA"
+          git push --force origin refs/tags/nightly
 
-          declare -A keep=()
-          for asset in "${assets[@]}"; do
-            keep["$(basename "$asset")"]=1
-          done
-          while IFS= read -r name; do
-            [ -n "$name" ] || continue
-            if [ -z "${keep[$name]:-}" ]; then
-              echo "removing stale asset ${name}"
-              gh release delete-asset "$tag" "$name" --yes
-            fi
-          done < <(gh release view "$tag" --json assets --jq '.assets[].name')
+      - name: Verify the nightly tag points at the built commit
+        env:
+          SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Read the tag back from the remote rather than trusting the push.
+          git fetch --force --no-tags origin '+refs/tags/nightly:refs/tags/nightly-verify'
+          actual="$(git rev-parse 'refs/tags/nightly-verify^{commit}')"
+          if [ "$actual" != "$SHA" ]; then
+            echo "::error::nightly points at ${actual}, expected ${SHA}"
+            exit 1
+          fi
+          echo "nightly -> ${actual}"

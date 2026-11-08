@@ -42,9 +42,25 @@ fi
 if ! [[ "$date" =~ ^[0-9]{8}$ ]]; then
   fail "date '$date' must be YYYYMMDD"
 fi
+year=$((10#${date:0:4}))
 month=$((10#${date:4:2}))
 day=$((10#${date:6:2}))
-if [ "$month" -lt 1 ] || [ "$month" -gt 12 ] || [ "$day" -lt 1 ] || [ "$day" -gt 31 ]; then
+# Real calendar dates, not just numeric ranges: `20260230` must fail. Leap
+# years follow the Gregorian rule (divisible by 4, except centuries unless
+# divisible by 400).
+case "$month" in
+  1 | 3 | 5 | 7 | 8 | 10 | 12) last_day=31 ;;
+  4 | 6 | 9 | 11) last_day=30 ;;
+  2)
+    if (( (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 )); then
+      last_day=29
+    else
+      last_day=28
+    fi
+    ;;
+  *) fail "date '$date' is not a calendar date" ;;
+esac
+if [ "$day" -lt 1 ] || [ "$day" -gt "$last_day" ]; then
   fail "date '$date' is not a calendar date"
 fi
 
