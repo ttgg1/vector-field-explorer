@@ -4,11 +4,11 @@
 //! into the line collection by `app::compose_lines`, never counted as field
 //! geometry and never owned by the viewmodel snapshot.
 //!
-//! 3D sampling draws the 12 domain box edges, light grid lines on the three
-//! far faces (the min-x/min-y/min-z planes, which face away from the default
-//! orbit eye), and coloured X/Y/Z axes through the domain centre. Flat sampling
-//! draws one grid on the domain's mid-z plane, which is exactly where
-//! `Domain::grid_points` puts a single z slice.
+//! 3D sampling draws light grid lines on the three far faces first, then the
+//! 12 domain box edges over them (so coincident segments are not overdrawn by
+//! the thinner grid), and the coloured X/Y/Z axes through the domain centre
+//! last. Flat sampling draws one grid on the domain's mid-z plane, which is
+//! exactly where `Domain::grid_points` puts a single z slice, then its axes.
 
 use glam::Vec3;
 
@@ -60,25 +60,9 @@ fn cube_lines(domain: &Domain) -> Vec<LineInstanceGPU> {
     let max = domain.max;
     let mut lines = Vec::new();
 
-    // 12 box edges.
-    for y in [min.y, max.y] {
-        for z in [min.z, max.z] {
-            push(&mut lines, Vec3::new(min.x, y, z), Vec3::new(max.x, y, z), EDGE_COLOR, EDGE_WIDTH);
-        }
-    }
-    for x in [min.x, max.x] {
-        for z in [min.z, max.z] {
-            push(&mut lines, Vec3::new(x, min.y, z), Vec3::new(x, max.y, z), EDGE_COLOR, EDGE_WIDTH);
-        }
-    }
-    for x in [min.x, max.x] {
-        for y in [min.y, max.y] {
-            push(&mut lines, Vec3::new(x, y, min.z), Vec3::new(x, y, max.z), EDGE_COLOR, EDGE_WIDTH);
-        }
-    }
-
-    // Light grids on the three far faces. Each face gets one line per
-    // subdivision along each of its two in-plane directions.
+    // Light grids on the three far faces, drawn first so the thicker box
+    // edges and axes land on top where they coincide. Each face gets one line
+    // per subdivision along each of its two in-plane directions.
     for k in 0..=REFERENCE_DIVISIONS {
         let t = lerp(min.y, max.y, k);
         push(&mut lines, Vec3::new(min.x, t, min.z), Vec3::new(min.x, t, max.z), GRID_COLOR, GRID_WIDTH);
@@ -94,6 +78,24 @@ fn cube_lines(domain: &Domain) -> Vec<LineInstanceGPU> {
         push(&mut lines, Vec3::new(t, min.y, min.z), Vec3::new(t, max.y, min.z), GRID_COLOR, GRID_WIDTH);
         let t = lerp(min.y, max.y, k);
         push(&mut lines, Vec3::new(min.x, t, min.z), Vec3::new(max.x, t, min.z), GRID_COLOR, GRID_WIDTH);
+    }
+
+    // 12 box edges, after the face grid so they overdraw the thinner grid
+    // lines they share.
+    for y in [min.y, max.y] {
+        for z in [min.z, max.z] {
+            push(&mut lines, Vec3::new(min.x, y, z), Vec3::new(max.x, y, z), EDGE_COLOR, EDGE_WIDTH);
+        }
+    }
+    for x in [min.x, max.x] {
+        for z in [min.z, max.z] {
+            push(&mut lines, Vec3::new(x, min.y, z), Vec3::new(x, max.y, z), EDGE_COLOR, EDGE_WIDTH);
+        }
+    }
+    for x in [min.x, max.x] {
+        for y in [min.y, max.y] {
+            push(&mut lines, Vec3::new(x, y, min.z), Vec3::new(x, y, max.z), EDGE_COLOR, EDGE_WIDTH);
+        }
     }
 
     // Coloured axes through the domain centre.

@@ -129,9 +129,10 @@ impl State {
         self.formula = formula;
         match parsed {
             Ok(field) => {
+                let previous_grid = self.grid();
                 self.field = field;
                 self.parse_error = String::new();
-                self.sync_plane();
+                self.sync_plane(previous_grid);
                 self.mark_dirty()
             }
             Err(error) => {
@@ -150,8 +151,9 @@ impl State {
         if self.mode_3d == mode_3d {
             return false;
         }
+        let previous_grid = self.grid();
         self.mode_3d = mode_3d;
-        self.sync_plane();
+        self.sync_plane(previous_grid);
         self.mark_dirty()
     }
 
@@ -162,8 +164,9 @@ impl State {
         if self.density == density {
             return false;
         }
+        let previous_grid = self.grid();
         self.density = density;
-        self.sync_plane();
+        self.sync_plane(previous_grid);
         self.mark_dirty()
     }
 
@@ -175,8 +178,9 @@ impl State {
         if self.domain == domain {
             return false;
         }
+        let previous_grid = self.grid();
         self.domain = domain;
-        self.sync_plane();
+        self.sync_plane(previous_grid);
         self.mark_dirty()
     }
 
@@ -268,15 +272,11 @@ impl State {
         self.mark_dirty()
     }
 
-    /// The plane-by-plane selection, clamped into the current grid. Turning
-    /// the mode on from a fresh (index 0) selection starts at the middle
-    /// plane, matching [`PlaneView::middle`]; the app's 2D startup state and
-    /// the sidebar mirror both begin at index 0.
+    /// The plane-by-plane selection, clamped into the current grid. The index
+    /// is a user choice once the grid has more than one slice, so toggling the
+    /// mode keeps it; only a grid change recentres it (see [`sync_plane`]).
     pub fn set_plane(self: &mut State, plane: PlaneView) -> bool {
-        let mut plane = plane.clamped(self.grid());
-        if plane.enabled && !self.plane.enabled && plane.index == 0 {
-            plane.index = plane.axis.middle_index(self.grid());
-        }
+        let plane = plane.clamped(self.grid());
         if self.plane == plane {
             return false;
         }
@@ -311,15 +311,18 @@ impl State {
     }
 
     /// Keep the plane index valid after the sampling grid changes shape:
-    /// collapse a one-slice axis to 0, and recentre a plane that no longer
-    /// exists at the middle sample. Called by every setter that changes the
-    /// grid (density, mode, formula dimension, domain).
-    fn sync_plane(self: &mut State) {
+    /// collapse a one-slice axis to 0, recentre a plane that no longer exists,
+    /// and — leaving a one-slice axis — start at the middle plane, because
+    /// index 0 on a single slice was never a choice. Called by every setter
+    /// that changes the grid (density, mode, formula dimension, domain) with
+    /// the grid that was in force before the change.
+    fn sync_plane(self: &mut State, previous_grid: UVec3) {
         let grid = self.grid();
         let count = self.plane.axis.count(grid);
+        let previous_count = self.plane.axis.count(previous_grid);
         if count <= 1 {
             self.plane.index = 0;
-        } else if self.plane.index >= count {
+        } else if previous_count <= 1 || self.plane.index >= count {
             self.plane.index = self.plane.axis.middle_index(grid);
         }
     }

@@ -9,7 +9,8 @@
 use glam::Vec3;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::reference::{
-    AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, EDGE_COLOR, REFERENCE_DIVISIONS, reference_lines,
+    AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, EDGE_COLOR, GRID_COLOR, REFERENCE_DIVISIONS,
+    reference_lines,
 };
 use vector_field_explorer::renderer::LineInstanceGPU;
 
@@ -103,6 +104,50 @@ fn three_d_reference_stays_inside_the_domain_and_draws_every_bound() {
             "a box edge lies on axis {axis} bound {bound}",
         );
     }
+}
+
+#[test]
+fn face_grid_is_drawn_before_the_box_edges_and_axes_last() {
+    // Later lines overdraw earlier ones where they coincide, so the thin face
+    // grid must come first, the thicker box edges on top of it, and the
+    // coloured axes last.
+    let domain = Domain::default();
+    let lines = reference_lines(&domain, true);
+    let last_grid = lines
+        .iter()
+        .rposition(|line| same_color(line.color, GRID_COLOR))
+        .expect("the faces contribute grid lines");
+    let first_edge = lines
+        .iter()
+        .position(|line| same_color(line.color, EDGE_COLOR))
+        .expect("the cube contributes edge lines");
+    assert!(last_grid < first_edge, "every face-grid line precedes the box edges");
+    let last_edge = lines
+        .iter()
+        .rposition(|line| same_color(line.color, EDGE_COLOR))
+        .expect("the cube contributes edge lines");
+    for (color, name) in [
+        (AXIS_X_COLOR, "x"),
+        (AXIS_Y_COLOR, "y"),
+        (AXIS_Z_COLOR, "z"),
+    ] {
+        let axis = lines
+            .iter()
+            .position(|line| same_color(line.color, color))
+            .unwrap_or_else(|| panic!("the {name} axis is drawn"));
+        assert!(axis > last_edge, "the {name} axis is drawn after the box edges");
+    }
+
+    let flat = reference_lines(&domain, false);
+    let last_flat_grid = flat
+        .iter()
+        .rposition(|line| same_color(line.color, GRID_COLOR))
+        .expect("the plane contributes grid lines");
+    let first_flat_axis = flat
+        .iter()
+        .position(|line| same_color(line.color, AXIS_X_COLOR))
+        .expect("the plane contributes axes");
+    assert!(last_flat_grid < first_flat_axis, "the 2D grid precedes its axes");
 }
 
 #[test]

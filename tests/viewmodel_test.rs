@@ -79,17 +79,43 @@ fn plane_state_defaults_to_the_middle_z_plane() {
 }
 
 #[test]
-fn enabling_plane_mode_from_a_fresh_selection_starts_at_the_middle() {
-    // The app boots 2D with index 0; loading a 3D field leaves it there while
-    // the mode is off. Turning plane mode on should show the middle slice,
-    // matching `PlaneView::middle`.
+fn leaving_a_one_slice_grid_starts_at_the_middle_plane() {
+    // The app boots 2D with index 0, where the single z slice makes 0 the only
+    // possible index. The first transition to a multi-slice grid (3D mode plus
+    // a three-component formula) is therefore not a user selection and should
+    // land on the middle plane, matching `PlaneView::middle`.
     let mut st = State::new(false);
+    assert_eq!(st.plane.index, 0, "the one-slice startup grid sits at index 0");
+    assert!(st.set_mode(true), "switching to 3D mode marks dirty");
+    assert_eq!(st.plane.index, 0, "a 2D field still samples one z slice");
+    assert!(st.set_formula(FORMULA_3D.to_string()), "the preset formula applies");
+    assert_eq!(
+        st.plane.index,
+        (st.density - 1) / 2,
+        "leaving the one-slice grid recentres to the middle plane",
+    );
+    assert!(!st.plane.enabled, "recentring does not switch the mode on");
+}
+
+#[test]
+fn a_user_selected_plane_zero_survives_disable_and_enable() {
+    // Regression: index 0 is a legitimate plane once the cube exists (enable,
+    // drag to plane 0, disable, re-enable). Toggling the mode must keep the
+    // user's slice instead of jumping back to the middle.
+    let mut st = State::new(true);
+    assert!(st.set_plane_index(0), "drag the plane to the first z slice");
+    assert!(st.set_plane_enabled(true), "show plane 0");
     assert_eq!(st.plane.index, 0);
-    assert!(st.set_mode(true));
-    assert!(st.set_formula(FORMULA_3D.to_string()));
-    assert_eq!(st.plane.index, 0, "still the disabled startup index");
+    assert!(st.set_plane_enabled(false), "hide the plane");
+    assert_eq!(st.plane.index, 0, "hiding keeps the selected slice");
+    assert!(st.set_plane_enabled(true), "show it again");
+    assert_eq!(st.plane.index, 0, "re-enabling must not jump to the middle plane");
+
+    let middle = (st.density - 1) / 2;
+    assert!(st.set_plane_index(middle), "a middle selection");
+    assert!(st.set_plane_enabled(false));
     assert!(st.set_plane_enabled(true));
-    assert_eq!(st.plane.index, (st.density - 1) / 2, "enabling recentres to the middle plane");
+    assert_eq!(st.plane.index, middle, "a non-zero selection survives the toggle too");
 }
 
 #[test]
