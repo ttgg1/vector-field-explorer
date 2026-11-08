@@ -4,11 +4,13 @@
 
 **Blocked by:** 04 (2D streamlines), 05 (particles + dots pipeline).
 
-**Status:** ready-for-agent
+**Status:** COMPLETE (`ff5e708`, review clean; 3 minors parked for final review)
 
-- [ ] 3D sampling feeds streamline/particle paths; sort keeps lines/dots ordered with arrows (existing CPU far-to-near contract)
-- [ ] Pure click→ray→seed-placement function RED→GREEN watched (unproject helpers already exist behind the camera module)
-- [ ] Click seeding works in 2D too (ray degenerates to the ortho plane) — reviewer requirement only if cheap per brief task 11
-- [ ] Gates: build / clippy `-D warnings` / full `cargo test` green; commit `feat: 3D features with click seeding`
+- [x] 3D sampling feeds streamline/particle paths — ruled: sort stays arrows-only, lines/dots keep insertion order (pre-existing contract)
+- [x] Pure click→ray→seed-placement function RED→GREEN watched (`ray_seed` + `click_seed`, 4 tests)
+- [x] Click seeding works in 2D too (ortho ray → domain z-mid plane)
+- [x] Gates: build / clippy `-D warnings` / full `cargo test` green; smoke PASS; commit `feat: 3D features with click seeding`
+
+**Rulings:** click bursts paint even with the Streamlines toggle off (a click is an explicit request; the toggle governs the ambient grid only). Depth sort stays arrows-only; extending far-to-near sorting to lines/dots is out of scope (parked).
 
 **Dispatch notes:** brief = plan task 11 via `scripts/task-brief … 11`.
