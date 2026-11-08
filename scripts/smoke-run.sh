@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runtime smoke test: launch the app under a timeout and fail on startup
-# panics or wgpu validation errors.
+# panics, wgpu validation errors, or a textless window (no bundled/system
+# fonts).
 #
 # Why: `cargo build` and `cargo test` never create a wgpu device, so broken
 # WGSL (parse errors, bad bindings) only surfaces when the app actually runs.
@@ -29,9 +30,11 @@ status=${PIPESTATUS[0]}
 set -e
 
 # A panic can happen on a non-main thread while the process keeps running, so
-# grep the log as well as trusting the exit status.
-if grep -Eq 'panicked at|wgpu error:|Validation Error|Shader .* parsing error' "$log"; then
-  echo "smoke: FAIL - panic or wgpu validation error detected" >&2
+# grep the log as well as trusting the exit status. The font pattern catches a
+# textless run: without bundled fonts (eframe's `default_fonts`), a host with
+# no system fonts renders a blank window but never panics (ticket 25).
+if grep -Eq 'panicked at|wgpu error:|Validation Error|Shader .* parsing error|No font provider has any font' "$log"; then
+  echo "smoke: FAIL - panic, wgpu validation error, or missing fonts detected" >&2
   exit 1
 fi
 
