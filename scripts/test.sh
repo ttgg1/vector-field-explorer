@@ -16,6 +16,12 @@
 # same `<crate>-<hash>` shape as a test binary. If the probe cannot produce a
 # set, cleanup falls back to the standalone default rule.
 #
+# Cleanup is skipped with a warning when cargo's output is not under the
+# directory this script would prune: a forwarded `--release`, `--target` or
+# `--target-dir`, a `build.target-dir` in `.cargo/config.toml` that
+# TARGET_DIR/CARGO_TARGET_DIR do not mirror, or a probe whose executables live
+# elsewhere. Pruning the wrong tree could delete every hashed executable there.
+#
 # Usage: scripts/test.sh [cargo test arguments...]
 #
 #   --incremental   also remove `debug/incremental/` after the run
@@ -113,6 +119,54 @@ expand_keep_set() {
   done <"$raw"
 }
 
+# The `debug` directory cleanup will prune, resolved like the cleanup script
+# does: TARGET_DIR, else CARGO_TARGET_DIR, else <repo>/target.
+cleanup_debug_dir() {
+  local target="${TARGET_DIR:-${CARGO_TARGET_DIR:-$root/target}}"
+  if [ -d "$target" ]; then
+    target="$(cd "$target" && pwd -P)"
+  fi
+  printf '%s/debug' "$target"
+}
+
+# Cargo can write somewhere else than the directory we would prune: `--release`
+# (`target/release/deps`), `--target <triple>`
+# (`target/<triple>/debug/deps`), `--target-dir`, or a `build.target-dir` in
+# `.cargo/config.toml` that `TARGET_DIR`/`CARGO_TARGET_DIR` do not mirror.
+# Pruning the wrong directory could delete every hashed executable there, so
+# print the first offender and let the caller skip cleanup.
+keep_set_in_target() {
+  local raw="$1" expected exe
+  expected="$(cleanup_debug_dir)/"
+  while IFS= read -r exe; do
+    [ -n "$exe" ] || continue
+    case "$exe" in
+      "$expected"*) : ;;
+      *)
+        printf '%s' "$exe"
+        return 1
+        ;;
+    esac
+  done <"$raw"
+  return 0
+}
+
+# Flags that move cargo's output out of `<target>/debug`; checked even when the
+# probe fails, because then there is no artifact list to compare against.
+forwarded_layout_flag() {
+  local arg
+  for arg in ${cargo_args[@]+"${cargo_args[@]}"}; do
+    [ "$arg" = "--" ] && break
+    case "$arg" in
+      --release|--target|--target=*|--target-dir|--target-dir=*)
+        printf '%s' "$arg"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 status=0
 raw_keep=""
 if [ "${KEEP_TEST_ARTIFACTS:-0}" != "1" ]; then
@@ -124,40 +178,60 @@ run_cargo_test || status=$?
 if [ "${KEEP_TEST_ARTIFACTS:-0}" = "1" ]; then
   echo "test: KEEP_TEST_ARTIFACTS=1; leaving test artifacts in place"
 else
-  keep_file=""
-  if [ -n "$raw_keep" ]; then
-    # Expand after the run so the bin artifact exists even on a cold target.
-    keep_file="$(mktemp)" || keep_file=""
-    if [ -n "$keep_file" ]; then
-      expand_keep_set "$raw_keep" "$keep_file"
-      if [ ! -s "$keep_file" ]; then
-        rm -f "$keep_file"
-        keep_file=""
-      fi
+  # Never prune a directory cargo did not write to: a forwarded layout flag, a
+  # `build.target-dir` in `.cargo/config.toml`, or a TARGET_DIR /
+  # CARGO_TARGET_DIR that does not mirror cargo's output would otherwise let
+  # cleanup delete every hashed executable in the wrong tree.
+  skip_cleanup=""
+  layout_flag="$(forwarded_layout_flag)" || true
+  if [ -n "$layout_flag" ]; then
+    skip_cleanup="'$layout_flag' moves cargo's output out of $(cleanup_debug_dir)"
+  elif [ -n "$raw_keep" ]; then
+    mismatch="$(keep_set_in_target "$raw_keep")" || true
+    if [ -n "$mismatch" ]; then
+      skip_cleanup="cargo wrote test binaries under '$(dirname "$mismatch")', but cleanup targets '$(cleanup_debug_dir)'"
     fi
-    rm -f "$raw_keep"
   fi
 
-  clean_args=()
-  if [ "$incremental" -eq 1 ] || [ "${CLEAN_INCREMENTAL:-0}" = "1" ]; then
-    clean_args+=(--incremental)
-  fi
-  if [ -n "$keep_file" ]; then
-    clean_args+=(--keep-file "$keep_file")
-    echo "test: cleaning test artifacts, keeping the binaries from this run"
-  fi
-  # Cleanup failures are a warning only: the test run's status wins.
-  if [ ${#clean_args[@]} -eq 0 ]; then
-    if ! "$root/scripts/clean-test-artifacts.sh"; then
-      echo "test: warning: artifact cleanup failed; test status unchanged" >&2
-    fi
+  if [ -n "$skip_cleanup" ]; then
+    echo "test: warning: $skip_cleanup; skipping artifact cleanup" >&2
+    rm -f "$raw_keep"
   else
-    if ! "$root/scripts/clean-test-artifacts.sh" "${clean_args[@]}"; then
-      echo "test: warning: artifact cleanup failed; test status unchanged" >&2
+    keep_file=""
+    if [ -n "$raw_keep" ]; then
+      # Expand after the run so the bin artifact exists even on a cold target.
+      keep_file="$(mktemp)" || keep_file=""
+      if [ -n "$keep_file" ]; then
+        expand_keep_set "$raw_keep" "$keep_file"
+        if [ ! -s "$keep_file" ]; then
+          rm -f "$keep_file"
+          keep_file=""
+        fi
+      fi
+      rm -f "$raw_keep"
     fi
-  fi
-  if [ -n "$keep_file" ]; then
-    rm -f "$keep_file"
+
+    clean_args=()
+    if [ "$incremental" -eq 1 ] || [ "${CLEAN_INCREMENTAL:-0}" = "1" ]; then
+      clean_args+=(--incremental)
+    fi
+    if [ -n "$keep_file" ]; then
+      clean_args+=(--keep-file "$keep_file")
+      echo "test: cleaning test artifacts, keeping the binaries from this run"
+    fi
+    # Cleanup failures are a warning only: the test run's status wins.
+    if [ ${#clean_args[@]} -eq 0 ]; then
+      if ! "$root/scripts/clean-test-artifacts.sh"; then
+        echo "test: warning: artifact cleanup failed; test status unchanged" >&2
+      fi
+    else
+      if ! "$root/scripts/clean-test-artifacts.sh" "${clean_args[@]}"; then
+        echo "test: warning: artifact cleanup failed; test status unchanged" >&2
+      fi
+    fi
+    if [ -n "$keep_file" ]; then
+      rm -f "$keep_file"
+    fi
   fi
 fi
 

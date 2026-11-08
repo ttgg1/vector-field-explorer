@@ -405,10 +405,12 @@ fn test_script_preserves_a_failing_test_status_and_still_cleans() {
 fn test_script_keeps_the_app_binary_hardlinked_into_deps() {
     let fx = Fixture::new();
     // Cargo links `target/debug/<name>` and hardlinks it into deps under a
-    // hashed name, so the app binary looks like a test executable there.
+    // hashed name, so the app binary looks like a test executable there. It is
+    // executable, like every cargo-produced binary: a 0644 fixture would be
+    // skipped by the executable-bit gate before the keep set is consulted.
     let bin = fx.target().join("debug/vector-field-explorer");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    fs::write(&bin, b"app binary").unwrap();
+    write_file(&bin, true, SystemTime::now());
     let bin_deps_name = "vector_field_explorer-0011223344556677";
     fs::hard_link(&bin, fx.path(bin_deps_name)).unwrap();
 
@@ -429,6 +431,48 @@ fn test_script_keeps_the_app_binary_hardlinked_into_deps() {
     assert_kept(&fx.path(bin_deps_name));
     assert_kept(&fx.path(NEW_HASHED));
     assert_removed(&fx.path(OLD_HASHED));
+}
+
+#[test]
+fn test_script_skips_cleanup_for_a_forwarded_layout_flag() {
+    let fx = Fixture::new();
+    let fake = fake_cargo(&fx.target(), 0, &[&fx.path(NEW_HASHED)]);
+
+    // `--release` makes cargo write to target/release/deps; the keep set would
+    // then describe a different tree than the one cleanup prunes.
+    let out = script_command(&test_script())
+        .env("TARGET_DIR", fx.target())
+        .env("CARGO", &fake)
+        .args(["--release", "--definitely-not-a-cargo-flag"])
+        .output()
+        .expect("run scripts/test.sh");
+
+    assert_success(&out, "scripts/test.sh --release");
+    // Fail safe: nothing in debug/deps is touched.
+    assert_kept(&fx.path(OLD_HASHED));
+    assert_kept(&fx.path(NEW_HASHED));
+    assert_kept(&fx.path(OTHER_CRATE_HASHED));
+}
+
+#[test]
+fn test_script_skips_cleanup_when_cargo_wrote_outside_the_cleanup_target() {
+    let fx = Fixture::new();
+    // The probe says cargo built into `release/deps` while cleanup would prune
+    // `debug/deps`: the mismatch must win over the keep set.
+    let elsewhere = fx.target().join("release/deps").join(NEW_HASHED);
+    let fake = fake_cargo(&fx.target(), 0, &[&elsewhere]);
+
+    let out = script_command(&test_script())
+        .env("TARGET_DIR", fx.target())
+        .env("CARGO", &fake)
+        .arg("--definitely-not-a-cargo-flag")
+        .output()
+        .expect("run scripts/test.sh");
+
+    assert_success(&out, "scripts/test.sh with a mismatched target");
+    assert_kept(&fx.path(OLD_HASHED));
+    assert_kept(&fx.path(NEW_HASHED));
+    assert_kept(&fx.path(OTHER_CRATE_HASHED));
 }
 
 #[test]
