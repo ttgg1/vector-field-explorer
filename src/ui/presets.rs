@@ -223,9 +223,10 @@ impl PresetPanel {
     pub fn show(&mut self, ui: &mut egui::Ui, camera: &mut Camera, state: &mut State) {
         ui.heading("Presets");
 
-        // Built-in field presets, grouped by category. The row highlight
-        // follows the formula currently in the scene, so it also reflects
-        // edits typed into the formula bar.
+        // Built-in field presets, grouped by category. The row highlight needs
+        // the clicked name (`active_field`) as well as the live formula and
+        // dimension, so duplicate formulas highlight one row and formula-bar
+        // edits clear the highlight.
         ui.weak("Field presets");
         for category in PresetCategory::ALL {
             ui.add_space(4.0);

@@ -23,7 +23,8 @@ A named, saved viewpoint that can be applied later.
 _Avoid_: view preset, camera state
 
 **Field preset**:
-A named formula example that loads into the formula bar.
+A named formula example listed in the grouped Presets panel; clicking one
+loads its formula and 2D/3D dimension into the scene.
 _Avoid_: preset (unqualified)
 
 **Controls panel**:

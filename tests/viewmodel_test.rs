@@ -32,7 +32,7 @@ fn invalid_edit_reports_error_without_losing_the_field() {
 
 #[test]
 fn preset_selection_switches_mode_and_field() {
-    // Mirrors the formula bar's ComboBox path for the "3D radial" preset:
+    // Mirrors the grouped Presets panel's field-preset load for "3D radial":
     // set_mode(true) followed by the preset's formula, both through the seam.
     let mut st = State::new(false);
     assert!(st.snapshot_if_dirty().is_some());

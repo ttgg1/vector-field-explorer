@@ -294,9 +294,10 @@ impl eframe::App for VfApp {
             style_panel::apply(ui.ctx(), &self.style);
         }
 
-        // Formula bar below the menu row: live edits, the field-preset
-        // ComboBox and the 2D/3D toggle. Every edit goes through a viewmodel
-        // setter, which owns parsing, clamping and the dirty flag.
+        // Formula bar below the menu row: live formula edits and the 2D/3D
+        // toggle. Field presets load from the grouped Presets panel. Every
+        // edit goes through a viewmodel setter, which owns parsing, clamping
+        // and the dirty flag.
         egui::Panel::top("formula_bar").show(ui, |ui| {
             crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
         });
