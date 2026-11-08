@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Vector Field Explorer
+GenericName=Vector Field Explorer
+Comment=Explore vector fields typed as formulas
+Exec=vector-field-explorer
+Icon=vector-field-explorer
+Terminal=false
+Categories=Education;Math;
+Keywords=vector;field;math;formula;visualization;
+StartupNotify=true
+StartupWMClass=vector-field-explorer

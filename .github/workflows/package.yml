@@ -7,11 +7,27 @@ name: Package
 # The caller owns verification, versioning and publishing. This workflow only:
 #   * checks out the requested ref,
 #   * builds the three supported targets in release mode,
-#   * strips the binary, packages it (tar.gz on Linux, .app.zip on macOS) and
-#     uploads one artifact per target under the target triple's name.
+#   * strips the binary, packages it (a single-file AppImage on Linux,
+#     .app.zip on macOS) and uploads one artifact per target under the target
+#     triple's name.
+#
+# Linux AppImage (ticket 43):
+#   * linuxdeploy 1-alpha-20251107-1 builds the AppDir; appimagetool 1.9.1
+#     turns it into the image using the pinned type2 runtime 20251108. All
+#     three downloads are pinned by URL and SHA-256 in the "Install Linux
+#     AppImage tools" step, and the tools run with
+#     --appimage-extract-and-run because GitHub runners have no FUSE.
+#   * The bundle carries the app and its non-graphics dependencies only. The
+#     Vulkan loader/ICD, GL/EGL, DRM and GBM userspace libraries are excluded
+#     so the AppImage uses the host GPU driver instead of shipping (or
+#     shadowing) Mesa. The packaging step fails if one slips in.
+#   * packaging/linux/vector-field-explorer.svg is the icon source; the
+#     committed 256x256 PNG beside it is rendered from that SVG, so CI needs no
+#     SVG converter and linuxdeploy always gets the raster icon AppImage
+#     tooling expects.
 #
 # Inputs:
-#   version        version used in archive names and Info.plist
+#   version        version used in asset names and Info.plist
 #   ref            tag name or commit SHA to build
 #   build-version  compile-time VFE_BUILD_VERSION; empty means the app falls
 #                  back to the Cargo.toml version (src/version.rs)
@@ -20,7 +36,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version used in archive names and Info.plist'
+        description: 'Version used in asset names and Info.plist'
         required: true
         type: string
       ref:
@@ -67,13 +83,15 @@ jobs:
           key: ${{ matrix.target }}
 
       # Build-only deps: winit/glutin headers, X11/Wayland, GL and Vulkan.
+      # file and patchelf are used by linuxdeploy to identify and rewire the
+      # ELF files it deploys.
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libwayland-dev libx11-dev libxi-dev \
-            libgl1-mesa-dev libvulkan-dev pkg-config
+            libgl1-mesa-dev libvulkan-dev pkg-config file patchelf
 
       - name: Build (release)
         env:
@@ -91,6 +109,38 @@ jobs:
           else
             strip "$bin"
           fi
+
+      # Both tools are AppImages themselves. --appimage-extract-and-run keeps
+      # them working on runners without FUSE. Pinning the release tag and the
+      # SHA-256 keeps a moving "continuous" build out of released artifacts.
+      - name: Install Linux AppImage tools
+        if: runner.os == 'Linux'
+        env:
+          LINUXDEPLOY_URL: https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          LINUXDEPLOY_SHA256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+          # appimagetool otherwise downloads this from the "continuous" tag,
+          # which would make released images non-reproducible.
+          APPIMAGE_RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+        run: |
+          set -euo pipefail
+          tools="${RUNNER_TEMP}/appimage-tools"
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/linuxdeploy.AppImage" "$LINUXDEPLOY_URL"
+          curl -fsSL --retry 3 -o "$tools/appimagetool.AppImage" "$APPIMAGETOOL_URL"
+          curl -fsSL --retry 3 -o "$tools/runtime-x86_64" "$APPIMAGE_RUNTIME_URL"
+          echo "${LINUXDEPLOY_SHA256}  $tools/linuxdeploy.AppImage" | sha256sum -c -
+          echo "${APPIMAGETOOL_SHA256}  $tools/appimagetool.AppImage" | sha256sum -c -
+          echo "${APPIMAGE_RUNTIME_SHA256}  $tools/runtime-x86_64" | sha256sum -c -
+          chmod +x "$tools/linuxdeploy.AppImage" "$tools/appimagetool.AppImage" \
+            "$tools/runtime-x86_64"
+          {
+            echo "LINUXDEPLOY=$tools/linuxdeploy.AppImage"
+            echo "APPIMAGETOOL=$tools/appimagetool.AppImage"
+            echo "APPIMAGE_RUNTIME=$tools/runtime-x86_64"
+          } >> "$GITHUB_ENV"
 
       - name: Package
         id: package
@@ -112,10 +162,80 @@ jobs:
           mkdir -p dist
 
           if [ "$RUNNER_OS" = "Linux" ]; then
-            mkdir -p "dist/${name}"
-            cp "$bin" README.md LICENSE "dist/${name}/"
-            tar -C dist -czf "${name}.tar.gz" "${name}"
-            echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+            appdir="dist/AppDir"
+            "$LINUXDEPLOY" --appimage-extract-and-run \
+              --appdir "$appdir" \
+              --executable "$bin" \
+              --desktop-file packaging/linux/vector-field-explorer.desktop \
+              --icon-file packaging/linux/vector-field-explorer-256.png \
+              --icon-filename vector-field-explorer \
+              --exclude-library 'libvulkan*' \
+              --exclude-library 'libGL*' \
+              --exclude-library 'libEGL*' \
+              --exclude-library 'libOpenGL*' \
+              --exclude-library 'libdrm*' \
+              --exclude-library 'libgbm*'
+
+            # linuxdeploy owns usr/bin, usr/lib, usr/share/applications,
+            # usr/share/icons and AppRun; docs are added afterwards so nothing
+            # in the tool run can overwrite them.
+            install -Dm644 README.md \
+              "${appdir}/usr/share/doc/vector-field-explorer/README.md"
+            install -Dm644 LICENSE \
+              "${appdir}/usr/share/doc/vector-field-explorer/LICENSE"
+
+            asset="dist/${name}.AppImage"
+            # No update information: v1 has no auto-update (out of scope), and
+            # --no-appstream avoids requiring AppStream metadata.
+            ARCH=x86_64 VERSION="$VERSION" \
+              "$APPIMAGETOOL" --appimage-extract-and-run --no-appstream \
+              --runtime-file "$APPIMAGE_RUNTIME" \
+              "$appdir" "$asset"
+
+            # Validate the published file itself, not just the AppDir.
+            if [ ! -s "$asset" ]; then
+              echo "::error::${asset} is missing or empty"
+              exit 1
+            fi
+            if [ ! -x "$asset" ]; then
+              echo "::error::${asset} is not marked executable"
+              exit 1
+            fi
+            asset_abs="$(realpath "$asset")"
+            extract="$(mktemp -d)"
+            ( cd "$extract" && "$asset_abs" --appimage-extract >/dev/null )
+            root="${extract}/squashfs-root"
+            for required in \
+              AppRun \
+              usr/bin/vector-field-explorer \
+              usr/share/applications/vector-field-explorer.desktop \
+              usr/share/icons/hicolor/256x256/apps/vector-field-explorer.png \
+              usr/share/doc/vector-field-explorer/README.md \
+              usr/share/doc/vector-field-explorer/LICENSE; do
+              if [ ! -e "${root}/${required}" ]; then
+                echo "::error::AppImage is missing ${required}"
+                exit 1
+              fi
+            done
+            if [ ! -x "${root}/usr/bin/vector-field-explorer" ]; then
+              echo "::error::AppImage binary is not executable"
+              exit 1
+            fi
+            # Host GPU userspace must stay on the host (ticket 43).
+            if [ -d "${root}/usr/lib" ]; then
+              bundled="$(find "${root}/usr/lib" -maxdepth 1 \
+                \( -type f -o -type l \) \
+                \( -name 'libvulkan*' -o -name 'libGL*' -o -name 'libEGL*' \
+                   -o -name 'libOpenGL*' -o -name 'libdrm*' \
+                   -o -name 'libgbm*' \) -printf '%f ')"
+              if [ -n "$bundled" ]; then
+                echo "::error::AppImage bundles host GPU libraries: ${bundled}"
+                exit 1
+              fi
+            fi
+            rm -rf "$extract"
+            file "$asset"
+            echo "asset=${asset}" >> "$GITHUB_OUTPUT"
           else
             app="dist/vector-field-explorer.app"
             mkdir -p "${app}/Contents/MacOS"

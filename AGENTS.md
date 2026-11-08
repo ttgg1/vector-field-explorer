@@ -24,8 +24,8 @@ presets, screenshots. Ships native and as a WebAssembly browser build.
 
 ## v0.1.0 target
 
-- **Native:** Linux x86_64 tarball; macOS x86_64/arm64 unsigned `.app` zips. No
-  signing, notarization, auto-update, or telemetry.
+- **Native:** Linux x86_64 single-file AppImage; macOS x86_64/arm64 unsigned
+  `.app` zips. No signing, notarization, auto-update, or telemetry.
 - **Web:** real wasm build at `https://ttgg1.github.io/vector-field-explorer/`.
   Visualization parity: formula, field presets, 2D/3D, arrows/streamlines/
   particles, click-to-seed, colormaps, camera; browser persistence and

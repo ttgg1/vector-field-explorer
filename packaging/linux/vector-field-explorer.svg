@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Vector Field Explorer">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101a26"/>
+      <stop offset="1" stop-color="#090d13"/>
+    </linearGradient>
+    <linearGradient id="field" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#4cc9f0"/>
+      <stop offset="1" stop-color="#7bf1a8"/>
+    </linearGradient>
+    <marker id="arrowhead" viewBox="0 0 10 10" refX="7" refY="5"
+            markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7bf1a8"/>
+    </marker>
+    <clipPath id="tile">
+      <rect x="8" y="8" width="240" height="240" rx="48"/>
+    </clipPath>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#background)"
+        stroke="#22313f" stroke-width="4"/>
+
+  <g clip-path="url(#tile)" stroke="#1b2a38" stroke-width="1.5">
+    <path d="M40 8V248M72 8V248M104 8V248M136 8V248M168 8V248M200 8V248M232 8V248"/>
+    <path d="M8 40H248M8 72H248M8 104H248M8 136H248M8 168H248M8 200H248M8 232H248"/>
+  </g>
+
+  <g fill="none" stroke="url(#field)" stroke-width="7"
+     stroke-linecap="round" marker-end="url(#arrowhead)">
+    <path d="M56 200 C 74 162, 96 140, 132 128"/>
+    <path d="M52 140 C 70 108, 104 92, 144 92"/>
+    <path d="M88 214 C 126 206, 162 186, 190 152"/>
+    <path d="M120 54 C 152 58, 178 76, 196 108"/>
+  </g>
+
+  <circle cx="128" cy="128" r="5" fill="#f4f7fb"/>
+</svg>

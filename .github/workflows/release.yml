@@ -6,7 +6,7 @@ name: Release
 #
 # Jobs:
 #   verify   ubuntu-latest  guards + build/test/clippy; everything else waits
-#   build    package.yml    reusable workflow: one archive per target (shared
+#   build    package.yml    reusable workflow: one asset per target (shared
 #                           with nightly.yml, ticket 42)
 #   release  ubuntu-latest  create/update the GitHub Release, attach all assets
 #
@@ -23,7 +23,7 @@ name: Release
 # test tag does not become the "latest" release.
 #
 # workflow_dispatch takes the tag to release and a `publish` flag: with
-# publish=false the run still verifies and builds all three archives (useful as
+# publish=false the run still verifies and builds all three assets (useful as
 # a dry run) but skips the release job.
 #
 # Runner images: the ticket named macos-13 for x86_64, but that image was
@@ -117,7 +117,7 @@ jobs:
     name: Publish release
     needs: [verify, build]
     # Tag pushes always publish. A manual run is a dry run unless publish is
-    # true: verify and all three builds still run and upload their archives.
+    # true: verify and all three builds still run and upload their assets.
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -154,8 +154,23 @@ jobs:
           right-click (or Control-click) `vector-field-explorer.app` and choose
           **Open**.
 
-          Linux: the tarball needs a Vulkan-capable driver (or a software
-          implementation such as `mesa-vulkan-drivers`).
+          ### Linux: AppImage
+
+          Download the `x86_64-unknown-linux-gnu.AppImage`, make it executable
+          and run it:
+
+          ```sh
+          chmod +x vector-field-explorer-*-x86_64-unknown-linux-gnu.AppImage
+          ./vector-field-explorer-*-x86_64-unknown-linux-gnu.AppImage
+          ```
+
+          It needs a Vulkan-capable driver (or a software implementation such
+          as `mesa-vulkan-drivers`). The AppImage uses the host GPU driver and
+          does not bundle Mesa.
+
+          If FUSE 2 is unavailable (for example Ubuntu 22.04+ without
+          `libfuse2`), run it with `--appimage-extract-and-run`, or install
+          `libfuse2`.
           NOTES
 
           if gh release view "$TAG" >/dev/null 2>&1; then
