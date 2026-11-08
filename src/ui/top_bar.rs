@@ -47,8 +47,8 @@ pub fn wheel_zoom(ctx: &egui::Context) -> f32 {
 
 /// Draw the menu bar. Returns the action the user picked (if any) and whether
 /// the appearance popover changed the style record (the app re-applies it in
-/// the same frame). `settings_open` is the popover's visibility flag, so the
-/// Settings > Appearance… item can open it and Esc/outside clicks close it.
+/// the same frame). `settings_open` is the popover's visibility flag, set by
+/// the Settings > Appearance… item.
 pub fn show(
     ui: &mut egui::Ui,
     style: &mut AppStyle,

@@ -2,6 +2,7 @@
 // dispatches `MenuAction`s; everything that can be decided without a window is
 // pinned here.
 
+use eframe::egui;
 use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
@@ -49,6 +50,32 @@ impl Fixture {
 fn effect_of(action: MenuAction) -> SideEffect {
     let mut fixture = Fixture::new();
     apply_action(action, &mut fixture.ui())
+}
+
+/// Run one egui pass with one key press and report what the real shortcut loop
+/// fires. `run_pass` may run more than one pass; only the first sees the key,
+/// so its result is captured once.
+fn fired_shortcuts(modifiers: egui::Modifiers, key: egui::Key) -> Vec<MenuAction> {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input.events.push(egui::Event::ModifiersChanged(modifiers));
+    input.events.push(egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    });
+    let mut fired = None;
+    let mut output = ctx.run_pass(input, |ctx| {
+        if fired.is_none() {
+            fired = Some(menu::shortcut_actions(ctx));
+        }
+    });
+    // The pass is only here to feed input to the shortcut loop; no painting
+    // happens, so the texture delta must be cleared before it is dropped.
+    output.textures_delta.clear();
+    fired.unwrap_or_default()
 }
 
 #[test]
@@ -169,7 +196,7 @@ fn copy_formula_copies_even_an_unparseable_edit() {
     assert!(fixture.state.set_formula(broken.to_string()));
     assert!(
         !fixture.state.parse_error.is_empty(),
-        "the edit is unparseable, so the field keeps its last good value",
+        "the edit is unparseable: `formula` holds the typed text, `field` keeps the last good expression",
     );
     assert_eq!(
         apply_action(MenuAction::CopyFormula, &mut fixture.ui()),
@@ -297,6 +324,39 @@ fn shortcuts_stay_out_of_text_fields_except_quit() {
     assert!(menu::shortcut_allowed(quit, false));
     assert!(menu::shortcut_allowed(quit, true), "Ctrl+Q quits even while typing");
     assert!(quit.global, "quit is the one global shortcut");
+}
+
+#[test]
+fn extra_modifiers_do_not_fire_the_plain_shortcuts() {
+    // Ticket-15 re-review: the loop matches modifiers exactly, so an extra
+    // Shift never turns Ctrl+B into a panel toggle or Shift+F1 into help.
+    assert_eq!(
+        fired_shortcuts(egui::Modifiers::COMMAND, egui::Key::B),
+        vec![MenuAction::ToggleControls],
+        "plain Ctrl+B still toggles Controls",
+    );
+    assert!(
+        fired_shortcuts(
+            egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+            egui::Key::B,
+        )
+        .is_empty(),
+        "Ctrl+Shift+B must not toggle Controls",
+    );
+    assert_eq!(
+        fired_shortcuts(egui::Modifiers::NONE, egui::Key::F1),
+        vec![MenuAction::ToggleHelp],
+        "plain F1 still toggles help",
+    );
+    assert!(
+        fired_shortcuts(egui::Modifiers::SHIFT, egui::Key::F1).is_empty(),
+        "Shift+F1 must not toggle help",
+    );
+    assert_eq!(
+        fired_shortcuts(egui::Modifiers::COMMAND, egui::Key::Q),
+        vec![MenuAction::Quit],
+        "Ctrl+Q still quits",
+    );
 }
 
 #[test]

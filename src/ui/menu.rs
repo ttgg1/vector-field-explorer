@@ -231,12 +231,16 @@ pub fn shortcut_allowed(shortcut: &Shortcut, text_edit_focused: bool) -> bool {
 /// Consume this frame's pressed shortcuts and report the actions to dispatch,
 /// in table order. Called before any widget so a focused text field never
 /// receives a key the menu table owns (Ctrl+Q is consumed from anywhere).
+/// Matching is exact: `Ctrl+Shift+B` is not `Ctrl+B`, and `Shift+F1` is not
+/// `F1`, so an extra modifier never fires a plain shortcut.
 pub fn shortcut_actions(ctx: &egui::Context) -> Vec<MenuAction> {
     let text_edit_focused = ctx.text_edit_focused();
     ctx.input_mut(|input| {
+        let modifiers = input.modifiers;
         SHORTCUTS
             .iter()
             .filter(|shortcut| shortcut_allowed(shortcut, text_edit_focused))
+            .filter(|shortcut| modifiers.matches_exact(shortcut.modifiers))
             .filter(|shortcut| input.consume_key(shortcut.modifiers, shortcut.key))
             .map(|shortcut| shortcut.action)
             .collect()
