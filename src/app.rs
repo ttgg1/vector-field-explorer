@@ -22,11 +22,13 @@ use crate::viewmodel::{
     ClickOutcome,
     DragButtons,
     DragChannel,
+    LastClickSeed,
     State,
     ViewGesture,
     apply_camera_input,
     click_outcome,
     drag_channel,
+    undo_click_seed,
 };
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
@@ -65,20 +67,12 @@ pub struct StatusBarState {
 /// grow the scene without limit.
 const MAX_CLICK_SEEDS: usize = 6;
 
-/// How long after a single click a second click still counts as a double-click,
-/// in seconds. Matches egui's default `max_double_click_delay`: the app uses it
-/// to take back the first click's seed when a double-click resets the view.
-const DOUBLE_CLICK_WINDOW: f64 = 0.3;
-
-/// The seed the last single click planted, so a double-click can remove it
-/// again: a double-click resets the view and must not seed the flow.
-struct LastClickSeed {
-    seed: Vec3,
-    /// Particle count after any ambient spawn but before the click's burst.
-    particles_before: usize,
-    /// egui's frame time when the click happened.
-    time: f64,
-}
+// Double-click seed handling (ticket 18): the first click seeds immediately and
+// a second click within `viewmodel::DOUBLE_CLICK_WINDOW` takes that burst back
+// before resetting the view. This is an accepted transient — a deferred seed
+// would add ~300 ms of latency to every single click, while the final state
+// after a double-click is clean. A triple-click is not special-cased: egui
+// reports the third click as a plain click, so it seeds again after the reset.
 
 /// Application root state: the viewmodel State (the single source of truth for
 /// what is on screen), the formula bar's local widgets, the sidebar's local
@@ -230,9 +224,15 @@ impl VfApp {
     }
 
     /// The current view context for the command seam: which projection is
-    /// showing and which domain it frames.
+    /// showing, which domain it frames, and the viewport's aspect ratio. The
+    /// aspect comes from the last painted viewport (keyboard and panel buttons
+    /// run before the central panel), so a resize takes effect one frame later.
     fn view_context(&self) -> ViewContext {
-        ViewContext::new(self.state.mode_3d, self.state.domain)
+        let aspect = self
+            .last_viewport_rect
+            .map(|rect| rect.width().max(1.0) / rect.height().max(1.0))
+            .unwrap_or(1.0);
+        ViewContext::new(self.state.mode_3d, self.state.domain, aspect)
     }
 
     /// Apply one camera command from any input surface (keyboard, double-click,
@@ -305,23 +305,25 @@ impl VfApp {
 
     /// Take back the burst the previous single click planted when it turns out
     /// to be the first half of a double-click: the double-click resets the view
-    /// and must not leave a seed behind. An older single click (outside egui's
-    /// double-click window) is left alone.
+    /// and must not leave a seed behind. The decision and the seed-list edit
+    /// live in the pure [`undo_click_seed`] seam; this wrapper applies the
+    /// particle truncation and recomposes the line collection.
     fn undo_last_click_seed(&mut self, now: f64) {
-        let Some(last) = self.last_click_seed.take() else {
-            return;
-        };
-        if now - last.time > DOUBLE_CLICK_WINDOW {
+        let undo = undo_click_seed(
+            &self.click_seeds,
+            self.last_click_seed.take(),
+            now,
+            particle_count(&self.particles),
+        );
+        if !undo.removed {
             return;
         }
-        if let Some(index) = self.click_seeds.iter().rposition(|seed| *seed == last.seed) {
-            self.click_seeds.remove(index);
-        }
+        self.click_seeds = undo.seeds;
         if self.state.particles
             && self.state.mode_3d
-            && particle_count(&self.particles) >= last.particles_before
+            && let Some(before) = undo.particles
         {
-            self.particles.pos.truncate(last.particles_before);
+            self.particles.pos.truncate(before);
         }
         self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
@@ -814,7 +816,7 @@ impl eframe::App for VfApp {
             && let Some(rect) = self.last_viewport_rect
         {
             let anchor = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
-            if crate::ui::help_overlay::show(ui.ctx(), anchor) {
+            if crate::ui::help_overlay::show(ui.ctx(), anchor, self.state.mode_3d) {
                 self.layout.help_visible = false;
             }
         }

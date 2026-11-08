@@ -12,9 +12,15 @@ use vector_field_explorer::view_command::{
     command_for_key, domain_center, fit_distance,
 };
 use vector_field_explorer::viewmodel::{
-    ClickOutcome, DragButtons, DragChannel, ViewGesture, apply_camera_input, click_outcome,
-    drag_channel,
+    ClickOutcome, DOUBLE_CLICK_WINDOW, DragButtons, DragChannel, LastClickSeed, ViewGesture,
+    apply_camera_input, click_outcome, drag_channel, undo_click_seed,
 };
+
+/// A view context at the default (square, 1.0) aspect. The aspect-aware fit
+/// tests build their own `ViewContext` with an explicit aspect.
+fn view(mode_3d: bool, domain: Domain) -> ViewContext {
+    ViewContext::new(mode_3d, domain, 1.0)
+}
 
 /// The default 3D camera, moved somewhere wild: every reset/fit test starts
 /// from a view that no default could accidentally match.
@@ -39,7 +45,7 @@ fn rectangular_domain() -> Domain {
 #[test]
 fn reset_returns_the_default_framing_centred_on_the_domain() {
     let square = Domain::default();
-    let square_view = ViewContext::new(true, square);
+    let square_view = view(true, square);
     let reset = apply_view_command(wild_camera(), square_view, ViewCommand::Reset);
     assert_eq!(
         reset,
@@ -48,7 +54,7 @@ fn reset_returns_the_default_framing_centred_on_the_domain() {
     );
 
     let rect = rectangular_domain();
-    let rect_reset = apply_view_command(wild_camera(), ViewContext::new(true, rect), ViewCommand::Reset);
+    let rect_reset = apply_view_command(wild_camera(), view(true, rect), ViewCommand::Reset);
     assert_eq!(rect_reset.target, Vec3::new(-1.0, 0.0, 1.0), "reset centres on the domain");
     assert_eq!(rect_reset.yaw, OrbitCamera::default().yaw, "reset restores the default orientation");
     assert_eq!(rect_reset.pitch, OrbitCamera::default().pitch);
@@ -56,11 +62,11 @@ fn reset_returns_the_default_framing_centred_on_the_domain() {
     assert_eq!(rect_reset.ortho_zoom, OrbitCamera::default().ortho_zoom);
     assert_eq!(
         rect_reset,
-        apply_view_command(wild_camera(), ViewContext::new(true, rect), ViewCommand::Reset),
+        apply_view_command(wild_camera(), view(true, rect), ViewCommand::Reset),
         "reset is deterministic",
     );
 
-    let flat_reset = apply_view_command(wild_camera(), ViewContext::new(false, rect), ViewCommand::Reset);
+    let flat_reset = apply_view_command(wild_camera(), view(false, rect), ViewCommand::Reset);
     assert_eq!(flat_reset, rect_reset, "the default front view is the same framing in 2D");
 }
 
@@ -70,7 +76,7 @@ fn fit_frames_square_and_rectangular_domains_deterministically() {
     let half_fov = camera.fov_y * 0.5;
 
     let square = Domain::default();
-    let square_view = ViewContext::new(true, square);
+    let square_view = view(true, square);
     let fit = apply_view_command(camera, square_view, ViewCommand::Fit);
     let expected = (3.0_f32).sqrt() / half_fov.sin();
     assert!((fit.distance - expected).abs() < 1e-4, "unit cube fits its bounding sphere: {}", fit.distance);
@@ -80,31 +86,107 @@ fn fit_frames_square_and_rectangular_domains_deterministically() {
     assert_eq!(fit, apply_view_command(camera, square_view, ViewCommand::Fit), "fit is deterministic");
 
     let rect = rectangular_domain();
-    let rect_view = ViewContext::new(true, rect);
+    let rect_view = view(true, rect);
     let fit = apply_view_command(camera, rect_view, ViewCommand::Fit);
     // Half the box diagonal (the bounding-sphere radius) over sin(half fov).
     let expected = (21.0_f32).sqrt() * 0.5 / half_fov.sin();
     assert!((fit.distance - expected).abs() < 1e-4, "rectangular box fits its diagonal: {}", fit.distance);
     assert_eq!(fit.target, domain_center(rect), "fit centres on the rectangular domain");
     assert!(
-        (fit_distance(rect, camera.fov_y) - fit.distance).abs() < 1e-6,
+        (fit_distance(rect, camera.fov_y, 1.0) - fit.distance).abs() < 1e-6,
         "the helper and the command agree",
+    );
+}
+
+#[test]
+fn fit_widens_for_a_narrow_viewport() {
+    let camera = wild_camera();
+    let rect = rectangular_domain();
+    let half_y = camera.fov_y * 0.5;
+
+    let square_fit = apply_view_command(camera, view(true, rect), ViewCommand::Fit);
+    let portrait_fit = apply_view_command(
+        camera,
+        ViewContext::new(true, rect, 0.5),
+        ViewCommand::Fit,
+    );
+    assert!(
+        portrait_fit.distance > square_fit.distance,
+        "a narrow viewport pulls the eye back: {} vs {}",
+        portrait_fit.distance,
+        square_fit.distance,
+    );
+
+    // The horizontal FOV is the tighter constraint: 2*atan(tan(fov_y/2)*aspect).
+    let half_x = (half_y.tan() * 0.5).atan();
+    let expected = (21.0_f32).sqrt() * 0.5 / half_x.sin();
+    assert!(
+        (portrait_fit.distance - expected).abs() < 1e-4,
+        "portrait fit uses the horizontal FOV: {} vs {expected}",
+        portrait_fit.distance,
+    );
+    assert_eq!(portrait_fit.target, domain_center(rect), "portrait fit still centres on the domain");
+    assert_eq!(
+        portrait_fit,
+        apply_view_command(camera, ViewContext::new(true, rect, 0.5), ViewCommand::Fit),
+        "aspect-aware fit is deterministic",
+    );
+
+    // A landscape viewport is limited by the vertical FOV, so it matches the
+    // square framing.
+    let landscape = apply_view_command(camera, ViewContext::new(true, rect, 2.0), ViewCommand::Fit);
+    assert!(
+        (landscape.distance - square_fit.distance).abs() < 1e-4,
+        "landscape fit is still vertical-FOV limited",
+    );
+}
+
+#[test]
+fn two_d_fit_zooms_out_for_a_narrow_viewport() {
+    let camera = OrbitCamera { ortho_zoom: 4.0, ..wild_camera() };
+    let rect = rectangular_domain(); // 4 wide, 1 tall
+
+    let landscape = apply_view_command(camera, view(false, rect), ViewCommand::Fit);
+    assert!(
+        (landscape.ortho_zoom - 1.0).abs() < 1e-6,
+        "a landscape viewport uses the padded plane at zoom 1",
+    );
+
+    let portrait = apply_view_command(
+        camera,
+        ViewContext::new(false, rect, 0.5),
+        ViewCommand::Fit,
+    );
+    // plane_size = max(4, 1) * 1.35 = 5.4; the horizontal fit is
+    // 5.4 * 0.5 / 4 = 0.675, so the whole domain stays visible.
+    assert!(
+        (portrait.ortho_zoom - 0.675).abs() < 1e-5,
+        "portrait 2D fit zooms out: {}",
+        portrait.ortho_zoom,
+    );
+    let half_h = 5.4 * 0.5 / portrait.ortho_zoom;
+    let half_w = half_h * 0.5;
+    assert!(half_w + 1e-4 >= 2.0, "the domain's half width fits: {half_w}");
+    assert_eq!(
+        portrait,
+        apply_view_command(camera, ViewContext::new(false, rect, 0.5), ViewCommand::Fit),
+        "2D portrait fit is deterministic",
     );
 }
 
 #[test]
 fn fit_clamps_the_distance_and_the_2d_view_returns_to_zoom_one() {
     let tiny = Domain::new(Vec3::splat(-0.001), Vec3::splat(0.001));
-    let fit = apply_view_command(OrbitCamera::default(), ViewContext::new(true, tiny), ViewCommand::Fit);
+    let fit = apply_view_command(OrbitCamera::default(), view(true, tiny), ViewCommand::Fit);
     assert!((fit.distance - 0.5).abs() < 1e-5, "a tiny domain cannot pull the eye inside the near plane");
 
     let huge = Domain::new(Vec3::splat(-100.0), Vec3::splat(100.0));
-    let fit = apply_view_command(OrbitCamera::default(), ViewContext::new(true, huge), ViewCommand::Fit);
+    let fit = apply_view_command(OrbitCamera::default(), view(true, huge), ViewCommand::Fit);
     assert!((fit.distance - 20.0).abs() < 1e-5, "a huge domain clamps at the far eye distance");
 
     let rect = rectangular_domain();
     let zoomed = OrbitCamera { ortho_zoom: 3.5, ..wild_camera() };
-    let flat = apply_view_command(zoomed, ViewContext::new(false, rect), ViewCommand::Fit);
+    let flat = apply_view_command(zoomed, view(false, rect), ViewCommand::Fit);
     assert!((flat.ortho_zoom - 1.0).abs() < 1e-6, "2D fit shows the whole padded plane");
     assert_eq!(flat.target, domain_center(rect), "2D fit centres on the domain");
     assert_eq!(flat.distance, zoomed.distance, "2D fit keeps the eye distance");
@@ -115,7 +197,7 @@ fn fit_clamps_the_distance_and_the_2d_view_returns_to_zoom_one() {
 #[test]
 fn arrow_keys_orbit_in_3d_and_pan_with_shift() {
     let camera = OrbitCamera::default();
-    let view = ViewContext::new(true, Domain::default());
+    let view = view(true, Domain::default());
     let none = egui::Modifiers::NONE;
 
     assert_eq!(
@@ -140,7 +222,7 @@ fn arrow_keys_orbit_in_3d_and_pan_with_shift() {
 #[test]
 fn arrow_keys_pan_in_2d_and_shift_pans_faster() {
     let camera = OrbitCamera::default();
-    let view = ViewContext::new(false, Domain::default());
+    let view = view(false, Domain::default());
     let slow = command_for_key(&camera, view, egui::Key::ArrowRight, egui::Modifiers::NONE)
         .expect("2D right arrow pans");
     let fast = command_for_key(&camera, view, egui::Key::ArrowRight, egui::Modifiers::SHIFT)
@@ -160,7 +242,7 @@ fn arrow_keys_pan_in_2d_and_shift_pans_faster() {
 #[test]
 fn plus_minus_r_and_f_map_to_commands() {
     let camera = OrbitCamera::default();
-    let view = ViewContext::new(true, Domain::default());
+    let view = view(true, Domain::default());
     let none = egui::Modifiers::NONE;
 
     assert_eq!(
@@ -187,7 +269,7 @@ fn command_modifiers_never_drive_the_camera() {
     // Ctrl+F is the browser/editor find; Ctrl+R is reload. Camera keys must
     // leave every command-modified key alone.
     let camera = OrbitCamera::default();
-    let view = ViewContext::new(true, Domain::default());
+    let view = view(true, Domain::default());
     for modifiers in [
         egui::Modifiers::COMMAND,
         egui::Modifiers::CTRL,
@@ -216,38 +298,39 @@ fn command_modifiers_never_drive_the_camera() {
 }
 
 #[test]
-fn keyboard_orbit_zoom_and_pan_respect_the_camera_clamps() {
-    let view = ViewContext::new(true, Domain::default());
+fn keyboard_orbit_and_zoom_respect_the_camera_clamps() {
+    let view_3d = view(true, Domain::default());
     let mut camera = OrbitCamera::default();
     for _ in 0..200 {
-        // A negative `dy` raises the eye (the camera's pitch is the polar
-        // angle from +Y), so this drives pitch to its upper clamp.
-        camera = apply_view_command(camera, view, ViewCommand::Orbit { dx: 0.0, dy: -KEY_ORBIT_STEP });
+        // `orbit` subtracts `dy` from the pitch (the polar angle from +Y), so
+        // a negative `dy` increases the pitch and drives it to the +1.55
+        // clamp (the lowest eye position).
+        camera = apply_view_command(camera, view_3d, ViewCommand::Orbit { dx: 0.0, dy: -KEY_ORBIT_STEP });
     }
-    assert!((camera.pitch - 1.55).abs() < 1e-5, "orbit pitch clamps at the pole: {}", camera.pitch);
+    assert!((camera.pitch - 1.55).abs() < 1e-5, "orbit pitch clamps at +1.55: {}", camera.pitch);
     for _ in 0..400 {
-        camera = apply_view_command(camera, view, ViewCommand::Orbit { dx: 0.0, dy: KEY_ORBIT_STEP });
+        camera = apply_view_command(camera, view_3d, ViewCommand::Orbit { dx: 0.0, dy: KEY_ORBIT_STEP });
     }
-    assert!((camera.pitch + 1.55).abs() < 1e-5, "orbit pitch clamps at the other pole");
+    assert!((camera.pitch + 1.55).abs() < 1e-5, "orbit pitch clamps at -1.55");
 
     let mut camera = OrbitCamera::default();
     for _ in 0..100 {
-        camera = apply_view_command(camera, view, ViewCommand::Zoom { factor: KEY_ZOOM_FACTOR });
+        camera = apply_view_command(camera, view_3d, ViewCommand::Zoom { factor: KEY_ZOOM_FACTOR });
     }
     assert!((camera.distance - 0.5).abs() < 1e-5, "zoom-in clamps the orbit distance");
     for _ in 0..200 {
-        camera = apply_view_command(camera, view, ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR });
+        camera = apply_view_command(camera, view_3d, ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR });
     }
     assert!((camera.distance - 20.0).abs() < 1e-5, "zoom-out clamps the orbit distance");
 
-    let flat = ViewContext::new(false, Domain::default());
+    let view_2d = view(false, Domain::default());
     let mut camera = OrbitCamera::default();
     for _ in 0..100 {
-        camera = apply_view_command(camera, flat, ViewCommand::Zoom { factor: KEY_ZOOM_FACTOR });
+        camera = apply_view_command(camera, view_2d, ViewCommand::Zoom { factor: KEY_ZOOM_FACTOR });
     }
     assert!((camera.ortho_zoom - OrbitCamera::MAX_ORTHO_ZOOM).abs() < 1e-4, "2D zoom-in clamps");
     for _ in 0..300 {
-        camera = apply_view_command(camera, flat, ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR });
+        camera = apply_view_command(camera, view_2d, ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR });
     }
     assert!((camera.ortho_zoom - OrbitCamera::MIN_ORTHO_ZOOM).abs() < 1e-5, "2D zoom-out clamps");
 }
@@ -255,7 +338,7 @@ fn keyboard_orbit_zoom_and_pan_respect_the_camera_clamps() {
 #[test]
 fn orbit_commands_are_inert_in_2d() {
     let home = OrbitCamera::default();
-    let flat = apply_view_command(home, ViewContext::new(false, Domain::default()), ViewCommand::Orbit {
+    let flat = apply_view_command(home, view(false, Domain::default()), ViewCommand::Orbit {
         dx: 1.0,
         dy: 1.0,
     });
@@ -265,7 +348,7 @@ fn orbit_commands_are_inert_in_2d() {
 #[test]
 fn camera_keys_are_inert_while_a_text_field_has_focus() {
     let camera = OrbitCamera::default();
-    let view = ViewContext::new(true, Domain::default());
+    let view = view(true, Domain::default());
 
     // A focused formula field keeps R for typing.
     let typing = run_camera_keys(true, egui::Key::R, egui::Modifiers::NONE, camera, view);
@@ -388,6 +471,55 @@ fn click_seeds_only_when_the_gesture_never_became_a_drag() {
     assert_eq!(click_outcome(false, true, false), ClickOutcome::ResetView);
 }
 
+// ---------------------------------------------------------------- seed undo
+
+fn last_click(seed: Vec3, particles_before: usize, time: f64) -> LastClickSeed {
+    LastClickSeed { seed, particles_before, time }
+}
+
+#[test]
+fn a_second_click_inside_the_window_removes_exactly_the_last_seed() {
+    let first = Vec3::new(0.1, 0.2, 0.0);
+    let second = Vec3::new(-0.3, 0.4, 0.0);
+    let seeds = [first, second];
+    let undo = undo_click_seed(
+        &seeds,
+        Some(last_click(second, 5, 1.0)),
+        1.0 + DOUBLE_CLICK_WINDOW * 0.5,
+        9,
+    );
+    assert!(undo.removed, "the second click's seed is removed");
+    assert_eq!(undo.seeds, vec![first], "exactly the last seed is gone");
+    assert_eq!(
+        undo.particles,
+        Some(5),
+        "the particle count returns to the pre-click value",
+    );
+}
+
+#[test]
+fn a_second_click_outside_the_window_keeps_every_seed() {
+    let seeds = [Vec3::ZERO, Vec3::X];
+    let undo = undo_click_seed(
+        &seeds,
+        Some(last_click(Vec3::X, 0, 1.0)),
+        1.0 + DOUBLE_CLICK_WINDOW * 2.0,
+        3,
+    );
+    assert!(!undo.removed, "an old click is not a double-click");
+    assert_eq!(undo.seeds, seeds.to_vec(), "every seed stays");
+    assert_eq!(undo.particles, None, "an old click's particle burst is left alone");
+}
+
+#[test]
+fn an_undo_without_a_pending_click_changes_nothing() {
+    let seeds = [Vec3::ZERO];
+    let undo = undo_click_seed(&seeds, None, 5.0, 2);
+    assert!(!undo.removed);
+    assert_eq!(undo.seeds, seeds.to_vec());
+    assert_eq!(undo.particles, None);
+}
+
 // ---------------------------------------------------------------- buttons
 
 #[test]
@@ -396,7 +528,7 @@ fn camera_buttons_run_the_same_commands_as_their_keys() {
     assert_eq!(labels, vec!["Reset view", "Fit domain"], "the camera action buttons are pinned");
 
     let camera = wild_camera();
-    let view = ViewContext::new(true, rectangular_domain());
+    let view = view(true, rectangular_domain());
     for (label, command) in CAMERA_BUTTONS {
         let key = match command {
             ViewCommand::Reset => egui::Key::R,

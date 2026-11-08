@@ -308,7 +308,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         MenuAction::ResetCamera => {
             *ui.orbit = crate::view_command::apply_view_command(
                 *ui.orbit,
-                crate::view_command::ViewContext::new(ui.state.mode_3d, ui.state.domain),
+                crate::view_command::ViewContext::new(ui.state.mode_3d, ui.state.domain, 1.0),
                 crate::view_command::ViewCommand::Reset,
             );
             *ui.camera = Camera::default();

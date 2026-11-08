@@ -37,17 +37,30 @@ pub const CAMERA_KEYS: &[egui::Key] = &[
     egui::Key::F,
 ];
 
-/// The view a command applies to: which projection is showing and which domain
-/// it should frame. A plain value so the seam stays pure and testable.
+/// The view a command applies to: which projection is showing, which domain it
+/// should frame, and the viewport's aspect ratio (width / height) for Fit. A
+/// plain value so the seam stays pure and testable.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewContext {
     pub mode_3d: bool,
     pub domain: Domain,
+    /// Viewport width / height. Fit uses the tighter field of view; a
+    /// non-finite or non-positive value falls back to 1.0.
+    pub aspect: f32,
 }
 
 impl ViewContext {
-    pub fn new(mode_3d: bool, domain: Domain) -> Self {
-        Self { mode_3d, domain }
+    pub fn new(mode_3d: bool, domain: Domain, aspect: f32) -> Self {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            1.0
+        };
+        Self {
+            mode_3d,
+            domain,
+            aspect,
+        }
     }
 }
 
@@ -75,18 +88,29 @@ pub fn domain_center(domain: Domain) -> Vec3 {
     (domain.min + domain.max) * 0.5
 }
 
-/// Orbit distance that fits the domain's bounding sphere in the vertical field
-/// of view, clamped to the camera's usable range. Fitting the sphere means any
-/// orbit angle keeps the domain on screen, and the answer is deterministic for
+/// Orbit distance that fits the domain's bounding sphere in the viewport's
+/// tighter field of view, clamped to the camera's usable range. The vertical
+/// FOV limits a landscape viewport; a portrait/narrow viewport is limited by
+/// its horizontal FOV (`2*atan(tan(fov_y/2)*aspect)`), so Fit pulls back far
+/// enough to keep the whole domain visible. Fitting the sphere also keeps the
+/// domain on screen at any orbit angle, and the answer is deterministic for
 /// square and rectangular boxes alike.
-pub fn fit_distance(domain: Domain, fov_y: f32) -> f32 {
+pub fn fit_distance(domain: Domain, fov_y: f32, aspect: f32) -> f32 {
     let radius = domain.domain_size().length() * 0.5;
     let fov_y = if fov_y.is_finite() && fov_y > 0.0 {
         fov_y
     } else {
         OrbitCamera::default().fov_y
     };
-    let sin_half = (fov_y * 0.5).sin().max(1e-4);
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        1.0
+    };
+    let half_y = fov_y * 0.5;
+    let half_x = (half_y.tan() * aspect).atan();
+    let half_fov = half_y.min(half_x);
+    let sin_half = half_fov.sin().max(1e-4);
     let distance = radius / sin_half;
     if distance.is_finite() {
         distance.clamp(OrbitCamera::MIN_DISTANCE, OrbitCamera::MAX_DISTANCE)
@@ -156,11 +180,20 @@ pub fn apply_view_command(camera: OrbitCamera, view: ViewContext, command: ViewC
         ViewCommand::Fit => {
             camera.target = domain_center(view.domain);
             if view.mode_3d {
-                camera.distance = fit_distance(view.domain, camera.fov_y);
+                camera.distance = fit_distance(view.domain, camera.fov_y, view.aspect);
             } else {
-                // The 2D plane size is the padded domain, so zoom 1 already
-                // frames the whole domain.
-                camera.ortho_zoom = 1.0;
+                // The 2D ortho projection shows `plane_size / zoom` vertically
+                // and that times the aspect horizontally. Fit starts at the
+                // padded plane (zoom 1) and only zooms out when a narrow
+                // viewport would clip the domain's width.
+                let size = view.domain.domain_size();
+                let width = size.x.max(1e-6);
+                let height = size.y.max(1e-6);
+                let plane_size = width.max(height) * PLANE_MARGIN;
+                let zoom = (plane_size / height)
+                    .min(plane_size * view.aspect / width)
+                    .min(1.0);
+                camera.ortho_zoom = zoom.clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
             }
         }
     }

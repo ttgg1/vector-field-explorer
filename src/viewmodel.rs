@@ -638,6 +638,73 @@ pub fn click_outcome(clicked: bool, double_clicked: bool, dragged: bool) -> Clic
     }
 }
 
+/// How long after a single click a second click still counts as a double-click,
+/// in seconds. Matches egui's default `max_double_click_delay`: the app uses it
+/// to take back the first click's seed when a double-click resets the view.
+pub const DOUBLE_CLICK_WINDOW: f64 = 0.3;
+
+/// The seed the last single click planted, so a double-click can remove it
+/// again: a double-click resets the view and must not seed the flow.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LastClickSeed {
+    pub seed: Vec3,
+    /// Particle count after any ambient spawn but before the click's burst.
+    pub particles_before: usize,
+    /// egui's frame time when the click happened.
+    pub time: f64,
+}
+
+/// What [`undo_click_seed`] did: the seed list after the undo, whether the
+/// click's seed was removed, and the particle count to truncate back to when
+/// the click's burst should go too.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClickSeedUndo {
+    pub seeds: Vec<Vec3>,
+    pub removed: bool,
+    pub particles: Option<usize>,
+}
+
+/// Take back the burst the previous single click planted when it turns out to
+/// be the first half of a double-click. Pure: the app owns the seed list, the
+/// particle cloud and the recompose step.
+///
+/// A click older than [`DOUBLE_CLICK_WINDOW`] is not a double-click and is left
+/// alone. Inside the window, exactly the last occurrence of the click's seed is
+/// removed and `particles` reports the pre-click count (when the cloud still
+/// has at least that many points, so a truncation is safe).
+pub fn undo_click_seed(
+    seeds: &[Vec3],
+    last: Option<LastClickSeed>,
+    now: f64,
+    particle_count: usize,
+) -> ClickSeedUndo {
+    let unchanged = |seeds: &[Vec3]| ClickSeedUndo {
+        seeds: seeds.to_vec(),
+        removed: false,
+        particles: None,
+    };
+    let Some(last) = last else {
+        return unchanged(seeds);
+    };
+    if !now.is_finite() || !last.time.is_finite() || now - last.time > DOUBLE_CLICK_WINDOW {
+        return unchanged(seeds);
+    }
+    let mut seeds = seeds.to_vec();
+    let Some(index) = seeds.iter().rposition(|seed| *seed == last.seed) else {
+        return unchanged(&seeds);
+    };
+    seeds.remove(index);
+    ClickSeedUndo {
+        seeds,
+        removed: true,
+        particles: if particle_count >= last.particles_before {
+            Some(last.particles_before)
+        } else {
+            None
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

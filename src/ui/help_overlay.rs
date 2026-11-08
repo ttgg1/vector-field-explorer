@@ -53,7 +53,7 @@ const ROWS_2D: &[HelpRow] = &[
 
 const ROWS_GLOBAL: &[HelpRow] = &[
     HelpRow { input: "F1 / ?", action: "Toggle help" },
-    HelpRow { input: "Ctrl+B / Ctrl+P", action: "Toggle panels" },
+    HelpRow { input: "Ctrl+B / Ctrl+P", action: "Toggle panels (not while typing)" },
     HelpRow { input: "Ctrl+Shift+S", action: "Export screenshot" },
     HelpRow { input: "Ctrl+Shift+C", action: "Copy formula" },
     HelpRow { input: "Ctrl+Q", action: "Quit" },
@@ -61,17 +61,36 @@ const ROWS_GLOBAL: &[HelpRow] = &[
 ];
 
 /// The three groups, in window order. Both help surfaces read this table, so a
-/// binding is spelled exactly once.
-pub const HELP_SECTIONS: &[HelpSection] = &[
+/// binding is spelled exactly once. A `static` (not a `const`) so the overlay
+/// and the window can be proven to hand back the very same allocation.
+pub static HELP_SECTIONS: &[HelpSection] = &[
     HelpSection { title: "3D view", rows: ROWS_3D },
     HelpSection { title: "2D view", rows: ROWS_2D },
     HelpSection { title: "Global", rows: ROWS_GLOBAL },
 ];
 
-/// Every documented row, across all groups (the flattened table both help
-/// surfaces render).
+/// Every documented row, across all groups (the Help window's contents).
 pub fn all_rows() -> Vec<HelpRow> {
     HELP_SECTIONS
+        .iter()
+        .flat_map(|section| section.rows.iter().copied())
+        .collect()
+}
+
+/// The sections the viewport overlay shows: the active view's bindings, then
+/// Global. The Help window keeps all three groups from [`HELP_SECTIONS`].
+pub fn sections_for(mode_3d: bool) -> [&'static HelpSection; 2] {
+    let active = if mode_3d {
+        &HELP_SECTIONS[0]
+    } else {
+        &HELP_SECTIONS[1]
+    };
+    [active, &HELP_SECTIONS[2]]
+}
+
+/// The overlay's flattened rows for the current mode.
+pub fn rows_for(mode_3d: bool) -> Vec<HelpRow> {
+    sections_for(mode_3d)
         .iter()
         .flat_map(|section| section.rows.iter().copied())
         .collect()
@@ -120,11 +139,10 @@ fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection]) {
 }
 
 /// Draw the compact overlay anchored at `anchor` (the viewport's bottom-left
-/// corner in global coordinates). It renders the same table as the Help
-/// window, so every binding is discoverable without opening a menu. Returns
-/// true when the user dismissed it, so the caller can persist the new
-/// visibility.
-pub fn show(ctx: &egui::Context, anchor: egui::Pos2) -> bool {
+/// corner in global coordinates). It shows the active view's bindings plus the
+/// global ones; the Help window carries the full table. Returns true when the
+/// user dismissed it, so the caller can persist the new visibility.
+pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
     let mut dismissed = false;
     egui::Area::new(egui::Id::unique("help_overlay"))
         .fixed_pos(anchor)
@@ -153,8 +171,8 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2) -> bool {
                             },
                         );
                     });
-                    let all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
-                    table(ui, &all);
+                    let sections = sections_for(mode_3d);
+                    table(ui, &sections);
                 });
         });
     dismissed
