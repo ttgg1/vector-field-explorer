@@ -83,10 +83,13 @@ pub fn count(particles: &Particles) -> usize {
     particles.pos.len()
 }
 
-/// Empty the cloud: the app calls this when the particle toggle turns off, so
-/// a later enable respawns from a clean state.
+/// Empty the cloud *and* rewind its pseudo-random stream to [`SPAWN_SEED`]: the
+/// app calls this when the particle toggle turns off, so a later enable respawns
+/// from a clean state — the same jitter a fresh session draws — rather than
+/// continuing a stream the previous cloud already advanced.
 pub fn clear(particles: &mut Particles) {
     particles.pos.clear();
+    particles.rng = SPAWN_SEED;
 }
 
 /// Inclusive axis-aligned containment (the `Domain` type has no `contains`
@@ -494,5 +497,17 @@ mod tests {
         assert_eq!(count(&cloud), 0, "turning the toggle off empties the cloud");
         assert!(dot_instances(&cloud, &field, &domain, Colormap::Viridis, (0.0, 1.0), 0.05).is_empty(),
             "no dots painted for an empty cloud");
+    }
+
+    #[test]
+    fn spawn_clear_spawn_is_deterministic() {
+        let domain = Domain::default();
+        let mut cloud = Particles::default();
+        spawn(&mut cloud, &domain, 24);
+        let first = positions(&cloud);
+        clear(&mut cloud);
+        spawn(&mut cloud, &domain, 24);
+        assert_eq!(positions(&cloud), first,
+            "a toggle off/on cycle respawns from the fixed seed, not the advanced stream");
     }
 }
