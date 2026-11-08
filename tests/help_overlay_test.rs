@@ -1,7 +1,7 @@
-// Ticket 18: the help table is one source of strings for the viewport overlay.
-// Ticket 28 removed the duplicate Help-menu window, so the overlay is the one
-// surface. These tests pin every binding exactly once in its group and reject
-// the stale "right-drag pans" copy.
+// Ticket 18: the help table is one source of strings for both the viewport
+// overlay and the Help menu's full window (ticket 28 keeps that window as the
+// only menu entry). These tests pin every binding exactly once in its group
+// and reject the stale "right-drag pans" copy.
 
 use vector_field_explorer::ui::help_overlay::{
     HELP_SECTIONS, HelpRow, all_rows, rows_for, sections_for,
@@ -90,8 +90,8 @@ fn every_binding_is_listed_exactly_once_in_its_group() {
 }
 
 #[test]
-fn the_overlay_rows_come_from_one_table() {
-    // The overlay renders HELP_SECTIONS; the flattened rows are exactly the
+fn the_overlay_and_window_share_one_table() {
+    // Both surfaces render HELP_SECTIONS; the flattened rows are exactly the
     // section rows, in 3D/2D/global order.
     let titles: Vec<&str> = HELP_SECTIONS.iter().map(|section| section.title).collect();
     assert_eq!(titles, vec!["3D view", "2D view", "Global"]);
@@ -150,14 +150,14 @@ fn the_overlay_shows_only_the_active_view_and_global() {
 }
 
 #[test]
-fn the_overlay_sections_come_from_the_same_constants() {
-    // The overlay filters HELP_SECTIONS and hands back the very same
-    // constants, so the strings cannot drift.
+fn the_overlay_and_window_share_the_same_section_constants() {
+    // The overlay filters HELP_SECTIONS; the window renders it whole. Both
+    // hand back the very same constants, so the strings cannot drift.
     assert!(std::ptr::eq(sections_for(true)[0], &HELP_SECTIONS[0]));
     assert!(std::ptr::eq(sections_for(true)[1], &HELP_SECTIONS[2]));
     assert!(std::ptr::eq(sections_for(false)[0], &HELP_SECTIONS[1]));
     assert!(std::ptr::eq(sections_for(false)[1], &HELP_SECTIONS[2]));
-    assert_eq!(HELP_SECTIONS.len(), 3, "the table keeps all three groups");
+    assert_eq!(HELP_SECTIONS.len(), 3, "the window keeps all three groups");
 }
 
 #[test]

@@ -1,12 +1,11 @@
-//! The keyboard & mouse reference (ticket 18), behind the one help surface
-//! (ticket 28).
+//! The keyboard & mouse reference (ticket 18).
 //!
-//! [`HELP_SECTIONS`] is the single source of strings: the compact overlay
-//! anchored in the viewport's bottom-left corner renders the active view's
-//! group plus Global. The overlay's visibility is a persisted
-//! [`crate::ui::layout::LayoutState`] flag, visible on first run; the overlay's
-//! ×, the Help > Keyboard & mouse entry, `F1`, `?` and `Esc` all toggle or
-//! dismiss it.
+//! One table is the single source of strings for both surfaces: the compact
+//! overlay anchored in the viewport's bottom-left corner (active mode + global
+//! bindings) and the Help menu's window (all three groups; ticket 28 keeps it
+//! as the only help menu entry). The overlay's visibility is a persisted
+//! [`crate::ui::layout::LayoutState`] flag, visible on first run; its ×, `F1`,
+//! `?` and `Esc` all toggle or dismiss it.
 
 use eframe::egui;
 
@@ -17,8 +16,8 @@ pub struct HelpRow {
     pub action: &'static str,
 }
 
-/// One titled group of rows. The overlay shows one view group plus Global;
-/// [`HELP_SECTIONS`] keeps every group in table order.
+/// One titled group of rows. The overlay shows one view group plus Global; the
+/// Help window shows every group in [`HELP_SECTIONS`] order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HelpSection {
     pub title: &'static str,
@@ -62,16 +61,16 @@ const ROWS_GLOBAL: &[HelpRow] = &[
     HelpRow { input: "Esc", action: "Close dialogs / dismiss help" },
 ];
 
-/// The three groups, in table order. The overlay reads this table, so a
+/// The three groups, in window order. Both help surfaces read this table, so a
 /// binding is spelled exactly once. A `static` (not a `const`) so the overlay
-/// and the tests can be proven to hand back the very same allocation.
+/// and the window can be proven to hand back the very same allocation.
 pub static HELP_SECTIONS: &[HelpSection] = &[
     HelpSection { title: "3D view", rows: ROWS_3D },
     HelpSection { title: "2D view", rows: ROWS_2D },
     HelpSection { title: "Global", rows: ROWS_GLOBAL },
 ];
 
-/// Every documented row, across all groups.
+/// Every documented row, across all groups (the Help window's contents).
 pub fn all_rows() -> Vec<HelpRow> {
     HELP_SECTIONS
         .iter()
@@ -80,7 +79,7 @@ pub fn all_rows() -> Vec<HelpRow> {
 }
 
 /// The sections the viewport overlay shows: the active view's bindings, then
-/// Global.
+/// Global. The Help window keeps all three groups from [`HELP_SECTIONS`].
 pub fn sections_for(mode_3d: bool) -> [&'static HelpSection; 2] {
     let active = if mode_3d {
         &HELP_SECTIONS[0]
@@ -142,8 +141,8 @@ fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection]) {
 
 /// Draw the compact overlay anchored at `anchor` (the viewport's bottom-left
 /// corner in global coordinates). It shows the active view's bindings plus the
-/// global ones. Returns true when the user dismissed it, so the caller can
-/// persist the new visibility.
+/// global ones; the Help window carries the full table. Returns true when the
+/// user dismissed it, so the caller can persist the new visibility.
 pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
     let mut dismissed = false;
     egui::Area::new(egui::Id::unique("help_overlay"))
@@ -178,4 +177,17 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
                 });
         });
     dismissed
+}
+
+/// The Help menu's window: the same table, all three groups. `open` is the
+/// window's visibility flag (the menu action sets it, the × clears it).
+pub fn help_window(ctx: &egui::Context, open: &mut bool) {
+    egui::Window::new("Keyboard & mouse")
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
+            table(ui, &all);
+        });
 }

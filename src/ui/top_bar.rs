@@ -64,7 +64,7 @@ pub fn show(
             let response = ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
                     let mut button = egui::Button::new(item.label);
-                    if let Some(label) = menu::shortcut_label(item.action) {
+                    if let Some(label) = menu::item_shortcut_label(item) {
                         button = button.shortcut_text(label);
                     }
                     if ui.add(button).clicked() {

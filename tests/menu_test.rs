@@ -128,6 +128,7 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ResetLayout, SideEffect::ResetLayout),
         (MenuAction::ResetCamera, SideEffect::ResetCamera),
         (MenuAction::ToggleHelp, SideEffect::None),
+        (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
         (MenuAction::OpenSettings, SideEffect::OpenSettings),
         (MenuAction::About, SideEffect::ShowAbout),
     ];
@@ -263,15 +264,20 @@ fn the_shortcut_table_has_no_duplicates() {
 }
 
 #[test]
-fn every_enum_variant_is_reachable_from_a_menu_item() {
-    let reachable: Vec<MenuAction> = menu::MENUS
+fn every_enum_variant_is_reachable_from_a_menu_item_or_shortcut() {
+    // A variant is dead only when nothing dispatches it: no menu item and no
+    // shortcut. Ticket 28 removed the View > Help overlay entry, so ToggleHelp
+    // is now keyboard-only (F1 / ?), which is reachable but not a menu home.
+    let menu_actions: Vec<MenuAction> = menu::MENUS
         .iter()
         .flat_map(|menu| menu.items.iter().map(|item| item.action))
         .collect();
     for action in MenuAction::ALL {
+        let has_menu_home = menu_actions.contains(action);
+        let has_shortcut = SHORTCUTS.iter().any(|shortcut| shortcut.action == *action);
         assert!(
-            reachable.contains(action),
-            "{action:?} has no menu item: it would be a dead variant",
+            has_menu_home || has_shortcut,
+            "{action:?} is dead: no menu item and no shortcut",
         );
     }
 }
@@ -384,9 +390,10 @@ fn about_reports_the_package_version_and_gpl_license() {
 }
 
 #[test]
-fn the_help_menu_entry_toggles_the_help_overlay() {
-    // Ticket 28: Help > Keyboard & mouse is the one canonical help command.
-    // It toggles the viewport overlay, and shows the F1 hint from SHORTCUTS.
+fn the_help_menu_entry_opens_the_full_help_window() {
+    // Ticket 28: Help > Keyboard & mouse is the one canonical help entry. It
+    // opens the full grouped table window; the compact overlay stays on
+    // F1 / ? / × / Esc.
     let help = menu::MENUS
         .iter()
         .find(|menu| menu.title == "Help")
@@ -396,31 +403,55 @@ fn the_help_menu_entry_toggles_the_help_overlay() {
         .iter()
         .find(|item| item.label == "Keyboard & mouse")
         .expect("Help keeps the Keyboard & mouse entry");
-    assert_eq!(item.action, MenuAction::ToggleHelp);
+    assert_eq!(item.action, MenuAction::ShowHelpTable);
     assert_eq!(
-        menu::shortcut_label(item.action),
+        menu::item_shortcut_label(item),
         Some("F1"),
-        "the surviving item shows the F1 label sourced from SHORTCUTS",
+        "the surviving item shows the F1 hint sourced from SHORTCUTS",
     );
-
-    let mut fixture = Fixture::new();
-    assert!(fixture.layout.help_visible, "help starts visible");
     assert_eq!(
-        apply_action(item.action, &mut fixture.ui()),
-        SideEffect::None,
+        effect_of(item.action),
+        SideEffect::ShowHelp,
+        "the menu entry opens the full help window",
     );
-    assert!(!fixture.layout.help_visible, "the menu entry dismisses the overlay");
-    apply_action(item.action, &mut fixture.ui());
-    assert!(fixture.layout.help_visible, "and brings it back");
 }
 
 #[test]
-fn f1_still_fires_the_single_help_toggle() {
+fn help_has_exactly_one_menu_entry() {
+    // Ticket 28: the View duplicate is gone, so the only help command in the
+    // menus is Help > Keyboard & mouse. ToggleHelp stays keyboard-only.
+    let help_actions = [MenuAction::ToggleHelp, MenuAction::ShowHelpTable];
+    let homes: Vec<(&str, &str)> = menu::MENUS
+        .iter()
+        .flat_map(|menu| {
+            menu.items
+                .iter()
+                .filter(|item| help_actions.contains(&item.action))
+                .map(move |item| (menu.title, item.label))
+        })
+        .collect();
     assert_eq!(
-        fired_shortcuts(egui::Modifiers::NONE, egui::Key::F1),
-        vec![MenuAction::ToggleHelp],
-        "the surviving help command keeps its F1 shortcut",
+        homes,
+        vec![("Help", "Keyboard & mouse")],
+        "one help entry, and it is the Help menu's",
     );
+}
+
+#[test]
+fn f1_still_toggles_the_compact_overlay() {
+    let fired = fired_shortcuts(egui::Modifiers::NONE, egui::Key::F1);
+    assert_eq!(
+        fired,
+        vec![MenuAction::ToggleHelp],
+        "F1 still dispatches the overlay toggle",
+    );
+
+    let mut fixture = Fixture::new();
+    assert!(fixture.layout.help_visible, "the overlay starts visible");
+    assert_eq!(apply_action(fired[0], &mut fixture.ui()), SideEffect::None);
+    assert!(!fixture.layout.help_visible, "F1 dismisses the compact overlay");
+    apply_action(fired[0], &mut fixture.ui());
+    assert!(fixture.layout.help_visible, "and brings it back");
 }
 
 #[test]

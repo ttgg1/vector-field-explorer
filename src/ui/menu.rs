@@ -66,6 +66,7 @@ menu_actions! {
     ResetLayout,
     ResetCamera,
     ToggleHelp,
+    ShowHelpTable,
     OpenSettings,
     About,
 }
@@ -80,6 +81,8 @@ pub enum SideEffect {
     OpenSettings,
     /// Show the About dialog.
     ShowAbout,
+    /// Show the full keyboard & mouse window (all three help groups).
+    ShowHelp,
     /// Ask the screenshot capture for one frame.
     Screenshot,
     /// Close the window.
@@ -146,7 +149,7 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "Help",
         items: &[
-            MenuItem { label: "Keyboard & mouse", action: MenuAction::ToggleHelp },
+            MenuItem { label: "Keyboard & mouse", action: MenuAction::ShowHelpTable },
             MenuItem { label: "About Vector Field Explorer", action: MenuAction::About },
         ],
     },
@@ -219,6 +222,17 @@ pub fn shortcut_for(action: MenuAction) -> Option<&'static Shortcut> {
 /// The label shown beside `action`'s menu item.
 pub fn shortcut_label(action: MenuAction) -> Option<&'static str> {
     shortcut_for(action).map(|shortcut| shortcut.label)
+}
+
+/// The hint shown beside `item`. Normally the item's own shortcut; Help >
+/// Keyboard & mouse is the exception: it opens the full table window while F1
+/// toggles the compact overlay, so the item shows the help shortcut's label
+/// (F1) and the two help surfaces advertise the same key.
+pub fn item_shortcut_label(item: &MenuItem) -> Option<&'static str> {
+    match item.action {
+        MenuAction::ShowHelpTable => shortcut_label(MenuAction::ToggleHelp),
+        action => shortcut_label(action),
+    }
 }
 
 /// Whether `shortcut` may fire this frame. Every shortcut stays inert while a
@@ -314,6 +328,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             ui.layout.toggle_help();
             SideEffect::None
         }
+        MenuAction::ShowHelpTable => SideEffect::ShowHelp,
         MenuAction::OpenSettings => SideEffect::OpenSettings,
         MenuAction::About => SideEffect::ShowAbout,
     }
