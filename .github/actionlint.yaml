@@ -1,0 +1,9 @@
+# actionlint configuration.
+#
+# `macos-15-intel` is the last GitHub-hosted Intel macOS image (supported
+# through Aug 2027); release.yml and package.yml use it for the
+# x86_64-apple-darwin build. actionlint's bundled runner-label list predates
+# that image, so declare it here instead of suppressing the whole check.
+self-hosted-runner:
+  labels:
+    - macos-15-intel

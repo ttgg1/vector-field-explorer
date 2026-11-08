@@ -6,7 +6,8 @@ name: Release
 #
 # Jobs:
 #   verify   ubuntu-latest  guards + build/test/clippy; everything else waits
-#   build    matrix         release binary per target, packaged as an archive
+#   build    package.yml    reusable workflow: one archive per target (shared
+#                           with nightly.yml, ticket 42)
 #   release  ubuntu-latest  create/update the GitHub Release, attach all assets
 #
 # Guards, both before anything is built or published:
@@ -58,6 +59,8 @@ jobs:
     name: Verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,9 +70,11 @@ jobs:
           fetch-depth: 0 # full history and tags for the main-reachability check
 
       - name: Check tag matches Cargo.toml version
+        id: version
         run: |
           version="$(scripts/check-version.sh "$TAG")"
           echo "release version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Check tag is reachable from main
         run: |
@@ -98,132 +103,15 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   build:
-    name: Build ${{ matrix.target }}
+    name: Package
     needs: verify
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-          - os: macos-15
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
-    # macOS minutes bill at 10x on private repos; cap a hung build.
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-
-      - name: Check tag matches Cargo.toml version
-        id: version
-        run: |
-          version="$(scripts/check-version.sh "$TAG")"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
-      # Build-only deps: winit/glutin headers, X11/Wayland, GL and Vulkan.
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libxkbcommon-dev libwayland-dev libx11-dev libxi-dev \
-            libgl1-mesa-dev libvulkan-dev pkg-config
-
-      - name: Build (release)
-        run: cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Strip binary
-        run: |
-          set -euo pipefail
-          bin="target/${{ matrix.target }}/release/vector-field-explorer"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            strip -x "$bin"
-          else
-            strip "$bin"
-          fi
-
-      - name: Package
-        id: package
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          for f in README.md LICENSE; do
-            if [ ! -f "$f" ]; then
-              echo "::error::release assets require $f in the repo root"
-              exit 1
-            fi
-          done
-
-          name="vector-field-explorer-${VERSION}-${TARGET}"
-          bin="target/${TARGET}/release/vector-field-explorer"
-          mkdir -p dist
-
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            mkdir -p "dist/${name}"
-            cp "$bin" README.md LICENSE "dist/${name}/"
-            tar -C dist -czf "${name}.tar.gz" "${name}"
-            echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
-          else
-            app="dist/vector-field-explorer.app"
-            mkdir -p "${app}/Contents/MacOS"
-            cp "$bin" "${app}/Contents/MacOS/vector-field-explorer"
-            cat > "${app}/Contents/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleInfoDictionaryVersion</key>
-            <string>6.0</string>
-            <key>CFBundleName</key>
-            <string>Vector Field Explorer</string>
-            <key>CFBundleDisplayName</key>
-            <string>Vector Field Explorer</string>
-            <key>CFBundleIdentifier</key>
-            <string>io.github.ttgg1.vector-field-explorer</string>
-            <key>CFBundleExecutable</key>
-            <string>vector-field-explorer</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>${VERSION}</string>
-            <key>CFBundleVersion</key>
-            <string>${VERSION}</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>11.0</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-          </dict>
-          </plist>
-          PLIST
-            cp README.md LICENSE dist/
-            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE )
-            echo "asset=${name}.zip" >> "$GITHUB_OUTPUT"
-          fi
-
-          ls -l dist
-
-      - name: Upload archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: ${{ steps.package.outputs.asset }}
-          if-no-files-found: error
+    # Shared with nightly.yml: same targets, same archive layouts (ticket 42).
+    # A versioned release leaves build-version empty, so the app reports the
+    # Cargo.toml version.
+    uses: ./.github/workflows/package.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
   release:
     name: Publish release

@@ -1,0 +1,216 @@
+name: Nightly
+
+# Rolling nightly prerelease (ticket 42).
+#
+# Every day at 03:17 UTC (and on demand) this workflow verifies main, builds the
+# same three archives as the tag-driven release through the shared
+# `.github/workflows/package.yml`, and moves the single `nightly` tag to the
+# built commit. It never creates a `v*` tag or release; `nightly` is always a
+# prerelease and is never marked "latest".
+#
+# Failure behaviour: the release job needs verify *and* build, so a failing
+# test, lint or build publishes nothing and the previous nightly stays intact.
+# The release job uploads the new assets before deleting the old ones.
+#
+# Cost: two macOS builds a day bill at 10x on a private repo. If that becomes
+# unacceptable, gate the macOS targets on `workflow_dispatch` (or a weekly
+# schedule) and keep the Linux nightly; the ticket asks for a ruling first.
+#
+# The tag push uses the job's `contents: write` token. GITHUB_TOKEN pushes do
+# not trigger other workflows, and release.yml only listens for `v*` tags, so
+# moving `nightly` can never start a versioned release.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One nightly at a time. Never cancel a run in progress: the release job moves a
+# shared tag, so a half-finished run must not race the next one.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify main
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.nightly.outputs.version }}
+      sha: ${{ steps.nightly.outputs.sha }}
+      display_date: ${{ steps.nightly.outputs.display_date }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0 # full history for the origin/main comparison
+
+      - name: Require the current origin/main head
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "main:refs/remotes/origin/main"
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::nightly builds run from main, not ${GITHUB_REF}"
+            exit 1
+          fi
+          head="$(git rev-parse HEAD)"
+          main="$(git rev-parse refs/remotes/origin/main)"
+          if [ "$head" != "$main" ]; then
+            echo "::error::checked out ${head}, but origin/main is ${main}; re-run on the main head"
+            exit 1
+          fi
+
+      - name: Compute nightly version
+        id: nightly
+        run: |
+          set -euo pipefail
+          base="$(scripts/crate-version.sh)"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y%m%d)"
+          version="$(scripts/nightly-version.sh "$base" "$date" "$sha")"
+          echo "nightly version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "display_date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (all targets)
+        run: cargo build --all-targets
+
+      # scripts/test.sh also prunes stale test binaries before the cache saves
+      # target/, keeping the cache under GitHub's 10 GB limit (ticket 34).
+      - name: Test
+        run: scripts/test.sh
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+  build:
+    name: Package
+    needs: verify
+    uses: ./.github/workflows/package.yml
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      ref: ${{ needs.verify.outputs.sha }}
+      build-version: ${{ needs.verify.outputs.version }}
+
+  release:
+    name: Publish nightly
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # `contents: write` lives here and only here: verify and build are read-only.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Move the nightly tag to the built commit
+        env:
+          SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$SHA" in
+            ''|*[!0-9a-f]*)
+              echo "::error::not a full commit SHA: '${SHA}'"
+              exit 1
+              ;;
+          esac
+          # Force-update the rolling tag. Never a `v*` tag.
+          git tag -f nightly "$SHA"
+          git push --force origin refs/tags/nightly
+
+      - name: Create or update the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          SHA: ${{ needs.verify.outputs.sha }}
+          NIGHTLY_DATE: ${{ needs.verify.outputs.display_date }}
+        run: |
+          set -euo pipefail
+          tag=nightly
+          case "$tag" in
+            v*)
+              echo "::error::refusing to publish a versioned tag from the nightly workflow"
+              exit 1
+              ;;
+          esac
+
+          shopt -s nullglob
+          assets=(dist/*)
+          if [ "${#assets[@]}" -ne 3 ]; then
+            echo "::error::expected 3 nightly assets, found ${#assets[@]}: ${assets[*]}"
+            exit 1
+          fi
+          ls -l dist
+
+          cat > release-notes.md <<NOTES
+          ### Nightly build
+
+          Built from \`main\` at \`${SHA}\` (version \`${VERSION}\`). This is a
+          rolling prerelease: assets are rebuilt daily and the \`nightly\` tag
+          moves to the newest verified \`main\` commit.
+
+          ### macOS: first launch
+
+          These builds are unsigned and not notarized. On macOS 15 (Sequoia)
+          and later, the first launch is blocked; approve it in System Settings
+          -> Privacy & Security, then choose "Open Anyway". On older macOS,
+          right-click (or Control-click) \`vector-field-explorer.app\` and choose
+          **Open**.
+
+          Linux: the tarball needs a Vulkan-capable driver (or a software
+          implementation such as \`mesa-vulkan-drivers\`).
+          NOTES
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release ${tag} exists; updating title, notes and assets"
+            gh release edit "$tag" \
+              --title "Nightly ${NIGHTLY_DATE}" \
+              --prerelease \
+              --latest=false \
+              --notes-file release-notes.md
+          else
+            echo "release ${tag} does not exist; creating it"
+            gh release create "$tag" \
+              --title "Nightly ${NIGHTLY_DATE}" \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --notes-file release-notes.md
+          fi
+
+          # Upload first, then drop assets from older nightlies: each run
+          # replaces the set, and a failed upload leaves the previous set whole.
+          gh release upload "$tag" "${assets[@]}" --clobber
+
+          declare -A keep=()
+          for asset in "${assets[@]}"; do
+            keep["$(basename "$asset")"]=1
+          done
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if [ -z "${keep[$name]:-}" ]; then
+              echo "removing stale asset ${name}"
+              gh release delete-asset "$tag" "$name" --yes
+            fi
+          done < <(gh release view "$tag" --json assets --jq '.assets[].name')

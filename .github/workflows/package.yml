@@ -1,0 +1,163 @@
+name: Package
+
+# Reusable packaging pipeline (ticket 42), shared by release.yml (ticket 17)
+# and nightly.yml so a versioned release and a nightly are built and laid out
+# by exactly one copy of the steps.
+#
+# The caller owns verification, versioning and publishing. This workflow only:
+#   * checks out the requested ref,
+#   * builds the three supported targets in release mode,
+#   * strips the binary, packages it (tar.gz on Linux, .app.zip on macOS) and
+#     uploads one artifact per target under the target triple's name.
+#
+# Inputs:
+#   version        version used in archive names and Info.plist
+#   ref            tag name or commit SHA to build
+#   build-version  compile-time VFE_BUILD_VERSION; empty means the app falls
+#                  back to the Cargo.toml version (src/version.rs)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version used in archive names and Info.plist'
+        required: true
+        type: string
+      ref:
+        description: 'Tag or commit SHA to build'
+        required: true
+        type: string
+      build-version:
+        description: 'Compile-time VFE_BUILD_VERSION (empty = Cargo.toml version)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    # macOS minutes bill at 10x on private repos; cap a hung build.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Build-only deps: winit/glutin headers, X11/Wayland, GL and Vulkan.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxi-dev \
+            libgl1-mesa-dev libvulkan-dev pkg-config
+
+      - name: Build (release)
+        env:
+          # Nightly builds stamp their full version; a versioned release passes
+          # an empty value and the app falls back to the Cargo.toml version.
+          VFE_BUILD_VERSION: ${{ inputs.build-version }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Strip binary
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/vector-field-explorer"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            strip -x "$bin"
+          else
+            strip "$bin"
+          fi
+
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          for f in README.md LICENSE; do
+            if [ ! -f "$f" ]; then
+              echo "::error::release assets require $f in the repo root"
+              exit 1
+            fi
+          done
+
+          name="vector-field-explorer-${VERSION}-${TARGET}"
+          bin="target/${TARGET}/release/vector-field-explorer"
+          mkdir -p dist
+
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            mkdir -p "dist/${name}"
+            cp "$bin" README.md LICENSE "dist/${name}/"
+            tar -C dist -czf "${name}.tar.gz" "${name}"
+            echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          else
+            app="dist/vector-field-explorer.app"
+            mkdir -p "${app}/Contents/MacOS"
+            cp "$bin" "${app}/Contents/MacOS/vector-field-explorer"
+            cat > "${app}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>Vector Field Explorer</string>
+            <key>CFBundleDisplayName</key>
+            <string>Vector Field Explorer</string>
+            <key>CFBundleIdentifier</key>
+            <string>io.github.ttgg1.vector-field-explorer</string>
+            <key>CFBundleExecutable</key>
+            <string>vector-field-explorer</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>11.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+            cp README.md LICENSE dist/
+            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE )
+            echo "asset=${name}.zip" >> "$GITHUB_OUTPUT"
+          fi
+
+          ls -l dist
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
