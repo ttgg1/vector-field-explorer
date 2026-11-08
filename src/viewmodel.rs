@@ -12,7 +12,7 @@ use super::domain::Domain;
 use super::field::FieldExpr;
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
-use super::streamlines::{seed_grid, trace, StreamlineOpts};
+use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
 
 use std::sync::Arc;
 
@@ -340,9 +340,13 @@ impl State {
     /// the arrows. The speed slider sets the per-line point budget and the
     /// grid spacing sets the step scale, so streamlines advance at a
     /// spacing-multiple per second comparable with arrows and particles.
-    /// 2D only this ticket: 3D seeds and click-to-seed are ticket 6.
+    /// Both views trace the same RK4 [`streamlines::trace`] through the same
+    /// 3D-sampled field: the pan/zoom view uses the jittered grid of the view
+    /// plane, while the orbit view uses the same grid at the domain's mid-depth
+    /// so its lines run with the depth they cross. [`streamlines::ray_seed`]
+    /// turns a click into a seed inside the domain for the orbit view's click-to-seed.
     pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
-        if !self.streamlines || self.mode_3d {
+        if !self.streamlines {
             return Vec::new();
         }
         // Half the grid density seeds the plane: enough lines to read the flow
@@ -351,43 +355,85 @@ impl State {
         let grid = self.grid();
         let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
         let seeds = seed_grid(&self.domain, axis, STREAMLINE_JITTER, salt);
-        let speed = if self.speed.is_finite() { self.speed.clamp(MIN_SPEED, MAX_SPEED) } else { 1.0 };
-        // The slider bounds keep the budget inside [12, 360] points, below the
-        // tracer's 400-point cap.
-        let max_len = (120.0 * speed).round() as usize;
-        let opts = StreamlineOpts {
-            max_len,
-            step_scale: 0.5 * self.spacing(),
-            both_directions: true,
-        };
-        let (lo, hi) = self.color_range(sampled);
+        let opts = self.streamline_opts();
+        let range = self.color_range(sampled);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for seed in seeds {
-            let path = trace(&self.field, seed, &self.domain, &opts);
-            for i in 0..path.len().saturating_sub(1) {
-                let pa = path[i];
-                let pb = path[i + 1];
-                let mag = match self.field.eval3(pa) {
-                    Some(v) => v.length(),
-                    None => 0.0,
-                };
-                let rgb = self.colormap.colormap(mag, lo, hi);
-                lines.push(LineInstanceGPU {
-                    a: [pa.x, pa.y, pa.z, 1.0],
-                    b: [pb.x, pb.y, pb.z, STREAMLINE_WIDTH],
-                    color: [
-                        rgb[0] as f32 / 255.0,
-                        rgb[1] as f32 / 255.0,
-                        rgb[2] as f32 / 255.0,
-                        1.0,
-                    ],
-                });
+            self.push_line(&mut lines, seed, &opts, range);
+        }
+        lines
+    }
+
+    /// The tracing parameters both seed sources share: the speed slider sets
+    /// the point budget (bounded inside the tracer's 400-point cap) and the
+    /// grid spacing sets the step scale, so lines advance at a comparable
+    /// spacing-multiple per second in either view.
+    fn streamline_opts(self: &State) -> StreamlineOpts {
+        let speed = if self.speed.is_finite() { self.speed.clamp(MIN_SPEED, MAX_SPEED) } else { 1.0 };
+        StreamlineOpts {
+            max_len: (120.0 * speed).round() as usize,
+            step_scale: 0.5 * self.spacing(),
+            both_directions: true,
+        }
+    }
+
+    /// Trace one seed and push its coloured segments: one instance per segment,
+    /// coloured at the segment's start by the same [`color_range`] the arrows
+    /// use. Shared by the grid seeds and the click bursts so both paint
+    /// identically.
+    fn push_line(
+        self: &State,
+        lines: &mut Vec<LineInstanceGPU>,
+        seed: Vec3,
+        opts: &StreamlineOpts,
+        range: (f32, f32),
+    ) {
+        let (lo, hi) = range;
+        let path = trace(&self.field, seed, &self.domain, opts);
+        for i in 0..path.len().saturating_sub(1) {
+            let pa = path[i];
+            let pb = path[i + 1];
+            let mag = match self.field.eval3(pa) {
+                Some(v) => v.length(),
+                None => 0.0,
+            };
+            let rgb = self.colormap.colormap(mag, lo, hi);
+            lines.push(LineInstanceGPU {
+                a: [pa.x, pa.y, pa.z, 1.0],
+                b: [pb.x, pb.y, pb.z, STREAMLINE_WIDTH],
+                color: [
+                    rgb[0] as f32 / 255.0,
+                    rgb[1] as f32 / 255.0,
+                    rgb[2] as f32 / 255.0,
+                    1.0,
+                ],
+            });
+        }
+    }
+
+    /// Line instances for the click-seeded streamlines: every click expands to
+    /// a deterministic [`burst_seeds`] cluster (3D depth in the orbit view, on
+    /// the clicked plane in 2D), each seed traced exactly like a grid seed.
+    /// Unlike [`streamlines_snapshot`] this ignores the streamline toggle — a
+    /// click is an explicit request to see the flow there. Pure; the app owns
+    /// the (bounded) list of clicks.
+    pub fn click_streamlines_snapshot(
+        self: &State,
+        color_range: (f32, f32),
+        clicks: &[Vec3],
+    ) -> Vec<LineInstanceGPU> {
+        let opts = self.streamline_opts();
+        let dimension = if self.mode_3d { 3 } else { 2 };
+        let mut lines: Vec<LineInstanceGPU> = Vec::new();
+        for click in clicks {
+            for seed in burst_seeds(*click, &self.domain, CLICK_BURST_SEEDS, dimension) {
+                self.push_line(&mut lines, seed, &opts, color_range);
             }
         }
         lines
     }
 
-    /// The whole GPU scene for this state: arrows plus 2D streamlines —
+    /// The whole GPU scene for this state: arrows plus streamlines —
     /// particle tasks add `dots` later. Pure: no GPU resources touched, so
     /// the UI layer just stores the result; the field is sampled once and
     /// reused for the arrows and the streamline colour range.
@@ -665,10 +711,10 @@ mod tests {
     }
 
     #[test]
-    fn streamlines_stay_2d_and_off_by_default() {
+    fn streamlines_run_in_both_modes_and_off_by_default() {
         let mut s3 = State::new(true);
         assert!(s3.set_streamlines(true), "the toggle still works in 3D");
-        assert!(s3.snapshot().lines.is_empty(), "3D streamlines wait for ticket 6");
+        assert!(!s3.snapshot().lines.is_empty(), "the orbit view gets 3D streamlines (ticket 6)");
         let s2 = State::new(false);
         assert!(s2.snapshot().lines.is_empty(), "streamlines are off at the defaults");
     }
@@ -698,5 +744,53 @@ mod tests {
         let third = s.snapshot().lines.len();
         assert_eq!(first, second, "seeds are deterministic: rebuilds agree");
         assert_eq!(second, third, "and again, with no state change in between");
+    }
+
+    /// The payload of every line instance, for equality checks
+    /// (`LineInstanceGPU` has no `PartialEq` of its own).
+    fn segments(lines: &[crate::renderer::LineInstanceGPU]) -> Vec<([f32; 4], [f32; 4], [f32; 4])> {
+        lines.iter().map(|l| (l.a, l.b, l.color)).collect()
+    }
+
+    #[test]
+    fn click_streamlines_seed_a_burst_without_the_grid_toggle() {
+        // A click is an explicit request: it plants a burst even with the
+        // streamline grid toggle off, and the burst stays on the 2D plane.
+        let mut s = State::new(false);
+        assert!(s.set_formula("(1, 0)".to_string()), "a field that flows at the origin");
+        assert!(!s.streamlines, "the grid seeds are off at the defaults");
+        let lines = s.click_streamlines_snapshot((0.0, 1.0), &[Vec3::ZERO]);
+        assert!(!lines.is_empty(), "the click seeds a burst anyway");
+        assert!(
+            lines.iter().all(|l| l.a[2] == 0.0 && l.b[2] == 0.0),
+            "the 2D burst stays on the click's plane",
+        );
+        let starts: Vec<[f32; 3]> = lines.iter().map(|l| [l.a[0], l.a[1], l.a[2]]).collect();
+        let unique = starts.iter().fold(Vec::new(), |mut acc: Vec<[f32; 3]>, p| {
+            if !acc.contains(p) {
+                acc.push(*p);
+            }
+            acc
+        });
+        assert!(unique.len() > 1, "the burst traces several seeds, not one: {} starts", unique.len());
+    }
+
+    #[test]
+    fn click_streamlines_are_deterministic_and_bounded_by_the_clicks() {
+        // Same clicks redraw the same bursts; each extra click adds its own
+        // geometry; and a click off the field contributes nothing.
+        let mut s = State::new(true);
+        assert!(s.set_formula("(-y, x, 0.5)".to_string()), "a depth-carrying field");
+        let clicks = [Vec3::new(0.1, 0.1, 0.0), Vec3::new(-0.2, 0.3, 0.1)];
+        let first = s.click_streamlines_snapshot((0.0, 1.5), &clicks);
+        let second = s.click_streamlines_snapshot((0.0, 1.5), &clicks);
+        assert_eq!(segments(&first), segments(&second), "rebuilds redraw the same bursts");
+        let one = s.click_streamlines_snapshot((0.0, 1.5), &clicks[..1]);
+        assert!(first.len() > one.len(), "each click adds its own burst");
+        assert!(s.click_streamlines_snapshot((0.0, 1.5), &[]).is_empty(), "no clicks, no click lines");
+        assert!(
+            s.click_streamlines_snapshot((0.0, 1.5), &[Vec3::new(9.0, 9.0, 9.0)]).is_empty(),
+            "a click off the field draws nothing",
+        );
     }
 }

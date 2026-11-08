@@ -10,10 +10,13 @@
 //! Seeds are a jittered grid (ticket ruling): a regular lattice over the view
 //! with a seeded, deterministic per-point jitter so streamlines are spread
 //! evenly but not on a rigid lattice — reproducible across rebuilds, stable
-//! under camera changes. Click-to-seed is ticket 6.
+//! under camera changes. The 3D view additionally seeds from a camera ray
+//! ([`ray_seed`], ticket 06): a click lands on the domain box where the user
+//! points, at the camera's focal plane.
 
-use glam::Vec3;
+use glam::{Vec2, Vec3, Vec4};
 
+use crate::camera::OrbitCamera;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
 
@@ -29,6 +32,13 @@ pub struct StreamlineOpts {
 
 /// Hard cap on points per streamline, regardless of the requested budget.
 pub const MAX_STREAMLINE_POINTS: usize = 400;
+
+/// Streamline seeds one click produces: the picked point plus a small
+/// surrounding cluster (a "burst" — ticket 06).
+pub const CLICK_BURST_SEEDS: usize = 5;
+/// Radius of that cluster, as a fraction of the domain's smallest positive
+/// extent, so a click reads as a local spray at any zoom of the domain.
+pub const CLICK_BURST_REACH: f32 = 0.08;
 
 /// Inclusive axis-aligned containment (the `Domain` type has no `contains`).
 fn inside(domain: &Domain, p: Vec3) -> bool {
@@ -110,6 +120,160 @@ pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineO
     line
 }
 
+/// Seed point for a click at `ndc_xy` in the 3D view: unproject the click with
+/// [`OrbitCamera::ndc_ray`] and land it on the domain box.
+///
+/// The seed sits where the user points: on the focal plane through the camera's
+/// `target`, perpendicular to the view direction, clamped to the box's near/far
+/// crossing along the ray. Clamping to that crossing (rather than taking the
+/// bare entry point) is what gives a traced streamline room to run: a near-face
+/// entry would sit in front of the field with only the box's depth ahead of it,
+/// while a centre click then seeds exactly the target the user aimed at.
+///
+/// A click whose ray misses the box falls back to a shell entry on a sphere
+/// about the target at half the eye-to-target distance (or, for a ray that
+/// misses that sphere too, the point of closest approach projected out to it),
+/// which `trace` then drops: clicking empty space draws nothing. Returns `None`
+/// only when the camera does not describe a finite ray.
+pub fn ray_seed(camera: OrbitCamera, domain: &Domain, aspect: f32, ndc_xy: Vec2) -> Option<Vec3> {
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let (origin, direction) = camera.ndc_ray(aspect, ndc_xy);
+    let span = direction.length();
+    if !(origin.is_finite() && direction.is_finite()) || !span.is_finite() || span <= 0.0 {
+        return None;
+    }
+    let view = direction * (1.0 / span);
+
+    // Ray/box crossing (the slab test). `t` is in units of the raw, unnormalized
+    // `direction`, so `t == 1` is the far plane; a ray parallel to an axis gives
+    // +/-inf bounds, which the min/max reduction of the three axes ignores unless
+    // the ray is entirely outside a slab (then the crossing is empty).
+    let reciprocal = Vec3::splat(1.0) / direction;
+    let t_enter = (domain.min - origin) * reciprocal;
+    let t_exit = (domain.max - origin) * reciprocal;
+    let t_in = Vec3::min(t_enter, t_exit).max_element().max(0.0);
+    let t_out = Vec3::max(t_enter, t_exit).min_element();
+    if t_in <= t_out {
+        // Depth of the focal plane — the plane through the camera's target,
+        // perpendicular to the eye-to-target axis — measured along the clicked
+        // ray, then clamped into the box crossing so an extreme click still
+        // seeds a usable point. A centre click lands exactly on the target.
+        let axis = (camera.target - camera.position()).normalize_or_zero();
+        let denom = view.dot(axis);
+        let t_world = if denom.abs() < 1e-6 { 0.0 } else { (camera.target - origin).dot(axis) / denom };
+        let t_focal = t_world / span;
+        return Some(origin + direction * t_focal.clamp(t_in, t_out));
+    }
+
+    // Box missed: the shell fallback. `s` below is in world units along the unit
+    // view direction, the sphere being half the eye-to-target distance.
+    let to_target = camera.target - origin;
+    let shell = to_target.length() * 0.5;
+    if !(to_target.is_finite()) || !shell.is_finite() || shell <= 0.0 {
+        return None;
+    }
+    let along = to_target.dot(view);
+    let lateral = (to_target - view * along).length();
+    if lateral <= shell {
+        // Entry into the shell, on the near side of the target.
+        return Some(origin + view * (along - (shell * shell - lateral * lateral).sqrt()));
+    }
+    // The ray misses the shell as well: project its point of closest approach
+    // radially out onto it, so the seed still reads as "the direction clicked".
+    let nearest = origin + view * along;
+    let outward = nearest - camera.target;
+    if !outward.is_finite() || outward.length() <= 0.0 {
+        return None;
+    }
+    Some(camera.target + outward.normalize() * shell)
+}
+
+/// The mode-aware click-to-seed entry point: where a click at `ndc_xy` plants a
+/// seed in the current view.
+///
+/// `ortho_plane_size == None` is the 3D view, and the seed is exactly
+/// [`ray_seed`]'s focal-plane placement on the camera ray. `Some(plane_size)` is
+/// the 2D view — the same orbit camera run through its orthographic projection
+/// — and the seed is where that click's ortho ray crosses the domain's z
+/// midpoint, the plane the 2D grid is sampled on. The seed is not clamped to the
+/// domain: a click on empty space returns a point the tracer then drops, so
+/// "clicked nothing" draws nothing.
+///
+/// Returns `None` only when the camera or the aspect does not describe a usable
+/// ray.
+pub fn click_seed(
+    camera: OrbitCamera,
+    domain: &Domain,
+    aspect: f32,
+    ndc_xy: Vec2,
+    ortho_plane_size: Option<f32>,
+) -> Option<Vec3> {
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let Some(plane_size) = ortho_plane_size else {
+        return ray_seed(camera, domain, aspect, ndc_xy);
+    };
+    let plane_size = if plane_size.is_finite() && plane_size > 0.0 { plane_size } else { 1.0 };
+    let inv_vp = camera.vp_matrix(aspect, Some(plane_size)).inverse();
+    if !inv_vp.is_finite() {
+        return None;
+    }
+    let unproject = |z: f32| {
+        let p = inv_vp * Vec4::new(ndc_xy.x, ndc_xy.y, z, 1.0);
+        Vec3::new(p.x, p.y, p.z) / p.w
+    };
+    // The ortho click's ray is the near→far segment through the NDC point; only
+    // its direction matters for landing it on the plane.
+    let near = unproject(-1.0);
+    let far = unproject(1.0);
+    let direction = far - near;
+    if !(near.is_finite() && direction.is_finite()) || direction.length_squared() <= 0.0 {
+        return None;
+    }
+    let dz = direction.z;
+    if !dz.is_finite() || dz.abs() < 1e-9 {
+        return None;
+    }
+    let z_mid = (domain.min.z + domain.max.z) * 0.5;
+    let seed = near + direction * ((z_mid - near.z) / dz);
+    seed.is_finite().then_some(seed)
+}
+
+/// The seeds one click plants: the clicked point first, then `count - 1`
+/// deterministic jittered neighbours inside a small cluster around it.
+///
+/// `dimension == 3` jitters the full box, so a 3D burst has depth; any other
+/// value leaves z at the clicked coordinate, keeping a 2D burst on its plane.
+/// The offsets are keyed on the clicked point's bits (splitmix64), so the same
+/// click redraws the same burst across frames while different clicks differ.
+/// Returns an empty vector for `count == 0` or a click outside the domain.
+pub fn burst_seeds(center: Vec3, domain: &Domain, count: usize, dimension: usize) -> Vec<Vec3> {
+    if count == 0 || !inside(domain, center) {
+        return Vec::new();
+    }
+    let size = domain.domain_size();
+    let smallest = [size.x, size.y, size.z]
+        .into_iter()
+        .filter(|extent| *extent > 0.0)
+        .fold(f32::INFINITY, f32::min);
+    let reach = if smallest.is_finite() { CLICK_BURST_REACH * smallest } else { 0.0 };
+    let salt = (center.x.to_bits() as u64)
+        ^ ((center.y.to_bits() as u64) << 21)
+        ^ ((center.z.to_bits() as u64) << 42);
+    let mut seeds = Vec::with_capacity(count);
+    seeds.push(center);
+    for i in 1..count {
+        let (ux, uy, uz) = unit_triple(rand_stream(salt, i as u64));
+        let dz = if dimension == 3 { uz } else { 0.0 };
+        let p = center + Vec3::new(ux, uy, dz) * reach;
+        seeds.push(Vec3::new(
+            p.x.clamp(domain.min.x, domain.max.x),
+            p.y.clamp(domain.min.y, domain.max.y),
+            p.z.clamp(domain.min.z, domain.max.z),
+        ));
+    }
+    seeds
+}
+
 /// Jittered grid of seeds over the domain's xy plane at the plane's z midpoint:
 /// `per_axis × per_axis` lattice points spanning the domain extents (endpoints
 /// included for `per_axis > 1`, like `Domain::grid_points`), each displaced by
@@ -131,6 +295,17 @@ fn unit_pair(z: u64) -> (f32, f32) {
     let a = ((z >> 32) & 0xFFFFFF) as u32 as f32;
     let b = (z & 0xFFFFFF) as u32 as f32;
     (a * (2.0 / 16777216.0) - 1.0, b * (2.0 / 16777216.0) - 1.0)
+}
+
+/// Three independent 21-bit slices of a splitmix64 output mapped onto [-1, 1):
+/// one per axis, so a click-burst offset fills a small box in one draw.
+fn unit_triple(z: u64) -> (f32, f32, f32) {
+    const SLICE: u64 = 0x1FFFFF;
+    const SCALE: f32 = 2.0 / 2097152.0;
+    let a = ((z >> 42) & SLICE) as u32 as f32;
+    let b = ((z >> 21) & SLICE) as u32 as f32;
+    let c = (z & SLICE) as u32 as f32;
+    (a * SCALE - 1.0, b * SCALE - 1.0, c * SCALE - 1.0)
 }
 
 pub fn seed_grid(domain: &Domain, per_axis: u32, jitter: f32, salt: u64) -> Vec<Vec3> {
@@ -160,8 +335,9 @@ pub fn seed_grid(domain: &Domain, per_axis: u32, jitter: f32, salt: u64) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::{trace, seed_grid, StreamlineOpts};
+    use super::{CLICK_BURST_REACH, CLICK_BURST_SEEDS, burst_seeds, click_seed, ray_seed, seed_grid, trace, StreamlineOpts};
     use glam::{Vec2, Vec3};
+    use crate::camera::OrbitCamera;
     use crate::domain::Domain;
     use crate::field::FieldExpr;
 
@@ -291,5 +467,247 @@ mod tests {
 
         // Different salt keys a different stream.
         assert!(a != seed_grid(&d, 8, 0.4, 43), "salt keys the jitter");
+    }
+
+    // --- the 3D click-to-seed path (ticket 06) --------------------------------
+
+    /// Asserts two points coincide, to the tolerance the unprojection's f32
+    /// noise allows.
+    fn assert_close(actual: Vec3, expected: Vec3, what: &str) {
+        let gap = (actual - expected).length();
+        assert!(gap < 1e-3, "{what}: |{actual:?} - {expected:?}| = {gap}");
+    }
+
+    /// A view direction for the focal-plane assertions below.
+    fn view_of(camera: OrbitCamera) -> Vec3 {
+        let (_, direction) = camera.ndc_ray(1.0, Vec2::ZERO);
+        direction * (1.0 / direction.length())
+    }
+
+    #[test]
+    fn ray_seed_inside_domain() {
+        // Pinned ticket-06 test: a centre click (ndc 0,0) at the default orbit
+        // aimed at the origin of a [-1,1]^3 domain unprojects to a point inside
+        // that domain, and tracing the depth-carrying vortex (-y, x, 0.5) from
+        // it spends the point budget (>= 50 points) rather than dying at once.
+        // This is what pulls streamlines into the 3D view at all.
+        let camera = OrbitCamera::default();
+        let domain = Domain::default();
+        let seed = ray_seed(camera, &domain, 1.0, Vec2::ZERO).expect("a centre click describes a seed");
+        assert!(inside(&domain, seed), "the seed lands inside the domain: {seed:?}");
+
+        let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
+        let opts = StreamlineOpts { max_len: 200, step_scale: 0.02, both_directions: true };
+        let line = trace(&field, seed, &domain, &opts);
+        assert!(line.len() >= 50, "the ray-seeded streamline spends the budget: {} points", line.len());
+    }
+
+    #[test]
+    fn ray_seed_stays_on_the_clicked_ray() {
+        // The seed never wanders off the ray the click describes: it is
+        // collinear with the unprojected direction and in front of the eye.
+        let camera = OrbitCamera::default();
+        let domain = Domain::default();
+        let clicks = [
+            Vec2::ZERO,
+            Vec2::new(0.4, -0.25),
+            Vec2::new(-0.35, 0.3),
+            Vec2::new(0.15, 0.15),
+            Vec2::new(-0.45, -0.4),
+        ];
+        for ndc_xy in clicks {
+            let (origin, direction) = camera.ndc_ray(1.0, ndc_xy);
+            let seed = ray_seed(camera, &domain, 1.0, ndc_xy).expect("these clicks land on the box");
+            let offset = seed - origin;
+            assert!(direction.cross(offset).length() <= 1e-2 * direction.length(), "seed on the clicked ray");
+            assert!(direction.dot(offset) >= 0.0, "seed in front of the eye");
+            assert!(inside(&domain, seed), "the seed stays inside the domain: {seed:?}");
+        }
+    }
+    #[test]
+    fn ray_seed_seeds_the_aimed_point_and_the_focal_plane() {
+        // A centre click seeds the point the camera is aimed at (the orbit
+        // target), whatever the orbit angles and zoom, and that seed lies on
+        // the focal plane through the target, perpendicular to the view.
+        let domain = Domain::default();
+        let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
+        let opts = StreamlineOpts { max_len: 200, step_scale: 0.02, both_directions: true };
+
+        let mut orbited = OrbitCamera::default();
+        orbited.orbit(1.4, -0.45);
+        let mut zoomed = OrbitCamera::default();
+        zoomed.zoom(0.25);
+        let mut pulled = OrbitCamera::default();
+        pulled.zoom(4.0);
+
+        for camera in [OrbitCamera::default(), orbited, zoomed, pulled] {
+            let seed = ray_seed(camera, &domain, 1.6, Vec2::ZERO).expect("a centre click describes a seed");
+            assert_close(seed, camera.target, "a centre click seeds the point the camera is aimed at");
+            let view = view_of(camera);
+            assert!((seed - camera.target).dot(view).abs() < 1e-3, "the seed lies on the focal plane");
+            let line = trace(&field, seed, &domain, &opts);
+            assert!(line.len() >= 50, "the click spends the budget: {} points", line.len());
+        }
+    }
+
+    #[test]
+    fn ray_seed_interior_clicks_run_the_line_through_the_box() {
+        // Off-centre clicks that hit the box's interior (not its skin) put the
+        // seed on the same focal plane; the traced line still runs the field's
+        // full depth through the box.
+        let domain = Domain::default();
+        let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
+        let opts = StreamlineOpts { max_len: 200, step_scale: 0.02, both_directions: true };
+        let camera = OrbitCamera::default();
+        let view = view_of(camera);
+        for ndc_xy in [Vec2::new(0.2, -0.15), Vec2::new(-0.3, 0.35)] {
+            let seed = ray_seed(camera, &domain, 1.0, ndc_xy).expect("these clicks land on the box");
+            assert!(inside(&domain, seed), "seed inside the domain: {seed:?}");
+            assert!((seed - camera.target).dot(view).abs() < 1e-3, "interior click stays on the focal plane");
+            let line = trace(&field, seed, &domain, &opts);
+            assert!(line.len() >= 50, "the click spends the budget: {} points", line.len());
+        }
+    }
+
+    #[test]
+    fn ray_seed_click_off_the_field_traces_nothing() {
+        // A wide-frustum corner click whose ray misses the box falls back to a
+        // shell point outside the domain, which `trace` then drops: clicking
+        // empty space draws nothing, and the caller still gets a finite point.
+        let domain = Domain::default();
+        let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
+        let opts = StreamlineOpts { max_len: 200, step_scale: 0.02, both_directions: true };
+        let wide = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: 3.2, target: Vec3::ZERO, fov_y: 1.5 };
+        let seed = ray_seed(wide, &domain, 1.0, Vec2::new(1.0, -1.0)).expect("a missed click describes a point");
+        assert!(seed.is_finite(), "a missed click describes a finite point: {seed:?}");
+        assert!(!inside(&domain, seed), "the shell fallback sits off the domain: {seed:?}");
+        assert!(
+            trace(&field, seed, &domain, &opts).is_empty(),
+            "a click off the field traces nothing",
+        );
+    }
+
+    #[test]
+    fn ray_seed_degenerate_view_gives_no_seed() {
+        // A camera that does not describe a finite ray (a non-finite orbit
+        // distance) yields no seed rather than a NaN point the renderer would
+        // choke on.
+        let domain = Domain::default();
+        let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::INFINITY, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        assert!(ray_seed(broken, &domain, 1.0, Vec2::ZERO).is_none(), "an infinite orbit gives no seed");
+        let unusable = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        assert!(ray_seed(unusable, &domain, 1.0, Vec2::ZERO).is_none(), "a NaN orbit gives no seed");
+        let squashed = OrbitCamera { yaw: 0.8, pitch: 1.55, distance: 0.5, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        assert!(ray_seed(squashed, &domain, 1.0, Vec2::ZERO).is_some(), "a pole-on orbit still describes a ray");
+    }
+
+    // --- the mode-aware click entry point (ticket 06) ------------------------
+
+    /// The NDC a world point projects to under `vp`, for the round-trip test.
+    fn project(vp: glam::Mat4, p: Vec3) -> Vec2 {
+        let clip = vp * glam::Vec4::new(p.x, p.y, p.z, 1.0);
+        Vec2::new(clip.x / clip.w, clip.y / clip.w)
+    }
+
+    #[test]
+    fn click_seed_2d_lands_on_the_midplane_under_the_click() {
+        // The 2D view is the same orbit camera run orthographically. A click
+        // maps onto the plane the 2D grid is sampled on (the domain's z
+        // midpoint) and, crucially, projects back to exactly the NDC clicked:
+        // the seed is under the pointer, not beside it.
+        let camera = OrbitCamera::default();
+        let domain = Domain::default();
+        let aspect = 1.6;
+        let plane_size = 2.7;
+        let vp = camera.vp_matrix(aspect, Some(plane_size));
+        for ndc in [Vec2::ZERO, Vec2::new(0.4, -0.2), Vec2::new(-0.6, 0.5), Vec2::new(0.9, 0.9)] {
+            let seed = click_seed(camera, &domain, aspect, ndc, Some(plane_size))
+                .expect("a 2D click describes a seed");
+            let z_mid = (domain.min.z + domain.max.z) * 0.5;
+            assert!((seed.z - z_mid).abs() < 1e-4, "the seed sits on the domain's z-midpoint plane: {seed:?}");
+            let back = project(vp, seed);
+            assert!((back - ndc).length() < 1e-3, "the seed projects back under the click: {back:?} vs {ndc:?}");
+        }
+    }
+
+    #[test]
+    fn click_seed_2d_follows_the_domain_midplane() {
+        // A domain whose z midpoint is not the camera target's z still seeds on
+        // that midpoint plane: the click is an orthographic ray and the plane
+        // picks the point along it.
+        let camera = OrbitCamera::default();
+        let domain = Domain::new(Vec3::new(-1.0, -1.0, 0.5), Vec3::new(1.0, 1.0, 0.5));
+        let seed = click_seed(camera, &domain, 1.0, Vec2::ZERO, Some(2.7))
+            .expect("a 2D click describes a seed");
+        assert!((seed.z - 0.5).abs() < 1e-4, "the seed follows the shifted midplane: {seed:?}");
+    }
+
+    #[test]
+    fn click_seed_3d_is_the_camera_ray_seed() {
+        // In 3D mode the entry point is exactly the tested camera-ray seed:
+        // one mode-aware function, no second placement rule to drift.
+        let camera = OrbitCamera::default();
+        let domain = Domain::default();
+        for ndc in [Vec2::ZERO, Vec2::new(0.35, -0.3), Vec2::new(-0.5, 0.45)] {
+            let direct = ray_seed(camera, &domain, 1.3, ndc).expect("the ray lands on the box");
+            let via = click_seed(camera, &domain, 1.3, ndc, None).expect("a 3D click describes a seed");
+            assert_close(via, direct, "3D click seeding uses the camera-ray seed");
+        }
+    }
+
+    #[test]
+    fn click_seed_degenerate_camera_gives_no_seed() {
+        // A broken orbit describes no usable ray in either mode: no seed, not
+        // a NaN point the tracer and renderer would choke on.
+        let domain = Domain::default();
+        let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        assert!(click_seed(broken, &domain, 1.0, Vec2::ZERO, None).is_none(), "3D: no seed from a broken camera");
+        assert!(click_seed(broken, &domain, 1.0, Vec2::ZERO, Some(2.7)).is_none(), "2D: no seed from a broken camera");
+        assert!(click_seed(OrbitCamera::default(), &domain, 1.0, Vec2::ZERO, Some(0.0)).is_some(),
+            "a zero plane size still describes the centre ray");
+    }
+
+    // --- the click burst (ticket 06) -----------------------------------------
+
+    #[test]
+    fn burst_seeds_cluster_around_the_click() {
+        // One click becomes a small cluster: the click itself plus jittered
+        // neighbours, all inside the domain and within the burst reach.
+        let domain = Domain::default();
+        let center = Vec3::new(0.25, -0.1, 0.3);
+        let seeds = burst_seeds(center, &domain, CLICK_BURST_SEEDS, 3);
+        assert_eq!(seeds.len(), CLICK_BURST_SEEDS, "one seed per burst member");
+        assert_eq!(seeds[0], center, "the click itself leads the burst");
+        let reach = CLICK_BURST_REACH * 2.0; // the default domain's smallest extent
+        for seed in &seeds {
+            assert!(inside(&domain, *seed), "burst seeds stay in the domain: {seed:?}");
+            assert!((*seed - center).length() <= reach * 3.0_f32.sqrt() + 1e-5, "inside the burst reach: {seed:?}");
+        }
+        assert!(seeds[1..].iter().any(|s| *s != center), "the cluster actually spreads");
+    }
+
+    #[test]
+    fn burst_seeds_are_deterministic_and_2d_pins_the_plane() {
+        // The same click redraws the same burst (rebuilds must not shimmer),
+        // a different click draws a different one, and 2D bursts stay on the
+        // clicked plane instead of jittering out of it.
+        let domain = Domain::default();
+        let center = Vec3::new(-0.2, 0.4, 0.0);
+        let a = burst_seeds(center, &domain, CLICK_BURST_SEEDS, 3);
+        let b = burst_seeds(center, &domain, CLICK_BURST_SEEDS, 3);
+        assert_eq!(a, b, "the same click draws the same burst");
+        let c = burst_seeds(Vec3::new(0.3, 0.2, -0.4), &domain, CLICK_BURST_SEEDS, 3);
+        assert_ne!(a[1..], c[1..], "a different click draws a different burst");
+        let flat = burst_seeds(center, &domain, CLICK_BURST_SEEDS, 2);
+        assert!(flat.iter().all(|s| s.z == center.z), "2D bursts stay on the clicked plane: {flat:?}");
+    }
+
+    #[test]
+    fn burst_seeds_skip_clicks_off_the_field() {
+        // A click outside the domain has nothing to trace from, and an empty
+        // request asks for no seeds: both yield an empty burst.
+        let domain = Domain::default();
+        assert!(burst_seeds(Vec3::new(5.0, 0.0, 0.0), &domain, 4, 3).is_empty(), "off the domain seeds nothing");
+        assert!(burst_seeds(Vec3::ZERO, &domain, 0, 3).is_empty(), "no burst for an empty request");
     }
 }

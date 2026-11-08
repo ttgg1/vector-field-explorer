@@ -35,6 +35,12 @@ pub const SPAWN_INSET: f32 = 0.02;
 /// Dot radius as a fraction of the grid spacing, so a denser grid keeps dots
 /// the same relative size (and dots stay visible in the 3D view).
 pub const DOT_SPACING_FRACTION: f32 = 0.3;
+/// Particles one viewport click adds around the picked spot (ticket 06), on
+/// top of the ambient cloud.
+pub const CLICK_BURST_PARTICLES: usize = 64;
+/// Radius of that burst, as a fraction of the domain's smallest positive
+/// extent, so a click reads as a local cluster at any domain size.
+pub const CLICK_SPAWN_REACH: f32 = 0.1;
 
 /// Park/Miller LCG constants: 64-bit multiplicative congruential, all u64
 /// arithmetic wraps (debug-build overflow panics otherwise).
@@ -169,11 +175,16 @@ fn rk4_step(field: &FieldExpr, p: Vec3, h: f32) -> Vec3 {
     p + (f0 + f1 * 2.0 + f2 * 2.0 + f3) * (h / 6.0)
 }
 
-/// Fill the cloud with `count` jittered points inside `domain`, capped at
+/// Fill the cloud with `count` jittered points inside `domain`. The `dimension`
+/// selects the spawn volume: `3` jitters through the domain's whole inset box,
+/// so the orbit view's cloud has depth, while any other value pins the points
+/// to the domain's z-midpoint plane — the flat slice the pan/zoom view draws
+/// (and what a genuinely flat 2D domain gives either way). Capped at
 /// [`MAX_PARTICLES`] and drawn from the cloud's stream (so a respawn mid-
 /// [`advect`] and a fresh spawn agree).
-pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize) {
+pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize, dimension: usize) {
     let region = spawn_box(domain);
+    let band = if dimension == 3 { region.band } else { region.band * Vec3::new(1.0, 1.0, 0.0) };
     let mut state = particles.rng;
     particles.pos.reserve((particles.pos.len() + count).min(MAX_PARTICLES) - particles.pos.len());
     for _ in 0..count {
@@ -181,9 +192,53 @@ pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize) {
             break;
         }
         state = lcg_next(state);
-        particles.pos.push(jittered_point(region.center, region.band, state));
+        particles.pos.push(jittered_point(region.center, band, state));
     }
     particles.rng = state;
+}
+
+/// Add a `count`-point burst around `center`: the click-seeded counterpart of
+/// [`spawn`]. The cluster radius is [`CLICK_SPAWN_REACH`] of the domain's
+/// smallest positive extent, so the dots land where the user pointed rather
+/// than across the whole box; `dimension` follows [`spawn`] (`3` jitters the
+/// full box, anything else keeps z at the clicked plane). Draws from the
+/// cloud's own stream, so the same click replays the same dots. Returns how
+/// many points were actually added: zero for a click off the domain or an
+/// empty request, and never past [`MAX_PARTICLES`].
+pub fn spawn_at(
+    particles: &mut Particles,
+    domain: &Domain,
+    center: Vec3,
+    count: usize,
+    dimension: usize,
+) -> usize {
+    if count == 0 || !center.is_finite() || !inside(domain, center) {
+        return 0;
+    }
+    let size = domain.domain_size();
+    let smallest = [size.x, size.y, size.z]
+        .into_iter()
+        .filter(|extent| *extent > 0.0)
+        .fold(f32::INFINITY, f32::min);
+    let reach = if smallest.is_finite() { CLICK_SPAWN_REACH * smallest } else { 0.0 };
+    let band = Vec3::new(reach, reach, if dimension == 3 { reach } else { 0.0 });
+    let mut state = particles.rng;
+    let mut added = 0;
+    for _ in 0..count {
+        if particles.pos.len() >= MAX_PARTICLES {
+            break;
+        }
+        state = lcg_next(state);
+        let p = jittered_point(center, band, state);
+        particles.pos.push(Vec3::new(
+            p.x.clamp(domain.min.x, domain.max.x),
+            p.y.clamp(domain.min.y, domain.max.y),
+            p.z.clamp(domain.min.z, domain.max.z),
+        ));
+        added += 1;
+    }
+    particles.rng = state;
+    added
 }
 
 /// Advect every particle by one RK4 step for the frame's `dt` (seconds) scaled
@@ -245,7 +300,7 @@ pub fn dot_instances(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PARTICLES, PARTICLES_PER_DENSITY, Particles, advect, clear, count, dot_instances, spawn, target_count};
+    use super::{CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, MAX_PARTICLES, PARTICLES_PER_DENSITY, Particles, advect, clear, count, dot_instances, spawn, spawn_at, target_count};
     use glam::Vec3;
     use crate::colormap::Colormap;
     use crate::domain::Domain;
@@ -260,7 +315,7 @@ mod tests {
     fn spawn_fills_requested_count() {
         let domain = Domain::new(Vec3::new(-1.0, -0.5, 0.5), Vec3::new(1.0, 0.5, 0.5));
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, 37);
+        spawn(&mut cloud, &domain, 37, 2);
         let ps = positions(&cloud);
         assert_eq!(ps.len(), 37, "spawn fills exactly the requested count");
         for p in &ps {
@@ -277,10 +332,114 @@ mod tests {
     }
 
     #[test]
+    fn spawn_3d_mode_jitters_the_full_depth() {
+        // 3D mode: particles are seeded throughout the domain's depth, not on
+        // a plane — a small cloud's z spread covers most of the box, and the
+        // same inset as 2D mode keeps it off the domain's skin.
+        let domain = Domain::default();
+        let mut cloud = Particles::default();
+        spawn(&mut cloud, &domain, 64, 3);
+        let ps = positions(&cloud);
+        assert_eq!(ps.len(), 64, "count is honoured");
+        let mut z_min = f32::INFINITY;
+        let mut z_max = f32::NEG_INFINITY;
+        for p in ps.iter() {
+            z_min = z_min.min(p.z);
+            z_max = z_max.max(p.z);
+        }
+        assert!(z_min > domain.min.z && z_max < domain.max.z, "inset from the domain faces");
+        assert!(z_max - z_min > 0.8 * (domain.max.z - domain.min.z), "seeds span the domain's depth");
+        let mut x_min = f32::INFINITY;
+        let mut x_max = f32::NEG_INFINITY;
+        for p in ps.iter() {
+            x_min = x_min.min(p.x);
+            x_max = x_max.max(p.x);
+        }
+        assert!(x_max - x_min > 0.8 * (domain.max.x - domain.min.x), "and the domain's width");
+    }
+
+    #[test]
+    fn spawn_2d_mode_pins_the_plane() {
+        // 2D mode keeps particles on the domain's z-midpoint plane, so the
+        // existing 2D behaviour is unchanged by the dimension parameter.
+        let domain = Domain::new(Vec3::new(-2.0, -2.0, 0.5), Vec3::new(2.0, 2.0, 0.5));
+        let mut cloud = Particles::default();
+        spawn(&mut cloud, &domain, 32, 2);
+        let ps = positions(&cloud);
+        assert!(ps.iter().all(|p| p.z == 0.5), "flat 2D domains pin z at the plane");
+    }
+
+    #[test]
+    fn spawn_3d_mode_of_a_flat_domain_is_a_2d_mode() {
+        // A domain that is itself flat degenerates the same way in either mode
+        // (the band is zero on that axis), so 3D mode cannot escape the box.
+        let domain = Domain::new(Vec3::new(-1.0, -1.0, 0.5), Vec3::new(1.0, 1.0, 0.5));
+        let mut cloud = Particles::default();
+        spawn(&mut cloud, &domain, 32, 3);
+        let ps = positions(&cloud);
+        assert!(ps.iter().all(|p| p.z == 0.5), "a zero-depth domain stays a plane in 3D mode");
+    }
+
+    #[test]
+    fn spawn_at_clusters_around_the_click() {
+        // A click burst adds a small cloud centred on the picked spot, not
+        // across the whole domain: the dots appear where the user pointed.
+        let domain = Domain::default();
+        let center = Vec3::new(0.25, -0.1, 0.3);
+        let mut cloud = Particles::default();
+        let added = spawn_at(&mut cloud, &domain, center, CLICK_BURST_PARTICLES, 3);
+        assert_eq!(added, CLICK_BURST_PARTICLES, "the click adds its whole burst");
+        let ps = positions(&cloud);
+        assert_eq!(ps.len(), CLICK_BURST_PARTICLES);
+        let reach = CLICK_SPAWN_REACH * 2.0; // the default domain's smallest extent
+        for p in &ps {
+            assert!((*p - center).length() <= reach * 3.0_f32.sqrt() + 1e-5, "within the click radius: {p:?}");
+            assert!(
+                p.x >= domain.min.x && p.x <= domain.max.x
+                    && p.y >= domain.min.y && p.y <= domain.max.y
+                    && p.z >= domain.min.z && p.z <= domain.max.z,
+                "inside the domain: {p:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn spawn_at_is_deterministic_and_2d_pins_the_plane() {
+        // The burst draws from the cloud's own stream, so replaying a click
+        // (or rebuilding) lands the same dots; 2D clicks stay on their plane.
+        let domain = Domain::default();
+        let center = Vec3::new(-0.2, 0.4, 0.0);
+        let mut a = Particles::default();
+        let mut b = Particles::default();
+        spawn_at(&mut a, &domain, center, CLICK_BURST_PARTICLES, 3);
+        spawn_at(&mut b, &domain, center, CLICK_BURST_PARTICLES, 3);
+        assert_eq!(positions(&a), positions(&b), "the same click draws the same burst");
+        let mut flat = Particles::default();
+        let plane = Domain::new(Vec3::new(-1.0, -1.0, 0.5), Vec3::new(1.0, 1.0, 0.5));
+        spawn_at(&mut flat, &plane, Vec3::new(0.1, 0.2, 0.5), 24, 2);
+        assert!(positions(&flat).iter().all(|p| p.z == 0.5), "2D bursts stay on the plane");
+    }
+
+    #[test]
+    fn spawn_at_respects_the_cap_and_the_domain() {
+        // A click can never push the cloud past its instance budget, and a
+        // click that landed off the field adds nothing.
+        let domain = Domain::default();
+        let mut full = Particles::default();
+        spawn(&mut full, &domain, MAX_PARTICLES, 3);
+        assert_eq!(spawn_at(&mut full, &domain, Vec3::ZERO, CLICK_BURST_PARTICLES, 3), 0);
+        assert_eq!(count(&full), MAX_PARTICLES, "the cap holds");
+        let mut cloud = Particles::default();
+        assert_eq!(spawn_at(&mut cloud, &domain, Vec3::new(5.0, 0.0, 0.0), 10, 3), 0,
+            "an off-field click adds nothing");
+        assert!(positions(&cloud).is_empty());
+    }
+
+    #[test]
     fn spawn_caps_at_particle_cap() {
         let domain = Domain::default();
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, MAX_PARTICLES + 250);
+        spawn(&mut cloud, &domain, MAX_PARTICLES + 250, 3);
         assert_eq!(count(&cloud), MAX_PARTICLES, "never more than the instance budget");
     }
 
@@ -296,8 +455,8 @@ mod tests {
         let domain = Domain::default();
         let mut a = Particles::default();
         let mut b = Particles::default();
-        spawn(&mut a, &domain, 37);
-        spawn(&mut b, &domain, 37);
+        spawn(&mut a, &domain, 37, 3);
+        spawn(&mut b, &domain, 37, 3);
         assert_eq!(positions(&a), positions(&b), "jitter is deterministic across runs");
     }
 
@@ -308,7 +467,7 @@ mod tests {
         let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
         let domain = Domain::default();
         let mut particles = Particles::default();
-        spawn(&mut particles, &domain, 9);
+        spawn(&mut particles, &domain, 9, 3);
         let dt = 0.016;
         let speed = 1.0;
         let before = positions(&particles);
@@ -336,7 +495,7 @@ mod tests {
         let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
         let domain = Domain::default();
         let mut particles = Particles::default();
-        spawn(&mut particles, &domain, 11);
+        spawn(&mut particles, &domain, 11, 3);
         let before = positions(&particles);
         advect(&mut particles, &field, &domain, 0.016, 0.0);
         let ps = positions(&particles);
@@ -407,7 +566,7 @@ mod tests {
         let domain = Domain::new(Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 0.0));
         let mut particles = Particles::default();
         let density = 100;
-        spawn(&mut particles, &domain, target_count(density));
+        spawn(&mut particles, &domain, target_count(density), 2);
         let base = count(&particles);
         assert!(base <= MAX_PARTICLES, "spawned count respects the cap");
         let dt = 0.016;
@@ -444,7 +603,7 @@ mod tests {
         let field = FieldExpr::parse("(2, 0)").expect("constant field parses");
         let domain = Domain::default();
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, 64);
+        spawn(&mut cloud, &domain, 64, 3);
         let dots = dot_instances(&cloud, &field, &domain, Colormap::Viridis, (0.0, 2.0), 0.05);
         assert_eq!(dots.len(), count(&cloud), "one dot instance per particle");
         assert!(dots.len() <= MAX_PARTICLES, "inside the instance budget");
@@ -458,7 +617,7 @@ mod tests {
         let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
         let domain = Domain::default();
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, 16);
+        spawn(&mut cloud, &domain, 16, 3);
         let radius = 2.0;
         let dots = dot_instances(&cloud, &field, &domain, Colormap::Turbo, (0.0, 1.0), radius);
         assert_eq!(dots.len(), 16);
@@ -474,7 +633,7 @@ mod tests {
         let field = FieldExpr::parse("(2, 0)").expect("constant field parses");
         let domain = Domain::default();
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, 8);
+        spawn(&mut cloud, &domain, 8, 3);
         let bright = dot_instances(&cloud, &field, &domain, Colormap::Mono, (0.0, 2.0), 0.1);
         for d in &bright {
             assert_eq!(d.color, [1.0, 1.0, 1.0, 1.0], "mono ramp at its maximum: white");
@@ -492,7 +651,7 @@ mod tests {
         let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
         let domain = Domain::default();
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, 24);
+        spawn(&mut cloud, &domain, 24, 3);
         clear(&mut cloud);
         assert_eq!(count(&cloud), 0, "turning the toggle off empties the cloud");
         assert!(dot_instances(&cloud, &field, &domain, Colormap::Viridis, (0.0, 1.0), 0.05).is_empty(),
@@ -503,10 +662,10 @@ mod tests {
     fn spawn_clear_spawn_is_deterministic() {
         let domain = Domain::default();
         let mut cloud = Particles::default();
-        spawn(&mut cloud, &domain, 24);
+        spawn(&mut cloud, &domain, 24, 3);
         let first = positions(&cloud);
         clear(&mut cloud);
-        spawn(&mut cloud, &domain, 24);
+        spawn(&mut cloud, &domain, 24, 3);
         assert_eq!(positions(&cloud), first,
             "a toggle off/on cycle respawns from the fixed seed, not the advanced stream");
     }

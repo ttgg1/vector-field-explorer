@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use eframe::egui;
+use glam::{Vec2, Vec3};
 
 use crate::camera::OrbitCamera;
 use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
+use crate::streamlines::click_seed;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::presets::{PresetPanel, default_preset_dir};
 use crate::ui::sidebar::Controls;
@@ -13,12 +15,14 @@ use crate::viewmodel::{State, apply_camera_input};
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
 use crate::particles::{
+    CLICK_BURST_PARTICLES,
     Particles,
     DOT_SPACING_FRACTION,
     advect,
     clear,
     dot_instances,
     spawn,
+    spawn_at,
     target_count,
     count as particle_count,
 };
@@ -42,6 +46,11 @@ pub struct StatusBarState {
 /// Radians of orbit per point of left-drag on the viewport.
 const ORBIT_SENSITIVITY: f32 = 0.005;
 
+/// How many viewport clicks keep their seeded bursts. Clicks accumulate only up
+/// to this bound (the oldest burst is dropped), so repeated clicking cannot
+/// grow the scene without limit.
+const MAX_CLICK_SEEDS: usize = 6;
+
 /// Application root state: the viewmodel State (the single source of truth for
 /// what is on screen), the formula bar's local widgets, the sidebar's local
 /// Controls, the status readouts, both cameras (the 2D `Camera` and the
@@ -62,6 +71,17 @@ pub struct VfApp {
     /// range the arrows were coloured with at the last scene rebuild.
     particles: Particles,
     dots_range: (f32, f32),
+    /// Where the user clicked in the viewport (ticket 06), bounded by
+    /// [`MAX_CLICK_SEEDS`] and oldest-first. The viewmodel turns each pick into
+    /// a deterministic streamline burst; the newest click also drops a
+    /// particle burst when the particle toggle is on.
+    click_seeds: Vec<Vec3>,
+    /// The grid-seeded streamline segments from the last scene rebuild, kept
+    /// separately so a click can recompose the line collection without
+    /// re-sampling or re-tracing the grid.
+    flow_lines: Vec<LineInstanceGPU>,
+    /// The current click bursts' streamline segments.
+    click_lines: Vec<LineInstanceGPU>,
 }
 
 impl VfApp {
@@ -89,6 +109,9 @@ impl VfApp {
             streamline_count: 0,
             particles: Particles::default(),
             dots_range: (0.0, 1.0),
+            click_seeds: Vec::new(),
+            flow_lines: Vec::new(),
+            click_lines: Vec::new(),
         }
     }
 }
@@ -127,6 +150,16 @@ fn reference_lines() -> Vec<LineInstanceGPU> {
     lines
 }
 
+/// Fold the backdrop, the grid-seeded streamlines and the click bursts into the
+/// one line collection the viewport paints. Rebuilt only on a scene rebuild or
+/// a click, so the per-frame path still clones an `Arc`.
+fn compose_lines(flow: &[LineInstanceGPU], clicks: &[LineInstanceGPU]) -> Vec<LineInstanceGPU> {
+    let mut lines = reference_lines();
+    lines.extend_from_slice(flow);
+    lines.extend_from_slice(clicks);
+    lines
+}
+
 impl eframe::App for VfApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Top formula bar: live edits, the field-preset ComboBox and the
@@ -159,11 +192,13 @@ impl eframe::App for VfApp {
             // with (one extra sample pass on rebuild frames only), so dots
             // keep matching the arrows' colours.
             self.dots_range = self.state.color_range(&self.state.sample());
-            let fresh_lines = Arc::unwrap_or_clone(fresh.lines);
-            self.streamline_count = fresh_lines.len();
-            let mut backdrop = reference_lines();
-            backdrop.extend(fresh_lines);
-            self.scene.lines = Arc::new(backdrop);
+            self.flow_lines = Arc::unwrap_or_clone(fresh.lines);
+            // Click bursts outlive the rebuild: they are anchored on the field,
+            // not on the sampling grid, so retrace them against the new
+            // domain/formula rather than dropping the user's picks.
+            self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+            self.streamline_count = self.flow_lines.len() + self.click_lines.len();
+            self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
         }
 
         // Particle cloud: while the toggle is on (3D view only — the 2D
@@ -174,7 +209,7 @@ impl eframe::App for VfApp {
         // density/speed, and before the status bar so its count includes them.
         if self.state.particles && self.state.mode_3d {
             if particle_count(&self.particles) == 0 {
-                spawn(&mut self.particles, &self.state.domain, target_count(self.state.density));
+                spawn(&mut self.particles, &self.state.domain, target_count(self.state.density), 3);
             }
             let dt = ui.ctx().input(|i| i.stable_dt).max(0.0);
             advect(&mut self.particles, &self.state.field, &self.state.domain, dt, self.state.speed);
@@ -236,11 +271,61 @@ impl eframe::App for VfApp {
             // Camera gestures feed the seam's pure camera action: a left-drag
             // orbits in 3D mode only (2D keeps its fixed front view), and a
             // ctrl-scroll or pinch zoom factor zooms in both (the camera clamps
-            // it).
-            let resp = ui.allocate_response(rect.size(), egui::Sense::drag());
+            // it). The response also senses clicks, so a press+release without
+            // dragging seeds the flow (egui only reports `clicked` when the
+            // gesture never became a drag, so orbiting/panning is untouched).
+            let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
             let drag = resp.drag_delta() * ORBIT_SENSITIVITY;
             let zoom = ui.ctx().input(|i| i.zoom_delta());
             self.orbit = apply_camera_input(self.orbit, self.state.mode_3d, drag.x, drag.y, zoom);
+
+            let width = rect.width().max(1.0);
+            let height = rect.height().max(1.0);
+            let aspect = width / height;
+
+            // Click-to-seed: the pure entry point turns the pointer position
+            // into a point on the camera ray (3D, at the focal plane) or on the
+            // 2D plane, then the viewmodel retraces the (bounded) burst list.
+            if resp.clicked()
+                && let Some(pos) = resp.interact_pointer_pos()
+            {
+                let ndc = Vec2::new(
+                    (pos.x - rect.left()) / width * 2.0 - 1.0,
+                    1.0 - (pos.y - rect.top()) / height * 2.0,
+                );
+                let ortho = if self.state.mode_3d { None } else { Some(self.state.plane_size()) };
+                if let Some(seed) = click_seed(self.orbit, &self.state.domain, aspect, ndc, ortho) {
+                    if self.click_seeds.len() >= MAX_CLICK_SEEDS {
+                        self.click_seeds.remove(0);
+                    }
+                    self.click_seeds.push(seed);
+                    self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+                    self.streamline_count = self.flow_lines.len() + self.click_lines.len();
+                    self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+                    // Particles only exist in the 3D view; a click adds a
+                    // capped burst around the pick (the per-frame dot
+                    // rebuild picks it up on the next frame). If the cloud
+                    // has not spawned yet, fill it first so the click does
+                    // not leave a cloud of just this burst.
+                    if self.state.particles && self.state.mode_3d {
+                        if particle_count(&self.particles) == 0 {
+                            spawn(
+                                &mut self.particles,
+                                &self.state.domain,
+                                target_count(self.state.density),
+                                3,
+                            );
+                        }
+                        spawn_at(
+                            &mut self.particles,
+                            &self.state.domain,
+                            seed,
+                            CLICK_BURST_PARTICLES,
+                            3,
+                        );
+                    }
+                }
+            }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so
             // order the instances far-to-near along this frame's view.
@@ -257,7 +342,6 @@ impl eframe::App for VfApp {
 
             // 2D mode covers the domain's plane orthographically; 3D mode is
             // the orbiting perspective camera.
-            let aspect = rect.width() / rect.height().max(1.0);
             let view_proj = self.orbit.vp_matrix(
                 aspect,
                 if self.state.mode_3d { None } else { Some(self.state.plane_size()) },
