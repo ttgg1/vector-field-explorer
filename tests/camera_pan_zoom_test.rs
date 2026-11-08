@@ -11,6 +11,53 @@ fn ndc(m: Mat4, p: Vec4) -> Vec3 {
 }
 
 #[test]
+fn ndc_ray_round_trips_off_centre_clicks_and_reaches_the_far_plane() {
+    // Fix-round review: the analytic ray must agree with the projection for
+    // off-centre clicks and a non-square viewport, and `t == 1` must land on
+    // the far plane (view depth 100), not merely at Euclidean distance `FAR`.
+    // The `pulled` camera (distance 12.8) is the regime where the old f32
+    // view-projection inverse drifted.
+    let mut pulled = OrbitCamera::default();
+    pulled.zoom(4.0);
+    let aspect = 1.6;
+    for camera in [OrbitCamera::default(), pulled] {
+        let vp = camera.vp_matrix(aspect, None);
+        for ndc_xy in [
+            Vec2::ZERO,
+            Vec2::new(0.5, -0.25),
+            Vec2::new(-0.4, 0.3),
+            Vec2::new(0.9, 0.9),
+        ] {
+            let (origin, direction) = camera.ndc_ray(aspect, ndc_xy);
+            let point = |t: f32| {
+                Vec4::new(
+                    origin.x + direction.x * t,
+                    origin.y + direction.y * t,
+                    origin.z + direction.z * t,
+                    1.0,
+                )
+            };
+            let half = ndc(vp, point(0.5));
+            assert!((half.x - ndc_xy.x).abs() < 1e-5, "x round-trips at {ndc_xy:?}: {half:?}");
+            assert!((half.y - ndc_xy.y).abs() < 1e-5, "y round-trips at {ndc_xy:?}: {half:?}");
+            // `t == 1` must be at the far plane's *view depth*, which is what
+            // the old normalise-then-scale direction got wrong for off-centre
+            // rays (it measured Euclidean distance instead).
+            let far_view = camera.view() * point(1.0);
+            assert!(
+                (far_view.z + 100.0).abs() < 1e-3,
+                "t == 1 sits at view depth {} at {ndc_xy:?}, want -100",
+                far_view.z
+            );
+            let far = ndc(vp, point(1.0));
+            assert!((far.x - ndc_xy.x).abs() < 1e-4, "far x at {ndc_xy:?}: {far:?}");
+            assert!((far.y - ndc_xy.y).abs() < 1e-4, "far y at {ndc_xy:?}: {far:?}");
+            assert!((far.z - 1.0).abs() < 1e-4, "t == 1 lands on the far plane at {ndc_xy:?}: {far:?}");
+        }
+    }
+}
+
+#[test]
 fn eye_distance_equals_orbit_distance_at_any_orientation() {
     // Review I-2: the spherical eye must sit exactly `distance` from the target
     // for every yaw/pitch, including the pitch clamp limits.

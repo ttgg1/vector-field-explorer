@@ -154,16 +154,16 @@ impl OrbitCamera {
     /// Built analytically from the camera basis rather than by inverting the
     /// view-projection: at long eye distances the f32 inverse drifts the centre
     /// ray by ~1e-3, which would make a centre click miss the point it aims at.
-    /// The origin is the eye and the direction runs to the far plane, so
-    /// `t == 1` still means the far plane.
+    /// The origin is the eye and the direction is scaled so `t == 1` lands on
+    /// the far plane (view depth `FAR`, which is farther than Euclidean `FAR`
+    /// for off-centre rays).
     pub fn ndc_ray(&self, aspect: f32, ndc_xy: Vec2) -> (Vec3, Vec3) {
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
         let half_h = (self.fov_y * 0.5).tan();
-        let camera_dir = Vec3::new(ndc_xy.x * half_h * aspect, ndc_xy.y * half_h, -1.0);
-        let world_dir = (self.view().inverse() * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
-            .truncate()
-            .normalize_or_zero();
-        (self.position(), world_dir * Self::FAR)
+        let camera_dir = Vec3::new(ndc_xy.x * half_h * aspect, ndc_xy.y * half_h, -1.0) * Self::FAR;
+        let direction = (self.view().inverse() * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
+            .truncate();
+        (self.position(), direction)
     }
 }
 
