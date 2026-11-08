@@ -14,7 +14,7 @@ colormaps. Vision spec: `docs/superpowers/specs/2026-11-05-vector-field-explorer
 | `docs/superpowers/plans/2026-11-05-preset-persistence.md` | Camera presets: `export::Preset` serde, save/load/delete to `presets.json`, sidebar Preset panel, app data-dir config | **COMPLETE** (Tasks 1–3; commits `037825f`, `40f98f4`, `87c4e23`, `2dcb1a6` on `feature/preset-persistence`; final review pass done → fix commit `331d72e`, no re-review needed per skill). Ruled behaviors: duplicate-name save replaces, corrupt `presets.json` fails fast with io::Error; RGBA (not BGRA) PNG contract pinned by test |
 | `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T6 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`; T6 `7e37254` OrbitCamera → `src/camera.rs`); **T7 complete** (`81d1b30` instanced wgpu renderer + fix round 1 `2020a31` arrow-shader world-space normal `b * normal`, scoped re-review clean); **T8A complete** (`522d011` viewmodel seam `src/viewmodel.rs` — pure State/dirty-flag/snapshot builder, 12 unit tests); **T8B + T9–T14 tracked as TICKETS 02–09** under `.scratch/field-viewport/issues/` (02 **COMPLETE** (c5cfd95..`c62507a`, review clean after fix round 1: zoom gated 3D-only; 4 minors parked for final review) → 03 **COMPLETE** (20701e0..`41fe108`, review clean after fix round 1: VfApp doc comment restored; 3 minors parked for final review) → 04 **COMPLETE** (00c4ee5..`13fa5dc`, review clean after fix round 1: both_directions composition, pinned `vortex_stays_bounded` verbatim, status-bar split counts; 2 minors parked for final review) → 05 **COMPLETE** (18307e6..`a42fa97`, review clean after fix round 1: `clear()` rng→`SPAWN_SEED` respawn contract + pinned covering test, cost note corrected; 4 minors parked for final review) → frontier 06 ∥ 07 (06 3D+click-seed ∥ 07 style-persistence; sequential-implementers rule kept); 06 3D+click-seed ← 04,05; 07 style persistence ← 03; 08 screenshot ← 06; 09 README+cleanup+final whole-branch review ← 02–08; 10 full-codebase documentation ← 09 (user-added 2026-11-07)). ⚠ working tree (2026-11-08, post-ticket-05): CLEAN at HEAD `a42fa97` + docs bookkeeping — ticket-05 orphan covering test salvaged from dead seat, gate-RED-probed, committed+reviewed through fix round 1. Issue 01's "Related minors" + tickets 02–05 parked minors (4+3+2+4) all routed to final whole-branch review
 
-**Session handoff 2026-11-08 (refreshed):** active SDD ledger = `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` — read `git log` + the ledger's LAST dated section (later sections supersede the older `## HANDOFF` block). As of the refresh: tickets 02–05 COMPLETE (05 = `18307e6..a42fa97`, fix round 1 clean: `clear()` rng rewind + covering test), next ticket = 06 3d-features-click-seeding (plan task 11; brief via `scripts/task-brief PLAN 11`), order 06→07→08→09(final whole-branch review incl. parked-minor triage 4+3+2+4+issue-01, then **merge `feature/preset-persistence` → `main`** per trunk-based rule)→10. Lost-report protocol + gate-probe-before-redispatch rule + clippy `--` separator lesson in ledger tail.
+**Session handoff 2026-11-08 (refreshed):** active SDD ledger = `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` — read `git log` + the ledger's LAST dated section (later sections supersede the older `## HANDOFF` block). As of the refresh: tickets 02–05 COMPLETE (05 = `18307e6..a42fa97`, fix round 1 clean: `clear()` rng rewind + covering test), next tickets = 11 arrow-shader parse + 12 empty-instance-buffer bind (both startup blockers; `scripts/smoke-run.sh` must pass), then 06 3d-features-click-seeding (plan task 11; brief via `scripts/task-brief PLAN 11`), order 11→12→06→07→08→09(final whole-branch review incl. parked-minor triage 4+3+2+4+issue-01, then **merge `feature/preset-persistence` → `main`** per trunk-based rule)→10. Lost-report protocol + gate-probe-before-redispatch rule + clippy `--` separator lesson in ledger tail.
 
 **Spec for the remaining work (published, ready-for-agent):** `.scratch/field-viewport/spec.md` — seams confirmed with the user: existing pure-module seams + exactly ONE new seam (viewmodel/scene-builder of pure functions state→SceneGPU, input→camera actions); GPU paint stays behind SceneGPU, no unit tests. Issue tracker: local markdown under `.scratch/field-viewport/issues/`. |
 
@@ -49,6 +49,12 @@ a *different* `Preset` type than `export::Preset`, which is the camera preset),
 - Resolution ledgering (`Ruling: <decision> — <why>` in the ledger) is mandatory.
 - CI (`.github/workflows/ci.yml`, Rust-based) gates on `cargo clippy --all-targets -- -D warnings`,
   `cargo test --all-targets`, `cargo build --all-targets` — keep code clippy-clean.
+- **Runtime smoke test**: `cargo build`/`cargo test` never create a wgpu device, so
+  broken WGSL and device-init errors surface only when the app launches. After
+  touching `src/renderer.rs` or any `src/*.wgsl`, and before claiming any rendering
+  task done, run `scripts/smoke-run.sh 15` — it launches the app under `timeout` and
+  fails on a panic or wgpu validation error. CI runs the same script headlessly
+  (Xvfb + software Vulkan) in the `smoke` job.
 
 ## Egui / Rust API notes (learned the hard way)
 
@@ -77,22 +83,19 @@ Skill location (scripts + prompt templates):
 templates; `scripts/task-brief`, `scripts/review-package` generate the brief
 and diff-package artifacts; never make a subagent read the whole plan.
 
-**Model policy (user-selected 2026-11-06, supersedes all earlier policies): ONLY
-`qwen3.8-flash-next` from provider `strata`, for ALL subagent seats.**
-Every seat — implementer, task reviewer, scoped re-review, research, and the
-final whole-branch review — uses `strata/coder-iq1_m` ("Qwen3.8-Flash-Next
-(local)"; always pass the model explicitly — subagents never silently inherit
-the session model). No LM Studio seats, no cloud fallbacks (qwen3.8-27b,
-devstral2, nemotron are retired). If a seat needs more judgment, raise the
-*variant* of the same model: `strata/coder-iq1_m#medium` / `#high`
-(available variants: low, medium, high). Escalation for stuck implementers
-(BLOCKED/NEEDS_CONTEXT twice) bumps the variant, not the model.
+**Model policy (user-selected 2026-11-08, supersedes all earlier policies):**
+coding seats use OpenCode Go models; review seats use a FREE OpenCode Go model.
+Always pass the model explicitly — subagents never silently inherit the session
+model. No NVIDIA/Nemotron seats, no LM Studio seats, no `strata` seats.
 
-**Erratum 2026-11-07 (user):** implementer seats stay `strata/coder-iq1_m`
-(local); REVIEW seats may use a FREE OpenCode model (e.g.
-`opencode/flint-40b-free`, `opencode/glm-5.3-flash-free`) instead of the
-strata seat — scale the free model to the diff's size/complexity. Still
-always pass the model explicitly.
+- **Coding seats** (implementer, fix rounds, research) — `opencode-go/deepseek-v4.1-flash`
+  by default. Raise the *variant* (`#high` → `#max`) when a seat needs more judgment,
+  and bump the variant for a stuck implementer (BLOCKED/NEEDS_CONTEXT twice). For heavier
+  work, escalate the model to `opencode-go/kimi-k3.1-pro` (`#high`/`#max`).
+- **Review seats** (task reviewer, scoped re-review, final whole-branch review) —
+  `opencode-go/crouton-alpha-free` (free). Scale its variant (`#minimal` … `#max`) to the
+  diff's size/complexity. Free fallbacks if it is unavailable: `opencode-go/beam-free`,
+  `opencode-go/iceman-contributor-free`.
 
 **Implementer contract (in every dispatch):** work from the task brief file
 only (never the whole plan); TDD when the brief requires tests (RED→GREEN
@@ -105,12 +108,12 @@ summary, full report to `…/task-N-report.md`.
 Dispatch flow per task:
 1. Record BASE (`git rev-parse HEAD`).
 2. `bash scripts/task-brief PLAN_FILE N` → brief path.
-3. Dispatch implementer (`strata/coder-iq1_m`) with:
+3. Dispatch implementer (`opencode-go/deepseek-v4.1-flash`, variant per policy) with:
    how the task fits, brief path,
    interfaces/decisions earlier tasks established, ambiguity resolutions,
    report-file path + report contract.
 4. On DONE: `bash scripts/review-package PLAN_FILE BASE HEAD` → diff file.
-5. Dispatch task reviewer (capable model) with brief, report, diff paths +
+5. Dispatch task reviewer (`opencode-go/crouton-alpha-free`, variant scaled to the diff) with brief, report, diff paths +
    binding global constraints; resolve findings via the fix loop (resume the
    same implementer session with `sessionID`); ledger completion line.
 

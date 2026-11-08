@@ -5,6 +5,8 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  schedule:
+    - cron: '0 3 * * *'
 
 jobs:
   build:
@@ -22,3 +24,19 @@ jobs:
         run: cargo test --all-targets
       - name: Build (debug)
         run: cargo build --all-targets
+
+  # Shader parse / device-init errors only appear at runtime, so actually
+  # launch the app on a headless X server with software Vulkan (lavapipe).
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Xvfb + software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-vulkan-drivers
+      - name: Runtime smoke test
+        run: xvfb-run -a env WGPU_BACKEND=vulkan scripts/smoke-run.sh 20
