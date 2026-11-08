@@ -1,85 +1,100 @@
-# 14: Window size, mouse controls, hideable sidebars, clearer controls
+# 14: Desktop UI — window, panel rails, mouse navigation, help overlay
 
-**What to build (UX feature):** the app currently opens at eframe's default
-window size, the 2D view has no mouse navigation (drag only orbits in 3D), the
-sidebar controls read as an undifferentiated list, and the left/right panels
-cannot be hidden. Make the app usable on a normal desktop: a larger default
-window, predictable mouse navigation in both views, toggleable panels, and
-clearer grouping/affordances in the controls.
+**What to build (UX feature):** make the app comfortable on a normal desktop.
+It currently opens at eframe's small default, both side panels are permanently
+visible, 2D has no drag/zoom navigation, style controls sit above field
+controls, and the sidebar gives no units or reset affordances. Agreed design
+(2026-11-08): larger default window, collapsible edge rails for both panels, a
+top menu bar with Settings/Help/screenshot, a dismissible help overlay, mouse
+navigation in both views, clearer control grouping, and full view-state
+persistence.
 
 **Status:** ready-for-agent
 
-## Current behaviour (2026-11-08, `main` at ticket 08)
-
-- `src/main.rs` uses `eframe::NativeOptions::default()` — no `inner_size` or
-  `min_inner_size`, so the window opens at eframe's small default (800x600) and
-  can be shrunk until panels collapse.
-- `src/viewmodel.rs:475` `apply_camera_input(camera, mode_3d, dx, dy, zoom)`
-  calls `orbit`/`zoom` **only when `mode_3d` is true**. The default state is 2D,
-  so left-drag does nothing and the wheel does nothing; there is no pan.
-- `src/app.rs:206` and `:289` show `Panel::left("sidebar")` and
-  `Panel::right("presets")` unconditionally; `resizable(true)` only changes
-  width. There is no hide/show control or shortcut.
-- Sidebar sections exist but lack a consistent heading/tooltip/reset pattern,
-  and panels give no hint about drag/zoom gestures.
-
-## Desired behaviour
+## Agreed design
 
 ### Window
-- Default inner size 1280x800, minimum 960x600, centred; still resizable.
-- Build options in a small pure helper (`window_options()`), not inline in
-  `main`, so sizes are testable. Keep the existing app title.
+- Default inner size 1280x800, minimum 960x600, centred; resizable.
+- Remember last size/position across restarts (eframe window persistence).
+- Keep the title "Vector Field Explorer".
 
-### Mouse navigation (both views)
-- **3D:** left-drag orbits; wheel/pinch zooms; right-drag (or middle-drag) pans
-  the orbit target.
-- **2D:** left-drag pans the plane; wheel/pinch zooms; a click without drag
-  still seeds streamlines/particles (do not regress ticket 06).
-- Cursor feedback over the viewport: grab / grabbing (and a move cursor for
-  pan), so the gesture is discoverable.
-- One-line hint in the status bar (or a `?` tooltip): "Drag to rotate/pan ·
-  Wheel to zoom · Click to seed".
-- Keep the camera math in the pure seam: extend `apply_camera_input` (or a
-  sibling pure function) to return the new camera for 2D pan/zoom and 3D
-  orbit/pan/zoom; unit-test the direction and clamping.
+### Top bar
+- A slim **top menu bar** above the formula row:
+  - **View**: toggle Controls panel, toggle Presets panel, reset layout,
+    reset camera.
+  - **Settings**: opens the Settings popover.
+  - **Help**: toggles the help overlay.
+  - Screenshot action at the right end of the menu row (moved out of the
+    sidebar).
+- Formula row below it: field-preset selector, 2D/3D toggle, editable formula.
+- The menu row is the future host for File/Edit; do not add dead menus now.
 
-### Hideable sidebars
-- Toggle buttons in the always-visible top bar: "Controls" (left) and
-  "Presets" (right), plus shortcuts `Ctrl+B` / `Ctrl+P`.
-- Hidden panels release their space to the viewport; the toggles stay visible
-  in the top bar so a hidden panel can always be restored.
-- Persist visibility across restarts through the same eframe app-state storage
-  used by `AppStyle` (extend the stored settings; absent/corrupt → both shown).
+### Panels collapse to edge rails
+- Controls (left) and Presets (right) each collapse to a narrow vertical rail
+  with a short label (and chevron), not a top/bottom bar.
+- Clicking the rail expands and **pins** the panel; a second click (or
+  `Ctrl+B` / `Ctrl+P`) collapses it. No hover-peek.
+- First launch: both expanded. Thereafter the collapsed/expanded state is
+  remembered. No auto-collapse on small windows.
+- Hidden panels release their width to the viewport; the rail remains as the
+  restore affordance.
 
-### Clearer controls
-- Group the left sidebar into collapsible sections with headings (Field,
-  Sampling, Rendering, Streamlines, Particles, Export), each control labelled
-  and given a hover tooltip with units/effect.
-- Add a per-section or per-control "reset to default" affordance where it is
-  cheap (at minimum for density, arrow scale, spacing, speed).
-- Presets panel: make Save / Load / Delete row affordances unambiguous (clear
-  primary action, delete confirmation or undo), and show a name field
-  placeholder rather than a bare text box.
-- Keep all existing behaviour: setters, clamping, dirty flag, and the 2D/3D
-  mode gate semantics unchanged unless the ticket explicitly changes them.
+### Settings popover
+- Non-modal popover from the top bar containing:
+  - existing appearance controls (`AppStyle`: theme, accent, rounding,
+    spacing, font size);
+  - "Show help overlay" toggle;
+  - "Reset layout" (panels expanded, default widths).
+- Live preview stays visible while adjusting appearance.
+
+### Help overlay
+- Grey, dismissible text in the viewport's bottom-left corner: drag/wheel
+  gestures per mode, click-to-seed, and a one-line formula syntax reminder.
+- Small dismiss ×; visibility is a setting. Visible by default on first run,
+  remembered after.
+
+### Mouse navigation
+- **3D:** left-drag orbits; right-drag (or middle-drag) pans the orbit target;
+  wheel/pinch zooms; click without drag seeds.
+- **2D:** left-drag pans; wheel/pinch zooms; click without drag seeds.
+- Cursor feedback over the viewport: grab / grabbing for drag, move for pan.
+- Extend the pure camera-input seam and unit-test direction/clamping; keep the
+  click-seed path intact (ticket 06 behavior).
+
+### Controls clarity
+- Reorder the left sidebar to **Display → Features → Coloring → Domain**.
+- Each section stays collapsible and gains a reset-to-default button.
+- Tooltips with units/effect, e.g. "Density: samples per axis", "Normalize:
+  scale arrows to unit length".
+- Display and Features open by default; Coloring and Domain start collapsed.
+- Remove Export from the sidebar (screenshot now lives in the top bar).
+
+### Presets panel
+- Explicit "Save current view" button; clear active-row highlight; delete with
+  confirmation. Duplicate-name save still replaces (existing ruling).
+
+### Persistence
+- Persist view state: formula, 2D/3D mode, domain, and all control values.
+- Persist layout (panel visibility, widths, help visibility) and style.
+- Camera state resets to the default on launch; camera presets remain the way
+  to restore a viewpoint.
+- Absent/corrupt stored state falls back to defaults (never brick startup).
 
 ## Tests / gates
 
-- Pure tests: window option sizes; 2D drag pans in the expected direction and
-  clamps; 3D drag orbits / right-drag pans; wheel zoom both modes; sidebar
-  visibility round-trips through a fake `eframe::Storage` and absent/corrupt
-  storage shows both panels.
-- TDD: each pure helper gets a watched RED first.
-- Gates: build / `cargo test --all-targets` / clippy `-- -D warnings` /
-  `scripts/smoke-run.sh 15` (touches `src/app.rs` and likely `src/renderer.rs`
-  wiring).
-- Manual visual check by the user: window opens large; drag rotates in 3D and
-  pans in 2D; wheel zooms; both panels hide/restore; controls read clearly.
+- Pure tests: window option sizes; 2D pan and zoom direction/clamping; 3D pan;
+  layout/view-state persistence round-trip via a fake `eframe::Storage`
+  (absent/corrupt → defaults); help-overlay default visibility.
+- TDD: watched RED first for each pure helper.
+- Gates: build / `cargo test --all-targets` / clippy `--all-targets -- -D
+  warnings` / `scripts/smoke-run.sh 15`.
+- Manual visual check by the user: window opens large; rails expand in one
+  click; both panels hide/restore; drag orbits 3D and pans 2D; wheel zooms;
+  help overlay readable and dismissible; controls legible with tooltips.
   The implementer states exactly what a headless environment could not verify.
-- Commit: `feat: larger window, mouse navigation, hideable sidebars`.
+- Commit: `feat: desktop UI — rails, navigation, help, persistence`.
 
 ## Scheduling
 
-Land **before ticket 13** (test/source separation), so ticket 13 moves the new
-tests too, and before ticket 09's final whole-branch review. Order:
-08 → 14 → 13 → 09 → 10.
+Land before ticket 13 (test/source separation) so the moved tests include the
+new ones, and before ticket 09's final review. Order: 14 → 13 → 09 → 10.
