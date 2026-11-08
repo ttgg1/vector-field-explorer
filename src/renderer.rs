@@ -81,6 +81,10 @@ pub struct DrawState {
     line_bind: wgpu::BindGroup,
     dot_bind: wgpu::BindGroup,
     light_dir: [f32; 4],
+    /// The surface format the pipelines were built for. An offscreen capture
+    /// renders in the same format, so the image matches the screen and the
+    /// readback only needs the channel-order fix-up.
+    format: wgpu::TextureFormat,
 }
 
 impl DrawState {
@@ -311,6 +315,7 @@ impl DrawState {
             line_bind,
             dot_bind,
             light_dir: LIGHT_DIR,
+            format,
         }
     }
 
@@ -403,6 +408,158 @@ impl DrawState {
             });
         }
     }
+
+    /// Record this frame's scene into a render pass: lines, then opaque
+    /// arrows, then dots — the same order the on-screen pass uses, so an
+    /// offscreen capture paints exactly what the viewport paints.
+    fn record(&self, pass: &mut wgpu::RenderPass<'_>, scene: &SceneGPU) {
+        if !scene.lines.is_empty() {
+            pass.set_pipeline(&self.line_pipeline);
+            pass.set_bind_group(0, &self.line_bind, &[]);
+            pass.draw(0..(scene.lines.len() as u32) * 6, 0..1);
+        }
+
+        if !scene.arrows.is_empty() {
+            pass.set_pipeline(&self.arrow_pipeline);
+            pass.set_bind_group(0, &self.arrow_bind, &[]);
+            pass.draw(0..(scene.arrows.len() as u32) * 54, 0..1);
+        }
+
+        if !scene.dots.is_empty() {
+            pass.set_pipeline(&self.dot_pipeline);
+            pass.set_bind_group(0, &self.dot_bind, &[]);
+            pass.draw(0..(scene.dots.len() as u32) * 24, 0..1);
+        }
+    }
+
+    /// Render `scene` into a fresh offscreen texture at `width`×`height` and
+    /// read it back as row-packed RGBA8 (screenshot export, plan task 13).
+    ///
+    /// The caller passes the same `view_proj`/`camera_pos` the viewport is
+    /// painting with, so the capture is the current view rather than a
+    /// re-derived one. The texture borrows the surface format (the pipelines
+    /// were created for it) and lives only for this call: the live surface
+    /// textures are never touched. `clear` is the viewport background in
+    /// linear space, matching what egui paints behind the field.
+    ///
+    /// Readback is synchronous by design: the app wants the pixels before it
+    /// spawns the save dialog, and one 4k frame is a short stall. `map_async`
+    /// is followed by a submit + `poll(Wait)` so the mapping cannot race the
+    /// copy (the brief's ordering).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_offscreen(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &SceneGPU,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        width: u32,
+        height: u32,
+        clear: [f64; 4],
+    ) -> Result<Vec<u8>, String> {
+        // Same uniforms + instance buffers the on-screen pass would use. The
+        // paint callback re-uploads every frame, so this does not leave the
+        // live frame stale.
+        self.upload(device, queue, view_proj, camera_pos, scene);
+
+        let output = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vfe screenshot target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let padded_row = crate::screenshot::padded_row_bytes(width);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vfe screenshot readback"),
+            size: u64::from(padded_row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("vfe screenshot encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("vfe screenshot pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: clear[0],
+                            g: clear[1],
+                            b: clear[2],
+                            a: clear[3],
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.record(&mut pass, scene);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &output,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let slice = readback.slice(..);
+        let (mapped_tx, mapped_rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = mapped_tx.send(result);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("readback poll failed: {error}"))?;
+        mapped_rx
+            .recv()
+            .map_err(|error| format!("readback callback lost: {error}"))?
+            .map_err(|error| format!("readback mapping failed: {error}"))?;
+
+        let pixels = {
+            let mapped = slice
+                .get_mapped_range()
+                .map_err(|error| format!("readback range unavailable: {error}"))?;
+            crate::screenshot::strip_row_padding(&mapped, width, height)
+        };
+        readback.unmap();
+
+        crate::screenshot::to_rgba(self.format, pixels)
+    }
 }
 
 /// Per-frame draw: carries the scene to upload and the camera matrices.
@@ -438,23 +595,7 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
             .get::<DrawState>()
             .expect("DrawState must be installed before the first paint callback");
 
-        if !self.scene.lines.is_empty() {
-            render_pass.set_pipeline(&ds.line_pipeline);
-            render_pass.set_bind_group(0, &ds.line_bind, &[]);
-            render_pass.draw(0..(self.scene.lines.len() as u32) * 6, 0..1);
-        }
-
-        if !self.scene.arrows.is_empty() {
-            render_pass.set_pipeline(&ds.arrow_pipeline);
-            render_pass.set_bind_group(0, &ds.arrow_bind, &[]);
-            render_pass.draw(0..(self.scene.arrows.len() as u32) * 54, 0..1);
-        }
-
-        if !self.scene.dots.is_empty() {
-            render_pass.set_pipeline(&ds.dot_pipeline);
-            render_pass.set_bind_group(0, &ds.dot_bind, &[]);
-            render_pass.draw(0..(self.scene.dots.len() as u32) * 24, 0..1);
-        }
+        ds.record(render_pass, &self.scene);
     }
 }
 

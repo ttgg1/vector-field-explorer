@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use eframe::egui;
 use glam::{Vec2, Vec3};
@@ -6,6 +7,7 @@ use glam::{Vec2, Vec3};
 use crate::camera::OrbitCamera;
 use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
+use crate::screenshot::{self, Screenshot};
 use crate::streamlines::click_seed;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::presets::{PresetPanel, default_preset_dir};
@@ -88,6 +90,9 @@ pub struct VfApp {
     flow_lines: Vec<LineInstanceGPU>,
     /// The current click bursts' streamline segments.
     click_lines: Vec<LineInstanceGPU>,
+    /// The screenshot action (ticket 08): the pending capture request, the
+    /// channel its save thread reports on, and the completion toast.
+    pub screenshot: Screenshot,
 }
 
 impl VfApp {
@@ -127,6 +132,7 @@ impl VfApp {
             click_seeds: Vec::new(),
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
+            screenshot: Screenshot::new(),
         }
     }
 }
@@ -182,6 +188,10 @@ impl eframe::App for VfApp {
         // keeps the UI in sync even if a theme/visual was changed elsewhere.
         style_panel::apply(ui.ctx(), &self.style);
 
+        // Screenshot completions arrive on a channel from the save thread; pick
+        // them up here so the toast reflects the latest attempt this frame.
+        self.screenshot.tick(Instant::now());
+
         // Top formula bar: live edits, the field-preset ComboBox and the
         // 2D/3D toggle. Every edit goes through a viewmodel setter, which owns
         // parsing, clamping and the dirty flag.
@@ -205,6 +215,12 @@ impl eframe::App for VfApp {
                     crate::ui::style_panel::apply(ui.ctx(), &self.style);
                 }
                 crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+
+                // Screenshot export sits at the sidebar's bottom: the button
+                // only records the request; the capture happens in the
+                // viewport, where this frame's rect and camera are known.
+                ui.separator();
+                self.screenshot.ui(ui);
             });
 
         // Rebuild the scene only when a setter marked the state dirty. The
@@ -372,6 +388,58 @@ impl eframe::App for VfApp {
                 aspect,
                 if self.state.mode_3d { None } else { Some(self.state.plane_size()) },
             );
+
+            // Screenshot export (ticket 08): re-render this frame's scene
+            // offscreen at the viewport's pixel size (capped at 4096 on the
+            // long edge, both axes scaled so the framing is unchanged) and
+            // hand the pixels to a worker thread that shows the native save
+            // dialog and writes the PNG. Nothing here touches the live
+            // surface textures, and the readback is RGBA by contract.
+            if self.screenshot.take_request() {
+                let (capture_width, capture_height) = screenshot::capture_size(
+                    rect.width().round().max(1.0) as u32,
+                    rect.height().round().max(1.0) as u32,
+                );
+                // egui paints this behind the field; clearing to the same
+                // (linear-space) fill keeps the capture's background identical.
+                let clear = egui::Rgba::from(ui.visuals().panel_fill).to_array();
+                let capture = {
+                    let mut renderer = render_state.renderer.write();
+                    renderer
+                        .callback_resources
+                        .get_mut::<DrawState>()
+                        .expect("DrawState must be installed before capturing")
+                        .render_offscreen(
+                            &render_state.device,
+                            &render_state.queue,
+                            &scene,
+                            view_proj,
+                            self.orbit.position(),
+                            capture_width,
+                            capture_height,
+                            [
+                                f64::from(clear[0]),
+                                f64::from(clear[1]),
+                                f64::from(clear[2]),
+                                f64::from(clear[3]),
+                            ],
+                        )
+                };
+                match capture {
+                    Ok(rgba) => screenshot::spawn_save(
+                        self.screenshot.sender(),
+                        ui.ctx().clone(),
+                        rgba,
+                        capture_width,
+                        capture_height,
+                        screenshot::default_filename(
+                            std::time::SystemTime::now(),
+                            if self.state.mode_3d { "3D" } else { "2D" },
+                        ),
+                    ),
+                    Err(error) => self.screenshot.fail(error),
+                }
+            }
 
             let callback = eframe::egui_wgpu::Callback::new_paint_callback(
                 rect,
