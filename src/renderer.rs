@@ -333,65 +333,75 @@ impl DrawState {
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
-        self.arrow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vfe arrows (frame)"),
-            contents: bytemuck::cast_slice(scene.arrows.as_slice()),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        self.arrow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("vfe arrow bind (frame)"),
-            layout: &self.bind_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.globals_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.arrow_buf.as_entire_binding(),
-                },
-            ],
-        });
+        // Empty collections are skipped: a zero-size storage buffer cannot be
+        // bound (the bind group would be rejected with "binding size is zero").
+        // The one-instance placeholders from `new()` remain bound and valid,
+        // and `paint()` skips drawing any empty collection anyway.
+        if !scene.arrows.is_empty() {
+            self.arrow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vfe arrows (frame)"),
+                contents: bytemuck::cast_slice(scene.arrows.as_slice()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            self.arrow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("vfe arrow bind (frame)"),
+                layout: &self.bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.globals_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.arrow_buf.as_entire_binding(),
+                    },
+                ],
+            });
+        }
 
-        self.line_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vfe lines (frame)"),
-            contents: bytemuck::cast_slice(scene.lines.as_slice()),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        self.line_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("vfe line bind (frame)"),
-            layout: &self.bind_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.globals_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.line_buf.as_entire_binding(),
-                },
-            ],
-        });
+        if !scene.lines.is_empty() {
+            self.line_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vfe lines (frame)"),
+                contents: bytemuck::cast_slice(scene.lines.as_slice()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            self.line_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("vfe line bind (frame)"),
+                layout: &self.bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.globals_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.line_buf.as_entire_binding(),
+                    },
+                ],
+            });
+        }
 
-        self.dot_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vfe dots (frame)"),
-            contents: bytemuck::cast_slice(scene.dots.as_slice()),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        self.dot_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("vfe dot bind (frame)"),
-            layout: &self.bind_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.globals_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.dot_buf.as_entire_binding(),
-                },
-            ],
-        });
+        if !scene.dots.is_empty() {
+            self.dot_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vfe dots (frame)"),
+                contents: bytemuck::cast_slice(scene.dots.as_slice()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            self.dot_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("vfe dot bind (frame)"),
+                layout: &self.bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.globals_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.dot_buf.as_entire_binding(),
+                    },
+                ],
+            });
+        }
     }
 }
 
