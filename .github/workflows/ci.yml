@@ -34,9 +34,11 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # winit dlopens libxkbcommon-x11.so.0 at startup; it is not pulled in by
+      # xvfb or Mesa, so the app panics before any wgpu work without it.
       - name: Install Xvfb + software Vulkan
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0
       - name: Runtime smoke test
         run: xvfb-run -a env WGPU_BACKEND=vulkan scripts/smoke-run.sh 20
