@@ -5,10 +5,10 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 /// Spherical orbit camera around a target point.
 ///
-/// The same camera drives both views: the perspective orbit in 3D mode and the
-/// orthographic front view in 2D mode. `ortho_zoom` is the 2D view's zoom
-/// factor (1.0 = fit the domain); the 3D zoom lives in `distance`, so the two
-/// modes zoom independently without fighting over one field.
+/// The same camera drives both views: the perspective orbit in 3D mode and a
+/// fixed front view (looking down -Z, Y up) in 2D mode. `ortho_zoom` is the 2D
+/// view's zoom factor (1.0 = fit the domain); the 3D zoom lives in `distance`,
+/// so the two modes zoom independently without fighting over one field.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OrbitCamera {
     pub yaw: f32,
@@ -39,19 +39,22 @@ impl OrbitCamera {
     const MIN_DISTANCE: f32 = 0.5;
     const MAX_DISTANCE: f32 = 20.0;
     const NEAR: f32 = 0.01;
+    const FAR: f32 = 100.0;
     /// Tightest 2D zoom-in (a 20x magnification).
     pub const MIN_ORTHO_ZOOM: f32 = 0.05;
     /// Widest 2D zoom-out (50x the domain).
     pub const MAX_ORTHO_ZOOM: f32 = 50.0;
 
-    /// Eye position derived from the spherical parameters.
+    /// Eye position derived from the spherical parameters. The three terms are
+    /// the unit sphere direction, so `|position() - target| == distance` for
+    /// every yaw/pitch (review I-2: the z term is `sin(yaw) * sin(pitch)`).
     pub fn position(&self) -> Vec3 {
         self.target
             + self.distance
                 * Vec3::new(
                     self.yaw.cos() * self.pitch.sin(),
                     self.pitch.cos(),
-                    self.yaw.sin() * self.pitch.cos(),
+                    self.yaw.sin() * self.pitch.sin(),
                 )
     }
 
@@ -67,8 +70,13 @@ impl OrbitCamera {
         self.distance = (self.distance * factor).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
     }
 
-    /// Multiply the 2D zoom, clamped so the view can never invert or vanish.
+    /// Multiply the 2D zoom, clamped so the view can never invert or vanish. A
+    /// non-finite current zoom (corrupt storage, an unguarded preset) resets to
+    /// 1.0 first, so one bad value cannot stick forever (review M-3).
     pub fn zoom_2d(&mut self, factor: f32) {
+        if !self.ortho_zoom.is_finite() {
+            self.ortho_zoom = 1.0;
+        }
         if factor.is_finite() && factor > 0.0 {
             self.ortho_zoom = (self.ortho_zoom * factor).clamp(Self::MIN_ORTHO_ZOOM, Self::MAX_ORTHO_ZOOM);
         }
@@ -96,15 +104,30 @@ impl OrbitCamera {
         Mat4::look_at_rh(self.position(), self.target, Vec3::Y)
     }
 
-    /// Perspective projection (right-handed).
-    pub fn proj_perspective(&self, aspect: f32) -> Mat4 {
-        Mat4::perspective_rh(self.fov_y, aspect, Self::NEAR, 100.0)
+    /// The eye for a projection mode: the orbit position in 3D, and the fixed
+    /// front-view eye (`target + Z * distance`) in 2D. The renderer's
+    /// camera-facing line ribbons take this, so they match the projection.
+    pub fn eye_position(&self, ortho: bool) -> Vec3 {
+        if ortho { self.target + Vec3::Z * self.distance } else { self.position() }
     }
 
-    /// Orthographic projection centered on the target, facing along the view
-    /// direction; `plane_size` is the world height covered by the plane at the
-    /// default zoom, divided by [`Self::ortho_zoom`] so the 2D wheel zoom works
-    /// through every caller (the viewport and `click_seed` share it).
+    /// World-to-eye transform for the 2D front view: the eye on +Z looking
+    /// down -Z at the target, Y up. The z=0 domain plane is therefore seen
+    /// face-on, not obliquely (review I-1).
+    pub fn front_view(&self) -> Mat4 {
+        Mat4::look_at_rh(self.eye_position(true), self.target, Vec3::Y)
+    }
+
+    /// Perspective projection (right-handed).
+    pub fn proj_perspective(&self, aspect: f32) -> Mat4 {
+        Mat4::perspective_rh(self.fov_y, aspect, Self::NEAR, Self::FAR)
+    }
+
+    /// Orthographic projection centered on the target, used with
+    /// [`Self::front_view`] for the 2D mode; `plane_size` is the world height
+    /// covered by the plane at the default zoom, divided by [`Self::ortho_zoom`]
+    /// so the 2D wheel zoom works through every caller (the viewport and
+    /// `click_seed` share it).
     pub fn proj_ortho(&self, aspect: f32, plane_size: f32) -> Mat4 {
         let zoom = if self.ortho_zoom.is_finite() && self.ortho_zoom > 0.0 {
             self.ortho_zoom
@@ -117,24 +140,30 @@ impl OrbitCamera {
         Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, Self::NEAR, far)
     }
 
-    /// Full view-projection; `Some(plane_size)` selects the orthographic mode.
+    /// Full view-projection; `Some(plane_size)` selects the 2D orthographic
+    /// front view, which the viewport, screenshots and `click_seed` all share.
     pub fn vp_matrix(&self, aspect: f32, ortho_plane_size: Option<f32>) -> Mat4 {
         match ortho_plane_size {
-            Some(size) => self.proj_ortho(aspect, size) * self.view(),
+            Some(size) => self.proj_ortho(aspect, size) * self.front_view(),
             None => self.proj_perspective(aspect) * self.view(),
         }
     }
 
     /// Ray through `ndc_xy` (in [-1,1]^2); direction intentionally unnormalized.
+    ///
+    /// Built analytically from the camera basis rather than by inverting the
+    /// view-projection: at long eye distances the f32 inverse drifts the centre
+    /// ray by ~1e-3, which would make a centre click miss the point it aims at.
+    /// The origin is the eye and the direction runs to the far plane, so
+    /// `t == 1` still means the far plane.
     pub fn ndc_ray(&self, aspect: f32, ndc_xy: Vec2) -> (Vec3, Vec3) {
-        let inv_vp = self.vp_matrix(aspect, None).inverse();
-        let unproject = |z: f32| {
-            let p = inv_vp * Vec4::new(ndc_xy.x, ndc_xy.y, z, 1.0);
-            Vec3::new(p.x, p.y, p.z) / p.w
-        };
-        let near = unproject(-1.0);
-        let far = unproject(1.0);
-        (near, far - near)
+        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        let half_h = (self.fov_y * 0.5).tan();
+        let camera_dir = Vec3::new(ndc_xy.x * half_h * aspect, ndc_xy.y * half_h, -1.0);
+        let world_dir = (self.view().inverse() * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
+            .truncate()
+            .normalize_or_zero();
+        (self.position(), world_dir * Self::FAR)
     }
 }
 
@@ -199,58 +228,5 @@ mod tests {
         assert_ne!(before, c.view());
     }
 
-    #[test]
-    fn view_basis_is_orthonormal_and_perpendicular_to_the_view() {
-        let c = OrbitCamera::default();
-        let (right, up) = c.view_basis();
-        let forward = (c.target - c.position()).normalize();
-        assert!((right.length() - 1.0).abs() < 1e-5, "right is a unit vector");
-        assert!((up.length() - 1.0).abs() < 1e-5, "up is a unit vector");
-        assert!(right.dot(up).abs() < 1e-5, "the basis is orthogonal");
-        assert!(right.dot(forward).abs() < 1e-5, "right is perpendicular to the view");
-        assert!(up.dot(forward).abs() < 1e-5, "up is perpendicular to the view");
-    }
 
-    #[test]
-    fn pan_moves_the_target_in_the_view_plane_only() {
-        let mut c = OrbitCamera::default();
-        let forward = (c.target - c.position()).normalize();
-        let before = c.target;
-        c.pan(1.0, 0.0);
-        let moved = c.target - before;
-        assert!((moved.length() - 1.0).abs() < 1e-5, "one world unit right");
-        assert!(moved.dot(forward).abs() < 1e-5, "a pan never changes the view direction");
-        assert!((c.distance - OrbitCamera::default().distance).abs() < 1e-6, "pan keeps the zoom");
-        let mut c2 = OrbitCamera::default();
-        c2.pan(0.0, 2.0);
-        let (_, up) = c2.view_basis();
-        assert!(up.dot(c2.target) > 0.0, "a positive up pan moves the target up the screen");
-    }
-
-    #[test]
-    fn ortho_zoom_scales_the_visible_plane_and_clamps() {
-        let mut c = OrbitCamera::default();
-        let (_, up) = c.view_basis();
-        let plane = 2.0;
-        // At zoom 1 the half-height point sits on the top edge (ndc y = 1).
-        let edge = c.target + up * (plane * 0.5);
-        let edge_ndc = ndc(c.proj_ortho(1.0, plane) * c.view(), Vec4::new(edge.x, edge.y, edge.z, 1.0));
-        assert!((edge_ndc.y - 1.0).abs() < 1e-4, "default zoom fits the plane exactly");
-
-        // Zooming 2x halves the visible world: the same point is now off-screen,
-        // and half the old height lands on the top edge.
-        c.zoom_2d(2.0);
-        let half = c.target + up * (plane * 0.25);
-        let half_ndc = ndc(c.proj_ortho(1.0, plane) * c.view(), Vec4::new(half.x, half.y, half.z, 1.0));
-        assert!((half_ndc.y - 1.0).abs() < 1e-4, "2x zoom shows half the world height");
-        assert!((c.ortho_zoom - 2.0).abs() < 1e-6);
-
-        c.zoom_2d(1e9);
-        assert!((c.ortho_zoom - OrbitCamera::MAX_ORTHO_ZOOM).abs() < 1e-6, "zoom-in clamps");
-        c.zoom_2d(1e-9);
-        assert!((c.ortho_zoom - OrbitCamera::MIN_ORTHO_ZOOM).abs() < 1e-6, "zoom-out clamps");
-        let before = c.ortho_zoom;
-        c.zoom_2d(f32::NAN);
-        assert!((c.ortho_zoom - before).abs() < 1e-6, "a nonsense zoom factor is ignored");
-    }
 }

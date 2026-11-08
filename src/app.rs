@@ -364,11 +364,20 @@ impl eframe::App for VfApp {
                 });
         }
         if let Some(applied) = self.presets.take_applied() {
-            self.orbit.target.x = applied.position[0];
-            self.orbit.target.y = applied.position[1];
-            self.orbit.ortho_zoom = applied
-                .scale
-                .clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
+            // Guard the hand-editable preset file: `f32::clamp` passes NaN
+            // through, so a non-finite component keeps the current camera
+            // (review M-3).
+            if applied.position[0].is_finite() {
+                self.orbit.target.x = applied.position[0];
+            }
+            if applied.position[1].is_finite() {
+                self.orbit.target.y = applied.position[1];
+            }
+            if applied.scale.is_finite() {
+                self.orbit.ortho_zoom = applied
+                    .scale
+                    .clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
+            }
         }
 
         // Rebuild the scene only when a setter marked the state dirty. The
@@ -601,7 +610,7 @@ impl eframe::App for VfApp {
                             &render_state.queue,
                             &scene,
                             view_proj,
-                            self.orbit.position(),
+                            self.orbit.eye_position(!self.state.mode_3d),
                             capture_width,
                             capture_height,
                             [
@@ -633,7 +642,7 @@ impl eframe::App for VfApp {
                 DrawCallback {
                     scene,
                     view_proj,
-                    camera_pos: self.orbit.position(),
+                    camera_pos: self.orbit.eye_position(!self.state.mode_3d),
                 },
             );
             ui.painter().add(callback);
@@ -659,7 +668,7 @@ impl eframe::App for VfApp {
         let settings = AppSettings {
             style: self.style.clone(),
             layout: self.layout.clone(),
-            view: ViewRecord::capture(&self.state, &self.sidebar),
+            view: ViewRecord::capture(&self.state),
         };
         persistence::save(storage, &settings);
     }

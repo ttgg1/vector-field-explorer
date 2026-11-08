@@ -5,10 +5,10 @@
 //! Scope note (updated for ticket 14): "style" is still only UI chrome — the
 //! field knobs live in the viewmodel `State`. Ticket 14 wraps this record in
 //! the app's [`crate::persistence::AppSettings`] envelope under the same
-//! eframe key, alongside layout and view state; [`load`]/[`save`] here remain
-//! the style-only helpers (used by tests and the migration fallback). A
-//! corrupt or absent record still falls back to the defaults: cosmetic UI
-//! state must never brick startup (camera presets stay fail-fast for data
+//! eframe key, alongside layout and view state. A corrupt or absent record
+//! falls back to the defaults, and [`AppStyle::sanitized`] clamps stored values
+//! into the Settings slider ranges before they reach egui: cosmetic UI state
+//! must never brick startup (camera presets stay fail-fast for data
 //! integrity).
 
 use eframe::egui;
@@ -17,6 +17,15 @@ use serde::{Deserialize, Serialize};
 /// Vertical item spacing as a fraction of the horizontal one, chosen so the
 /// defaults (spacing 8) reproduce egui's own `item_spacing = (8, 3)`.
 pub const SPACING_Y_RATIO: f32 = 3.0 / 8.0;
+
+/// Settings-slider bounds, shared by the popover and [`AppStyle::sanitized`]
+/// so a stored record can never hold a value the UI itself cannot produce.
+pub const MIN_ROUNDING: f32 = 0.0;
+pub const MAX_ROUNDING: f32 = 20.0;
+pub const MIN_SPACING: f32 = 2.0;
+pub const MAX_SPACING: f32 = 24.0;
+pub const MIN_FONT_SIZE: f32 = 8.0;
+pub const MAX_FONT_SIZE: f32 = 24.0;
 
 /// The persisted UI-chrome style record. Field names are distinct from the
 /// repo's three existing `Preset` types; this one only carries look-and-feel.
@@ -48,11 +57,33 @@ impl Default for AppStyle {
     }
 }
 
+impl AppStyle {
+    /// Clamp a stored record into what the Settings sliders can produce. A
+    /// non-finite number takes the default before clamping (review I-3): a
+    /// corrupt record must never hand egui an infinite font size or spacing.
+    pub fn sanitized(mut self) -> Self {
+        let defaults = Self::default();
+        self.rounding = finite_or(self.rounding, defaults.rounding).clamp(MIN_ROUNDING, MAX_ROUNDING);
+        self.spacing = finite_or(self.spacing, defaults.spacing).clamp(MIN_SPACING, MAX_SPACING);
+        self.font_size =
+            finite_or(self.font_size, defaults.font_size).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        self
+    }
+}
+
+/// `value` when finite, `fallback` otherwise.
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
+}
+
 /// Map the style record onto egui's global styles (both themes, so switching
 /// theme later never resurrects stale accents/spacing). Idempotent: it runs at
 /// the start of every frame, so applying the same record twice must leave the
 /// context identical.
 pub fn apply(ctx: &egui::Context, style: &AppStyle) {
+    // Defensive: loaded records are sanitized, but `apply` also runs on user
+    // edits and must never feed egui a value outside the sliders (review I-3).
+    let style = style.clone().sanitized();
     let rounding = egui::CornerRadius::same(
         style.rounding.round().clamp(0.0, u8::MAX as f32) as u8,
     );
@@ -128,58 +159,20 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
         changed |= ui.color_edit_button_srgba(&mut style.accent).changed();
     });
     changed |= ui
-        .add(egui::Slider::new(&mut style.rounding, 0.0..=20.0).text("Rounding"))
+        .add(egui::Slider::new(&mut style.rounding, MIN_ROUNDING..=MAX_ROUNDING).text("Rounding"))
         .changed();
     changed |= ui
-        .add(egui::Slider::new(&mut style.spacing, 2.0..=24.0).text("Spacing"))
+        .add(egui::Slider::new(&mut style.spacing, MIN_SPACING..=MAX_SPACING).text("Spacing"))
         .changed();
     changed |= ui
-        .add(egui::Slider::new(&mut style.font_size, 8.0..=24.0).text("Font size"))
+        .add(egui::Slider::new(&mut style.font_size, MIN_FONT_SIZE..=MAX_FONT_SIZE).text("Font size"))
         .changed();
     changed
-}
-
-/// Load the style record, falling back to the defaults when storage is absent,
-/// the key is missing, or the stored RON is corrupt. Never panics.
-pub fn load(storage: Option<&dyn eframe::Storage>) -> AppStyle {
-    storage
-        .and_then(|storage| eframe::get_value(storage, eframe::APP_KEY))
-        .unwrap_or_default()
-}
-
-/// Persist the style record under eframe's app key.
-pub fn save(storage: &mut dyn eframe::Storage, style: &AppStyle) {
-    eframe::set_value(storage, eframe::APP_KEY, style);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::Storage as _;
-
-    /// In-memory stand-in for eframe's disk/localstorage-backed storage: the
-    /// persistence helpers only need `get_string`/`set_string`.
-    #[derive(Default)]
-    struct MemoryStorage {
-        values: std::collections::HashMap<String, String>,
-    }
-
-    impl eframe::Storage for MemoryStorage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.values.get(key).cloned()
-        }
-
-        fn set_string(&mut self, key: &str, value: String) {
-            self.values.insert(key.to_owned(), value);
-        }
-
-        fn remove_string(&mut self, key: &str) {
-            self.values.remove(key);
-        }
-
-        fn flush(&mut self) {}
-    }
-
     fn sample_style() -> AppStyle {
         AppStyle {
             theme_dark: false,
@@ -188,26 +181,6 @@ mod tests {
             spacing: 11.0,
             font_size: 15.0,
         }
-    }
-
-    #[test]
-    fn style_round_trips_through_eframe_storage() {
-        let style = sample_style();
-        let mut storage = MemoryStorage::default();
-        save(&mut storage, &style);
-        assert_eq!(load(Some(&storage)), style);
-    }
-
-    #[test]
-    fn absent_storage_falls_back_to_defaults() {
-        assert_eq!(load(None), AppStyle::default());
-    }
-
-    #[test]
-    fn corrupt_stored_value_falls_back_to_defaults() {
-        let mut storage = MemoryStorage::default();
-        storage.set_string(eframe::APP_KEY, "this is not ron".to_owned());
-        assert_eq!(load(Some(&storage)), AppStyle::default());
     }
 
     #[test]

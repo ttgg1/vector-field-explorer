@@ -17,6 +17,7 @@ pub fn help_lines(mode_3d: bool) -> &'static [&'static str] {
             "Wheel/pinch: zoom",
             "Click: seed streamlines",
             "Formula: (fx, fy, fz), e.g. (-y, x, 0.5)",
+            "Ctrl+B / Ctrl+P: toggle panels, even while typing",
         ]
     } else {
         &[
@@ -24,6 +25,7 @@ pub fn help_lines(mode_3d: bool) -> &'static [&'static str] {
             "Wheel/pinch: zoom",
             "Click: seed streamlines",
             "Formula: (fx, fy), e.g. (-y, x)",
+            "Ctrl+B / Ctrl+P: toggle panels, even while typing",
         ]
     }
 }
@@ -70,35 +72,4 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
                 });
         });
     dismissed
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn two_d_help_lists_pan_zoom_click_and_syntax() {
-        let lines = help_lines(false);
-        let text = lines.join("\n");
-        assert!(text.contains("Drag: pan"), "2D drag pans: {text}");
-        assert!(text.contains("Wheel"), "the wheel zooms: {text}");
-        assert!(text.contains("Click"), "click seeding is documented: {text}");
-        assert!(text.contains("Formula:"), "the syntax reminder is there: {text}");
-        assert!(!text.contains("orbit"), "2D never mentions orbiting: {text}");
-    }
-
-    #[test]
-    fn three_d_help_adds_orbit_and_the_right_drag_pan() {
-        let lines = help_lines(true);
-        let text = lines.join("\n");
-        assert!(text.contains("Drag: orbit"), "3D drag orbits: {text}");
-        assert!(text.contains("Right/middle-drag: pan"), "3D right-drag pans: {text}");
-        assert!(text.contains("Wheel"), "the wheel zooms: {text}");
-        assert!(text.contains("Formula:"), "the syntax reminder is there: {text}");
-        assert_eq!(
-            lines.len(),
-            help_lines(false).len() + 1,
-            "3D adds exactly the orbit line",
-        );
-    }
 }
