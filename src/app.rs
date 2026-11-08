@@ -9,11 +9,14 @@ use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
 use crate::screenshot::{self, Screenshot};
 use crate::streamlines::click_seed;
+use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
+use crate::ui::layout::{self, LayoutState};
 use crate::ui::presets::{PresetPanel, default_preset_dir};
 use crate::ui::sidebar::Controls;
 use crate::ui::style_panel::{self, AppStyle};
-use crate::viewmodel::{State, apply_camera_input};
+use crate::ui::top_bar::{self, TopAction};
+use crate::viewmodel::{State, ViewGesture, apply_camera_input};
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
@@ -46,9 +49,6 @@ pub struct StatusBarState {
     pub streamline_count: usize,
 }
 
-/// Radians of orbit per point of left-drag on the viewport.
-const ORBIT_SENSITIVITY: f32 = 0.005;
-
 /// How many viewport clicks keep their seeded bursts. Clicks accumulate only up
 /// to this bound (the oldest burst is dropped), so repeated clicking cannot
 /// grow the scene without limit.
@@ -57,13 +57,15 @@ const MAX_CLICK_SEEDS: usize = 6;
 /// Application root state: the viewmodel State (the single source of truth for
 /// what is on screen), the formula bar's local widgets, the sidebar's local
 /// Controls, the status readouts, both cameras (the 2D `Camera` and the
-/// `OrbitCamera`), the preset manager, the persisted UI-chrome style and the
-/// GPU scene currently being painted.
+/// `OrbitCamera`), the preset manager, the persisted appearance and layout
+/// records, and the GPU scene currently being painted.
 pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
     pub sidebar: Controls,
     pub status: StatusBarState,
+    /// The 2D camera record the preset panel saves/applies; the live view is
+    /// the shared [`OrbitCamera`] (its ortho mode is the 2D view).
     pub camera: Camera,
     pub orbit: OrbitCamera,
     pub presets: PresetPanel,
@@ -71,6 +73,15 @@ pub struct VfApp {
     /// app-state storage on startup and written back in [`eframe::App::save`].
     /// It lives app-side and never touches the viewmodel `State`.
     pub style: AppStyle,
+    /// The persisted layout record (ticket 14): panel visibility, expanded
+    /// widths and help-overlay visibility.
+    pub layout: LayoutState,
+    /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
+    /// forget their last dragged size, letting the default widths apply.
+    panel_generation: u32,
+    /// The viewport rect from this frame (set in the central panel) so the help
+    /// overlay can anchor to its bottom-left corner.
+    last_viewport_rect: Option<egui::Rect>,
     scene: SceneGPU,
     renderer_ready: bool,
     streamline_count: usize,
@@ -96,20 +107,25 @@ pub struct VfApp {
 }
 
 impl VfApp {
-    /// App with no persistent storage (defaults for the style record).
+    /// App with no persistent storage (defaults for every persisted record).
     pub fn new() -> Self {
         Self::new_with_storage(None)
     }
 
-    /// App wired to eframe's persistent storage: the style record is restored
-    /// from it (absent/corrupt values fall back to the defaults) and written
-    /// back on save.
+    /// App wired to eframe's persistent storage: the settings envelope
+    /// (style + layout + view state) is restored from it — absent, corrupt or
+    /// older records fall back to sensible defaults — and written back on save.
     pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
-        let state = State::new(false);
+        let settings = persistence::load(storage);
+        let mut state = State::new(false);
+        let mut sidebar = Controls::new();
+        // Restore through the viewmodel setters so the first frame samples the
+        // saved field; a corrupt record cannot poison the grid.
+        settings.view.restore(&mut state, &mut sidebar);
         Self {
             state,
             bar: FormulaBarState::new(),
-            sidebar: Controls::new(),
+            sidebar,
             status: StatusBarState {
                 parse_message: String::new(),
                 instance_count: 0,
@@ -119,7 +135,10 @@ impl VfApp {
             orbit: OrbitCamera::default(),
             presets: PresetPanel::new_with_dir(presets_data_dir())
                 .unwrap_or_else(|_| PresetPanel::new()),
-            style: style_panel::load(storage),
+            style: settings.style,
+            layout: settings.layout,
+            panel_generation: 0,
+            last_viewport_rect: None,
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
                 lines: Arc::new(reference_lines()),
@@ -171,6 +190,21 @@ fn reference_lines() -> Vec<LineInstanceGPU> {
     lines
 }
 
+/// A slim collapse chevron at the top of an expanded panel. Clicking it
+/// collapses the panel back to its rail — the symmetric affordance to the
+/// rail's expand click, alongside Ctrl+B / Ctrl+P.
+fn collapse_button(ui: &mut egui::Ui, side: layout::RailSide, shortcut: &str) -> bool {
+    let (chevron, tooltip) = match side {
+        layout::RailSide::Left => ("‹", format!("Collapse Controls ({shortcut})")),
+        layout::RailSide::Right => ("›", format!("Collapse Presets ({shortcut})")),
+    };
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        clicked = ui.small_button(chevron).on_hover_text(tooltip).clicked();
+    });
+    clicked
+}
+
 /// Fold the backdrop, the grid-seeded streamlines and the click bursts into the
 /// one line collection the viewport paints. Rebuilt only on a scene rebuild or
 /// a click, so the per-frame path still clones an `Arc`.
@@ -192,36 +226,150 @@ impl eframe::App for VfApp {
         // them up here so the toast reflects the latest attempt this frame.
         self.screenshot.tick(Instant::now());
 
-        // Top formula bar: live edits, the field-preset ComboBox and the
-        // 2D/3D toggle. Every edit goes through a viewmodel setter, which owns
-        // parsing, clamping and the dirty flag.
+        // Keyboard toggles for the two panels (ticket 14). Consumed so a
+        // focused text field never receives them.
+        let (toggle_controls, toggle_presets) = ui.ctx().input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::B),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::P),
+            )
+        });
+        if toggle_controls {
+            self.layout.toggle_controls();
+        }
+        if toggle_presets {
+            self.layout.toggle_presets();
+        }
+
+        // Top menu bar: View / Settings / Help and the screenshot action.
+        let mut style_changed = false;
+        egui::Panel::top("top_bar").show(ui, |ui| {
+            let (action, changed) = top_bar::show(
+                ui,
+                &mut self.layout,
+                &mut self.style,
+                &mut self.screenshot,
+            );
+            style_changed = changed;
+            if let Some(action) = action {
+                match action {
+                    TopAction::ToggleControls => self.layout.toggle_controls(),
+                    TopAction::TogglePresets => self.layout.toggle_presets(),
+                    TopAction::ResetLayout => {
+                        self.layout.reset();
+                        // New panel ids forget egui's remembered drag width, so
+                        // the default widths really apply.
+                        self.panel_generation = self.panel_generation.wrapping_add(1);
+                    }
+                    TopAction::ResetCamera => {
+                        self.orbit = OrbitCamera::default();
+                        self.camera = Camera::default();
+                        self.presets.clear_active();
+                    }
+                    TopAction::ToggleHelp => self.layout.toggle_help(),
+                    // The top bar already recorded the screenshot request; the
+                    // capture happens in the viewport where the rect is known.
+                    TopAction::Screenshot => {}
+                }
+            }
+        });
+        if style_changed {
+            style_panel::apply(ui.ctx(), &self.style);
+        }
+
+        // Formula bar below the menu row: live edits, the field-preset
+        // ComboBox and the 2D/3D toggle. Every edit goes through a viewmodel
+        // setter, which owns parsing, clamping and the dirty flag.
         egui::Panel::top("formula_bar").show(ui, |ui| {
             crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
         });
 
-        // Left sidebar: every scene knob, handed to the viewmodel setters
-        // once per frame (the setters own clamping and the dirty flag). Shown
-        // before the rebuild below so a control edit is reflected in this
-        // frame's snapshot and in the status-bar count.
-        egui::Panel::left("sidebar")
-            .resizable(true)
-            .min_size(220.0)
-            .max_size(420.0)
-            .show(ui, |ui| {
-                // Style chrome lives at the top: it is UI config, not a field
-                // knob, so it does not route through the viewmodel. A change
-                // re-applies immediately so the rest of this frame restyles.
-                if crate::ui::style_panel::show(ui, &mut self.style) {
-                    crate::ui::style_panel::apply(ui.ctx(), &self.style);
-                }
-                crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+        // Left Controls panel, or its collapsed rail. The panel is shown
+        // before the scene rebuild below so a control edit is reflected in this
+        // frame's snapshot and status-bar count. Its width is remembered in the
+        // layout record and restored on the next launch.
+        if self.layout.controls_expanded {
+            let mut collapse = false;
+            let response = egui::Panel::left(("controls_panel", self.panel_generation))
+                .resizable(true)
+                .default_size(self.layout.controls_width)
+                .min_size(layout::MIN_PANEL_WIDTH)
+                .max_size(layout::MAX_PANEL_WIDTH)
+                .show(ui, |ui| {
+                    collapse = collapse_button(ui, layout::RailSide::Left, top_bar::CONTROLS_SHORTCUT);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+                    });
+                });
+            self.layout.controls_width = layout::clamp_width(
+                response.response.rect.width(),
+                layout::DEFAULT_CONTROLS_WIDTH,
+            );
+            if collapse {
+                self.layout.controls_expanded = false;
+            }
+        } else {
+            egui::Panel::left(("controls_rail", self.panel_generation))
+                .exact_size(layout::RAIL_WIDTH)
+                .show(ui, |ui| {
+                    if layout::rail(
+                        ui,
+                        layout::RailSide::Left,
+                        "Controls",
+                        top_bar::CONTROLS_SHORTCUT,
+                    ) {
+                        self.layout.controls_expanded = true;
+                    }
+                });
+        }
 
-                // Screenshot export sits at the sidebar's bottom: the button
-                // only records the request; the capture happens in the
-                // viewport, where this frame's rect and camera are known.
-                ui.separator();
-                self.screenshot.ui(ui);
-            });
+        // Right Presets panel, or its rail; same pin/collapse contract. The
+        // preset record's camera mirrors the live 2D view (target + zoom), so
+        // "Save current view" captures what is on screen; loading a preset
+        // hands its camera back and moves the orbit target/zoom.
+        self.camera.position = [self.orbit.target.x, self.orbit.target.y];
+        self.camera.scale = self.orbit.ortho_zoom;
+        if self.layout.presets_expanded {
+            let mut collapse = false;
+            let response = egui::Panel::right(("presets_panel", self.panel_generation))
+                .resizable(true)
+                .default_size(self.layout.presets_width)
+                .min_size(layout::MIN_PANEL_WIDTH)
+                .max_size(layout::MAX_PANEL_WIDTH)
+                .show(ui, |ui| {
+                    collapse = collapse_button(ui, layout::RailSide::Right, top_bar::PRESETS_SHORTCUT);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.presets.show(ui, &mut self.camera);
+                    });
+                });
+            self.layout.presets_width = layout::clamp_width(
+                response.response.rect.width(),
+                layout::DEFAULT_PRESETS_WIDTH,
+            );
+            if collapse {
+                self.layout.presets_expanded = false;
+            }
+        } else {
+            egui::Panel::right(("presets_rail", self.panel_generation))
+                .exact_size(layout::RAIL_WIDTH)
+                .show(ui, |ui| {
+                    if layout::rail(
+                        ui,
+                        layout::RailSide::Right,
+                        "Presets",
+                        top_bar::PRESETS_SHORTCUT,
+                    ) {
+                        self.layout.presets_expanded = true;
+                    }
+                });
+        }
+        if let Some(applied) = self.presets.take_applied() {
+            self.orbit.target.x = applied.position[0];
+            self.orbit.target.y = applied.position[1];
+            self.orbit.ortho_zoom = applied
+                .scale
+                .clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
+        }
 
         // Rebuild the scene only when a setter marked the state dirty. The
         // app keeps owning the backdrop lines: fresh snapshots arrive on top
@@ -285,18 +433,10 @@ impl eframe::App for VfApp {
             crate::ui::status_bar::show(ui, &self.status);
         });
 
-        // Presets panel on the right.
-        egui::Panel::right("presets")
-            .resizable(true)
-            .min_size(200.0)
-            .max_size(400.0)
-            .show(ui, |ui| {
-                self.presets.show(ui, &mut self.camera);
-            });
-
         // Central viewport: the wgpu field renderer, driven by the same state.
         egui::CentralPanel::default_margins().show(ui, |ui| {
             let rect = ui.max_rect().shrink(2.0);
+            self.last_viewport_rect = Some(rect);
             let Some(render_state) = frame.wgpu_render_state() else {
                 ui.painter().rect_filled(rect, 8.0, egui::Color32::from_rgb(30, 33, 41));
                 return;
@@ -311,15 +451,56 @@ impl eframe::App for VfApp {
             }
 
             // Camera gestures feed the seam's pure camera action: a left-drag
-            // orbits in 3D mode only (2D keeps its fixed front view), and a
-            // ctrl-scroll or pinch zoom factor zooms in both (the camera clamps
-            // it). The response also senses clicks, so a press+release without
-            // dragging seeds the flow (egui only reports `clicked` when the
-            // gesture never became a drag, so orbiting/panning is untouched).
+            // orbits in 3D or pans in 2D, a right/middle-drag pans the orbit
+            // target, and the wheel/pinch factor zooms both views (the camera
+            // clamps it). The response also senses clicks, so a press+release
+            // without dragging seeds the flow (egui only reports `clicked` when
+            // the gesture never became a drag, so orbiting/panning is
+            // untouched).
             let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
-            let drag = resp.drag_delta() * ORBIT_SENSITIVITY;
-            let zoom = ui.ctx().input(|i| i.zoom_delta());
-            self.orbit = apply_camera_input(self.orbit, self.state.mode_3d, drag.x, drag.y, zoom);
+            let pointer_delta = resp.drag_delta();
+            let pointer_delta = Vec2::new(pointer_delta.x, pointer_delta.y);
+            let (drag, pan) = if resp.dragged_by(egui::PointerButton::Primary) {
+                (pointer_delta, Vec2::ZERO)
+            } else if resp.dragged_by(egui::PointerButton::Secondary)
+                || resp.dragged_by(egui::PointerButton::Middle)
+            {
+                (Vec2::ZERO, pointer_delta)
+            } else {
+                (Vec2::ZERO, Vec2::ZERO)
+            };
+            let zoom = if resp.hovered() || resp.dragged() {
+                crate::ui::top_bar::wheel_zoom(ui.ctx())
+            } else {
+                1.0
+            };
+            self.orbit = apply_camera_input(
+                self.orbit,
+                self.state.mode_3d,
+                self.state.plane_size(),
+                ViewGesture {
+                    drag,
+                    pan,
+                    zoom,
+                    viewport_height: rect.height(),
+                },
+            );
+
+            // Cursor feedback: grab/grabbing for the orbit, move for panning.
+            if resp.hovered() || resp.dragged() {
+                let icon = if self.state.mode_3d {
+                    if resp.dragged() {
+                        egui::CursorIcon::Grabbing
+                    } else {
+                        egui::CursorIcon::Grab
+                    }
+                } else if resp.dragged() {
+                    egui::CursorIcon::Grabbing
+                } else {
+                    egui::CursorIcon::Move
+                };
+                ui.ctx().set_cursor_icon(icon);
+            }
 
             let width = rect.width().max(1.0);
             let height = rect.height().max(1.0);
@@ -457,12 +638,29 @@ impl eframe::App for VfApp {
             );
             ui.painter().add(callback);
         });
+
+        // Help overlay last, so it paints over the viewport (and the field
+        // callback). Anchored at the viewport's bottom-left corner; the ×
+        // persists the hidden state through the layout record.
+        if self.layout.help_visible
+            && let Some(rect) = self.last_viewport_rect
+        {
+            let anchor = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
+            if crate::ui::help_overlay::show(ui.ctx(), anchor, self.state.mode_3d) {
+                self.layout.help_visible = false;
+            }
+        }
     }
 
-    /// Persist the UI-chrome style record under eframe's app key. Deliberately
-    /// narrow (ticket 07 ruling): only the style record is stored here, so a
-    /// later settings envelope can extend it without touching this contract.
+    /// Persist the settings envelope (style + layout + view state) under
+    /// eframe's app key. Camera state is intentionally absent: presets are the
+    /// way to restore a viewpoint.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        style_panel::save(storage, &self.style);
+        let settings = AppSettings {
+            style: self.style.clone(),
+            layout: self.layout.clone(),
+            view: ViewRecord::capture(&self.state, &self.sidebar),
+        };
+        persistence::save(storage, &settings);
     }
 }

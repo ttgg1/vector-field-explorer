@@ -16,7 +16,7 @@ use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_gr
 
 use std::sync::Arc;
 
-use glam::{UVec3, Vec3};
+use glam::{UVec3, Vec2, Vec3};
 
 /// Number of samples along one axis of a 2D grid.
 pub const DEFAULT_DENSITY_2D: u32 = 24;
@@ -468,15 +468,88 @@ pub fn domain_between(min: Vec3, max: Vec3) -> Domain {
     )
 }
 
-/// Pure camera action for an input event: in 3D mode a left-drag delta `(dx, dy)`
-/// orbits and a scroll `zoom` factor zooms (the camera clamps it); in 2D mode
-/// gestures change nothing at all, keeping the fixed orthographic front view.
-/// Returns the new camera.
-pub fn apply_camera_input(camera: OrbitCamera, mode_3d: bool, dx: f32, dy: f32, zoom: f32) -> OrbitCamera {
+/// Radians of orbit per point of left-drag in the 3D view.
+pub const ORBIT_SENSITIVITY: f32 = 0.005;
+
+/// One frame of viewport mouse input, in logical points and egui's zoom
+/// convention (`zoom > 1` means the user asked to get closer). `drag` is the
+/// primary-button delta, `pan` the secondary/middle-button delta; each mode
+/// maps them onto its own navigation (see [`apply_camera_input`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewGesture {
+    /// Primary-button drag delta, points (3D: orbit; 2D: pan).
+    pub drag: Vec2,
+    /// Secondary/middle-button drag delta, points (pans both views).
+    pub pan: Vec2,
+    /// Wheel/pinch zoom factor; 1.0 is no change.
+    pub zoom: f32,
+    /// Viewport height in points, used to scale a pan like the picture
+    /// under the pointer.
+    pub viewport_height: f32,
+}
+
+impl Default for ViewGesture {
+    fn default() -> Self {
+        Self {
+            drag: Vec2::ZERO,
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+            viewport_height: 1.0,
+        }
+    }
+}
+
+/// Pure camera action for one frame of mouse input.
+///
+/// 3D: a primary drag orbits ([`ORBIT_SENSITIVITY`] rad/point), a secondary or
+/// middle drag pans the orbit target in the view plane, and the wheel/pinch
+/// factor scales the orbit distance (clamped by the camera).
+///
+/// 2D: a drag pans the ortho view; the wheel/pinch factor multiplies the ortho
+/// zoom (clamped). Panning moves the target exactly with the pointer: one
+/// screen point of drag is one screen point of world motion at the current
+/// visible height, so the scene sticks to the cursor.
+///
+/// Ticket 14 supersedes ticket 02's "2D ignores gestures" rule: the 2D view is
+/// now navigable. Returns the new camera.
+pub fn apply_camera_input(
+    camera: OrbitCamera,
+    mode_3d: bool,
+    plane_size: f32,
+    gesture: ViewGesture,
+) -> OrbitCamera {
     let mut camera = camera;
+    let zoom = if gesture.zoom.is_finite() && gesture.zoom > 0.0 {
+        gesture.zoom
+    } else {
+        1.0
+    };
+    let height = if gesture.viewport_height.is_finite() && gesture.viewport_height > 0.0 {
+        gesture.viewport_height
+    } else {
+        1.0
+    };
+    let plane_size = if plane_size.is_finite() && plane_size > 0.0 {
+        plane_size
+    } else {
+        1.0
+    };
+
     if mode_3d {
-        camera.orbit(dx, dy);
-        camera.zoom(zoom);
+        camera.orbit(gesture.drag.x * ORBIT_SENSITIVITY, gesture.drag.y * ORBIT_SENSITIVITY);
+        // egui reports >1 for "closer"; the orbit camera's zoom is a distance
+        // multiplier, so invert it.
+        camera.zoom(1.0 / zoom);
+        let world_per_point =
+            2.0 * camera.distance * (camera.fov_y * 0.5).tan() / height;
+        camera.pan(-gesture.pan.x * world_per_point, gesture.pan.y * world_per_point);
+    } else {
+        let visible_height = plane_size / camera.ortho_zoom.max(f32::MIN_POSITIVE);
+        let world_per_point = visible_height / height;
+        // Both buttons pan in 2D: a left drag is the 2D navigation gesture.
+        let pan = gesture.drag + gesture.pan;
+        camera.pan(-pan.x * world_per_point, pan.y * world_per_point);
+        camera.zoom_2d(zoom);
     }
     camera
 }
@@ -486,7 +559,7 @@ mod tests {
     use super::*;
     use crate::camera::OrbitCamera;
     use crate::colormap::Colormap;
-    use glam::Vec3;
+    use glam::{Vec2, Vec3};
 
     #[test]
     fn new_state_starts_at_default_density() {
@@ -647,24 +720,134 @@ mod tests {
         assert_eq!(s.view_options().color_range, Some((-3.0, 2.0)));
     }
 
-    #[test]
-    fn camera_input_orbits_and_zooms_only_in_3d() {
-        let flat = apply_camera_input(OrbitCamera::default(), false, 0.5, 0.3, 0.5);
-        let home = OrbitCamera::default();
-        assert!((flat.yaw - home.yaw).abs() < 1e-6, "2D mode ignores drag deltas");
-        assert!((flat.pitch - home.pitch).abs() < 1e-6);
-        assert!(
-            (flat.distance - home.distance).abs() < 1e-6,
-            "2D mode ignores scroll zoom too",
-        );
-        let zoomed = apply_camera_input(OrbitCamera::default(), true, 0.0, 0.0, 0.5);
-        assert!((zoomed.distance - 1.6).abs() < 1e-6, "3D mode applies the scroll zoom");
-        let cube = apply_camera_input(OrbitCamera::default(), true, 0.5, 0.3, 1.0);
-        assert!((cube.yaw - (0.8 - 0.5)).abs() < 1e-6, "3D mode orbits by the drag delta");
-        assert!((cube.pitch - (0.9 - 0.3)).abs() < 1e-6);
-        let pulled = apply_camera_input(OrbitCamera::default(), true, 0.0, 0.0, 100.0);
-        assert!((pulled.distance - 20.0).abs() < 1e-6, "zoom clamp stays at 20");
+    fn gesture(drag: Vec2, pan: Vec2, zoom: f32, viewport_height: f32) -> ViewGesture {
+        ViewGesture { drag, pan, zoom, viewport_height }
     }
+
+    #[test]
+    fn camera_input_orbits_zooms_and_pans_per_mode() {
+        let home = OrbitCamera::default();
+        // 3D: a primary drag orbits, exactly as ticket 02 pinned it.
+        let cube = apply_camera_input(
+            home,
+            true,
+            2.7,
+            gesture(Vec2::new(100.0, 60.0), Vec2::ZERO, 1.0, 600.0),
+        );
+        assert!((cube.yaw - (0.8 - 0.5)).abs() < 1e-6, "3D drag orbits by the delta");
+        assert!((cube.pitch - (0.9 - 0.3)).abs() < 1e-6);
+        // 3D wheel in: egui's zoom 2.0 halves the orbit distance.
+        let zoomed = apply_camera_input(home, true, 2.7, gesture(Vec2::ZERO, Vec2::ZERO, 2.0, 600.0));
+        assert!((zoomed.distance - 1.6).abs() < 1e-6, "3D mode applies the wheel zoom");
+        let pulled = apply_camera_input(home, true, 2.7, gesture(Vec2::ZERO, Vec2::ZERO, 0.01, 600.0));
+        assert!((pulled.distance - 20.0).abs() < 1e-6, "zoom clamp stays at 20");
+
+        // 2D: a primary drag pans instead of orbiting (ticket 14 supersedes
+        // ticket 02's fixed 2D view) and the wheel zooms the ortho view.
+        let flat = apply_camera_input(
+            home,
+            false,
+            2.7,
+            gesture(Vec2::new(100.0, 40.0), Vec2::ZERO, 1.0, 600.0),
+        );
+        assert!((flat.yaw - home.yaw).abs() < 1e-6, "2D drag never orbits");
+        assert!((flat.pitch - home.pitch).abs() < 1e-6);
+        assert!((flat.distance - home.distance).abs() < 1e-6, "2D drag never moves the 3D eye");
+        assert!(flat.target != home.target, "2D drag pans the ortho target");
+        let flat_zoom = apply_camera_input(home, false, 2.7, gesture(Vec2::ZERO, Vec2::ZERO, 2.0, 600.0));
+        assert!((flat_zoom.ortho_zoom - 2.0).abs() < 1e-6, "2D wheel gets closer");
+        assert!(flat_zoom.target == home.target, "2D zoom keeps the target put");
+        assert!((flat_zoom.distance - home.distance).abs() < 1e-6, "2D zoom keeps the 3D eye put");
+    }
+
+    #[test]
+    fn two_d_pan_follows_the_pointer_one_to_one() {
+        let home = OrbitCamera::default();
+        let (right, up) = home.view_basis();
+        // Visible height 2.0 over a 200-point viewport → 0.01 world per point.
+        let right_drag = apply_camera_input(
+            home,
+            false,
+            2.0,
+            gesture(Vec2::new(100.0, 0.0), Vec2::ZERO, 1.0, 200.0),
+        );
+        let delta = right_drag.target - home.target;
+        assert!((delta.dot(right) + 1.0).abs() < 1e-4, "dragging right slides the scene right");
+        assert!(delta.dot(up).abs() < 1e-4, "a horizontal drag stays horizontal");
+        let down_drag = apply_camera_input(
+            home,
+            false,
+            2.0,
+            gesture(Vec2::new(0.0, 100.0), Vec2::ZERO, 1.0, 200.0),
+        );
+        let delta = down_drag.target - home.target;
+        assert!((delta.dot(up) - 1.0).abs() < 1e-4, "dragging down slides the scene down");
+    }
+
+    #[test]
+    fn two_d_pan_scale_follows_the_zoom() {
+        let mut zoomed = OrbitCamera::default();
+        zoomed.zoom_2d(2.0);
+        let (right, _) = zoomed.view_basis();
+        // 2x closer shows half the world: the same drag moves half as far.
+        let panned = apply_camera_input(
+            zoomed,
+            false,
+            2.0,
+            gesture(Vec2::new(100.0, 0.0), Vec2::ZERO, 1.0, 200.0),
+        );
+        let delta = (panned.target - zoomed.target).dot(right).abs();
+        assert!((delta - 0.5).abs() < 1e-4, "pan scale halves at 2x zoom: got {delta}");
+    }
+
+    #[test]
+    fn three_d_right_drag_pans_without_orbiting() {
+        let home = OrbitCamera::default();
+        let (right, up) = home.view_basis();
+        let forward = (home.target - home.position()).normalize();
+        let panned = apply_camera_input(
+            home,
+            true,
+            2.7,
+            gesture(Vec2::ZERO, Vec2::new(100.0, 0.0), 1.0, 600.0),
+        );
+        assert!((panned.yaw - home.yaw).abs() < 1e-6, "a pan never orbits");
+        assert!((panned.pitch - home.pitch).abs() < 1e-6);
+        assert!((panned.distance - home.distance).abs() < 1e-6, "a pan never zooms");
+        let delta = panned.target - home.target;
+        assert!(delta.dot(right) < 0.0, "dragging right slides the scene right");
+        assert!(delta.dot(up).abs() < 1e-4, "a horizontal pan stays horizontal");
+        assert!(delta.dot(forward).abs() < 1e-4, "the pan stays in the view plane");
+        let up_panned = apply_camera_input(
+            home,
+            true,
+            2.7,
+            gesture(Vec2::ZERO, Vec2::new(0.0, 100.0), 1.0, 600.0),
+        );
+        assert!((up_panned.target - home.target).dot(up) > 0.0, "dragging down slides the scene down");
+    }
+
+    #[test]
+    fn gesture_zoom_and_pan_stay_bounded_with_nonsense_input() {
+        let home = OrbitCamera::default();
+        let flat = apply_camera_input(home, false, 2.7, gesture(Vec2::ZERO, Vec2::ZERO, 1e9, 600.0));
+        assert!((flat.ortho_zoom - OrbitCamera::MAX_ORTHO_ZOOM).abs() < 1e-6, "2D zoom-in clamps");
+        let flat_out = apply_camera_input(home, false, 2.7, gesture(Vec2::ZERO, Vec2::ZERO, 1e-9, 600.0));
+        assert!((flat_out.ortho_zoom - OrbitCamera::MIN_ORTHO_ZOOM).abs() < 1e-6, "2D zoom-out clamps");
+        for nonsense in [f32::NAN, 0.0, -2.0, f32::INFINITY] {
+            let same = apply_camera_input(home, true, 2.7, gesture(Vec2::ZERO, Vec2::ZERO, nonsense, 600.0));
+            assert_eq!(same, home, "a nonsense zoom factor ({nonsense}) leaves the camera alone");
+        }
+        // A degenerate viewport height must not blow the pan up to infinity.
+        let degenerate = apply_camera_input(
+            home,
+            false,
+            2.7,
+            gesture(Vec2::new(10.0, 10.0), Vec2::ZERO, 1.0, 0.0),
+        );
+        assert!(degenerate.target.is_finite(), "pan stays finite when the rect is degenerate");
+    }
+
     #[test]
     fn density_clamps_to_dimension_being_sampled() {
         let mut s = State::new(false);

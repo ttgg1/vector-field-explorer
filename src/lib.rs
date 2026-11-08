@@ -6,6 +6,7 @@ pub mod export;
 pub mod field;
 pub mod i18n;
 pub mod particles;
+pub mod persistence;
 pub mod presets;
 pub mod render;
 pub mod renderer;
@@ -14,6 +15,7 @@ pub mod screenshot;
 pub mod streamlines;
 pub mod ui;
 pub mod viewmodel;
+pub mod window;
 
 // Re-export key types for tests and external use
 pub use app::VfApp;

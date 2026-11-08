@@ -4,7 +4,7 @@
 //! the selected colormap; out-of-range magnitudes clamp to the ramp ends.
 
 /// Colormaps available for viewing vector field magnitudes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Colormap {
     /// Perceptually uniform viridis ramp (dark purple to yellow).
     Viridis,

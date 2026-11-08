@@ -1,5 +1,8 @@
 pub mod formula_bar;
+pub mod help_overlay;
+pub mod layout;
 pub mod presets;
 pub mod sidebar;
 pub mod status_bar;
 pub mod style_panel;
+pub mod top_bar;

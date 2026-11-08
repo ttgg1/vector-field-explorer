@@ -577,7 +577,7 @@ mod tests {
         let domain = Domain::default();
         let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
         let opts = StreamlineOpts { max_len: 200, step_scale: 0.02, both_directions: true };
-        let wide = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: 3.2, target: Vec3::ZERO, fov_y: 1.5 };
+        let wide = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: 3.2, target: Vec3::ZERO, fov_y: 1.5, ..OrbitCamera::default() };
         let seed = ray_seed(wide, &domain, 1.0, Vec2::new(1.0, -1.0)).expect("a missed click describes a point");
         assert!(seed.is_finite(), "a missed click describes a finite point: {seed:?}");
         assert!(!inside(&domain, seed), "the shell fallback sits off the domain: {seed:?}");
@@ -593,11 +593,11 @@ mod tests {
         // distance) yields no seed rather than a NaN point the renderer would
         // choke on.
         let domain = Domain::default();
-        let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::INFINITY, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::INFINITY, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
         assert!(ray_seed(broken, &domain, 1.0, Vec2::ZERO).is_none(), "an infinite orbit gives no seed");
-        let unusable = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        let unusable = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
         assert!(ray_seed(unusable, &domain, 1.0, Vec2::ZERO).is_none(), "a NaN orbit gives no seed");
-        let squashed = OrbitCamera { yaw: 0.8, pitch: 1.55, distance: 0.5, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        let squashed = OrbitCamera { yaw: 0.8, pitch: 1.55, distance: 0.5, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
         assert!(ray_seed(squashed, &domain, 1.0, Vec2::ZERO).is_some(), "a pole-on orbit still describes a ray");
     }
 
@@ -660,7 +660,7 @@ mod tests {
         // A broken orbit describes no usable ray in either mode: no seed, not
         // a NaN point the tracer and renderer would choke on.
         let domain = Domain::default();
-        let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians() };
+        let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
         assert!(click_seed(broken, &domain, 1.0, Vec2::ZERO, None).is_none(), "3D: no seed from a broken camera");
         assert!(click_seed(broken, &domain, 1.0, Vec2::ZERO, Some(2.7)).is_none(), "2D: no seed from a broken camera");
         assert!(click_seed(OrbitCamera::default(), &domain, 1.0, Vec2::ZERO, Some(0.0)).is_some(),

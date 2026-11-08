@@ -66,7 +66,7 @@ fn test_presets_survive_restart() {
     drop(panel);
 
     // Simulate an application restart: a fresh panel pointing at the same directory.
-    let fresh = panel_in(dir.path());
+    let mut fresh = panel_in(dir.path());
     let mut camera = Camera::default();
     assert!(fresh.load("home", &mut camera), "preset still present after restart");
     assert_eq!(camera.position, [1.0, 2.0]);

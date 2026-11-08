@@ -10,7 +10,8 @@
 //!   smoke gate because `cargo test` never creates a device;
 //! - the save dialog and the file write run on a spawned thread so the egui
 //!   frame never blocks on native UI; completion arrives over a channel and
-//!   shows as a toast in the sidebar's Export block.
+//!   shows as a toast in the top menu bar (ticket 14 moved it out of the
+//!   sidebar).
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -327,29 +328,18 @@ impl Screenshot {
         self.toast.as_ref().map(|toast| toast.text.as_str())
     }
 
-    /// The sidebar's Export block: the capture button plus the completion
-    /// toast underneath it.
-    pub fn ui(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Export").default_open(true).show(ui, |ui| {
-            let clicked = ui
-                .button("Screenshot (PNG)")
-                .on_hover_text("Save the viewport exactly as it looks now")
-                .clicked();
-            if clicked {
-                self.request();
+    /// Draw just the completion toast (the top menu bar owns the button that
+    /// requests a capture). Keeps repainting while a toast is up so it
+    /// disappears on time even when nothing else asks for frames.
+    pub fn toast(&self, ui: &mut egui::Ui) {
+        if let Some(toast) = &self.toast {
+            if toast.failed {
+                ui.colored_label(egui::Color32::from_rgb(230, 70, 70), toast.text.clone());
+            } else {
+                ui.weak(toast.text.clone());
             }
-            if let Some(toast) = &self.toast {
-                if toast.failed {
-                    ui.colored_label(egui::Color32::from_rgb(230, 70, 70), toast.text.clone());
-                } else {
-                    ui.weak(toast.text.clone());
-                }
-                // Keep repainting while a toast is up so it disappears on time
-                // even when nothing else asks for frames.
-                ui.ctx()
-                    .request_repaint_after(Duration::from_millis(250));
-            }
-        });
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
     }
 }
 

@@ -2,13 +2,14 @@
 //! and font size) that restyle every widget, plus persistence of that record
 //! through eframe's app-state storage.
 //!
-//! Scope ruling (ledger 2026-11-08): "style" is UI chrome per
-//! `.scratch/field-viewport/spec.md` L32-33/L98-101 — it is *not* the field
-//! knobs (colormap/density/arrow scale, ticket 03) and not part of the
-//! viewmodel `State`. Only this record is persisted (`eframe::APP_KEY`);
-//! formula/mode persistence stays out of scope. A corrupt or absent stored
-//! record falls back to the defaults: cosmetic UI state must never brick
-//! startup (camera presets stay fail-fast for data integrity).
+//! Scope note (updated for ticket 14): "style" is still only UI chrome — the
+//! field knobs live in the viewmodel `State`. Ticket 14 wraps this record in
+//! the app's [`crate::persistence::AppSettings`] envelope under the same
+//! eframe key, alongside layout and view state; [`load`]/[`save`] here remain
+//! the style-only helpers (used by tests and the migration fallback). A
+//! corrupt or absent record still falls back to the defaults: cosmetic UI
+//! state must never brick startup (camera presets stay fail-fast for data
+//! integrity).
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -108,36 +109,33 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
     });
 }
 
-/// Draw the collapsible "Style" section. Returns `true` when a control moved
-/// so the caller can re-apply the same frame.
-pub fn show(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
+/// Draw the bare appearance controls, without a collapsing header, for the
+/// Settings popover (ticket 14 moved them out of the sidebar). Returns `true`
+/// when a control moved so the caller can re-apply the same frame.
+pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
     let mut changed = false;
-    egui::CollapsingHeader::new("Style")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Theme");
-                changed |= ui
-                    .selectable_value(&mut style.theme_dark, false, "Light")
-                    .changed();
-                changed |= ui
-                    .selectable_value(&mut style.theme_dark, true, "Dark")
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Accent");
-                changed |= ui.color_edit_button_srgba(&mut style.accent).changed();
-            });
-            changed |= ui
-                .add(egui::Slider::new(&mut style.rounding, 0.0..=20.0).text("Rounding"))
-                .changed();
-            changed |= ui
-                .add(egui::Slider::new(&mut style.spacing, 2.0..=24.0).text("Spacing"))
-                .changed();
-            changed |= ui
-                .add(egui::Slider::new(&mut style.font_size, 8.0..=24.0).text("Font size"))
-                .changed();
-        });
+    ui.horizontal(|ui| {
+        ui.label("Theme");
+        changed |= ui
+            .selectable_value(&mut style.theme_dark, false, "Light")
+            .changed();
+        changed |= ui
+            .selectable_value(&mut style.theme_dark, true, "Dark")
+            .changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("Accent");
+        changed |= ui.color_edit_button_srgba(&mut style.accent).changed();
+    });
+    changed |= ui
+        .add(egui::Slider::new(&mut style.rounding, 0.0..=20.0).text("Rounding"))
+        .changed();
+    changed |= ui
+        .add(egui::Slider::new(&mut style.spacing, 2.0..=24.0).text("Spacing"))
+        .changed();
+    changed |= ui
+        .add(egui::Slider::new(&mut style.font_size, 8.0..=24.0).text("Font size"))
+        .changed();
     changed
 }
 
