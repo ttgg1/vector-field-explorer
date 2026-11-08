@@ -1,27 +1,22 @@
-//! The top menu bar: View / Settings / Help plus the screenshot action at the
-//! right end (ticket 14). It replaces the old style + export blocks that used
-//! to live in the left sidebar: appearance moved into a Settings popover and
-//! the screenshot button now sits in this row.
+//! Conventional top menu bar (ticket 15): File / Edit / View / Settings / Help
+//! plus the screenshot action at the right end. It replaces ticket 14's
+//! View/Settings/Help button row.
 //!
-//! The bar only reports what the user asked for ([`TopAction`]); the app owns
-//! the state each action mutates, so every wiring decision stays in one place.
+//! The bar renders [`crate::ui::menu::MENUS`] and reports the picked
+//! [`MenuAction`]; the app applies it through `menu::apply_action`, so menu
+//! behaviour is testable without a window. The Settings popover and the About
+//! dialog are the only stateful surfaces left here — they need egui anchoring
+//! and therefore cannot live in the pure seam.
 
 use eframe::egui;
+
+use crate::screenshot::Screenshot;
+use crate::ui::menu::{self, MenuAction, MENUS};
+use crate::ui::style_panel::{self, AppStyle};
 
 /// One point of wheel scroll zooms by `exp(rate * points)`: about 10.5% per
 /// typical 50-point notch, and the reciprocal when scrolling the other way.
 pub const WHEEL_ZOOM_RATE: f32 = 0.002;
-
-/// What the user picked from the top bar this frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TopAction {
-    ToggleControls,
-    TogglePresets,
-    ResetLayout,
-    ResetCamera,
-    ToggleHelp,
-    Screenshot,
-}
 
 /// The pure part of the wheel zoom: map wheel points to a multiplicative zoom
 /// factor (`> 1` = closer). A negative delta zooms out, and a nonsense delta
@@ -50,93 +45,87 @@ pub fn wheel_zoom(ctx: &egui::Context) -> f32 {
     })
 }
 
-/// Keyboard shortcut labels shown in the View menu and the rail tooltips.
-pub const CONTROLS_SHORTCUT: &str = "Ctrl+B";
-/// Keyboard shortcut for the Presets panel.
-pub const PRESETS_SHORTCUT: &str = "Ctrl+P";
-
-/// Draw the menu row. Returns the action the user picked (if any) and whether
-/// the Settings popover changed the appearance record (the app re-applies it
-/// in the same frame).
+/// Draw the menu bar. Returns the action the user picked (if any) and whether
+/// the appearance popover changed the style record (the app re-applies it in
+/// the same frame). `settings_open` is the popover's visibility flag, so the
+/// Settings > Appearance… item can open it and Esc/outside clicks close it.
 pub fn show(
     ui: &mut egui::Ui,
-    layout: &mut crate::ui::layout::LayoutState,
-    style: &mut crate::ui::style_panel::AppStyle,
-    screenshot: &mut crate::screenshot::Screenshot,
-) -> (Option<TopAction>, bool) {
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    settings_open: &mut bool,
+) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
+    let mut settings_button = None;
 
-    ui.horizontal(|ui| {
-        ui.menu_button("View", |ui| {
-            if ui
-                .button(format!("Controls panel ({CONTROLS_SHORTCUT})"))
-                .clicked()
-            {
-                action = Some(TopAction::ToggleControls);
-                ui.close();
+    egui::MenuBar::new().ui(ui, |ui| {
+        for menu in MENUS {
+            let response = ui.menu_button(menu.title, |ui| {
+                for item in menu.items {
+                    let mut button = egui::Button::new(item.label);
+                    if let Some(label) = menu::shortcut_label(item.action) {
+                        button = button.shortcut_text(label);
+                    }
+                    if ui.add(button).clicked() {
+                        action = Some(item.action);
+                        // Every item is a one-shot command: close the dropdown
+                        // so the next click lands on the app, not the menu.
+                        ui.close();
+                    }
+                }
+            });
+            if menu.title == menu::SETTINGS_TITLE {
+                // The appearance popover anchors under the Settings title.
+                settings_button = Some(response.response);
             }
-            if ui
-                .button(format!("Presets panel ({PRESETS_SHORTCUT})"))
-                .clicked()
-            {
-                action = Some(TopAction::TogglePresets);
-                ui.close();
-            }
-            ui.separator();
-            if ui.button("Reset layout").clicked() {
-                action = Some(TopAction::ResetLayout);
-                ui.close();
-            }
-            if ui
-                .button("Reset camera")
-                .on_hover_text("Return the camera to its starting viewpoint")
-                .clicked()
-            {
-                action = Some(TopAction::ResetCamera);
-                ui.close();
-            }
-        });
-
-        // Non-modal popover: menu buttons are exactly that in egui, and the
-        // viewport stays visible while the appearance sliders move.
-        ui.menu_button("Settings", |ui| {
-            ui.label(egui::RichText::new("Appearance").strong());
-            style_changed |= crate::ui::style_panel::show_controls(ui, style);
-
-            ui.separator();
-            let mut help = layout.help_visible;
-            if ui.checkbox(&mut help, "Show help overlay").changed() {
-                layout.help_visible = help;
-            }
-            if ui.button("Reset layout").clicked() {
-                action = Some(TopAction::ResetLayout);
-                ui.close();
-            }
-        });
-
-        if ui
-            .selectable_label(layout.help_visible, "Help")
-            .on_hover_text("Show or hide the mouse/formula help overlay")
-            .clicked()
-        {
-            action = Some(TopAction::ToggleHelp);
         }
 
-        // Screenshot at the right end of the row; its completion toast sits
-        // just left of the button.
+        // The screenshot action lives at the right end of the bar and
+        // dispatches the same ExportScreenshot action as File > Export.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button("Screenshot")
-                .on_hover_text("Save the viewport exactly as it looks now")
-                .clicked()
-            {
-                action = Some(TopAction::Screenshot);
-                screenshot.request();
+            let tooltip = match menu::shortcut_label(MenuAction::ExportScreenshot) {
+                Some(label) => format!("Save the viewport exactly as it looks now ({label})"),
+                None => "Save the viewport exactly as it looks now".to_string(),
+            };
+            if ui.button("Screenshot").on_hover_text(tooltip).clicked() {
+                action = Some(MenuAction::ExportScreenshot);
             }
             screenshot.toast(ui);
         });
     });
 
+    if let Some(button) = settings_button {
+        egui::Popup::new(
+            button.id.with("appearance_popover"),
+            ui.ctx().clone(),
+            &button,
+            button.layer_id,
+        )
+        .anchor_widget(button.id)
+        .open_bool(settings_open)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_width(260.0);
+            ui.label(egui::RichText::new("Appearance").strong());
+            style_changed = style_panel::show_controls(ui, style);
+        });
+    }
+
     (action, style_changed)
+}
+
+/// The About dialog: name, package version, license and the repository link.
+/// `open` is the visibility flag; the window's × clears it.
+pub fn about_window(ctx: &egui::Context, open: &mut bool) {
+    egui::Window::new(format!("About {}", menu::ABOUT_NAME))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label(egui::RichText::new(menu::ABOUT_NAME).strong());
+            ui.label(format!("Version {}", menu::ABOUT_VERSION));
+            ui.label(format!("License: {}", menu::ABOUT_LICENSE));
+            ui.hyperlink_to(menu::ABOUT_URL, menu::ABOUT_URL);
+        });
 }

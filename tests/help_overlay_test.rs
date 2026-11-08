@@ -25,16 +25,19 @@ fn three_d_help_adds_orbit_and_the_right_drag_pan() {
 }
 
 #[test]
-fn both_modes_document_the_global_panel_shortcuts() {
-    // Review M-6: Ctrl+B/Ctrl+P fire even while the formula field has focus, so
-    // the help must say so rather than leaving it to surprise.
+fn both_modes_document_the_panel_shortcuts_and_their_text_field_rule() {
+    // Ticket 15 moved every shortcut into one table that stays inert while a
+    // text field has focus (Ctrl+Q is the only exception), so the help must
+    // describe the rule rather than the ticket-14 "even while typing" claim.
     for mode_3d in [false, true] {
         let text = help_lines(mode_3d).join("\n");
         assert!(text.contains("Ctrl+B"), "the Controls shortcut is documented: {text}");
         assert!(text.contains("Ctrl+P"), "the Presets shortcut is documented: {text}");
         assert!(
-            text.to_lowercase().contains("even while typing"),
-            "the help explains the shortcut is global: {text}",
+            text.contains("not while typing"),
+            "the help says shortcuts stay out of text fields: {text}",
         );
+        assert!(text.contains("Ctrl+Q"), "the quit shortcut is documented: {text}");
+        assert!(text.contains("F1"), "the help-overlay shortcut is documented: {text}");
     }
 }

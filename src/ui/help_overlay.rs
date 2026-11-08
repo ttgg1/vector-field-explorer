@@ -8,7 +8,8 @@
 use eframe::egui;
 
 /// The overlay's lines for the current mode. 2D lists the pan/zoom gestures;
-/// 3D adds orbit and the right-drag pan. Both end with the formula reminder.
+/// 3D adds orbit and the right-drag pan. Both add the formula reminder and the
+/// shortcut rule (which now excludes text fields except Ctrl+Q).
 pub fn help_lines(mode_3d: bool) -> &'static [&'static str] {
     if mode_3d {
         &[
@@ -17,7 +18,8 @@ pub fn help_lines(mode_3d: bool) -> &'static [&'static str] {
             "Wheel/pinch: zoom",
             "Click: seed streamlines",
             "Formula: (fx, fy, fz), e.g. (-y, x, 0.5)",
-            "Ctrl+B / Ctrl+P: toggle panels, even while typing",
+            "Ctrl+B / Ctrl+P: toggle panels (not while typing)",
+            "Ctrl+Q: quit; F1: toggle this help",
         ]
     } else {
         &[
@@ -25,7 +27,8 @@ pub fn help_lines(mode_3d: bool) -> &'static [&'static str] {
             "Wheel/pinch: zoom",
             "Click: seed streamlines",
             "Formula: (fx, fy), e.g. (-y, x)",
-            "Ctrl+B / Ctrl+P: toggle panels, even while typing",
+            "Ctrl+B / Ctrl+P: toggle panels (not while typing)",
+            "Ctrl+Q: quit; F1: toggle this help",
         ]
     }
 }

@@ -12,10 +12,11 @@ use crate::streamlines::click_seed;
 use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::layout::{self, LayoutState};
+use crate::ui::menu::{self, MenuAction};
 use crate::ui::presets::{PresetPanel, default_preset_dir};
 use crate::ui::sidebar::Controls;
 use crate::ui::style_panel::{self, AppStyle};
-use crate::ui::top_bar::{self, TopAction};
+use crate::ui::top_bar;
 use crate::viewmodel::{State, ViewGesture, apply_camera_input};
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
@@ -79,6 +80,10 @@ pub struct VfApp {
     /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
     /// forget their last dragged size, letting the default widths apply.
     panel_generation: u32,
+    /// Whether the Settings > Appearance… popover is up (ticket 15).
+    settings_open: bool,
+    /// Whether the Help > About dialog is up (ticket 15).
+    about_open: bool,
     /// The viewport rect from this frame (set in the central panel) so the help
     /// overlay can anchor to its bottom-left corner.
     last_viewport_rect: Option<egui::Rect>,
@@ -138,6 +143,8 @@ impl VfApp {
             style: settings.style,
             layout: settings.layout,
             panel_generation: 0,
+            settings_open: false,
+            about_open: false,
             last_viewport_rect: None,
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
@@ -152,6 +159,39 @@ impl VfApp {
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             screenshot: Screenshot::new(),
+        }
+    }
+
+    /// Apply one menu or shortcut action through the pure seam, then run the
+    /// side effect that needs the app (popover, capture, clipboard, quit).
+    /// Everything the seam can mutate goes in through [`menu::UiState`], so
+    /// there is no second copy of the layout, camera or controls records.
+    fn apply_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
+        let effect = menu::apply_action(
+            action,
+            &mut menu::UiState {
+                layout: &mut self.layout,
+                orbit: &mut self.orbit,
+                camera: &mut self.camera,
+                state: &mut self.state,
+                controls: &mut self.sidebar,
+            },
+        );
+        match effect {
+            menu::SideEffect::None => {}
+            menu::SideEffect::OpenSettings => self.settings_open = true,
+            menu::SideEffect::ShowAbout => self.about_open = true,
+            // The capture itself happens in the viewport, where this frame's
+            // rect and camera are known.
+            menu::SideEffect::Screenshot => self.screenshot.request(),
+            menu::SideEffect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            menu::SideEffect::CopyText(text) => ctx.copy_text(text),
+            menu::SideEffect::ResetLayout => {
+                // New panel ids forget egui's remembered drag width, so the
+                // default widths really apply.
+                self.panel_generation = self.panel_generation.wrapping_add(1);
+            }
+            menu::SideEffect::ResetCamera => self.presets.clear_active(),
         }
     }
 }
@@ -226,51 +266,28 @@ impl eframe::App for VfApp {
         // them up here so the toast reflects the latest attempt this frame.
         self.screenshot.tick(Instant::now());
 
-        // Keyboard toggles for the two panels (ticket 14). Consumed so a
-        // focused text field never receives them.
-        let (toggle_controls, toggle_presets) = ui.ctx().input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::B),
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::P),
-            )
-        });
-        if toggle_controls {
-            self.layout.toggle_controls();
-        }
-        if toggle_presets {
-            self.layout.toggle_presets();
+        // Menu shortcuts (ticket 15): one table in `ui::menu`, consumed before
+        // any widget so a focused text field never receives a key the menu
+        // owns. Ctrl+Q is the one global shortcut (it quits from anywhere);
+        // view state is already persisted, so there is no save prompt.
+        let ctx = ui.ctx().clone();
+        for action in menu::shortcut_actions(&ctx) {
+            self.apply_menu_action(action, &ctx);
         }
 
-        // Top menu bar: View / Settings / Help and the screenshot action.
+        // Top menu bar: File / Edit / View / Settings / Help and the screenshot
+        // action. The bar only reports the action; the app dispatches it.
         let mut style_changed = false;
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = top_bar::show(
                 ui,
-                &mut self.layout,
                 &mut self.style,
-                &mut self.screenshot,
+                &self.screenshot,
+                &mut self.settings_open,
             );
             style_changed = changed;
             if let Some(action) = action {
-                match action {
-                    TopAction::ToggleControls => self.layout.toggle_controls(),
-                    TopAction::TogglePresets => self.layout.toggle_presets(),
-                    TopAction::ResetLayout => {
-                        self.layout.reset();
-                        // New panel ids forget egui's remembered drag width, so
-                        // the default widths really apply.
-                        self.panel_generation = self.panel_generation.wrapping_add(1);
-                    }
-                    TopAction::ResetCamera => {
-                        self.orbit = OrbitCamera::default();
-                        self.camera = Camera::default();
-                        self.presets.clear_active();
-                    }
-                    TopAction::ToggleHelp => self.layout.toggle_help(),
-                    // The top bar already recorded the screenshot request; the
-                    // capture happens in the viewport where the rect is known.
-                    TopAction::Screenshot => {}
-                }
+                self.apply_menu_action(action, &ctx);
             }
         });
         if style_changed {
@@ -296,7 +313,7 @@ impl eframe::App for VfApp {
                 .min_size(layout::MIN_PANEL_WIDTH)
                 .max_size(layout::MAX_PANEL_WIDTH)
                 .show(ui, |ui| {
-                    collapse = collapse_button(ui, layout::RailSide::Left, top_bar::CONTROLS_SHORTCUT);
+                    collapse = collapse_button(ui, layout::RailSide::Left, menu::CONTROLS_SHORTCUT);
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
                     });
@@ -316,7 +333,7 @@ impl eframe::App for VfApp {
                         ui,
                         layout::RailSide::Left,
                         "Controls",
-                        top_bar::CONTROLS_SHORTCUT,
+                        menu::CONTROLS_SHORTCUT,
                     ) {
                         self.layout.controls_expanded = true;
                     }
@@ -337,7 +354,7 @@ impl eframe::App for VfApp {
                 .min_size(layout::MIN_PANEL_WIDTH)
                 .max_size(layout::MAX_PANEL_WIDTH)
                 .show(ui, |ui| {
-                    collapse = collapse_button(ui, layout::RailSide::Right, top_bar::PRESETS_SHORTCUT);
+                    collapse = collapse_button(ui, layout::RailSide::Right, menu::PRESETS_SHORTCUT);
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.presets.show(ui, &mut self.camera);
                     });
@@ -357,7 +374,7 @@ impl eframe::App for VfApp {
                         ui,
                         layout::RailSide::Right,
                         "Presets",
-                        top_bar::PRESETS_SHORTCUT,
+                        menu::PRESETS_SHORTCUT,
                     ) {
                         self.layout.presets_expanded = true;
                     }
@@ -677,6 +694,10 @@ impl eframe::App for VfApp {
                 self.layout.help_visible = false;
             }
         }
+
+        // Help > About (ticket 15): a small modal-ish window over everything,
+        // closed by its × (or Esc, which egui routes to the focused window).
+        top_bar::about_window(ui.ctx(), &mut self.about_open);
     }
 
     /// Persist the settings envelope (style + layout + view state) under
