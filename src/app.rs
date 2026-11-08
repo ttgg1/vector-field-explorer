@@ -695,8 +695,8 @@ impl eframe::App for VfApp {
             }
         }
 
-        // Help > About (ticket 15): a small modal-ish window over everything,
-        // closed by its × (or Esc, which egui routes to the focused window).
+        // Help > About (ticket 15): a small window over everything, closed by
+        // its × (its open flag is the window's visibility).
         top_bar::about_window(ui.ctx(), &mut self.about_open);
     }
 

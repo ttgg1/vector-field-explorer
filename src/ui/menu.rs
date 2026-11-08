@@ -37,8 +37,26 @@ pub const ABOUT_URL: &str = "https://github.com/ttgg1/vector-field-explorer";
 
 /// Every command a menu item (or a shortcut) can dispatch. Adding a variant
 /// requires adding it to a menu: `tests/menu_test.rs` pins reachability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MenuAction {
+///
+/// The macro defines the enum and `MenuAction::ALL` from one token list, so
+/// the reachability test's variant list can never drift from the enum without
+/// the compiler noticing.
+macro_rules! menu_actions {
+    ($($variant:ident),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum MenuAction {
+            $($variant),+
+        }
+
+        impl MenuAction {
+            /// Every variant, in menu order. Used by the reachability test so
+            /// a new variant cannot be forgotten in the table.
+            pub const ALL: &'static [MenuAction] = &[$(MenuAction::$variant),+];
+        }
+    };
+}
+
+menu_actions! {
     ExportScreenshot,
     Quit,
     CopyFormula,
@@ -50,24 +68,6 @@ pub enum MenuAction {
     ToggleHelp,
     OpenSettings,
     About,
-}
-
-impl MenuAction {
-    /// Every variant, in menu order. Used by the reachability test so a new
-    /// variant cannot be forgotten in the table.
-    pub const ALL: &'static [MenuAction] = &[
-        MenuAction::ExportScreenshot,
-        MenuAction::Quit,
-        MenuAction::CopyFormula,
-        MenuAction::ResetAllControls,
-        MenuAction::ToggleControls,
-        MenuAction::TogglePresets,
-        MenuAction::ResetLayout,
-        MenuAction::ResetCamera,
-        MenuAction::ToggleHelp,
-        MenuAction::OpenSettings,
-        MenuAction::About,
-    ];
 }
 
 /// What the app must do after the pure state mutation: the effects the menu

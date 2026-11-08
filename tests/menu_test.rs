@@ -163,6 +163,22 @@ fn copy_formula_reads_the_formula_at_invocation_time() {
 }
 
 #[test]
+fn copy_formula_copies_even_an_unparseable_edit() {
+    let mut fixture = Fixture::new();
+    let broken = ")( not a formula";
+    assert!(fixture.state.set_formula(broken.to_string()));
+    assert!(
+        !fixture.state.parse_error.is_empty(),
+        "the edit is unparseable, so the field keeps its last good value",
+    );
+    assert_eq!(
+        apply_action(MenuAction::CopyFormula, &mut fixture.ui()),
+        SideEffect::CopyText(broken.to_string()),
+        "Copy formula copies the text the user typed, parseable or not",
+    );
+}
+
+#[test]
 fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
     let mut fixture = Fixture::new();
     assert!(fixture.state.set_formula("(-y, x)".to_string()));
