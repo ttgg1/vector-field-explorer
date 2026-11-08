@@ -23,7 +23,8 @@ pub enum PresetCategory {
     Electrostatics,
     /// Fields around steady currents.
     Magnetostatics,
-    /// Travelling-wave fields (the closest v1 gets to time dependence).
+    /// Static spatial sinusoids: the field oscillates in space, but v1 has no
+    /// time variable, so these are snapshots of a wave rather than a moving one.
     Electrodynamics,
 }
 
@@ -54,7 +55,9 @@ impl PresetCategory {
                 "Coulomb-like fields from static point charges (softened at the source)"
             }
             PresetCategory::Magnetostatics => "Fields around steady currents: wires, dipoles, solenoids",
-            PresetCategory::Electrodynamics => "Travelling waves: the field oscillates in space",
+            PresetCategory::Electrodynamics => {
+                "Static spatial sinusoids: the field oscillates in space (no time variable in v1)"
+            }
         }
     }
 }
@@ -167,7 +170,8 @@ pub fn presets() -> &'static [Preset] {
             dimension: 2,
             category: PresetCategory::Electrostatics,
         },
-        // Linear quadrupole saddle: the gradient of a quadratic potential.
+        // Linear saddle field, -grad(x^2 - y^2) = (-2x, 2y): a saddle potential
+        // rather than a literal point quadrupole.
         Preset {
             name: "Quadrupole",
             formula: "(-2*x, 2*y)",
@@ -189,24 +193,25 @@ pub fn presets() -> &'static [Preset] {
             dimension: 3,
             category: PresetCategory::Magnetostatics,
         },
-        // Solenoid: azimuthal winding around the axis plus a uniform axial
-        // field inside the coil.
+        // Solenoid-like field: azimuthal winding around the axis plus a uniform
+        // axial component everywhere (a simplified coil with no end effects).
         Preset {
             name: "Solenoid",
             formula: "(-y/(x^2+y^2+0.05), x/(x^2+y^2+0.05), 0.5)",
             dimension: 3,
             category: PresetCategory::Magnetostatics,
         },
-        // Electrodynamics: spatially travelling waves (no time variable in v1).
-        // Plane wave travelling along x, polarised along y.
+        // Electrodynamics: static snapshots of sinusoidally varying fields (v1
+        // has no time variable). Plane-wave snapshot varying along x, polarised
+        // along y.
         Preset {
             name: "Plane wave",
             formula: "(0, sin(x), 0)",
             dimension: 3,
             category: PresetCategory::Electrodynamics,
         },
-        // Circularly polarised wave travelling along x: y and z components
-        // are 90° out of phase.
+        // Circularly polarised snapshot along x: y and z components are 90° out
+        // of phase.
         Preset {
             name: "Circular wave",
             formula: "(0, sin(x), cos(x))",

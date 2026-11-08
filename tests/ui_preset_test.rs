@@ -177,7 +177,7 @@ fn resetting_the_camera_can_clear_the_highlight() {
 #[test]
 fn loading_a_field_preset_sets_its_formula_and_dimension() {
     let dir = tempfile::tempdir().unwrap();
-    let panel = panel_in(dir.path());
+    let mut panel = panel_in(dir.path());
     let mut state = State::new(false);
 
     let magnetic = presets()
@@ -204,7 +204,7 @@ fn loading_a_field_preset_sets_its_formula_and_dimension() {
 #[test]
 fn every_built_in_field_preset_loads_through_the_panel() {
     let dir = tempfile::tempdir().unwrap();
-    let panel = panel_in(dir.path());
+    let mut panel = panel_in(dir.path());
     for preset in presets() {
         let mut state = State::new(false);
         assert!(
@@ -225,4 +225,34 @@ fn every_built_in_field_preset_loads_through_the_panel() {
             preset.name
         );
     }
+}
+
+#[test]
+fn loading_a_duplicate_formula_preset_highlights_only_the_clicked_name() {
+    // Pump and No-curl example (and Vortex/Curl example) share formulas but
+    // stay separate presets; the clicked row must be the only highlight.
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+
+    assert!(panel.load_field("Pump", &mut state));
+    assert_eq!(panel.active_field_name(), Some("Pump"));
+
+    assert!(panel.load_field("No-curl example", &mut state));
+    assert_eq!(
+        panel.active_field_name(),
+        Some("No-curl example"),
+        "the clicked duplicate owns the highlight, not the first formula match"
+    );
+
+    assert!(panel.load_field("Vortex", &mut state));
+    assert_eq!(panel.active_field_name(), Some("Vortex"));
+    assert!(panel.load_field("Curl example", &mut state));
+    assert_eq!(panel.active_field_name(), Some("Curl example"));
+
+    let names: Vec<&str> = presets().iter().map(|preset| preset.name).collect();
+    assert!(
+        names.contains(&"Pump") && names.contains(&"No-curl example"),
+        "duplicate formulas are kept, not deduplicated"
+    );
 }

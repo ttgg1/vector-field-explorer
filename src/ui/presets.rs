@@ -5,7 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::export::{delete_preset, load_presets, save_preset, Preset};
-use crate::presets::{presets as field_presets, PresetCategory};
+use crate::presets::{PresetCategory, presets, presets_in};
 use crate::render::Camera;
 use crate::viewmodel::State;
 
@@ -39,6 +39,9 @@ pub struct PresetPanel {
     new_name: String,
     /// The preset last saved or applied; drives the row highlight.
     active: Option<String>,
+    /// The built-in field preset last clicked, so duplicate formulas can
+    /// highlight only the row the user picked.
+    active_field: Option<String>,
     /// Preset awaiting the delete confirmation.
     pending_delete: Option<String>,
     /// A camera loaded this frame, for the app to hand to the live view. Taken
@@ -71,6 +74,7 @@ impl PresetPanel {
             presets,
             new_name: String::new(),
             active: None,
+            active_field: None,
             pending_delete: None,
             applied: None,
         }
@@ -94,6 +98,7 @@ impl PresetPanel {
             presets,
             new_name: String::new(),
             active: None,
+            active_field: None,
             pending_delete: None,
             applied: None,
         })
@@ -112,6 +117,11 @@ impl PresetPanel {
     /// The highlighted preset row, if any.
     pub fn active_name(&self) -> Option<&str> {
         self.active.as_deref()
+    }
+
+    /// The highlighted built-in field preset row, if any.
+    pub fn active_field_name(&self) -> Option<&str> {
+        self.active_field.as_deref()
     }
 
     /// The preset waiting for a delete confirmation, if any.
@@ -194,11 +204,12 @@ impl PresetPanel {
     /// Load a built-in field preset into the scene state: its formula and the
     /// matching 2D/3D mode. Returns false — leaving the state untouched — when
     /// no preset carries that name. Camera preset rows are unaffected.
-    pub fn load_field(&self, name: &str, state: &mut State) -> bool {
-        match field_presets().iter().find(|preset| preset.name == name) {
+    pub fn load_field(&mut self, name: &str, state: &mut State) -> bool {
+        match presets().iter().find(|preset| preset.name == name) {
             Some(preset) => {
                 state.set_mode(preset.dimension == 3);
                 state.set_formula(preset.formula.to_string());
+                self.active_field = Some(name.to_owned());
                 debug!("field preset loaded: {name}");
                 true
             }
@@ -220,12 +231,10 @@ impl PresetPanel {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(category.title()).strong())
                 .on_hover_text(category.description());
-            for preset in field_presets()
-                .iter()
-                .filter(|preset| preset.category == category)
-            {
-                let selected =
-                    state.formula == preset.formula && state.mode_3d == (preset.dimension == 3);
+            for preset in presets_in(category) {
+                let selected = self.active_field.as_deref() == Some(preset.name)
+                    && state.formula == preset.formula
+                    && state.mode_3d == (preset.dimension == 3);
                 let label = if preset.dimension == 3 {
                     format!("{} (3D)", preset.name)
                 } else {
