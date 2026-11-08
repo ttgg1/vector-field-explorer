@@ -356,7 +356,7 @@ impl eframe::App for VfApp {
                 .show(ui, |ui| {
                     collapse = collapse_button(ui, layout::RailSide::Right, menu::PRESETS_SHORTCUT);
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.presets.show(ui, &mut self.camera);
+                        self.presets.show(ui, &mut self.camera, &mut self.state);
                     });
                 });
             self.layout.presets_width = layout::clamp_width(

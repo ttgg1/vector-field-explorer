@@ -5,9 +5,11 @@
 // in `PresetPanel::show` route through them. These tests drive the actions the
 // way a button press would.
 
+use vector_field_explorer::presets::presets;
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::ui::presets::PresetPanel;
 use vector_field_explorer::export::{delete_preset, load_presets};
+use vector_field_explorer::viewmodel::State;
 
 fn panel_in(dir: &std::path::Path) -> PresetPanel {
     PresetPanel::new_with_dir(dir.to_path_buf()).expect("panel with tempdir")
@@ -167,4 +169,60 @@ fn resetting_the_camera_can_clear_the_highlight() {
     panel.clear_active();
     assert_eq!(panel.active_name(), None);
     assert_eq!(panel.presets().len(), 1, "clearing the highlight keeps the preset");
+}
+
+// Ticket 31: the Presets panel also lists the built-in field presets grouped
+// by category. Clicking one loads its formula and dimension into the scene.
+
+#[test]
+fn loading_a_field_preset_sets_its_formula_and_dimension() {
+    let dir = tempfile::tempdir().unwrap();
+    let panel = panel_in(dir.path());
+    let mut state = State::new(false);
+
+    let magnetic = presets()
+        .iter()
+        .find(|preset| preset.name == "Magnetic dipole")
+        .expect("Magnetic dipole is listed");
+    assert!(panel.load_field("Magnetic dipole", &mut state), "known preset loads");
+    assert!(state.mode_3d, "a 3D preset switches the view to 3D");
+    assert_eq!(state.field.dimension, 3);
+    assert_eq!(state.formula, magnetic.formula);
+
+    let point = presets()
+        .iter()
+        .find(|preset| preset.name == "Point charge")
+        .expect("Point charge is listed");
+    assert!(panel.load_field("Point charge", &mut state), "known preset loads");
+    assert!(!state.mode_3d, "a 2D preset switches the view back to 2D");
+    assert_eq!(state.field.dimension, 2);
+    assert_eq!(state.formula, point.formula);
+
+    assert!(!panel.load_field("No such preset", &mut state), "unknown name reports failure");
+}
+
+#[test]
+fn every_built_in_field_preset_loads_through_the_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let panel = panel_in(dir.path());
+    for preset in presets() {
+        let mut state = State::new(false);
+        assert!(
+            panel.load_field(preset.name, &mut state),
+            "preset `{}` must load",
+            preset.name
+        );
+        assert_eq!(state.formula, preset.formula, "preset `{}` formula", preset.name);
+        assert_eq!(
+            state.field.dimension, preset.dimension,
+            "preset `{}` dimension",
+            preset.name
+        );
+        assert_eq!(
+            state.mode_3d,
+            preset.dimension == 3,
+            "preset `{}` mode follows its dimension",
+            preset.name
+        );
+    }
 }

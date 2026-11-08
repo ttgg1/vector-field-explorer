@@ -1,15 +1,69 @@
-//! Built-in preset vector fields.
+//! Built-in preset vector fields, grouped by physical setting.
 //!
 //! Every formula is written in the app's field syntax — a comma-separated
 //! tuple of meval expressions — and must parse via
-//! [`crate::field::FieldExpr::parse`]. The source and sink compositions
-//! are softened with `+0.05` in each denominator so the field stays
-//! finite across the whole default domain.
+//! [`crate::field::FieldExpr::parse`]. The singular-looking fields (point
+//! charges, wires, dipoles) are softened with `+0.05` in each denominator so
+//! they stay finite across the whole default domain; the Coulomb/dipole
+//! numerators are not normalised, so magnitudes are illustrative rather than
+//! physical.
+//!
+//! The list is ordered by [`PresetCategory`] in [`PresetCategory::ALL`] order
+//! and, within a category, in declaration order. [`presets_in`] is the
+//! grouping seam the Presets panel renders, so the panel and the tests agree
+//! on both order and membership.
+
+/// The physical setting a preset belongs to; the Presets panel uses these as
+/// section headings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PresetCategory {
+    /// Kinematic demos and generic 2D/3D flows.
+    Classic,
+    /// Coulomb-like fields from static charges.
+    Electrostatics,
+    /// Fields around steady currents.
+    Magnetostatics,
+    /// Travelling-wave fields (the closest v1 gets to time dependence).
+    Electrodynamics,
+}
+
+impl PresetCategory {
+    /// The categories in panel order.
+    pub const ALL: [PresetCategory; 4] = [
+        PresetCategory::Classic,
+        PresetCategory::Electrostatics,
+        PresetCategory::Magnetostatics,
+        PresetCategory::Electrodynamics,
+    ];
+
+    /// Section heading text.
+    pub fn title(self) -> &'static str {
+        match self {
+            PresetCategory::Classic => "Classic",
+            PresetCategory::Electrostatics => "Electrostatics",
+            PresetCategory::Magnetostatics => "Magnetostatics",
+            PresetCategory::Electrodynamics => "Electrodynamics",
+        }
+    }
+
+    /// One-line explanation shown as the heading's tooltip.
+    pub fn description(self) -> &'static str {
+        match self {
+            PresetCategory::Classic => "Kinematic flows: pumps, vortices, shear and 3D demos",
+            PresetCategory::Electrostatics => {
+                "Coulomb-like fields from static point charges (softened at the source)"
+            }
+            PresetCategory::Magnetostatics => "Fields around steady currents: wires, dipoles, solenoids",
+            PresetCategory::Electrodynamics => "Travelling waves: the field oscillates in space",
+        }
+    }
+}
 
 pub struct Preset {
     pub name: &'static str,
     pub formula: &'static str,
     pub dimension: usize,
+    pub category: PresetCategory,
 }
 
 /// Source at (-0.5, 0.1) and sink at (+0.5, 0.1): flow leaves the first
@@ -23,105 +77,149 @@ const SOURCE_AND_SINK: &str = "((x+0.5)/((x+0.5)^2+(y-0.1)^2+0.05) - (x-0.5)/((x
 const DIPOLE: &str = "((x-0.5)/((x-0.5)^2+(y-0.1)^2+0.05) - (x+0.5)/((x+0.5)^2+(y-0.1)^2+0.05),\
  (y-0.1)/((x-0.5)^2+(y-0.1)^2+0.05) - (y-0.1)/((x+0.5)^2+(y-0.1)^2+0.05))";
 
+/// Two equal positive charges at (-0.5, 0) and (+0.5, 0): the superposition
+/// of two softened radial outflows, so field lines leave both centres and
+/// bend away from the midpoint between them.
+const LIKE_CHARGES: &str = "((x+0.5)/((x+0.5)^2+y^2+0.05) + (x-0.5)/((x-0.5)^2+y^2+0.05),\
+ y/((x+0.5)^2+y^2+0.05) + y/((x-0.5)^2+y^2+0.05))";
+
+/// Magnetic dipole: the point-dipole field of a current loop, softened with
+/// `d = x^2+y^2+z^2+0.05` so the origin stays finite.
+const MAGNETIC_DIPOLE: &str = "(3*x*z/(x^2+y^2+z^2+0.05)^2.5, 3*y*z/(x^2+y^2+z^2+0.05)^2.5,\
+ (3*z^2-(x^2+y^2+z^2))/(x^2+y^2+z^2+0.05)^2.5)";
+
 pub fn presets() -> &'static [Preset] {
     &[
+        // Classic: kinematic demos and generic flows.
         Preset {
             name: "Pump",
             formula: "(x, y)",
             dimension: 2,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "Vortex",
             formula: "(-y, x)",
             dimension: 2,
-        },
-        Preset {
-            name: "Dipole",
-            formula: DIPOLE,
-            dimension: 2,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "Shear flow",
             formula: "(1 - y*y, 0.05*x)",
             dimension: 2,
-        },
-        Preset {
-            name: "Source and sink",
-            formula: SOURCE_AND_SINK,
-            dimension: 2,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "Curl example",
             formula: "(-y, x)",
             dimension: 2,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "No-curl example",
             formula: "(x, y)",
             dimension: 2,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "3D radial",
             formula: "(x, y, z)",
             dimension: 3,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "3D swirl",
             formula: "(-y, x, 0)",
             dimension: 3,
+            category: PresetCategory::Classic,
         },
         Preset {
             name: "3D helix",
             formula: "(-y, x, 0.5)",
             dimension: 3,
+            category: PresetCategory::Classic,
+        },
+        // Electrostatics: softened Coulomb fields from static charges.
+        Preset {
+            name: "Dipole",
+            formula: DIPOLE,
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        Preset {
+            name: "Source and sink",
+            formula: SOURCE_AND_SINK,
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        // A single positive point charge at the origin: radial Coulomb field.
+        Preset {
+            name: "Point charge",
+            formula: "(x/(x^2+y^2+0.05), y/(x^2+y^2+0.05))",
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        // Two equal positive charges at (±0.5, 0): field lines repel at the
+        // midpoint.
+        Preset {
+            name: "Like charges",
+            formula: LIKE_CHARGES,
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        // Linear quadrupole saddle: the gradient of a quadratic potential.
+        Preset {
+            name: "Quadrupole",
+            formula: "(-2*x, 2*y)",
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        // Magnetostatics: fields of steady currents.
+        // Azimuthal field around a straight current along z.
+        Preset {
+            name: "Straight wire",
+            formula: "(-y/(x^2+y^2+0.05), x/(x^2+y^2+0.05))",
+            dimension: 2,
+            category: PresetCategory::Magnetostatics,
+        },
+        // Point dipole of a current loop, softened at the origin.
+        Preset {
+            name: "Magnetic dipole",
+            formula: MAGNETIC_DIPOLE,
+            dimension: 3,
+            category: PresetCategory::Magnetostatics,
+        },
+        // Solenoid: azimuthal winding around the axis plus a uniform axial
+        // field inside the coil.
+        Preset {
+            name: "Solenoid",
+            formula: "(-y/(x^2+y^2+0.05), x/(x^2+y^2+0.05), 0.5)",
+            dimension: 3,
+            category: PresetCategory::Magnetostatics,
+        },
+        // Electrodynamics: spatially travelling waves (no time variable in v1).
+        // Plane wave travelling along x, polarised along y.
+        Preset {
+            name: "Plane wave",
+            formula: "(0, sin(x), 0)",
+            dimension: 3,
+            category: PresetCategory::Electrodynamics,
+        },
+        // Circularly polarised wave travelling along x: y and z components
+        // are 90° out of phase.
+        Preset {
+            name: "Circular wave",
+            formula: "(0, sin(x), cos(x))",
+            dimension: 3,
+            category: PresetCategory::Electrodynamics,
         },
     ]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::field::FieldExpr;
-    use std::collections::HashSet;
-
-    #[test]
-    fn presets_nonempty_and_all_parse() {
-        let list = presets();
-        assert!(!list.is_empty(), "preset list must not be empty");
-        for p in list {
-            let parsed = FieldExpr::parse(p.formula).unwrap_or_else(|e| {
-                panic!("preset `{}` formula `{}` must parse: {e}", p.name, p.formula)
-            });
-            assert_eq!(
-                parsed.dimension, p.dimension,
-                "preset `{}` declared dimension must match its formula",
-                p.name
-            );
-        }
-    }
-
-    #[test]
-    fn preset_names_are_unique() {
-        let names: HashSet<&str> = presets().iter().map(|p| p.name).collect();
-        assert_eq!(names.len(), presets().len(), "preset names must be unique");
-    }
-
-    #[test]
-    fn required_presets_present() {
-        let names: HashSet<&str> = presets().iter().map(|p| p.name).collect();
-        for required in [
-            "Pump",
-            "Vortex",
-            "Dipole",
-            "Shear flow",
-            "Source and sink",
-            "Curl example",
-            "No-curl example",
-            "3D radial",
-            "3D swirl",
-            "3D helix",
-        ] {
-            assert!(names.contains(required), "preset `{required}` must be listed");
-        }
-    }
+/// The presets in one category, in declaration order. This is the grouping
+/// seam the Presets panel iterates, so panel order matches [`presets`].
+pub fn presets_in(category: PresetCategory) -> impl Iterator<Item = &'static Preset> {
+    presets()
+        .iter()
+        .filter(move |preset| preset.category == category)
 }

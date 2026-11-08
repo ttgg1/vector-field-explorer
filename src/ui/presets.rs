@@ -5,7 +5,9 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::export::{delete_preset, load_presets, save_preset, Preset};
+use crate::presets::{presets as field_presets, PresetCategory};
 use crate::render::Camera;
+use crate::viewmodel::State;
 
 /// Directory where presets.json lives by default: XDG_CONFIG_HOME if set,
 /// otherwise ~/.config/vector-field-explorer.
@@ -19,10 +21,11 @@ pub fn default_preset_dir() -> PathBuf {
     }
 }
 
-/// UI panel for managing camera presets. The panel's user-facing actions
-/// (`save_current`, `load`, `delete`) are factored into plain methods so the
-/// buttons in [`PresetPanel::show`] route through exactly the behavior the
-/// integration tests in `tests/ui_preset_test.rs` exercise.
+/// UI panel for managing camera presets, with the built-in field presets
+/// grouped by category above them. The panel's user-facing actions
+/// (`save_current`, `load`, `delete`, `load_field`) are factored into plain
+/// methods so the buttons in [`PresetPanel::show`] route through exactly the
+/// behavior the integration tests in `tests/ui_preset_test.rs` exercise.
 ///
 /// Ticket 14 additions: the row whose camera state was last saved/applied is
 /// highlighted (`active`), and deleting takes a confirmation click
@@ -188,9 +191,61 @@ impl PresetPanel {
         Ok(())
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, camera: &mut Camera) {
+    /// Load a built-in field preset into the scene state: its formula and the
+    /// matching 2D/3D mode. Returns false — leaving the state untouched — when
+    /// no preset carries that name. Camera preset rows are unaffected.
+    pub fn load_field(&self, name: &str, state: &mut State) -> bool {
+        match field_presets().iter().find(|preset| preset.name == name) {
+            Some(preset) => {
+                state.set_mode(preset.dimension == 3);
+                state.set_formula(preset.formula.to_string());
+                debug!("field preset loaded: {name}");
+                true
+            }
+            None => {
+                warn!("field preset load failed: no preset named {name}");
+                false
+            }
+        }
+    }
+
+    pub fn show(&mut self, ui: &mut egui::Ui, camera: &mut Camera, state: &mut State) {
         ui.heading("Presets");
 
+        // Built-in field presets, grouped by category. The row highlight
+        // follows the formula currently in the scene, so it also reflects
+        // edits typed into the formula bar.
+        ui.weak("Field presets");
+        for category in PresetCategory::ALL {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(category.title()).strong())
+                .on_hover_text(category.description());
+            for preset in field_presets()
+                .iter()
+                .filter(|preset| preset.category == category)
+            {
+                let selected =
+                    state.formula == preset.formula && state.mode_3d == (preset.dimension == 3);
+                let label = if preset.dimension == 3 {
+                    format!("{} (3D)", preset.name)
+                } else {
+                    preset.name.to_string()
+                };
+                if ui
+                    .selectable_label(selected, label)
+                    .on_hover_text(format!(
+                        "Load the {} preset ({}D field)",
+                        preset.name, preset.dimension
+                    ))
+                    .clicked()
+                {
+                    self.load_field(preset.name, state);
+                }
+            }
+        }
+
+        ui.separator();
+        ui.weak("Saved views");
         if self.presets.is_empty() {
             ui.weak("No saved views yet.");
         }
