@@ -10,6 +10,7 @@ use crate::streamlines::click_seed;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::presets::{PresetPanel, default_preset_dir};
 use crate::ui::sidebar::Controls;
+use crate::ui::style_panel::{self, AppStyle};
 use crate::viewmodel::{State, apply_camera_input};
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
@@ -54,7 +55,8 @@ const MAX_CLICK_SEEDS: usize = 6;
 /// Application root state: the viewmodel State (the single source of truth for
 /// what is on screen), the formula bar's local widgets, the sidebar's local
 /// Controls, the status readouts, both cameras (the 2D `Camera` and the
-/// `OrbitCamera`), the preset manager and the GPU scene currently being painted.
+/// `OrbitCamera`), the preset manager, the persisted UI-chrome style and the
+/// GPU scene currently being painted.
 pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
@@ -63,6 +65,10 @@ pub struct VfApp {
     pub camera: Camera,
     pub orbit: OrbitCamera,
     pub presets: PresetPanel,
+    /// The persisted look-and-feel record (ticket 07): restored from eframe's
+    /// app-state storage on startup and written back in [`eframe::App::save`].
+    /// It lives app-side and never touches the viewmodel `State`.
+    pub style: AppStyle,
     scene: SceneGPU,
     renderer_ready: bool,
     streamline_count: usize,
@@ -85,7 +91,15 @@ pub struct VfApp {
 }
 
 impl VfApp {
+    /// App with no persistent storage (defaults for the style record).
     pub fn new() -> Self {
+        Self::new_with_storage(None)
+    }
+
+    /// App wired to eframe's persistent storage: the style record is restored
+    /// from it (absent/corrupt values fall back to the defaults) and written
+    /// back on save.
+    pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
         let state = State::new(false);
         Self {
             state,
@@ -100,6 +114,7 @@ impl VfApp {
             orbit: OrbitCamera::default(),
             presets: PresetPanel::new_with_dir(presets_data_dir())
                 .unwrap_or_else(|_| PresetPanel::new()),
+            style: style_panel::load(storage),
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
                 lines: Arc::new(reference_lines()),
@@ -162,6 +177,11 @@ fn compose_lines(flow: &[LineInstanceGPU], clicks: &[LineInstanceGPU]) -> Vec<Li
 
 impl eframe::App for VfApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Restyle the whole frame from the persisted record before any widget
+        // runs. `apply` is idempotent, so doing this every frame is cheap and
+        // keeps the UI in sync even if a theme/visual was changed elsewhere.
+        style_panel::apply(ui.ctx(), &self.style);
+
         // Top formula bar: live edits, the field-preset ComboBox and the
         // 2D/3D toggle. Every edit goes through a viewmodel setter, which owns
         // parsing, clamping and the dirty flag.
@@ -178,6 +198,12 @@ impl eframe::App for VfApp {
             .min_size(220.0)
             .max_size(420.0)
             .show(ui, |ui| {
+                // Style chrome lives at the top: it is UI config, not a field
+                // knob, so it does not route through the viewmodel. A change
+                // re-applies immediately so the rest of this frame restyles.
+                if crate::ui::style_panel::show(ui, &mut self.style) {
+                    crate::ui::style_panel::apply(ui.ctx(), &self.style);
+                }
                 crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
             });
 
@@ -357,5 +383,12 @@ impl eframe::App for VfApp {
             );
             ui.painter().add(callback);
         });
+    }
+
+    /// Persist the UI-chrome style record under eframe's app key. Deliberately
+    /// narrow (ticket 07 ruling): only the style record is stored here, so a
+    /// later settings envelope can extend it without touching this contract.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        style_panel::save(storage, &self.style);
     }
 }

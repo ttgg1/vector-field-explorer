@@ -5,6 +5,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Vector Field Explorer",
         options,
-        Box::new(|_cc| Ok(Box::new(VfApp::default()))),
+        Box::new(|cc| Ok(Box::new(VfApp::new_with_storage(cc.storage)))),
     )
 }
