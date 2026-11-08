@@ -7,14 +7,18 @@ App: Rust eframe/egui GUI to explore vector fields (`f(x,y)` or `f(x,y,z)`)
 typed as formulas — live arrows, streamlines, particles, camera presets,
 colormaps. Vision spec: `docs/superpowers/specs/2026-11-05-vector-field-explorer-design.md`.
 
+License: **GPL-3.0-only** (`LICENSE`; `Cargo.toml` carries
+`license = "GPL-3.0-only"`). Private GitHub remote:
+`git@github.com:ttgg1/vector-field-explorer.git`.
+
 ## Implementation Plans & Status (verified against git 2026-11-06)
 
 | Plan | Scope | Status |
 |------|-------|--------|
 | `docs/superpowers/plans/2026-11-05-preset-persistence.md` | Camera presets: `export::Preset` serde, save/load/delete to `presets.json`, sidebar Preset panel, app data-dir config | **COMPLETE** (Tasks 1–3; commits `037825f`, `40f98f4`, `87c4e23`, `2dcb1a6` on `feature/preset-persistence`; final review pass done → fix commit `331d72e`, no re-review needed per skill). Ruled behaviors: duplicate-name save replaces, corrupt `presets.json` fails fast with io::Error; RGBA (not BGRA) PNG contract pinned by test |
-| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T6 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`; T6 `7e37254` OrbitCamera → `src/camera.rs`); **T7 complete** (`81d1b30` instanced wgpu renderer + fix round 1 `2020a31` arrow-shader world-space normal `b * normal`, scoped re-review clean); **T8A complete** (`522d011` viewmodel seam `src/viewmodel.rs` — pure State/dirty-flag/snapshot builder, 12 unit tests); **T8B + T9–T14 tracked as TICKETS 02–09** under `.scratch/field-viewport/issues/` (02 **COMPLETE** (c5cfd95..`c62507a`, review clean after fix round 1: zoom gated 3D-only; 4 minors parked for final review) → 03 **COMPLETE** (20701e0..`41fe108`, review clean after fix round 1: VfApp doc comment restored; 3 minors parked for final review) → 04 **COMPLETE** (00c4ee5..`13fa5dc`, review clean after fix round 1: both_directions composition, pinned `vortex_stays_bounded` verbatim, status-bar split counts; 2 minors parked for final review) → 05 **COMPLETE** (18307e6..`a42fa97`, review clean after fix round 1: `clear()` rng→`SPAWN_SEED` respawn contract + pinned covering test, cost note corrected; 4 minors parked for final review) → 11 **COMPLETE** (`fb4eca7`, review clean; shader parse fixed, dead `src/shaders.wgsl` deleted) → 12 **COMPLETE** (`d1b23c6`, review clean; smoke PASS 15s) → 06 **COMPLETE** (`ff5e708`, review clean after salvage; 3 minors parked) → 07 **COMPLETE** (`3db30e1`, review clean; 3 minors parked) → 08 **COMPLETE** (`9d0cb6d` + fix `43bd549`, review clean after fix round 1: physical-pixel capture; 1 cosmetic minor parked) → frontier 14 (window/mouse/hideable sidebars); 06 3D+click-seed ← 04,05; 07 style persistence ← 03; 08 screenshot ← 06; 09 README+cleanup+final whole-branch review ← 02–08; 10 full-codebase documentation ← 09 (user-added 2026-11-07)). ⚠ working tree (2026-11-08, post-ticket-08): `main` merged through `43bd549` (startup fixes, 3D/click seeding, style panel, screenshot export, all reviewed); only untracked `.scratch/vfe-tmp/` remains (prior-seat scratch, not part of the app). Issue 01's "Related minors" + tickets 02–05 parked minors (4+3+2+4) all routed to final whole-branch review
+| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T6 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`; T6 `7e37254` OrbitCamera → `src/camera.rs`); **T7 complete** (`81d1b30` instanced wgpu renderer + fix round 1 `2020a31` arrow-shader world-space normal `b * normal`, scoped re-review clean); **T8A complete** (`522d011` viewmodel seam `src/viewmodel.rs` — pure State/dirty-flag/snapshot builder, 12 unit tests); **T8B + T9–T14 tracked as TICKETS 02–09** under `.scratch/field-viewport/issues/` (02 **COMPLETE** (c5cfd95..`c62507a`, review clean after fix round 1: zoom gated 3D-only; 4 minors parked for final review) → 03 **COMPLETE** (20701e0..`41fe108`, review clean after fix round 1: VfApp doc comment restored; 3 minors parked for final review) → 04 **COMPLETE** (00c4ee5..`13fa5dc`, review clean after fix round 1: both_directions composition, pinned `vortex_stays_bounded` verbatim, status-bar split counts; 2 minors parked for final review) → 05 **COMPLETE** (18307e6..`a42fa97`, review clean after fix round 1: `clear()` rng→`SPAWN_SEED` respawn contract + pinned covering test, cost note corrected; 4 minors parked for final review) → 11 **COMPLETE** (`fb4eca7`, review clean; shader parse fixed, dead `src/shaders.wgsl` deleted) → 12 **COMPLETE** (`d1b23c6`, review clean; smoke PASS 15s) → 06 **COMPLETE** (`ff5e708`, review clean after salvage; 3 minors parked) → 07 **COMPLETE** (`3db30e1`, review clean; 3 minors parked) → 08 **COMPLETE** (`9d0cb6d` + fix `43bd549`, review clean after fix round 1: physical-pixel capture; 1 cosmetic minor parked) → 14 **IMPLEMENTED** (`f4dbb1b`, task review pending; rails/navigation/help/persistence; 179 tests, smoke PASS) → frontier 15 top-bar menus; tickets 15 (menus), 16 (GitHub Pages site), 17 (Linux/macOS release pipeline) **filed**; 16 ← 17; 13 test/source separation ← 14,15; 09 final review ← 13,14,15,16,17; 10 codebase docs ← 09. ⚠ working tree (2026-11-08, post-ticket-14): `main` at docs `c27b793`; feature branch `feature/ux-window-mouse-sidebars` carries `f4dbb1b` awaiting review; only untracked `.scratch/vfe-tmp/`. Issue 01's "Related minors" + tickets 02–05 parked minors (4+3+2+4) all routed to final whole-branch review
 
-**Session handoff 2026-11-08 (refreshed):** active SDD ledger = `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` — read `git log` + the ledger's LAST dated section (later sections supersede the older `## HANDOFF` block). As of the refresh: tickets 02–05 COMPLETE (05 = `18307e6..a42fa97`, fix round 1 clean: `clear()` rng rewind + covering test), tickets 11 + 12 + 06 + 07 + 08 COMPLETE (`513b31b..43bd549`, reviews clean, smoke PASS), next = 14 window/mouse/hideable-sidebars (brief = `.scratch/field-viewport/issues/14-window-mouse-sidebars.md`), order 14→13→09(final whole-branch review incl. parked-minor triage 4+3+2+4+issue-01, then **merge `feature/preset-persistence` → `main`** per trunk-based rule)→10. Ticket 13 (test/source separation refactor) filed 2026-11-08 — 95 inline tests across 9 `src/` files vs 26 in `tests/`; schedule after 14, before 09. Lost-report protocol + gate-probe-before-redispatch rule + clippy `--` separator lesson in ledger tail.
+**Session handoff 2026-11-08 (latest):** active SDD ledger = `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` — read `git log` + the ledger's LAST dated section (later sections supersede the older `## HANDOFF` block). State: tickets 02–08, 11, 12 COMPLETE (`513b31b..43bd549`, reviews clean, smoke PASS); ticket 14 IMPLEMENTED (`f4dbb1b`, 179 tests, smoke PASS) and awaiting task review; docs/design commit `c27b793` on `main` (GLOSSARY, ADR 0001, rewritten ticket 14). Next order: **15 top-bar menus → 13 test/source separation → 17 release pipeline → 16 Pages site → 09 final whole-branch review → 10 codebase docs**; first real `v*` tag only after 09 merges and `main` is green. Ticket 13 inventory (post-14): 152 inline tests across 18 `src/` files vs 27 in `tests/`, baseline 179. `feature/preset-persistence` is already fully merged (no-op for 09; delete stale branch there). After every reviewed merge: `git push origin main` (private repo), verify GitHub CI/smoke workflows. Lost-report protocol + gate-probe-before-redispatch rule + clippy `--` separator lesson in ledger tail.
 
 **Spec for the remaining work (published, ready-for-agent):** `.scratch/field-viewport/spec.md` — seams confirmed with the user: existing pure-module seams + exactly ONE new seam (viewmodel/scene-builder of pure functions state→SceneGPU, input→camera actions); GPU paint stays behind SceneGPU, no unit tests. Issue tracker: local markdown under `.scratch/field-viewport/issues/`. |
 
@@ -31,8 +35,12 @@ Module map (branch state may lag; trust `git log` + ledger for what's merged):
 a *different* `Preset` type than `export::Preset`, which is the camera preset),
 `src/sampling.rs` (`sample_field`, `ArrowData`, `ViewOptions`, `magnitude_range`),
 `src/export.rs` (PNG/presets), `src/i18n.rs` (locale JSONs in `data/locales/`),
-`src/render.rs` (2D pan/zoom `Camera`), `src/camera.rs` (3D `OrbitCamera`), `src/screenshot.rs` (offscreen capture + save dialog),
-`src/ui/presets.rs` (PresetPanel), `src/ui/style_panel.rs` (AppStyle + eframe-storage persistence).
+`src/render.rs` (2D pan/zoom `Camera`), `src/camera.rs` (3D `OrbitCamera` + gesture seam),
+`src/screenshot.rs` (offscreen capture + save dialog), `src/window.rs` (window
+options), `src/persistence.rs` (single APP_KEY envelope + migration),
+`src/ui/presets.rs` (PresetPanel), `src/ui/style_panel.rs` (AppStyle),
+`src/ui/top_bar.rs` (menu row), `src/ui/layout.rs` (panel rails/layout state),
+`src/ui/sidebar.rs` (field controls), `src/ui/help_overlay.rs`, `src/ui/status_bar.rs`.
 
 ## Conventions (mandatory)
 
@@ -55,6 +63,17 @@ a *different* `Preset` type than `export::Preset`, which is the camera preset),
   task done, run `scripts/smoke-run.sh 15` — it launches the app under `timeout` and
   fails on a panic or wgpu validation error. CI runs the same script headlessly
   (Xvfb + software Vulkan) in the `smoke` job.
+- **GitHub workflow**: private remote `git@github.com:ttgg1/vector-field-explorer.git`.
+  After a reviewed feature branch is merged into `main`, `git push origin main` and
+  confirm the GitHub CI/smoke workflows are green. Never force-push `main`; feature
+  branches may be pushed for backup, but merging is the push gate.
+- **License**: GPL-3.0-only. `LICENSE` at repo root; new files and dependencies must
+  stay GPL-3.0-compatible.
+- **Test layout**: `tests/` holds tests, `src/` holds production code. The existing
+  inline `#[cfg(test)]` modules are debt tracked by ticket 13 — do not add new ones.
+- **Background seats**: dispatch implementer/reviewer subagents with
+  `background=true`; the controller continues ledger/docs work while waiting. Never
+  run two implementer seats concurrently.
 
 ## Egui / Rust API notes (learned the hard way)
 
@@ -65,8 +84,8 @@ a *different* `Preset` type than `export::Preset`, which is the camera preset),
 - tests in `tests/` are integration tests: import `vector_field_explorer::{…}` —
   bare `crate::` / `use super::*` will not resolve.
 - Rust edition 2024: `std::env::set_var` / `remove_var` are `unsafe` — wrap them.
-- wgpu usage must go through eframe's re-exports; `rfd` was removed from deps
-  (re-add intentionally when screenshot dialogs land).
+- wgpu usage must go through eframe's re-exports; `rfd = "0.15"` is a deliberate
+  dependency for the screenshot save dialog.
 
 ## Subagent Usage (SDD mode — active from 2026-11-06)
 
@@ -84,7 +103,8 @@ templates; `scripts/task-brief`, `scripts/review-package` generate the brief
 and diff-package artifacts; never make a subagent read the whole plan.
 
 **Model policy (user-selected 2026-11-08, supersedes all earlier policies):**
-coding seats use OpenCode Go models; review seats use a FREE OpenCode Go model.
+coding seats use OpenCode Go models; review seats use the cheap OpenCode Go
+reviewer (`opencode-go/claude-haiku-5-5`, free `beam-free` fallback).
 Always pass the model explicitly — subagents never silently inherit the session
 model. No NVIDIA/Nemotron seats, no LM Studio seats, no `strata` seats.
 
@@ -108,14 +128,17 @@ summary, full report to `…/task-N-report.md`.
 Dispatch flow per task:
 1. Record BASE (`git rev-parse HEAD`).
 2. `bash scripts/task-brief PLAN_FILE N` → brief path.
-3. Dispatch implementer (`opencode-go/deepseek-v4.1-flash`, variant per policy) with:
+3. Dispatch implementer (`opencode-go/deepseek-v4.1-flash`, variant per policy) in
+   the background (`background=true`) with:
    how the task fits, brief path,
    interfaces/decisions earlier tasks established, ambiguity resolutions,
    report-file path + report contract.
 4. On DONE: `bash scripts/review-package PLAN_FILE BASE HEAD` → diff file.
-5. Dispatch task reviewer (`opencode-go/claude-haiku-5-5#high`, `#max` for the final whole-branch review) with brief, report, diff paths +
+5. Dispatch task reviewer (`opencode-go/claude-haiku-5-5#high`, `#max` for the final whole-branch review) in the background with brief, report, diff paths +
    binding global constraints; resolve findings via the fix loop (resume the
    same implementer session with `sessionID`); ledger completion line.
+6. Merge the reviewed branch into `main`, then `git push origin main` and check
+   GitHub CI/smoke are green.
 
 ## AI Workflow Integration
 

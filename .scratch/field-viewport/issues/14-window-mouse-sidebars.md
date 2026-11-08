@@ -9,7 +9,7 @@ top menu bar with Settings/Help/screenshot, a dismissible help overlay, mouse
 navigation in both views, clearer control grouping, and full view-state
 persistence.
 
-**Status:** ready-for-agent
+**Status:** implemented — `f4dbb1b` on `feature/ux-window-mouse-sidebars`; task review in progress
 
 ## Agreed design
 
