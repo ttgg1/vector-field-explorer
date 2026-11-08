@@ -103,9 +103,6 @@ pub struct VfApp {
     settings_open: bool,
     /// Whether the Help > About dialog is up (ticket 15).
     about_open: bool,
-    /// Whether the Help > Keyboard & mouse window is up (ticket 18): the full
-    /// help table, shared with the viewport overlay.
-    help_open: bool,
     /// The viewport rect from this frame (set in the central panel) so the help
     /// overlay can anchor to its bottom-left corner.
     last_viewport_rect: Option<egui::Rect>,
@@ -170,7 +167,6 @@ impl VfApp {
             panel_generation: 0,
             settings_open: false,
             about_open: false,
-            help_open: false,
             last_viewport_rect: None,
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
@@ -208,7 +204,6 @@ impl VfApp {
             menu::SideEffect::None => {}
             menu::SideEffect::OpenSettings => self.settings_open = true,
             menu::SideEffect::ShowAbout => self.about_open = true,
-            menu::SideEffect::ShowHelp => self.help_open = true,
             // The capture itself happens in the viewport, where this frame's
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.screenshot.request(),
@@ -425,7 +420,6 @@ impl eframe::App for VfApp {
         }
         if !ctx.text_edit_focused() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.settings_open = false;
-            self.help_open = false;
             self.layout.help_visible = false;
         }
 
@@ -824,10 +818,6 @@ impl eframe::App for VfApp {
         // Help > About (ticket 15): a small window over everything, closed by
         // its × (its open flag is the window's visibility).
         top_bar::about_window(ui.ctx(), &mut self.about_open);
-
-        // Help > Keyboard & mouse (ticket 18): the full help table, the same
-        // strings the overlay above renders.
-        crate::ui::help_overlay::help_window(ui.ctx(), &mut self.help_open);
     }
 
     /// Persist the settings envelope (style + layout + view state) under

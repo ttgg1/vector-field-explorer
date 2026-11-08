@@ -101,7 +101,6 @@ fn the_bar_carries_the_v1_menu_table() {
                     "Toggle Presets",
                     "Reset layout",
                     "Reset camera",
-                    "Help overlay",
                 ],
             ),
             ("Settings", vec!["Appearance…"]),
@@ -129,7 +128,6 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ResetLayout, SideEffect::ResetLayout),
         (MenuAction::ResetCamera, SideEffect::ResetCamera),
         (MenuAction::ToggleHelp, SideEffect::None),
-        (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
         (MenuAction::OpenSettings, SideEffect::OpenSettings),
         (MenuAction::About, SideEffect::ShowAbout),
     ];
@@ -276,11 +274,30 @@ fn every_enum_variant_is_reachable_from_a_menu_item() {
             "{action:?} has no menu item: it would be a dead variant",
         );
     }
-    // Ticket 18 split the two help homes: View > Help overlay toggles the
-    // viewport overlay, Help > Keyboard & mouse opens the full table window.
-    for action in MenuAction::ALL {
-        let homes = reachable.iter().filter(|reachable| *reachable == action).count();
-        assert_eq!(homes, 1, "{action:?} has {homes} menu homes");
+}
+
+#[test]
+fn no_action_has_more_than_one_menu_home() {
+    // Ticket 28: the View and Help menus both offered the help toggle. A
+    // command may appear in several places in the UI (the top-bar Screenshot
+    // button dispatches ExportScreenshot), but only one menu item may own it.
+    // There is no intentional menu-item exception; a second home is a
+    // duplicate command and must be removed.
+    let homes: Vec<(&str, &str, MenuAction)> = menu::MENUS
+        .iter()
+        .flat_map(|menu| {
+            menu.items
+                .iter()
+                .map(move |item| (menu.title, item.label, item.action))
+        })
+        .collect();
+    for (i, (menu, label, action)) in homes.iter().enumerate() {
+        for (other_menu, other_label, other_action) in &homes[i + 1..] {
+            assert_ne!(
+                action, other_action,
+                "{action:?} appears twice: {menu} > {label} and {other_menu} > {other_label}",
+            );
+        }
     }
 }
 
@@ -367,25 +384,61 @@ fn about_reports_the_package_version_and_gpl_license() {
 }
 
 #[test]
-fn the_help_menu_opens_the_table_while_view_keeps_the_overlay_toggle() {
-    // Ticket 18: Help > Keyboard & mouse opens the full table window; View >
-    // Help overlay still toggles the compact viewport overlay.
+fn the_help_menu_entry_toggles_the_help_overlay() {
+    // Ticket 28: Help > Keyboard & mouse is the one canonical help command.
+    // It toggles the viewport overlay, and shows the F1 hint from SHORTCUTS.
     let help = menu::MENUS
         .iter()
         .find(|menu| menu.title == "Help")
         .expect("the Help menu exists");
-    assert_eq!(help.items[0].label, "Keyboard & mouse");
-    assert_eq!(help.items[0].action, MenuAction::ShowHelpTable);
+    let item = help
+        .items
+        .iter()
+        .find(|item| item.label == "Keyboard & mouse")
+        .expect("Help keeps the Keyboard & mouse entry");
+    assert_eq!(item.action, MenuAction::ToggleHelp);
+    assert_eq!(
+        menu::shortcut_label(item.action),
+        Some("F1"),
+        "the surviving item shows the F1 label sourced from SHORTCUTS",
+    );
 
+    let mut fixture = Fixture::new();
+    assert!(fixture.layout.help_visible, "help starts visible");
+    assert_eq!(
+        apply_action(item.action, &mut fixture.ui()),
+        SideEffect::None,
+    );
+    assert!(!fixture.layout.help_visible, "the menu entry dismisses the overlay");
+    apply_action(item.action, &mut fixture.ui());
+    assert!(fixture.layout.help_visible, "and brings it back");
+}
+
+#[test]
+fn f1_still_fires_the_single_help_toggle() {
+    assert_eq!(
+        fired_shortcuts(egui::Modifiers::NONE, egui::Key::F1),
+        vec![MenuAction::ToggleHelp],
+        "the surviving help command keeps its F1 shortcut",
+    );
+}
+
+#[test]
+fn the_removed_view_help_overlay_entry_is_gone() {
     let view = menu::MENUS
         .iter()
         .find(|menu| menu.title == "View")
         .expect("the View menu exists");
     assert!(
-        view.items
+        !view.items.iter().any(|item| item.label == "Help overlay"),
+        "View no longer carries the duplicate help entry",
+    );
+    assert!(
+        !menu::MENUS
             .iter()
-            .any(|item| item.label == "Help overlay" && item.action == MenuAction::ToggleHelp),
-        "View keeps the overlay toggle",
+            .flat_map(|menu| menu.items.iter())
+            .any(|item| item.label == "Help overlay"),
+        "the removed `Help overlay` label appears in no menu",
     );
 }
 

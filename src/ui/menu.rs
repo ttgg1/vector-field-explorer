@@ -66,7 +66,6 @@ menu_actions! {
     ResetLayout,
     ResetCamera,
     ToggleHelp,
-    ShowHelpTable,
     OpenSettings,
     About,
 }
@@ -81,8 +80,6 @@ pub enum SideEffect {
     OpenSettings,
     /// Show the About dialog.
     ShowAbout,
-    /// Show the keyboard & mouse window (the full help table).
-    ShowHelp,
     /// Ask the screenshot capture for one frame.
     Screenshot,
     /// Close the window.
@@ -140,7 +137,6 @@ pub const MENUS: &[Menu] = &[
             MenuItem { label: "Toggle Presets", action: MenuAction::TogglePresets },
             MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
             MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
-            MenuItem { label: "Help overlay", action: MenuAction::ToggleHelp },
         ],
     },
     Menu {
@@ -150,7 +146,7 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "Help",
         items: &[
-            MenuItem { label: "Keyboard & mouse", action: MenuAction::ShowHelpTable },
+            MenuItem { label: "Keyboard & mouse", action: MenuAction::ToggleHelp },
             MenuItem { label: "About Vector Field Explorer", action: MenuAction::About },
         ],
     },
@@ -252,7 +248,7 @@ pub fn shortcut_actions(ctx: &egui::Context) -> Vec<MenuAction> {
 
 /// Whether this frame pressed `?` (Shift+/ on a US layout), the secondary help
 /// shortcut. It is not in [`SHORTCUTS`] because that table keeps exactly one
-/// key per action (F1); the Help window documents both. Inert while a text
+/// key per action (F1); the help overlay documents both. Inert while a text
 /// field has focus, like every camera/view key.
 pub fn help_key_pressed(ctx: &egui::Context) -> bool {
     if ctx.text_edit_focused() {
@@ -318,7 +314,6 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             ui.layout.toggle_help();
             SideEffect::None
         }
-        MenuAction::ShowHelpTable => SideEffect::ShowHelp,
         MenuAction::OpenSettings => SideEffect::OpenSettings,
         MenuAction::About => SideEffect::ShowAbout,
     }
