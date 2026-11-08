@@ -17,10 +17,13 @@
 # set, cleanup falls back to the standalone default rule.
 #
 # Cleanup is skipped with a warning when cargo's output is not under the
-# directory this script would prune: a forwarded `--release`, `--target` or
-# `--target-dir`, a `build.target-dir` in `.cargo/config.toml` that
-# TARGET_DIR/CARGO_TARGET_DIR do not mirror, or a probe whose executables live
-# elsewhere. Pruning the wrong tree could delete every hashed executable there.
+# directory this script would prune: a forwarded `--release`, `--profile`,
+# `--target` or `--target-dir`, a `build.target-dir` in `.cargo/config.toml`
+# that TARGET_DIR/CARGO_TARGET_DIR do not mirror, or a probe whose executables
+# live elsewhere. Pruning the wrong tree could delete every hashed executable
+# there. Probe paths and the cleanup directory are compared in canonical form,
+# so a symlinked target directory or macOS `$TMPDIR` (`/var` vs `/private/var`)
+# does not disable cleanup.
 #
 # Usage: scripts/test.sh [cargo test arguments...]
 #
@@ -129,18 +132,38 @@ cleanup_debug_dir() {
   printf '%s/debug' "$target"
 }
 
+# Resolve one path to its physical form without GNU-only `realpath`: canonicalize
+# the parent directory and re-attach the basename. Returns non-zero when the
+# parent directory no longer exists (a vanished probe entry).
+canonicalize_path() {
+  local path="$1" dir
+  dir="$(dirname "$path")"
+  if [ ! -d "$dir" ]; then
+    return 1
+  fi
+  printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$(basename "$path")"
+}
+
 # Cargo can write somewhere else than the directory we would prune: `--release`
-# (`target/release/deps`), `--target <triple>`
-# (`target/<triple>/debug/deps`), `--target-dir`, or a `build.target-dir` in
-# `.cargo/config.toml` that `TARGET_DIR`/`CARGO_TARGET_DIR` do not mirror.
-# Pruning the wrong directory could delete every hashed executable there, so
-# print the first offender and let the caller skip cleanup.
+# (`target/release/deps`), `--profile <name>` (`target/<profile>/deps`),
+# `--target <triple>` (`target/<triple>/debug/deps`), `--target-dir`, or a
+# `build.target-dir` in `.cargo/config.toml` that `TARGET_DIR`/`CARGO_TARGET_DIR`
+# do not mirror. Pruning the wrong directory could delete every hashed
+# executable there, so print the first offender and let the caller skip cleanup.
+#
+# Both sides are compared in canonical form: cargo reports the paths it used, and
+# on macOS `$TMPDIR` (`/var/folders/…`) or a symlinked target directory would
+# otherwise never match the resolved cleanup directory and silently disable
+# cleanup.
 keep_set_in_target() {
-  local raw="$1" expected exe
+  local raw="$1" expected exe resolved
   expected="$(cleanup_debug_dir)/"
   while IFS= read -r exe; do
     [ -n "$exe" ] || continue
-    case "$exe" in
+    # A probe entry whose directory vanished cannot be under the target; it is
+    # already gone, so skip it rather than failing the check.
+    resolved="$(canonicalize_path "$exe")" || continue
+    case "$resolved" in
       "$expected"*) : ;;
       *)
         printf '%s' "$exe"
@@ -158,7 +181,7 @@ forwarded_layout_flag() {
   for arg in ${cargo_args[@]+"${cargo_args[@]}"}; do
     [ "$arg" = "--" ] && break
     case "$arg" in
-      --release|--target|--target=*|--target-dir|--target-dir=*)
+      --release|--profile|--profile=*|--target|--target=*|--target-dir|--target-dir=*)
         printf '%s' "$arg"
         return 0
         ;;

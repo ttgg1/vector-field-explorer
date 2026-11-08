@@ -438,28 +438,38 @@ fn test_script_skips_cleanup_for_a_forwarded_layout_flag() {
     let fx = Fixture::new();
     let fake = fake_cargo(&fx.target(), 0, &[&fx.path(NEW_HASHED)]);
 
-    // `--release` makes cargo write to target/release/deps; the keep set would
-    // then describe a different tree than the one cleanup prunes.
-    let out = script_command(&test_script())
-        .env("TARGET_DIR", fx.target())
-        .env("CARGO", &fake)
-        .args(["--release", "--definitely-not-a-cargo-flag"])
-        .output()
-        .expect("run scripts/test.sh");
+    // Each of these makes cargo write outside `<target>/debug`, so the keep set
+    // would describe a different tree than the one cleanup prunes.
+    for args in [
+        &["--release", "--definitely-not-a-cargo-flag"][..],
+        &["--target", "x86_64-unknown-linux-gnu", "--definitely-not-a-cargo-flag"][..],
+        &["--profile", "custom", "--definitely-not-a-cargo-flag"][..],
+    ] {
+        let out = script_command(&test_script())
+            .env("TARGET_DIR", fx.target())
+            .env("CARGO", &fake)
+            .args(args)
+            .output()
+            .expect("run scripts/test.sh");
 
-    assert_success(&out, "scripts/test.sh --release");
-    // Fail safe: nothing in debug/deps is touched.
-    assert_kept(&fx.path(OLD_HASHED));
-    assert_kept(&fx.path(NEW_HASHED));
-    assert_kept(&fx.path(OTHER_CRATE_HASHED));
+        assert_success(&out, &format!("scripts/test.sh {args:?}"));
+        // Fail safe: nothing in debug/deps is touched.
+        assert_kept(&fx.path(OLD_HASHED));
+        assert_kept(&fx.path(NEW_HASHED));
+        assert_kept(&fx.path(OTHER_CRATE_HASHED));
+    }
 }
 
 #[test]
 fn test_script_skips_cleanup_when_cargo_wrote_outside_the_cleanup_target() {
     let fx = Fixture::new();
     // The probe says cargo built into `release/deps` while cleanup would prune
-    // `debug/deps`: the mismatch must win over the keep set.
-    let elsewhere = fx.target().join("release/deps").join(NEW_HASHED);
+    // `debug/deps`: the mismatch must win over the keep set. The probe path
+    // exists, as it does for a real cargo build.
+    let release_deps = fx.target().join("release/deps");
+    fs::create_dir_all(&release_deps).unwrap();
+    let elsewhere = release_deps.join(NEW_HASHED);
+    write_file(&elsewhere, true, SystemTime::now());
     let fake = fake_cargo(&fx.target(), 0, &[&elsewhere]);
 
     let out = script_command(&test_script())
@@ -473,6 +483,35 @@ fn test_script_skips_cleanup_when_cargo_wrote_outside_the_cleanup_target() {
     assert_kept(&fx.path(OLD_HASHED));
     assert_kept(&fx.path(NEW_HASHED));
     assert_kept(&fx.path(OTHER_CRATE_HASHED));
+}
+
+/// `$TMPDIR` on macOS is `/var/folders/…` while the physical path is
+/// `/private/var/…`, and users symlink target directories on every platform.
+/// Probe paths reached through the alias must still count as inside the target,
+/// otherwise cleanup is silently disabled.
+#[cfg(unix)]
+#[test]
+fn test_script_canonicalizes_a_symlinked_target_directory() {
+    let fx = Fixture::new();
+    let alias = fx.target().join("target-alias");
+    std::os::unix::fs::symlink(fx.target(), &alias).unwrap();
+    // The probe reports paths through the alias, exactly as cargo would when
+    // CARGO_TARGET_DIR (or TMPDIR) names the symlink.
+    let probe_exe = alias.join("debug/deps").join(NEW_HASHED);
+    let fake = fake_cargo(&fx.target(), 0, &[&probe_exe]);
+
+    let out = script_command(&test_script())
+        .env("TARGET_DIR", &alias)
+        .env("CARGO", &fake)
+        .arg("--definitely-not-a-cargo-flag")
+        .output()
+        .expect("run scripts/test.sh");
+
+    assert_success(&out, "scripts/test.sh with a symlinked target");
+    // Cleanup ran (the alias resolved to the real target) instead of being
+    // skipped as a mismatch.
+    assert_removed(&fx.path(OLD_HASHED));
+    assert_kept(&fx.path(NEW_HASHED));
 }
 
 #[test]
