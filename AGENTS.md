@@ -100,9 +100,12 @@ Production code is under `src/`, tests under `tests/`.
   it fails on panics and wgpu validation errors. CI runs it headlessly.
 - **Push after merge:** `git push origin main`, then confirm GitHub CI and smoke
   are green. Never force-push `main`.
-- **Background seats:** dispatch implementer/reviewer subagents with
-  `background=true`; one implementer per worktree at a time, only on
-  file-disjoint tickets; the controller serializes merges.
+- **Parallel seats:** default to several implementers at once when tickets are
+  independent. Give each one its own worktree and `target/` directory, and only
+  run tickets that touch disjoint files; never point two implementers at the
+  same file. Reviewers run per diff in parallel; the controller serializes
+  merges. Cargo is capped at 10 jobs (`.cargo/config.toml`) so concurrent builds
+  leave CPU for every agent; do not raise it without a ruling.
 - **Scope guard:** keep GPU paint behind `SceneGPU`; pure logic in testable
   seams; no test-only API widening without a ledger ruling.
 
@@ -125,10 +128,11 @@ Production code is under `src/`, tests under `tests/`.
 
 ## SDD workflow
 
-The session is controller: one implementer subagent per task, then one task
-reviewer against the diff. The controller keeps the ledger, does not edit code
-during the loop, and runs a fix round before moving on (read
-`references/fix-loop.md`). A whole-branch review runs once at the end.
+The session is controller: one implementer subagent per task, several at once
+when tickets are independent and file-disjoint, then one task reviewer per diff.
+The controller keeps the ledger, does not edit code during the loop, serializes
+merges, and runs a fix round before moving on (read `references/fix-loop.md`). A
+whole-branch review runs once at the end.
 
 Scripts and prompt templates:
 `~/.cache/opencode/npm/git-superpowers-*/…/skills/subagent-driven-development/`
