@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 (feature checkbox + speed slider must exist).
 
-**Status:** IMPLEMENTER DONE (salvage, sessions #1–#5 + finisher #6) — commit `267dca1` `feat: advected particle animation`, BASE 18307e6. Gates at commit: `cargo test --all-targets` 99/0, clippy `-D warnings` clean. Task review dispatched (opencode/flint-40b-free, ses_e47ac938cffePqGku83Q1jzX6z, package review-18307e6..267dca1.diff) — verdict UNREACHABLE from fresh sessions (not a child of this session); close out on final review / re-dispatch if needed.
+**Status:** COMPLETE (18307e6..`a42fa97`, review clean after fix round 1: `clear()` rewinds rng to `SPAWN_SEED` + pinned covering test `spawn_clear_spawn_is_deterministic` RED→GREEN; report cost note corrected to ≈5 field evals/particle/frame). Minors parked for final review: (m1) test gap y/z invariance, (m2) density-slider no-resize while ON, (m3) review-package diff artifact (hygiene), (m4) toggle off/on identical cloud pattern (= pinned contract; visual-review triage).
 
 - [ ] Pure advection step (position, velocity, lifetime/respawn) RED→GREEN watched: particles follow a constant field in straight lines; speed slider scales the step
 - [ ] Dots pipeline genuinely draws the particles — this closes deferred review minor (d) "paint() dots-count needs real dots draw"; ledger that minor as RESOLVED with this ticket's commit
