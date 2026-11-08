@@ -10,6 +10,7 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
+use super::plane::{DIM_ALPHA, PlaneAxis, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
@@ -66,6 +67,8 @@ pub struct State {
     pub streamlines: bool,
     pub particles: bool,
     pub speed: f32,
+    /// Which sampled slice plane-by-plane mode highlights (ticket 23).
+    pub plane: PlaneView,
     pub dirty: bool,
 }
 
@@ -86,12 +89,18 @@ impl State {
     pub fn new(mode_3d: bool) -> State {
         let formula = if mode_3d { FORMULA_3D } else { FORMULA_2D };
         let field = FieldExpr::parse(formula).expect("default formula must parse");
+        let density = if mode_3d { DEFAULT_DENSITY_3D } else { DEFAULT_DENSITY_2D };
+        let grid = if mode_3d && field.dimension == 3 {
+            UVec3::splat(density)
+        } else {
+            UVec3::new(density, density, 1)
+        };
         State {
             mode_3d,
             formula: formula.to_string(),
             field,
             parse_error: String::new(),
-            density: if mode_3d { DEFAULT_DENSITY_3D } else { DEFAULT_DENSITY_2D },
+            density,
             domain: Domain::default(),
             arrow_scale: 1.0,
             normalize: false,
@@ -103,6 +112,7 @@ impl State {
             streamlines: false,
             particles: false,
             speed: 1.0,
+            plane: PlaneView::middle(grid),
             dirty: true,
         }
     }
@@ -121,6 +131,7 @@ impl State {
             Ok(field) => {
                 self.field = field;
                 self.parse_error = String::new();
+                self.sync_plane();
                 self.mark_dirty()
             }
             Err(error) => {
@@ -140,6 +151,7 @@ impl State {
             return false;
         }
         self.mode_3d = mode_3d;
+        self.sync_plane();
         self.mark_dirty()
     }
 
@@ -151,6 +163,7 @@ impl State {
             return false;
         }
         self.density = density;
+        self.sync_plane();
         self.mark_dirty()
     }
 
@@ -163,6 +176,7 @@ impl State {
             return false;
         }
         self.domain = domain;
+        self.sync_plane();
         self.mark_dirty()
     }
 
@@ -254,6 +268,62 @@ impl State {
         self.mark_dirty()
     }
 
+    /// The plane-by-plane selection, clamped into the current grid. Turning
+    /// the mode on from a fresh (index 0) selection starts at the middle
+    /// plane, matching [`PlaneView::middle`]; the app's 2D startup state and
+    /// the sidebar mirror both begin at index 0.
+    pub fn set_plane(self: &mut State, plane: PlaneView) -> bool {
+        let mut plane = plane.clamped(self.grid());
+        if plane.enabled && !self.plane.enabled && plane.index == 0 {
+            plane.index = plane.axis.middle_index(self.grid());
+        }
+        if self.plane == plane {
+            return false;
+        }
+        self.plane = plane;
+        self.mark_dirty()
+    }
+
+    /// Toggle plane-by-plane inspection.
+    pub fn set_plane_enabled(self: &mut State, enabled: bool) -> bool {
+        let plane = PlaneView { enabled, ..self.plane };
+        self.set_plane(plane)
+    }
+
+    /// Choose the axis the selected plane is perpendicular to. The index is
+    /// clamped into the new axis (a one-slice axis collapses to 0).
+    pub fn set_plane_axis(self: &mut State, axis: PlaneAxis) -> bool {
+        let plane = PlaneView { axis, ..self.plane };
+        self.set_plane(plane)
+    }
+
+    /// Step the selected plane along its axis; out-of-range values clamp.
+    pub fn set_plane_index(self: &mut State, index: u32) -> bool {
+        let plane = PlaneView { index, ..self.plane };
+        self.set_plane(plane)
+    }
+
+    /// Whether plane-by-plane dimming applies: 3D sampling, the mode is on,
+    /// and the chosen axis really has more than one slice. 2D mode and a flat
+    /// field in 3D mode are therefore untouched.
+    pub fn plane_active(self: &State) -> bool {
+        self.is_3d() && self.plane.active(self.grid())
+    }
+
+    /// Keep the plane index valid after the sampling grid changes shape:
+    /// collapse a one-slice axis to 0, and recentre a plane that no longer
+    /// exists at the middle sample. Called by every setter that changes the
+    /// grid (density, mode, formula dimension, domain).
+    fn sync_plane(self: &mut State) {
+        let grid = self.grid();
+        let count = self.plane.axis.count(grid);
+        if count <= 1 {
+            self.plane.index = 0;
+        } else if self.plane.index >= count {
+            self.plane.index = self.plane.axis.middle_index(grid);
+        }
+    }
+
     /// The world half-height the 2D orthographic window covers: the domain's
     /// larger horizontal extent, padded so the field fills the window.
     pub fn plane_size(self: &State) -> f32 {
@@ -315,21 +385,34 @@ impl State {
     /// lengths: with `normalize` off, lengths are proportional to magnitude
     /// and the longest arrow is exactly `arrow_scale` grid cells; with it on
     /// every arrow is exactly `arrow_scale` cells.
+    ///
+    /// Plane-by-plane mode (ticket 23) keeps the selected slice's colormap
+    /// colour at full alpha and lerps every other arrow toward grey at
+    /// [`DIM_ALPHA`]. Sampling still produced the whole cube, so stepping the
+    /// plane only rebuilds these instances, never the field.
     pub fn arrow_instances(self: &State, arrows: &[ArrowData]) -> Vec<ArrowInstanceGPU> {
         let unit = self.arrow_scale * self.spacing();
         let max_mag = arrows.iter().fold(0.0_f32, |m, a| m.max(a.mag));
+        let plane_active = self.plane_active();
+        let grid = self.grid();
+        let domain = self.domain;
         arrows
             .iter()
             .map(|a| {
                 let len = if self.normalize || max_mag <= 0.0 { unit } else { unit * (a.mag / max_mag) };
+                let (rgb, alpha) = if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
+                    (dim_color(a.color), DIM_ALPHA)
+                } else {
+                    (a.color, 1.0)
+                };
                 ArrowInstanceGPU {
                     origin: [a.position.x, a.position.y, a.position.z, 1.0],
                     dir_len: [a.dir.x, a.dir.y, a.dir.z, len],
                     color: [
-                        a.color[0] as f32 / 255.0,
-                        a.color[1] as f32 / 255.0,
-                        a.color[2] as f32 / 255.0,
-                        1.0,
+                        rgb[0] as f32 / 255.0,
+                        rgb[1] as f32 / 255.0,
+                        rgb[2] as f32 / 255.0,
+                        alpha,
                     ],
                 }
             })

@@ -6,8 +6,10 @@
 //! app); each frame a `DrawCallback` uploads the current `SceneGPU` and draws.
 //!
 //! Depth note: egui_wgpu paint callbacks have no depth attachment, so arrows
-//! are opaque REPLACE-blend and are CPU-sorted far-to-near
-//! (painter's algorithm) by the caller.
+//! are CPU-sorted far-to-near (painter's algorithm) by the caller. The arrow
+//! pipeline blends straight alpha (`SrcAlpha` over `OneMinusSrcAlpha`) so
+//! plane-by-plane mode can paint the off-plane arrows translucently; selected
+//! plane arrows arrive with alpha 1.0 and therefore still paint opaquely.
 
 use std::sync::Arc;
 
@@ -84,6 +86,17 @@ impl SceneGPU {
 }
 
 const LIGHT_DIR: [f32; 4] = [0.4211, 0.8521, 0.3108, 0.0]; // normalize(0.42, 0.85, 0.31)
+
+/// The arrow pipeline's blend state: straight alpha, so an instance's
+/// `color.a` is honoured. Plane-by-plane mode relies on this; opaque arrows
+/// (alpha 1.0) are unchanged by it.
+///
+/// There is no depth attachment to configure: egui_wgpu paint callbacks run
+/// in a pass egui owns, so the existing far-to-near CPU sort is the depth
+/// ordering. A second opaque pass for the selected plane is unnecessary:
+/// alpha 1.0 under this blend resolves to a plain replace, so selected arrows
+/// still paint opaquely inside the one sorted draw.
+pub const ARROW_BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
 
 fn mat4_to_mats(m: Mat4) -> [[f32; 4]; 4] {
     m.to_cols_array_2d()
@@ -173,7 +186,7 @@ impl DrawState {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(ARROW_BLEND),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),

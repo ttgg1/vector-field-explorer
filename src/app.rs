@@ -5,6 +5,8 @@ use eframe::egui;
 use glam::{Vec2, Vec3};
 
 use crate::camera::OrbitCamera;
+use crate::domain::Domain;
+use crate::reference::reference_lines;
 use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
 use crate::screenshot::{self, Screenshot};
@@ -152,6 +154,7 @@ impl VfApp {
         // Restore through the viewmodel setters so the first frame samples the
         // saved field; a corrupt record cannot poison the grid.
         settings.view.restore(&mut state, &mut sidebar);
+        let backdrop = reference_lines(&state.domain, state.is_3d());
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -174,7 +177,7 @@ impl VfApp {
             last_viewport_rect: None,
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
-                lines: Arc::new(reference_lines()),
+                lines: Arc::new(backdrop),
                 dots: Arc::new(Vec::new()),
             },
             renderer_ready: false,
@@ -269,7 +272,12 @@ impl VfApp {
         self.click_seeds.push(seed);
         self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-        self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+        self.scene.lines = Arc::new(compose_lines(
+            &self.flow_lines,
+            &self.click_lines,
+            &self.state.domain,
+            self.state.is_3d(),
+        ));
         log::trace!(
             "click seed {} of {} at {seed:?}: {} click streamline segments",
             self.click_seeds.len(),
@@ -327,7 +335,12 @@ impl VfApp {
         }
         self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-        self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+        self.scene.lines = Arc::new(compose_lines(
+            &self.flow_lines,
+            &self.click_lines,
+            &self.state.domain,
+            self.state.is_3d(),
+        ));
     }
 }
 
@@ -337,39 +350,19 @@ impl Default for VfApp {
     }
 }
 
-/// Grid + axes backdrop on the z = 0 plane (thin unlit lines). App-side
-/// decoration: the viewmodel snapshot only owns the sampled field geometry.
-fn reference_lines() -> Vec<LineInstanceGPU> {
-    let mut lines = Vec::new();
-    let half = 6f32;
-    for i in -10..=10 {
-        let t = i as f32 / 10.0 * half;
-        let gray = if i == 0 { 0.45 } else { 0.22 };
-        let axis_color = if i == 0 { [0.55, 0.2, 0.2, 1.0] } else { [gray, gray, gray + 0.03, 1.0] };
-        lines.push(LineInstanceGPU {
-            a: [t, -half, 0.0, 1.0],
-            b: [t, half, 0.005, 0.015],
-            color: axis_color,
-        });
-    }
-    for i in -10..=10 {
-        let t = i as f32 / 10.0 * half;
-        let gray = if i == 0 { 0.45 } else { 0.22 };
-        let axis_color = if i == 0 { [0.2, 0.55, 0.2, 1.0] } else { [gray, gray + 0.03, gray, 1.0] };
-        lines.push(LineInstanceGPU {
-            a: [-half, t, 0.0, 1.0],
-            b: [half, t, 0.005, 0.015],
-            color: axis_color,
-        });
-    }
-    lines
-}
-
-/// Fold the backdrop, the grid-seeded streamlines and the click bursts into the
-/// one line collection the viewport paints. Rebuilt only on a scene rebuild or
-/// a click, so the per-frame path still clones an `Arc`.
-fn compose_lines(flow: &[LineInstanceGPU], clicks: &[LineInstanceGPU]) -> Vec<LineInstanceGPU> {
-    let mut lines = reference_lines();
+/// Fold the domain-matched backdrop, the grid-seeded streamlines and the click
+/// bursts into the one line collection the viewport paints. Rebuilt only on a
+/// scene rebuild or a click, so the per-frame path still clones an `Arc`. The
+/// backdrop follows the current domain and sampling dimension (ticket 23):
+/// `reference_lines` is cheap, and a rebuild is exactly when the domain may
+/// have moved.
+fn compose_lines(
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+    domain: &Domain,
+    sampling_3d: bool,
+) -> Vec<LineInstanceGPU> {
+    let mut lines = reference_lines(domain, sampling_3d);
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
     lines
@@ -565,7 +558,12 @@ impl eframe::App for VfApp {
             // domain/formula rather than dropping the user's picks.
             self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+            self.scene.lines = Arc::new(compose_lines(
+                &self.flow_lines,
+                &self.click_lines,
+                &self.state.domain,
+                self.state.is_3d(),
+            ));
             log::trace!(
                 "scene rebuilt: {} arrows, {} streamline segments, {} dots",
                 self.scene.arrows.len(),

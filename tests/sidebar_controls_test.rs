@@ -6,6 +6,7 @@
 
 use vector_field_explorer::ui::sidebar::{Controls, apply};
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::plane::{PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{State, DEFAULT_DENSITY_2D, MAX_DENSITY_3D};
 
 #[test]
@@ -25,6 +26,22 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.speed, s.speed, "speed agrees");
     assert_eq!(c.domain_min, s.domain.min, "domain min agrees");
     assert_eq!(c.domain_max, s.domain.max, "domain max agrees");
+    assert_eq!(c.plane, s.plane, "the plane mirror starts where the seam does");
+}
+
+#[test]
+fn apply_never_commits_the_plane_mirror() {
+    // The plane index commits on slider release (ticket 23), so the per-frame
+    // `apply` handoff must not touch it: a drag would otherwise resample the
+    // field on every frame.
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.plane = PlaneView { enabled: true, axis: PlaneAxis::X, index: 0 };
+    apply(&mut s, &mut c);
+    assert!(!s.dirty, "apply leaves the plane alone");
+    assert!(!s.plane.enabled, "the seam still has plane mode off");
+    assert_eq!(s.plane.axis, PlaneAxis::Z);
 }
 
 #[test]

@@ -24,6 +24,7 @@ use eframe::egui;
 
 use crate::colormap::Colormap;
 use crate::domain::Domain;
+use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
 use crate::viewmodel::{
     State,
     DEFAULT_DENSITY_2D,
@@ -89,6 +90,12 @@ pub struct Controls {
     pub speed: f32,
     pub domain_min: Vec3,
     pub domain_max: Vec3,
+    /// Plane-by-plane mirror (ticket 23). The index is only handed to the
+    /// seam when the slider is released, so a drag never resamples the field.
+    pub plane: PlaneView,
+    /// True while the plane slider is being dragged: the mirror must keep the
+    /// in-flight value instead of following the state.
+    pub plane_drag: bool,
 }
 
 impl Controls {
@@ -110,16 +117,20 @@ impl Controls {
             speed: 1.0,
             domain_min: domain.min,
             domain_max: domain.max,
+            plane: PlaneView::default(),
+            plane_drag: false,
         }
     }
 
     /// Restore the Display section's defaults (density, arrow length,
-    /// normalization).
+    /// normalization, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
         self.arrow_scale = defaults.arrow_scale;
         self.normalize = defaults.normalize;
+        self.plane = defaults.plane;
+        self.plane_drag = false;
     }
 
     /// Restore the Features section's defaults (traces off, speed 1).
@@ -159,6 +170,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
     let max_density = if sampling_3d { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
+    let grid = state.grid();
+    let domain = state.domain;
+
+    // The plane mirror follows the seam (which clamps/recentres it on grid
+    // changes) except while its slider is mid-drag: the in-flight value has to
+    // survive the frame so the slider does not snap back. The seam is only
+    // handed the new index when the drag ends, so dragging never resamples.
+    if !controls.plane_drag {
+        controls.plane = state.plane;
+    }
+    let mut commit_plane = false;
 
     section(ui, Section::Display, controls, |ui, controls| {
         ui.horizontal(|ui| {
@@ -173,6 +195,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         .on_hover_text("Arrow length as a multiple of one grid cell");
         ui.checkbox(&mut controls.normalize, "Normalize lengths")
             .on_hover_text("Scale arrows to unit length, keeping only their direction");
+        if sampling_3d {
+            commit_plane |= plane_controls(ui, controls, &domain, grid);
+        }
     });
 
     section(ui, Section::Features, controls, |ui, controls| {
@@ -240,8 +265,81 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
 
     // Hand the whole mirror to the seam (below); the rebuild that the dirty
     // flag asks for happens in app.rs right after this panel, so this frame's
-    // snapshot and status-bar count already reflect the edits.
+    // snapshot and status-bar count already reflect the edits. The plane index
+    // is separate: it commits on toggle/axis changes and on slider release
+    // only (ticket 23), so a drag never re-samples the field.
+    if commit_plane {
+        state.set_plane(controls.plane);
+        controls.plane = state.plane;
+    }
     apply(state, controls);
+}
+
+/// Draw the plane-by-plane controls (3D sampling only) and report whether the
+/// selection should be committed to the seam this frame. The slider commits on
+/// `drag_stopped` (or a click/keyboard change), not on every dragged frame.
+fn plane_controls(
+    ui: &mut egui::Ui,
+    controls: &mut Controls,
+    domain: &Domain,
+    grid: glam::UVec3,
+) -> bool {
+    let mut commit = ui
+        .checkbox(&mut controls.plane.enabled, "Plane by plane")
+        .on_hover_text("Highlight one sampled slice and fade the rest of the cube")
+        .changed();
+    if !controls.plane.enabled {
+        return commit;
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Axis");
+        for axis in PlaneAxis::ALL {
+            commit |= ui
+                .selectable_value(&mut controls.plane.axis, axis, axis.label().to_uppercase())
+                .on_hover_text("Axis the selected plane is perpendicular to")
+                .changed();
+        }
+    });
+
+    let count = controls.plane.axis.count(grid);
+    // An axis switch may leave the old index past the new axis's last sample.
+    controls.plane.index = controls.plane.index.min(count.saturating_sub(1));
+    if count <= 1 {
+        ui.label(format!(
+            "{} = {:.2}  (1 / 1) — one slice",
+            controls.plane.axis.label(),
+            plane_coordinate(domain, grid, controls.plane.axis, controls.plane.index),
+        ));
+        return commit;
+    }
+
+    let response = ui.add(
+        egui::Slider::new(&mut controls.plane.index, 0..=count - 1)
+            .text("Plane")
+            .integer(),
+    );
+    if response.drag_started() {
+        controls.plane_drag = true;
+    }
+    if response.drag_stopped() {
+        controls.plane_drag = false;
+        commit = true;
+    }
+    // A click on the track or a keyboard step is already a completed change;
+    // only a live drag waits for the release.
+    if response.changed() && !response.dragged() {
+        commit = true;
+    }
+    let index = controls.plane.index;
+    ui.label(format!(
+        "{} = {:.2}  ({} / {})",
+        controls.plane.axis.label(),
+        plane_coordinate(domain, grid, controls.plane.axis, index),
+        index + 1,
+        count,
+    ));
+    commit
 }
 
 /// One collapsible section with a reset-to-defaults button in its header.
@@ -289,6 +387,9 @@ fn section(
 /// and marks the state dirty only if the value actually moved; afterwards the
 /// mirror is refreshed from the effective state, so next frame's widgets
 /// start from truth (clamped density, swapped extrema, …).
+///
+/// Plane-by-plane is deliberately absent: its index commits on slider release
+/// (ticket 23), not once per frame, so it has its own handoff in `show`.
 pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_density(controls.density);
     state.set_arrow_scale(controls.arrow_scale);

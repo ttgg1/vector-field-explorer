@@ -13,6 +13,12 @@ The persisted inputs that determine what the viewport shows: formula, 2D/3D
 mode, domain, and the control values in the Controls panel. Restored on launch.
 _Avoid_: session state, app state (that also covers style and layout)
 
+**Plane-by-plane mode**:
+A 3D display mode that highlights one sampled slice of the field cube and fades
+the rest, so the cube keeps its shape while a single plane reads clearly. The
+slice is chosen by axis and grid index.
+_Avoid_: slice mode, cross-section
+
 **Camera state**:
 The live orientation, target, and zoom of the orbit camera. Resets to the
 default on launch; changed by mouse gestures or by applying a camera preset.
