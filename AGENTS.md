@@ -46,17 +46,18 @@ Never trust an unverified status line over those two.
 
 ## Status and frontier
 
-Completed: plan tasks T1–T8A; tickets 02–08, 11, 12. Ticket 14 is implemented
-(`f4dbb1b`) but its review requested changes; the fix-round work is **uncommitted**
-in the tree (patch: `.superpowers/sdd/2026-11-05-vector-field-explorer/ticket-14-fix-wip.patch`).
-See the ledger's `2026-11-08 — SESSION STATE` section before resuming.
+Completed: plan tasks T1–T8A; tickets 02–08, 11, 12, 14, 20. See the ledger's
+latest dated section before resuming.
 
-Next order: **20 logging (do first) → 15 top-bar menus → 18 right-drag orbit +
-expanded controls → 13 test/source separation → 17 release pipeline → 16 wasm
-+ Pages → 09 README, cleanup, final whole-branch review → 10 codebase
-documentation → 19 final whole-codebase review + organization refactor.** Ticket
-18 depends on 15's Help/menu surface; ticket 16 inherits 18's bindings; ticket
-20 goes first so every later UI/wasm ticket has logs.
+Next order: **15 top-bar menus → 18 right-drag orbit + expanded controls → 22
+sidebar rail legibility → 23 3D cube + plane view → 13 test/source separation →
+21 test-suite performance → 17 release pipeline → 16 wasm + Pages → 09 README,
+cleanup, final whole-branch review → 10 codebase documentation → 19 final
+whole-codebase review + organization refactor.** Ticket 18 depends on 15's
+Help/menu surface; ticket 16 inherits 18's bindings. Tickets 22 and 23 land
+after 18 (same panels/help) and before 13 so their tests move once; ticket 21
+follows 13 because relocating inline tests would otherwise multiply
+integration-binary startup cost.
 
 Ticket 09 triages all parked minors (issue-01, tickets 02–05, 06–08) and deletes
 stale feature branches. Ticket 19 is the last development ticket: a complete
