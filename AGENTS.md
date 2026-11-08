@@ -71,9 +71,13 @@ Production code is under `src/`, tests under `tests/`.
 
 - **TDD:** no production code without a failing test first; watch RED fail for
   the right reason, then keep the full suite green.
-- **Tests live in `tests/`.** Existing inline `#[cfg(test)]` modules are ticket
-  13 debt; add no new ones. Integration tests import
-  `vector_field_explorer::{…}` — `crate::` and `use super::*` do not resolve.
+- **Tests live in `tests/`.** Every test is an integration test named
+  `tests/<module>_test.rs`; `src/` carries no `#[cfg(test)]` modules, and
+  `tests/test_layout_test.rs` fails the suite if one comes back. Integration
+  tests import `vector_field_explorer::{…}` — `crate::` and `use super::*` do
+  not resolve, and they see only `pub` items. A helper that a test genuinely
+  needs is promoted to a single `#[doc(hidden)] pub` seam with the reason in the
+  commit body and the SDD ledger; never widen the API further for tests.
 - **Commits:** `feat:` / `fix:` / `docs:`, one commit set per task. Never ledger
   a task without a `git rev-parse`-verifiable hash.
 - **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD
