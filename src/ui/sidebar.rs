@@ -261,8 +261,9 @@ fn section(
     .show_header(ui, |ui| {
         ui.label(egui::RichText::new(section.title()).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Body-sized button, not `small_button`: the header action must
-            // read at the same scale as the section body (ticket 22 audit).
+            // Full-size button, not `small_button`: the section action gets a
+            // normal click target. (In egui 0.37 `small_button` only trims
+            // vertical padding, so this is about target size, not type size.)
             reset = ui
                 .button("Reset")
                 .on_hover_text(format!("Reset {} to defaults", section.title()))

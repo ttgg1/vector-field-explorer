@@ -365,21 +365,6 @@ fn reference_lines() -> Vec<LineInstanceGPU> {
     lines
 }
 
-/// A slim collapse chevron at the top of an expanded panel. Clicking it
-/// collapses the panel back to its rail — the symmetric affordance to the
-/// rail's expand click, alongside Ctrl+B / Ctrl+P.
-fn collapse_button(ui: &mut egui::Ui, side: layout::RailSide, shortcut: &str) -> bool {
-    let (chevron, tooltip) = match side {
-        layout::RailSide::Left => ("‹", format!("Collapse Controls ({shortcut})")),
-        layout::RailSide::Right => ("›", format!("Collapse Presets ({shortcut})")),
-    };
-    let mut clicked = false;
-    ui.horizontal(|ui| {
-        clicked = ui.small_button(chevron).on_hover_text(tooltip).clicked();
-    });
-    clicked
-}
-
 /// Fold the backdrop, the grid-seeded streamlines and the click bursts into the
 /// one line collection the viewport paints. Rebuilt only on a scene rebuild or
 /// a click, so the per-frame path still clones an `Arc`.
@@ -468,7 +453,8 @@ impl eframe::App for VfApp {
                 .min_size(layout::MIN_PANEL_WIDTH)
                 .max_size(layout::MAX_PANEL_WIDTH)
                 .show(ui, |ui| {
-                    collapse = collapse_button(ui, layout::RailSide::Left, menu::CONTROLS_SHORTCUT);
+                    collapse =
+                        layout::collapse_button(ui, layout::RailSide::Left, menu::CONTROLS_SHORTCUT);
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
                     });
@@ -481,18 +467,17 @@ impl eframe::App for VfApp {
                 self.layout.controls_expanded = false;
             }
         } else {
-            egui::Panel::left(("controls_rail", self.panel_generation))
-                .exact_size(layout::RAIL_WIDTH)
-                .show(ui, |ui| {
-                    if layout::rail(
-                        ui,
-                        layout::RailSide::Left,
-                        "Controls",
-                        menu::CONTROLS_SHORTCUT,
-                    ) {
-                        self.layout.controls_expanded = true;
-                    }
-                });
+            if layout::rail_panel(
+                ui,
+                ("controls_rail", self.panel_generation),
+                layout::RailSide::Left,
+                "Controls",
+                menu::CONTROLS_SHORTCUT,
+            )
+            .clicked
+            {
+                self.layout.controls_expanded = true;
+            }
         }
 
         // Right Presets panel, or its rail; same pin/collapse contract. The
@@ -513,7 +498,11 @@ impl eframe::App for VfApp {
                 .min_size(layout::MIN_PANEL_WIDTH)
                 .max_size(layout::MAX_PANEL_WIDTH)
                 .show(ui, |ui| {
-                    collapse = collapse_button(ui, layout::RailSide::Right, menu::PRESETS_SHORTCUT);
+                    collapse = layout::collapse_button(
+                        ui,
+                        layout::RailSide::Right,
+                        menu::PRESETS_SHORTCUT,
+                    );
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         camera_request =
                             self.presets.show(ui, &mut self.camera, &mut self.state);
@@ -527,18 +516,17 @@ impl eframe::App for VfApp {
                 self.layout.presets_expanded = false;
             }
         } else {
-            egui::Panel::right(("presets_rail", self.panel_generation))
-                .exact_size(layout::RAIL_WIDTH)
-                .show(ui, |ui| {
-                    if layout::rail(
-                        ui,
-                        layout::RailSide::Right,
-                        "Presets",
-                        menu::PRESETS_SHORTCUT,
-                    ) {
-                        self.layout.presets_expanded = true;
-                    }
-                });
+            if layout::rail_panel(
+                ui,
+                ("presets_rail", self.panel_generation),
+                layout::RailSide::Right,
+                "Presets",
+                menu::PRESETS_SHORTCUT,
+            )
+            .clicked
+            {
+                self.layout.presets_expanded = true;
+            }
         }
         if let Some(command) = camera_request {
             self.apply_view_command(command);
