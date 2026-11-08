@@ -20,8 +20,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
+      # scripts/test.sh runs the suite and prunes stale hashed test binaries
+      # before Swatinem/rust-cache saves target/ (ticket 34), keeping the cache
+      # under GitHub's 10 GB limit. Do not add `cargo clean`: it empties the
+      # cache the next job needs.
       - name: Test
-        run: cargo test --all-targets
+        run: scripts/test.sh
       - name: Build (debug)
         run: cargo build
 

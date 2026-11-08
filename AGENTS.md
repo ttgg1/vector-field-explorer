@@ -93,7 +93,9 @@ Production code is under `src/`, tests under `tests/`.
   ledger, not only in todos or chat.
 - **Trunk-based:** one `feature/<topic>` branch or worktree per feature; merge
   only after review; `main` is reviewed work only.
-- **Gates:** `cargo build`, `cargo test --all-targets`, `cargo
+- **Gates:** `cargo build`, `scripts/test.sh` (the local/CI test entry point: runs
+  `cargo test --all-targets` and prunes stale test binaries; pass
+  `KEEP_TEST_ARTIFACTS=1` to skip cleanup), `cargo
   clippy --all-targets -- -D warnings` (note the `--` separator).
 - **Runtime smoke:** build/test create no wgpu device. After touching
   `src/renderer.rs`, shaders, windowing, or input, run `scripts/smoke-run.sh 15`;
