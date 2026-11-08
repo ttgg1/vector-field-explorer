@@ -1,24 +1,275 @@
 name: Release
 
+# Tag-driven release pipeline (ticket 17).
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Jobs:
+#   verify   ubuntu-latest  guards + build/test/clippy; everything else waits
+#   build    matrix         release binary per target, packaged as an archive
+#   release  ubuntu-latest  create/update the GitHub Release, attach all assets
+#
+# Guards, both before anything is built or published:
+#   * the tag must be `v` + the Cargo.toml [package] version (v0.1.0)
+#   * the tag commit must be reachable from main
+#
+# macOS builds are unsigned and not notarized in v1, so Gatekeeper blocks the
+# first launch: right-click (or Control-click) the .app and choose Open. That
+# note is prepended to every release's generated notes.
+#
+# A semver pre-release tag (v0.1.0-rc.1) is published with --prerelease, so a
+# dry run does not become the "latest" release.
+#
+# Runner images: the ticket named macos-13 for x86_64, but that image was
+# retired in Dec 2025 and macos-14 followed on 2026-11-02. The matrix therefore
+# uses macos-15-intel (the last Intel image, supported through Aug 2027) and
+# macos-15 (arm64); targets and asset names are unchanged.
+
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (for example v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # Tag pushes expose the tag as github.ref_name; a manual run takes an input.
+  TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  release:
+  verify:
+    name: Verify
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Build and verify the tagged commit, not the branch head that a
+          # manual dispatch would otherwise check out.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          fetch-depth: 0 # full history and tags for the main-reachability check
+
+      - name: Check tag matches Cargo.toml version
+        run: |
+          version="$(scripts/check-version.sh "$TAG")"
+          echo "release version: ${version}"
+
+      - name: Check tag is reachable from main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "main:refs/remotes/origin/main"
+          git fetch --no-tags origin --force "refs/tags/${TAG}:refs/tags/${TAG}"
+          if ! git merge-base --is-ancestor "refs/tags/${TAG}^{commit}" refs/remotes/origin/main; then
+            echo "::error::tag ${TAG} is not reachable from main; refusing to release"
+            exit 1
+          fi
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
       - uses: Swatinem/rust-cache@v2
+
+      - name: Build (all targets)
+        run: cargo build --all-targets
+
       - name: Test
         run: cargo test --all-targets
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    # macOS minutes bill at 10x on private repos; cap a hung build.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+      - name: Check tag matches Cargo.toml version
+        id: version
+        run: |
+          version="$(scripts/check-version.sh "$TAG")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Build-only deps: winit/glutin headers, X11/Wayland, GL and Vulkan.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxi-dev \
+            libgl1-mesa-dev libvulkan-dev pkg-config
+
       - name: Build (release)
-        run: cargo build --release
-      - name: Upload artifact
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Strip binary
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/vector-field-explorer"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            strip -x "$bin"
+          else
+            strip "$bin"
+          fi
+
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          for f in README.md LICENSE; do
+            if [ ! -f "$f" ]; then
+              echo "::error::release assets require $f in the repo root"
+              exit 1
+            fi
+          done
+
+          name="vector-field-explorer-${VERSION}-${TARGET}"
+          bin="target/${TARGET}/release/vector-field-explorer"
+          mkdir -p dist
+
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            mkdir -p "dist/${name}"
+            cp "$bin" README.md LICENSE "dist/${name}/"
+            tar -C dist -czf "${name}.tar.gz" "${name}"
+            echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          else
+            app="dist/vector-field-explorer.app"
+            mkdir -p "${app}/Contents/MacOS"
+            cp "$bin" "${app}/Contents/MacOS/vector-field-explorer"
+            cat > "${app}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>Vector Field Explorer</string>
+            <key>CFBundleDisplayName</key>
+            <string>Vector Field Explorer</string>
+            <key>CFBundleIdentifier</key>
+            <string>io.github.ttgg1.vector-field-explorer</string>
+            <key>CFBundleExecutable</key>
+            <string>vector-field-explorer</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>11.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+            cp README.md LICENSE dist/
+            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE )
+            echo "asset=${name}.zip" >> "$GITHUB_OUTPUT"
+          fi
+
+          ls -l dist
+
+      - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
-          name: vector-field-explorer-${{ github.ref_name }}
-          path: target/release/vector-field-explorer
+          name: ${{ matrix.target }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          assets=(dist/*)
+          if [ "${#assets[@]}" -ne 3 ]; then
+            echo "::error::expected 3 release assets, found ${#assets[@]}: ${assets[*]}"
+            exit 1
+          fi
+          ls -l dist
+
+          # Prepended to the commit-generated notes by `gh release create`.
+          cat > release-notes.md <<'NOTES'
+          ### macOS: first launch
+
+          These builds are unsigned and not notarized. On first launch,
+          right-click (or Control-click) `vector-field-explorer.app` and choose
+          **Open**, then confirm. Double-clicking a freshly downloaded app shows
+          "Apple could not verify..." instead.
+
+          Linux: the tarball needs a Vulkan-capable driver (or a software
+          implementation such as `mesa-vulkan-drivers`).
+          NOTES
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists; uploading assets with --clobber"
+          else
+            # semver pre-release tags must not become the "latest" release.
+            prerelease=()
+            case "$TAG" in
+              v*-*) prerelease+=(--prerelease) ;;
+            esac
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --verify-tag \
+              --generate-notes \
+              "${prerelease[@]}" \
+              --notes "$(cat release-notes.md)"
+          fi
+
+          gh release upload "$TAG" "${assets[@]}" --clobber
