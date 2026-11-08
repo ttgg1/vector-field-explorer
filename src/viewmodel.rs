@@ -476,13 +476,14 @@ pub const ORBIT_SENSITIVITY: f32 = 0.005;
 
 /// One frame of viewport mouse input, in logical points and egui's zoom
 /// convention (`zoom > 1` means the user asked to get closer). `drag` is the
-/// primary-button delta, `pan` the secondary/middle-button delta; each mode
-/// maps them onto its own navigation (see [`apply_camera_input`]).
+/// orbit channel, `pan` the pan channel; [`drag_channel`] maps the held buttons
+/// onto them (ticket 18), then each mode maps the channels onto its own
+/// navigation (see [`apply_camera_input`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewGesture {
-    /// Primary-button drag delta, points (3D: orbit; 2D: pan).
+    /// Orbit-channel drag delta, points (3D: orbit; 2D: pan).
     pub drag: Vec2,
-    /// Secondary/middle-button drag delta, points (pans both views).
+    /// Pan-channel drag delta, points (pans both views).
     pub pan: Vec2,
     /// Wheel/pinch zoom factor; 1.0 is no change.
     pub zoom: f32,
@@ -565,6 +566,76 @@ pub fn apply_camera_input(
         camera.zoom_2d(zoom);
     }
     camera
+}
+
+/// Which pointer buttons are dragging this frame, plus the Shift modifier.
+/// Plain data so the button→gesture mapping is testable without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DragButtons {
+    pub primary: bool,
+    pub secondary: bool,
+    pub middle: bool,
+    pub shift: bool,
+}
+
+/// The camera channel a drag feeds. [`ViewGesture`] carries one delta per
+/// channel, so the mapping decides which field gets the pointer delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragChannel {
+    /// Orbit the 3D view.
+    Orbit,
+    /// Pan the view (both modes).
+    Pan,
+}
+
+/// Map the held pointer buttons onto a camera channel (ticket 18).
+///
+/// 3D: left-drag and right-drag orbit; middle-drag and Shift+right-drag pan
+/// (the trackpad/no-middle-button fallback). 2D: every button pans — the fixed
+/// front view has nothing to orbit. A middle button is the most explicit pan,
+/// then the secondary button, then the primary one.
+///
+/// The wasm build (ticket 16) reuses this mapping and only has to suppress the
+/// browser context menu on the secondary button.
+pub fn drag_channel(mode_3d: bool, buttons: DragButtons) -> Option<DragChannel> {
+    if buttons.middle {
+        return Some(DragChannel::Pan);
+    }
+    if buttons.secondary {
+        return Some(if mode_3d && !buttons.shift {
+            DragChannel::Orbit
+        } else {
+            DragChannel::Pan
+        });
+    }
+    if buttons.primary {
+        return Some(if mode_3d { DragChannel::Orbit } else { DragChannel::Pan });
+    }
+    None
+}
+
+/// What a completed pointer gesture in the viewport should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickOutcome {
+    /// The gesture never became a drag and was a single click: seed the flow.
+    Seed,
+    /// A double-click: reset the view, never seed.
+    ResetView,
+    /// No click (a drag, a hover, or nothing).
+    None,
+}
+
+/// Decide what one viewport gesture means. egui reports `clicked` for every
+/// completed click including the second half of a double-click, so the
+/// double-click check comes first: the reset wins and the click never seeds.
+pub fn click_outcome(clicked: bool, double_clicked: bool, dragged: bool) -> ClickOutcome {
+    if double_clicked {
+        ClickOutcome::ResetView
+    } else if clicked && !dragged {
+        ClickOutcome::Seed
+    } else {
+        ClickOutcome::None
+    }
 }
 
 #[cfg(test)]

@@ -36,8 +36,10 @@ impl Default for OrbitCamera {
 }
 
 impl OrbitCamera {
-    const MIN_DISTANCE: f32 = 0.5;
-    const MAX_DISTANCE: f32 = 20.0;
+    /// Closest the orbit eye may come to its target, world units.
+    pub const MIN_DISTANCE: f32 = 0.5;
+    /// Farthest the orbit eye may move from its target, world units.
+    pub const MAX_DISTANCE: f32 = 20.0;
     const NEAR: f32 = 0.01;
     const FAR: f32 = 100.0;
     /// Tightest 2D zoom-in (a 20x magnification).

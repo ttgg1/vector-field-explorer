@@ -129,6 +129,7 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ResetLayout, SideEffect::ResetLayout),
         (MenuAction::ResetCamera, SideEffect::ResetCamera),
         (MenuAction::ToggleHelp, SideEffect::None),
+        (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
         (MenuAction::OpenSettings, SideEffect::OpenSettings),
         (MenuAction::About, SideEffect::ShowAbout),
     ];
@@ -275,12 +276,11 @@ fn every_enum_variant_is_reachable_from_a_menu_item() {
             "{action:?} has no menu item: it would be a dead variant",
         );
     }
-    // ToggleHelp is deliberately offered from both View and Help; every other
-    // action has exactly one home.
+    // Ticket 18 split the two help homes: View > Help overlay toggles the
+    // viewport overlay, Help > Keyboard & mouse opens the full table window.
     for action in MenuAction::ALL {
         let homes = reachable.iter().filter(|reachable| *reachable == action).count();
-        let expected = if *action == MenuAction::ToggleHelp { 2 } else { 1 };
-        assert_eq!(homes, expected, "{action:?} has {homes} menu homes");
+        assert_eq!(homes, 1, "{action:?} has {homes} menu homes");
     }
 }
 
@@ -364,4 +364,66 @@ fn about_reports_the_package_version_and_gpl_license() {
     assert_eq!(ABOUT_VERSION, env!("CARGO_PKG_VERSION"));
     assert_eq!(ABOUT_LICENSE, "GPL-3.0-only");
     assert_eq!(ABOUT_URL, "https://github.com/ttgg1/vector-field-explorer");
+}
+
+#[test]
+fn the_help_menu_opens_the_table_while_view_keeps_the_overlay_toggle() {
+    // Ticket 18: Help > Keyboard & mouse opens the full table window; View >
+    // Help overlay still toggles the compact viewport overlay.
+    let help = menu::MENUS
+        .iter()
+        .find(|menu| menu.title == "Help")
+        .expect("the Help menu exists");
+    assert_eq!(help.items[0].label, "Keyboard & mouse");
+    assert_eq!(help.items[0].action, MenuAction::ShowHelpTable);
+
+    let view = menu::MENUS
+        .iter()
+        .find(|menu| menu.title == "View")
+        .expect("the View menu exists");
+    assert!(
+        view.items
+            .iter()
+            .any(|item| item.label == "Help overlay" && item.action == MenuAction::ToggleHelp),
+        "View keeps the overlay toggle",
+    );
+}
+
+/// Run one egui pass with one `?` press and report what the real help-key
+/// check sees.
+fn question_mark_fires(modifiers: egui::Modifiers) -> bool {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input.events.push(egui::Event::ModifiersChanged(modifiers));
+    input.events.push(egui::Event::Key {
+        key: egui::Key::Slash,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    });
+    let mut fired = None;
+    let mut output = ctx.run_pass(input, |ctx| {
+        if fired.is_none() {
+            fired = Some(menu::help_key_pressed(ctx));
+        }
+    });
+    output.textures_delta.clear();
+    fired.unwrap_or(false)
+}
+
+#[test]
+fn question_mark_toggles_help_without_firing_other_shortcuts() {
+    assert!(
+        question_mark_fires(egui::Modifiers::SHIFT),
+        "Shift+/ (?) toggles the help overlay",
+    );
+    assert!(
+        !question_mark_fires(egui::Modifiers::NONE),
+        "a bare slash is not the help key",
+    );
+    assert!(
+        !question_mark_fires(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT)),
+        "Ctrl+Shift+/ must not toggle help",
+    );
 }

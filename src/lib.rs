@@ -14,6 +14,7 @@ pub mod sampling;
 pub mod screenshot;
 pub mod streamlines;
 pub mod ui;
+pub mod view_command;
 pub mod viewmodel;
 pub mod window;
 

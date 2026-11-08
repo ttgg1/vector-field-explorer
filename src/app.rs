@@ -17,7 +17,17 @@ use crate::ui::presets::{PresetPanel, default_preset_dir};
 use crate::ui::sidebar::Controls;
 use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
-use crate::viewmodel::{State, ViewGesture, apply_camera_input};
+use crate::view_command::{self, ViewCommand, ViewContext};
+use crate::viewmodel::{
+    ClickOutcome,
+    DragButtons,
+    DragChannel,
+    State,
+    ViewGesture,
+    apply_camera_input,
+    click_outcome,
+    drag_channel,
+};
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
@@ -55,6 +65,21 @@ pub struct StatusBarState {
 /// grow the scene without limit.
 const MAX_CLICK_SEEDS: usize = 6;
 
+/// How long after a single click a second click still counts as a double-click,
+/// in seconds. Matches egui's default `max_double_click_delay`: the app uses it
+/// to take back the first click's seed when a double-click resets the view.
+const DOUBLE_CLICK_WINDOW: f64 = 0.3;
+
+/// The seed the last single click planted, so a double-click can remove it
+/// again: a double-click resets the view and must not seed the flow.
+struct LastClickSeed {
+    seed: Vec3,
+    /// Particle count after any ambient spawn but before the click's burst.
+    particles_before: usize,
+    /// egui's frame time when the click happened.
+    time: f64,
+}
+
 /// Application root state: the viewmodel State (the single source of truth for
 /// what is on screen), the formula bar's local widgets, the sidebar's local
 /// Controls, the status readouts, both cameras (the 2D `Camera` and the
@@ -84,6 +109,9 @@ pub struct VfApp {
     settings_open: bool,
     /// Whether the Help > About dialog is up (ticket 15).
     about_open: bool,
+    /// Whether the Help > Keyboard & mouse window is up (ticket 18): the full
+    /// help table, shared with the viewport overlay.
+    help_open: bool,
     /// The viewport rect from this frame (set in the central panel) so the help
     /// overlay can anchor to its bottom-left corner.
     last_viewport_rect: Option<egui::Rect>,
@@ -100,6 +128,9 @@ pub struct VfApp {
     /// a deterministic streamline burst; the newest click also drops a
     /// particle burst when the particle toggle is on.
     click_seeds: Vec<Vec3>,
+    /// The most recent single click's seed, so a double-click can take it back
+    /// (ticket 18: double-click resets the view, it must not seed).
+    last_click_seed: Option<LastClickSeed>,
     /// The grid-seeded streamline segments from the last scene rebuild, kept
     /// separately so a click can recompose the line collection without
     /// re-sampling or re-tracing the grid.
@@ -145,6 +176,7 @@ impl VfApp {
             panel_generation: 0,
             settings_open: false,
             about_open: false,
+            help_open: false,
             last_viewport_rect: None,
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
@@ -156,6 +188,7 @@ impl VfApp {
             particles: Particles::default(),
             dots_range: (0.0, 1.0),
             click_seeds: Vec::new(),
+            last_click_seed: None,
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             screenshot: Screenshot::new(),
@@ -181,6 +214,7 @@ impl VfApp {
             menu::SideEffect::None => {}
             menu::SideEffect::OpenSettings => self.settings_open = true,
             menu::SideEffect::ShowAbout => self.about_open = true,
+            menu::SideEffect::ShowHelp => self.help_open = true,
             // The capture itself happens in the viewport, where this frame's
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.screenshot.request(),
@@ -193,6 +227,105 @@ impl VfApp {
             }
             menu::SideEffect::ResetCamera => self.presets.clear_active(),
         }
+    }
+
+    /// The current view context for the command seam: which projection is
+    /// showing and which domain it frames.
+    fn view_context(&self) -> ViewContext {
+        ViewContext::new(self.state.mode_3d, self.state.domain)
+    }
+
+    /// Apply one camera command from any input surface (keyboard, double-click,
+    /// camera buttons, menu). Reset and fit invalidate the highlighted preset:
+    /// the camera no longer matches the saved view.
+    fn apply_view_command(&mut self, command: ViewCommand) {
+        self.orbit = view_command::apply_view_command(self.orbit, self.view_context(), command);
+        if matches!(command, ViewCommand::Reset | ViewCommand::Fit) {
+            self.presets.clear_active();
+        }
+    }
+
+    /// Turn one viewport click into a deterministic streamline burst (and a
+    /// particle burst when particles are on). The pure entry point maps the
+    /// pointer position onto the camera ray (3D, at the focal plane) or the 2D
+    /// plane; the viewmodel retraces the bounded burst list.
+    fn seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
+        let width = rect.width().max(1.0);
+        let height = rect.height().max(1.0);
+        let ndc = Vec2::new(
+            (pos.x - rect.left()) / width * 2.0 - 1.0,
+            1.0 - (pos.y - rect.top()) / height * 2.0,
+        );
+        let ortho = if self.state.mode_3d { None } else { Some(self.state.plane_size()) };
+        let Some(seed) = click_seed(self.orbit, &self.state.domain, aspect, ndc, ortho) else {
+            // A click that lands off the domain plants nothing, so it cannot
+            // be the first half of a seeding double-click either.
+            self.last_click_seed = None;
+            return;
+        };
+        if self.click_seeds.len() >= MAX_CLICK_SEEDS {
+            self.click_seeds.remove(0);
+        }
+        self.click_seeds.push(seed);
+        self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+        self.streamline_count = self.flow_lines.len() + self.click_lines.len();
+        self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
+        log::trace!(
+            "click seed {} of {} at {seed:?}: {} click streamline segments",
+            self.click_seeds.len(),
+            MAX_CLICK_SEEDS,
+            self.click_lines.len()
+        );
+        // Particles only exist in the 3D view; a click adds a capped burst
+        // around the pick (the per-frame dot rebuild picks it up next frame).
+        // If the cloud has not spawned yet, fill it first so the click does not
+        // leave a cloud of just this burst. The count after that ambient spawn
+        // is what a double-click truncates back to.
+        let mut particles_before = particle_count(&self.particles);
+        if self.state.particles && self.state.mode_3d {
+            if particle_count(&self.particles) == 0 {
+                spawn(
+                    &mut self.particles,
+                    &self.state.domain,
+                    target_count(self.state.density),
+                    3,
+                );
+            }
+            particles_before = particle_count(&self.particles);
+            spawn_at(
+                &mut self.particles,
+                &self.state.domain,
+                seed,
+                CLICK_BURST_PARTICLES,
+                3,
+            );
+        }
+        self.last_click_seed = Some(LastClickSeed { seed, particles_before, time });
+    }
+
+    /// Take back the burst the previous single click planted when it turns out
+    /// to be the first half of a double-click: the double-click resets the view
+    /// and must not leave a seed behind. An older single click (outside egui's
+    /// double-click window) is left alone.
+    fn undo_last_click_seed(&mut self, now: f64) {
+        let Some(last) = self.last_click_seed.take() else {
+            return;
+        };
+        if now - last.time > DOUBLE_CLICK_WINDOW {
+            return;
+        }
+        if let Some(index) = self.click_seeds.iter().rposition(|seed| *seed == last.seed) {
+            self.click_seeds.remove(index);
+        }
+        if self.state.particles
+            && self.state.mode_3d
+            && particle_count(&self.particles) >= last.particles_before
+        {
+            self.particles.pos.truncate(last.particles_before);
+        }
+        self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+        self.streamline_count = self.flow_lines.len() + self.click_lines.len();
+        self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
     }
 }
 
@@ -275,6 +408,25 @@ impl eframe::App for VfApp {
             self.apply_menu_action(action, &ctx);
         }
 
+        // Camera keys (ticket 18): arrows, `+`/`-`, `R` and `F` feed the same
+        // view-command seam as the double-click and the camera buttons. The
+        // loop is inert while a text field has focus, so the formula bar keeps
+        // every key it needs (the menu's global shortcuts already ran above).
+        for command in view_command::view_key_commands(&ctx, &self.orbit, self.view_context()) {
+            self.apply_view_command(command);
+        }
+
+        // `?` is the second help key (F1 goes through the menu table); Esc
+        // dismisses the transient help surfaces. Neither fires while typing.
+        if menu::help_key_pressed(&ctx) {
+            self.layout.toggle_help();
+        }
+        if !ctx.text_edit_focused() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.settings_open = false;
+            self.help_open = false;
+            self.layout.help_visible = false;
+        }
+
         // Top menu bar: File / Edit / View / Settings / Help and the screenshot
         // action. The bar only reports the action; the app dispatches it.
         let mut style_changed = false;
@@ -347,6 +499,10 @@ impl eframe::App for VfApp {
         // hands its camera back and moves the orbit target/zoom.
         self.camera.position = [self.orbit.target.x, self.orbit.target.y];
         self.camera.scale = self.orbit.ortho_zoom;
+        // A camera button (Reset view / Fit domain) picked in the Presets panel
+        // this frame; applied after the panel so the view-command seam owns the
+        // camera update.
+        let mut camera_request = None;
         if self.layout.presets_expanded {
             let mut collapse = false;
             let response = egui::Panel::right(("presets_panel", self.panel_generation))
@@ -357,7 +513,8 @@ impl eframe::App for VfApp {
                 .show(ui, |ui| {
                     collapse = collapse_button(ui, layout::RailSide::Right, menu::PRESETS_SHORTCUT);
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.presets.show(ui, &mut self.camera, &mut self.state);
+                        camera_request =
+                            self.presets.show(ui, &mut self.camera, &mut self.state);
                     });
                 });
             self.layout.presets_width = layout::clamp_width(
@@ -380,6 +537,9 @@ impl eframe::App for VfApp {
                         self.layout.presets_expanded = true;
                     }
                 });
+        }
+        if let Some(command) = camera_request {
+            self.apply_view_command(command);
         }
         if let Some(applied) = self.presets.take_applied() {
             // Guard the hand-editable preset file: `f32::clamp` passes NaN
@@ -489,24 +649,25 @@ impl eframe::App for VfApp {
                 log::info!("wgpu renderer initialized");
             }
 
-            // Camera gestures feed the seam's pure camera action: a left-drag
-            // orbits in 3D or pans in 2D, a right/middle-drag pans the orbit
-            // target, and the wheel/pinch factor zooms both views (the camera
-            // clamps it). The response also senses clicks, so a press+release
-            // without dragging seeds the flow (egui only reports `clicked` when
-            // the gesture never became a drag, so orbiting/panning is
-            // untouched).
+            // Camera gestures feed the seam's pure camera action. Ticket 18
+            // maps the buttons through `drag_channel`: in 3D left- and
+            // right-drag orbit, middle-drag and Shift+right-drag pan; in 2D
+            // every drag pans. The wheel/pinch factor zooms both views (the
+            // camera clamps it).
             let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
             let pointer_delta = resp.drag_delta();
             let pointer_delta = Vec2::new(pointer_delta.x, pointer_delta.y);
-            let (drag, pan) = if resp.dragged_by(egui::PointerButton::Primary) {
-                (pointer_delta, Vec2::ZERO)
-            } else if resp.dragged_by(egui::PointerButton::Secondary)
-                || resp.dragged_by(egui::PointerButton::Middle)
-            {
-                (Vec2::ZERO, pointer_delta)
-            } else {
-                (Vec2::ZERO, Vec2::ZERO)
+            let buttons = DragButtons {
+                primary: resp.dragged_by(egui::PointerButton::Primary),
+                secondary: resp.dragged_by(egui::PointerButton::Secondary),
+                middle: resp.dragged_by(egui::PointerButton::Middle),
+                shift: ui.ctx().input(|input| input.modifiers.shift),
+            };
+            let channel = drag_channel(self.state.mode_3d, buttons);
+            let (drag, pan) = match channel {
+                Some(DragChannel::Orbit) => (pointer_delta, Vec2::ZERO),
+                Some(DragChannel::Pan) => (Vec2::ZERO, pointer_delta),
+                None => (Vec2::ZERO, Vec2::ZERO),
             };
             let zoom = if resp.hovered() || resp.dragged() {
                 crate::ui::top_bar::wheel_zoom(ui.ctx())
@@ -525,74 +686,36 @@ impl eframe::App for VfApp {
                 },
             );
 
-            // Cursor feedback: grab/grabbing for the orbit, move for panning.
+            // Cursor feedback (ticket 18): orbiting shows grab/grabbing,
+            // panning shows move; the wheel zoom leaves the cursor alone.
             if resp.hovered() || resp.dragged() {
-                let icon = if self.state.mode_3d {
-                    if resp.dragged() {
-                        egui::CursorIcon::Grabbing
-                    } else {
-                        egui::CursorIcon::Grab
-                    }
-                } else if resp.dragged() {
-                    egui::CursorIcon::Grabbing
-                } else {
-                    egui::CursorIcon::Move
+                let icon = match channel {
+                    Some(DragChannel::Orbit) => egui::CursorIcon::Grabbing,
+                    Some(DragChannel::Pan) => egui::CursorIcon::Move,
+                    None if self.state.mode_3d => egui::CursorIcon::Grab,
+                    None => egui::CursorIcon::Move,
                 };
                 ui.ctx().set_cursor_icon(icon);
             }
 
-            let width = rect.width().max(1.0);
-            let height = rect.height().max(1.0);
-            let aspect = width / height;
+            let aspect = rect.width().max(1.0) / rect.height().max(1.0);
 
-            // Click-to-seed: the pure entry point turns the pointer position
-            // into a point on the camera ray (3D, at the focal plane) or on the
-            // 2D plane, then the viewmodel retraces the (bounded) burst list.
-            if resp.clicked()
-                && let Some(pos) = resp.interact_pointer_pos()
-            {
-                let ndc = Vec2::new(
-                    (pos.x - rect.left()) / width * 2.0 - 1.0,
-                    1.0 - (pos.y - rect.top()) / height * 2.0,
-                );
-                let ortho = if self.state.mode_3d { None } else { Some(self.state.plane_size()) };
-                if let Some(seed) = click_seed(self.orbit, &self.state.domain, aspect, ndc, ortho) {
-                    if self.click_seeds.len() >= MAX_CLICK_SEEDS {
-                        self.click_seeds.remove(0);
-                    }
-                    self.click_seeds.push(seed);
-                    self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
-                    self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-                    self.scene.lines = Arc::new(compose_lines(&self.flow_lines, &self.click_lines));
-                    log::trace!(
-                        "click seed {} of {} at {seed:?}: {} click streamline segments",
-                        self.click_seeds.len(),
-                        MAX_CLICK_SEEDS,
-                        self.click_lines.len()
-                    );
-                    // Particles only exist in the 3D view; a click adds a
-                    // capped burst around the pick (the per-frame dot
-                    // rebuild picks it up on the next frame). If the cloud
-                    // has not spawned yet, fill it first so the click does
-                    // not leave a cloud of just this burst.
-                    if self.state.particles && self.state.mode_3d {
-                        if particle_count(&self.particles) == 0 {
-                            spawn(
-                                &mut self.particles,
-                                &self.state.domain,
-                                target_count(self.state.density),
-                                3,
-                            );
-                        }
-                        spawn_at(
-                            &mut self.particles,
-                            &self.state.domain,
-                            seed,
-                            CLICK_BURST_PARTICLES,
-                            3,
-                        );
+            // Click-to-seed and double-click reset (ticket 18): a click only
+            // seeds when the gesture never became a drag, and a double-click
+            // resets the view instead — taking back the seed its first click
+            // planted so the gesture leaves no burst behind.
+            let now = ui.ctx().input(|input| input.time);
+            match click_outcome(resp.clicked(), resp.double_clicked(), resp.dragged()) {
+                ClickOutcome::ResetView => {
+                    self.undo_last_click_seed(now);
+                    self.apply_view_command(ViewCommand::Reset);
+                }
+                ClickOutcome::Seed => {
+                    if let Some(pos) = resp.interact_pointer_pos() {
+                        self.seed_click(pos, rect, aspect, now);
                     }
                 }
+                ClickOutcome::None => {}
             }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so
@@ -691,7 +814,7 @@ impl eframe::App for VfApp {
             && let Some(rect) = self.last_viewport_rect
         {
             let anchor = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
-            if crate::ui::help_overlay::show(ui.ctx(), anchor, self.state.mode_3d) {
+            if crate::ui::help_overlay::show(ui.ctx(), anchor) {
                 self.layout.help_visible = false;
             }
         }
@@ -699,6 +822,10 @@ impl eframe::App for VfApp {
         // Help > About (ticket 15): a small window over everything, closed by
         // its × (its open flag is the window's visibility).
         top_bar::about_window(ui.ctx(), &mut self.about_open);
+
+        // Help > Keyboard & mouse (ticket 18): the full help table, the same
+        // strings the overlay above renders.
+        crate::ui::help_overlay::help_window(ui.ctx(), &mut self.help_open);
     }
 
     /// Persist the settings envelope (style + layout + view state) under

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::export::{delete_preset, load_presets, save_preset, Preset};
 use crate::presets::{PresetCategory, presets, presets_in};
 use crate::render::Camera;
+use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
 
 /// Directory where presets.json lives by default: XDG_CONFIG_HOME if set,
@@ -20,6 +21,14 @@ pub fn default_preset_dir() -> PathBuf {
         }
     }
 }
+
+/// The camera action buttons the panel offers, in display order. The labels
+/// are pinned by the tests and the commands go through the same
+/// [`crate::view_command::apply_view_command`] seam as `R` and `F`.
+pub const CAMERA_BUTTONS: &[(&str, ViewCommand)] = &[
+    ("Reset view", ViewCommand::Reset),
+    ("Fit domain", ViewCommand::Fit),
+];
 
 /// UI panel for managing camera presets, with the built-in field presets
 /// grouped by category above them. The panel's user-facing actions
@@ -220,8 +229,32 @@ impl PresetPanel {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, camera: &mut Camera, state: &mut State) {
+    /// Draw the panel. Returns the camera command a `Reset view` / `Fit
+    /// domain` button asked for this frame (the app applies it through the
+    /// view-command seam).
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        camera: &mut Camera,
+        state: &mut State,
+    ) -> Option<ViewCommand> {
         ui.heading("Presets");
+
+        // Camera actions (ticket 18): clickable twins of `R` and `F`, kept
+        // next to the presets so the view controls live in one place.
+        let mut requested = None;
+        ui.horizontal(|ui| {
+            for (label, command) in CAMERA_BUTTONS {
+                let tooltip = match command {
+                    ViewCommand::Reset => "Restore the default view (R)",
+                    ViewCommand::Fit => "Frame the whole domain (F)",
+                    _ => "",
+                };
+                if ui.button(*label).on_hover_text(tooltip).clicked() {
+                    requested = Some(*command);
+                }
+            }
+        });
 
         // Built-in field presets, grouped by category. The row highlight needs
         // the clicked name (`active_field`) as well as the live formula and
@@ -325,5 +358,7 @@ impl PresetPanel {
                 self.new_name.clear();
             }
         });
+
+        requested
     }
 }

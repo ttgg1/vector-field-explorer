@@ -66,6 +66,7 @@ menu_actions! {
     ResetLayout,
     ResetCamera,
     ToggleHelp,
+    ShowHelpTable,
     OpenSettings,
     About,
 }
@@ -80,6 +81,8 @@ pub enum SideEffect {
     OpenSettings,
     /// Show the About dialog.
     ShowAbout,
+    /// Show the keyboard & mouse window (the full help table).
+    ShowHelp,
     /// Ask the screenshot capture for one frame.
     Screenshot,
     /// Close the window.
@@ -147,7 +150,7 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "Help",
         items: &[
-            MenuItem { label: "Keyboard & mouse", action: MenuAction::ToggleHelp },
+            MenuItem { label: "Keyboard & mouse", action: MenuAction::ShowHelpTable },
             MenuItem { label: "About Vector Field Explorer", action: MenuAction::About },
         ],
     },
@@ -247,6 +250,25 @@ pub fn shortcut_actions(ctx: &egui::Context) -> Vec<MenuAction> {
     })
 }
 
+/// Whether this frame pressed `?` (Shift+/ on a US layout), the secondary help
+/// shortcut. It is not in [`SHORTCUTS`] because that table keeps exactly one
+/// key per action (F1); the Help window documents both. Inert while a text
+/// field has focus, like every camera/view key.
+pub fn help_key_pressed(ctx: &egui::Context) -> bool {
+    if ctx.text_edit_focused() {
+        return false;
+    }
+    ctx.input(|input| {
+        let modifiers = input.modifiers;
+        modifiers.shift
+            && !modifiers.ctrl
+            && !modifiers.command
+            && !modifiers.alt
+            && !modifiers.mac_cmd
+            && input.key_pressed(egui::Key::Slash)
+    })
+}
+
 /// The state a menu action mutates: everything the pure seam can touch. The
 /// app builds one per dispatch from its own fields, so there is no second copy
 /// of the layout, camera, viewmodel or controls records.
@@ -284,7 +306,11 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             SideEffect::ResetLayout
         }
         MenuAction::ResetCamera => {
-            *ui.orbit = OrbitCamera::default();
+            *ui.orbit = crate::view_command::apply_view_command(
+                *ui.orbit,
+                crate::view_command::ViewContext::new(ui.state.mode_3d, ui.state.domain),
+                crate::view_command::ViewCommand::Reset,
+            );
             *ui.camera = Camera::default();
             SideEffect::ResetCamera
         }
@@ -292,6 +318,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             ui.layout.toggle_help();
             SideEffect::None
         }
+        MenuAction::ShowHelpTable => SideEffect::ShowHelp,
         MenuAction::OpenSettings => SideEffect::OpenSettings,
         MenuAction::About => SideEffect::ShowAbout,
     }

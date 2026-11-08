@@ -102,7 +102,9 @@ fn two_d_pan_scale_follows_the_zoom() {
 }
 
 #[test]
-fn three_d_right_drag_pans_without_orbiting() {
+fn three_d_pan_channel_pans_without_orbiting() {
+    // Ticket 18 maps middle-drag and Shift+right-drag onto this channel; the
+    // channel itself still pans without orbiting or zooming.
     let home = OrbitCamera::default();
     let (right, up) = home.view_basis();
     let forward = (home.target - home.position()).normalize();

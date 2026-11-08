@@ -1,42 +1,130 @@
-//! Dismissible help overlay in the viewport's bottom-left corner (ticket 14).
+//! The keyboard & mouse reference (ticket 18).
 //!
-//! The text is deliberately terse and grey so it never competes with the
-//! field: one line per gesture plus the formula-syntax reminder. Its
+//! One table is the single source of strings for both surfaces: the compact
+//! overlay anchored in the viewport's bottom-left corner (active mode + global
+//! bindings) and the Help menu's window (all three groups). The overlay's
 //! visibility is a persisted [`crate::ui::layout::LayoutState`] flag, visible
-//! on first run; the × is the discoverable way to hide it.
+//! on first run; the ×, `F1`, `?` and `Esc` all dismiss it.
 
 use eframe::egui;
 
-/// The overlay's lines for the current mode. 2D lists the pan/zoom gestures;
-/// 3D adds orbit and the right-drag pan. Both add the formula reminder and the
-/// shortcut rule (which now excludes text fields except Ctrl+Q).
-pub fn help_lines(mode_3d: bool) -> &'static [&'static str] {
-    if mode_3d {
-        &[
-            "Drag: orbit",
-            "Right/middle-drag: pan",
-            "Wheel/pinch: zoom",
-            "Click: seed streamlines",
-            "Formula: (fx, fy, fz), e.g. (-y, x, 0.5)",
-            "Ctrl+B / Ctrl+P: toggle panels (not while typing)",
-            "Ctrl+Q: quit; F1: toggle this help",
-        ]
-    } else {
-        &[
-            "Drag: pan",
-            "Wheel/pinch: zoom",
-            "Click: seed streamlines",
-            "Formula: (fx, fy), e.g. (-y, x)",
-            "Ctrl+B / Ctrl+P: toggle panels (not while typing)",
-            "Ctrl+Q: quit; F1: toggle this help",
-        ]
-    }
+/// One documented input: the key or mouse gesture, and what it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpRow {
+    pub input: &'static str,
+    pub action: &'static str,
 }
 
-/// Draw the overlay anchored at `anchor` (the viewport's bottom-left corner in
-/// global coordinates). Returns true when the user dismissed it, so the caller
-/// can persist the new visibility.
-pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
+/// One titled group of rows. The overlay shows one view group plus Global; the
+/// Help window shows every group in [`HELP_SECTIONS`] order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpSection {
+    pub title: &'static str,
+    pub rows: &'static [HelpRow],
+}
+
+const ROWS_3D: &[HelpRow] = &[
+    HelpRow { input: "Left-drag", action: "Orbit" },
+    HelpRow { input: "Right-drag", action: "Orbit" },
+    HelpRow { input: "Middle-drag", action: "Pan" },
+    HelpRow { input: "Shift + right-drag", action: "Pan" },
+    HelpRow { input: "Wheel / pinch", action: "Zoom" },
+    HelpRow { input: "Double-click", action: "Reset view" },
+    HelpRow { input: "Arrow keys", action: "Orbit" },
+    HelpRow { input: "Shift + arrows", action: "Pan" },
+    HelpRow { input: "+ / -", action: "Zoom in / out" },
+    HelpRow { input: "R", action: "Reset view" },
+    HelpRow { input: "F", action: "Fit domain" },
+    HelpRow { input: "Click", action: "Seed streamlines" },
+];
+
+const ROWS_2D: &[HelpRow] = &[
+    HelpRow { input: "Left / right-drag", action: "Pan" },
+    HelpRow { input: "Middle-drag", action: "Pan" },
+    HelpRow { input: "Wheel / pinch", action: "Zoom" },
+    HelpRow { input: "Double-click", action: "Reset view" },
+    HelpRow { input: "Arrow keys", action: "Pan" },
+    HelpRow { input: "Shift + arrows", action: "Pan faster" },
+    HelpRow { input: "+ / -", action: "Zoom in / out" },
+    HelpRow { input: "R", action: "Reset view" },
+    HelpRow { input: "F", action: "Fit domain" },
+    HelpRow { input: "Click", action: "Seed streamlines" },
+];
+
+const ROWS_GLOBAL: &[HelpRow] = &[
+    HelpRow { input: "F1 / ?", action: "Toggle help" },
+    HelpRow { input: "Ctrl+B / Ctrl+P", action: "Toggle panels" },
+    HelpRow { input: "Ctrl+Shift+S", action: "Export screenshot" },
+    HelpRow { input: "Ctrl+Shift+C", action: "Copy formula" },
+    HelpRow { input: "Ctrl+Q", action: "Quit" },
+    HelpRow { input: "Esc", action: "Close dialogs / dismiss help" },
+];
+
+/// The three groups, in window order. Both help surfaces read this table, so a
+/// binding is spelled exactly once.
+pub const HELP_SECTIONS: &[HelpSection] = &[
+    HelpSection { title: "3D view", rows: ROWS_3D },
+    HelpSection { title: "2D view", rows: ROWS_2D },
+    HelpSection { title: "Global", rows: ROWS_GLOBAL },
+];
+
+/// Every documented row, across all groups (the flattened table both help
+/// surfaces render).
+pub fn all_rows() -> Vec<HelpRow> {
+    HELP_SECTIONS
+        .iter()
+        .flat_map(|section| section.rows.iter().copied())
+        .collect()
+}
+
+/// The formula-syntax reminder, kept apart from the binding table because it
+/// is not an input. Both help surfaces show it under the Global group.
+pub const FORMULA_HINT: &str = "Formula: (fx, fy) or (fx, fy, fz), e.g. (-y, x)";
+
+fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection]) {
+    for (index, section) in sections.iter().enumerate() {
+        if index > 0 {
+            ui.add_space(4.0);
+        }
+        ui.label(
+            egui::RichText::new(section.title)
+                .strong()
+                .size(11.0)
+                .color(egui::Color32::from_gray(200)),
+        );
+        egui::Grid::new(("help_grid", section.title))
+            .num_columns(2)
+            .spacing([12.0, 1.0])
+            .show(ui, |ui| {
+                for row in section.rows {
+                    ui.label(
+                        egui::RichText::new(row.input)
+                            .size(12.0)
+                            .color(egui::Color32::from_gray(185)),
+                    );
+                    ui.label(
+                        egui::RichText::new(row.action)
+                            .size(12.0)
+                            .color(egui::Color32::from_gray(155)),
+                    );
+                    ui.end_row();
+                }
+            });
+    }
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(FORMULA_HINT)
+            .size(11.0)
+            .color(egui::Color32::from_gray(150)),
+    );
+}
+
+/// Draw the compact overlay anchored at `anchor` (the viewport's bottom-left
+/// corner in global coordinates). It renders the same table as the Help
+/// window, so every binding is discoverable without opening a menu. Returns
+/// true when the user dismissed it, so the caller can persist the new
+/// visibility.
+pub fn show(ctx: &egui::Context, anchor: egui::Pos2) -> bool {
     let mut dismissed = false;
     egui::Area::new(egui::Id::unique("help_overlay"))
         .fixed_pos(anchor)
@@ -51,7 +139,7 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("Mouse & formula")
+                            egui::RichText::new("Mouse & keyboard")
                                 .strong()
                                 .color(egui::Color32::from_gray(200)),
                         );
@@ -60,19 +148,27 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
                             |ui| {
                                 dismissed = ui
                                     .small_button("×")
-                                    .on_hover_text("Hide the help overlay")
+                                    .on_hover_text("Hide the help overlay (F1)")
                                     .clicked();
                             },
                         );
                     });
-                    for line in help_lines(mode_3d) {
-                        ui.label(
-                            egui::RichText::new(*line)
-                                .size(12.0)
-                                .color(egui::Color32::from_gray(175)),
-                        );
-                    }
+                    let all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
+                    table(ui, &all);
                 });
         });
     dismissed
+}
+
+/// The Help menu's window: the same table, all three groups. `open` is the
+/// window's visibility flag (the menu action sets it, the × clears it).
+pub fn help_window(ctx: &egui::Context, open: &mut bool) {
+    egui::Window::new("Keyboard & mouse")
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
+            table(ui, &all);
+        });
 }
