@@ -3,11 +3,19 @@ use std::io;
 /// Save a rendered frame buffer as PNG.
 ///
 /// The frame is packed RGBA8 bytes (row-major, as produced by eframe/wgpu
-/// readbacks); channels are written through unchanged.
-pub fn save_png(frame: &[u8], width: u32, height: u32, path: &str) -> io::Result<()> {
+/// readbacks); channels are written through unchanged. The destination is any
+/// `AsRef<Path>`, so a native dialog's `PathBuf` is written exactly as chosen
+/// — no lossy UTF-8 round trip for a non-UTF-8 path (screenshot fix round 1).
+pub fn save_png(
+    frame: &[u8],
+    width: u32,
+    height: u32,
+    path: impl AsRef<std::path::Path>,
+) -> io::Result<()> {
     let buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, frame.to_vec())
         .ok_or_else(|| io::Error::other("invalid frame size"))?;
-    buffer.save_with_format(path, image::ImageFormat::Png)
+    buffer
+        .save_with_format(path.as_ref(), image::ImageFormat::Png)
         .map_err(io::Error::other)?;
     Ok(())
 }

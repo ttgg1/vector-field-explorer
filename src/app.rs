@@ -396,9 +396,15 @@ impl eframe::App for VfApp {
             // dialog and writes the PNG. Nothing here touches the live
             // surface textures, and the readback is RGBA by contract.
             if self.screenshot.take_request() {
+                // `rect` is in logical points; a capture must have the viewport's
+                // *physical* pixels, so scale by the display's pixels-per-point
+                // before rounding (HiDPI fix round 1). The cap applies after that.
+                let pixels_per_point = ui.ctx().pixels_per_point();
                 let (capture_width, capture_height) = screenshot::capture_size(
-                    rect.width().round().max(1.0) as u32,
-                    rect.height().round().max(1.0) as u32,
+                    rect.width(),
+                    rect.height(),
+                    pixels_per_point,
+                    screenshot::MAX_CAPTURE_EDGE,
                 );
                 // egui paints this behind the field; clearing to the same
                 // (linear-space) fill keeps the capture's background identical.

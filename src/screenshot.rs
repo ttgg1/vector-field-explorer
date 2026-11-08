@@ -40,21 +40,41 @@ pub enum SaveOutcome {
     Failed(String),
 }
 
-/// The capture size for a viewport of `width`×`height` pixels: unchanged while
-/// it fits, otherwise both axes scaled by the same factor so neither exceeds
-/// [`MAX_CAPTURE_EDGE`]. Scaling both keeps the aspect ratio — and therefore
-/// the camera framing — identical to what is on screen.
-pub fn capture_size(width: u32, height: u32) -> (u32, u32) {
-    let width = width.max(1);
-    let height = height.max(1);
+/// The capture size for a viewport of `width_points`×`height_points` logical
+/// points at `pixels_per_point`: unchanged while it fits, otherwise both axes
+/// scaled by the same factor so neither exceeds `cap`. The logical size is
+/// converted to **physical pixels** first — egui rects are in points, the
+/// viewport is painted in pixels, so a 2× display must capture twice the
+/// pixels (HiDPI fix round 1). Scaling both axes keeps the aspect ratio — and
+/// therefore the camera framing — identical to what is on screen.
+pub fn capture_size(
+    width_points: f32,
+    height_points: f32,
+    pixels_per_point: f32,
+    cap: u32,
+) -> (u32, u32) {
+    // A nonsense scale factor (0, negative, NaN, inf) must not collapse the
+    // capture to nothing: fall back to one pixel per point.
+    let scale_factor = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
+        f64::from(pixels_per_point)
+    } else {
+        1.0
+    };
+    let cap = f64::from(cap.max(1));
+    let to_pixels = |points: f32| -> f64 {
+        let pixels = f64::from(points) * scale_factor;
+        if pixels.is_finite() { pixels.round().max(1.0) } else { 1.0 }
+    };
+    let width = to_pixels(width_points);
+    let height = to_pixels(height_points);
     let longest = width.max(height);
-    if longest <= MAX_CAPTURE_EDGE {
-        return (width, height);
+    if longest <= cap {
+        return (width as u32, height as u32);
     }
-    let scale = MAX_CAPTURE_EDGE as f64 / longest as f64;
+    let down_scale = cap / longest;
     (
-        ((width as f64 * scale).round() as u32).max(1),
-        ((height as f64 * scale).round() as u32).max(1),
+        ((width * down_scale).round() as u32).max(1),
+        ((height * down_scale).round() as u32).max(1),
     )
 }
 
@@ -85,6 +105,23 @@ pub fn strip_row_padding(readback: &[u8], width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+/// Whether a readback in `format` can be normalised to the PNG contract, i.e.
+/// one of the 8-bit RGBA/BGRA flavours [`to_rgba`] understands.
+///
+/// Kept as the shared predicate for the whole screenshot path: the GPU capture
+/// calls it *before* creating a texture or a readback buffer, because a format
+/// with a different bytes-per-texel would make the stride/buffer sizing invalid
+/// and trip wgpu validation instead of returning the clean error.
+pub fn png_readback_check(format: TextureFormat) -> Result<(), String> {
+    match format {
+        TextureFormat::Rgba8Unorm
+        | TextureFormat::Rgba8UnormSrgb
+        | TextureFormat::Bgra8Unorm
+        | TextureFormat::Bgra8UnormSrgb => Ok(()),
+        other => Err(format!("unsupported surface format {other:?} for screenshots")),
+    }
+}
+
 /// Normalise a readback to the PNG byte order contract: RGBA, never BGRA.
 ///
 /// Ruling (ticket 08): screenshots carry the same RGBA contract as the preset
@@ -93,6 +130,7 @@ pub fn strip_row_padding(readback: &[u8], width: u32, height: u32) -> Vec<u8> {
 /// instead of silently writing red as blue. A format the PNG path cannot
 /// describe is an error, not a guess.
 pub fn to_rgba(format: TextureFormat, mut pixels: Vec<u8>) -> Result<Vec<u8>, String> {
+    png_readback_check(format)?;
     match format {
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(pixels),
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(pixels
@@ -101,6 +139,7 @@ pub fn to_rgba(format: TextureFormat, mut pixels: Vec<u8>) -> Result<Vec<u8>, St
             .iter_mut()
             .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
             .collect()),
+        // Unreachable: `png_readback_check` rejected everything else.
         other => Err(format!("unsupported surface format {other:?} for screenshots")),
     }
 }
@@ -160,10 +199,11 @@ pub fn ensure_png_extension(path: PathBuf) -> PathBuf {
     }
 }
 
-/// Write a captured frame, reporting success/failure back to the UI.
+/// Write a captured frame, reporting success/failure back to the UI. The path
+/// goes to the encoder as a `Path`, exactly as the dialog returned it.
 fn save_capture(rgba: &[u8], width: u32, height: u32, path: PathBuf) -> SaveOutcome {
     let path = ensure_png_extension(path);
-    match crate::export::save_png(rgba, width, height, &path.to_string_lossy()) {
+    match crate::export::save_png(rgba, width, height, &path) {
         Ok(()) => SaveOutcome::Saved(path),
         Err(error) => SaveOutcome::Failed(error.to_string()),
     }
@@ -357,15 +397,70 @@ mod tests {
 
     #[test]
     fn capture_size_keeps_the_aspect_and_the_4096_cap() {
-        assert_eq!(capture_size(800, 600), (800, 600), "small viewports capture 1:1");
-        assert_eq!(capture_size(4096, 4096), (4096, 4096), "exactly at the cap");
+        let cap = MAX_CAPTURE_EDGE;
         assert_eq!(
-            capture_size(8192, 4096),
+            capture_size(800.0, 600.0, 1.0, cap),
+            (800, 600),
+            "small viewports capture 1:1",
+        );
+        assert_eq!(
+            capture_size(4096.0, 4096.0, 1.0, cap),
+            (4096, 4096),
+            "exactly at the cap",
+        );
+        assert_eq!(
+            capture_size(8192.0, 4096.0, 1.0, cap),
             (4096, 2048),
             "oversized captures scale both axes so the framing is unchanged",
         );
-        assert_eq!(capture_size(8192, 100), (4096, 50));
-        assert_eq!(capture_size(0, 0), (1, 1), "a degenerate rect still captures one pixel");
+        assert_eq!(capture_size(8192.0, 100.0, 1.0, cap), (4096, 50));
+        assert_eq!(
+            capture_size(0.0, 0.0, 1.0, cap),
+            (1, 1),
+            "a degenerate rect still captures one pixel",
+        );
+    }
+
+    #[test]
+    fn capture_size_uses_physical_pixels_on_hidpi() {
+        let cap = MAX_CAPTURE_EDGE;
+        // egui rects are logical points; a 2x display renders twice the pixels.
+        assert_eq!(
+            capture_size(400.0, 300.0, 2.0, cap),
+            (800, 600),
+            "a 400x300-point viewport on a 2x display captures 800x600 pixels",
+        );
+        assert_eq!(
+            capture_size(400.0, 300.0, 2.0, cap),
+            (800, 600),
+            "and so does a second capture: the conversion is stable",
+        );
+        assert_eq!(
+            capture_size(123.4, 56.7, 2.0, cap),
+            (247, 113),
+            "points are scaled then rounded to whole pixels",
+        );
+        // The cap applies AFTER the point→pixel conversion.
+        assert_eq!(
+            capture_size(4096.0, 2048.0, 2.0, cap),
+            (4096, 2048),
+            "a 8192x4096-pixel viewport scales down to the 4096 cap",
+        );
+        assert_eq!(
+            capture_size(5000.0, 2500.0, 1.5, cap),
+            (4096, 2048),
+            "1.5x keeps the aspect at the cap: 7500x3750 -> 4096x2048",
+        );
+        assert_eq!(
+            capture_size(400.0, 300.0, 0.0, cap),
+            (400, 300),
+            "a nonsense scale factor falls back to 1x instead of capturing nothing",
+        );
+        assert_eq!(
+            capture_size(400.0, 300.0, f32::NAN, cap),
+            (400, 300),
+            "a NaN scale factor falls back to 1x too",
+        );
     }
 
     #[test]
@@ -396,8 +491,34 @@ mod tests {
     }
 
     #[test]
-    fn screenshots_are_rgba_never_bgra() {
-        // Ruling (ticket 08): the PNG byte order contract is RGBA — the same
+    fn the_early_format_gate_matches_the_converter() {
+        // Fix round 1, finding 2: the GPU path calls `png_readback_check`
+        // BEFORE creating a texture/readback buffer, so it must reject exactly
+        // what `to_rgba` rejects and with the same message — otherwise a
+        // 16-float surface would trip wgpu validation instead of returning Err.
+        for supported in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+        ] {
+            assert!(png_readback_check(supported).is_ok(), "{supported:?} is supported");
+            assert!(to_rgba(supported, vec![1, 2, 3, 4]).is_ok());
+        }
+        for unsupported in [
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+            TextureFormat::Rgba8Sint,
+            TextureFormat::Depth32Float,
+        ] {
+            let early = png_readback_check(unsupported).expect_err("the gate must reject");
+            let late = to_rgba(unsupported, vec![0; 8]).expect_err("the converter must reject");
+            assert_eq!(early, late, "the gate reports the converter's own error");
+        }
+    }
+
+    #[test]
+    fn screenshots_are_rgba_never_bgra() {        // Ruling (ticket 08): the PNG byte order contract is RGBA — the same
         // pin as the preset PNGs. The offscreen texture borrows the surface
         // format, so a BGRA surface is swizzled on readback rather than
         // silently producing blue-for-red screenshots.

@@ -458,6 +458,11 @@ impl DrawState {
         height: u32,
         clear: [f64; 4],
     ) -> Result<Vec<u8>, String> {
+        // Reject formats the PNG path cannot describe up front: a readback
+        // stride/buffer sized for RGBA8 is wrong for, say, a 16-float band and
+        // would surface as a wgpu validation panic instead of this error.
+        crate::screenshot::png_readback_check(self.format)?;
+
         // Same uniforms + instance buffers the on-screen pass would use. The
         // paint callback re-uploads every frame, so this does not leave the
         // live frame stale.
