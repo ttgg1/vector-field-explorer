@@ -1,202 +1,168 @@
 # Vector Field Explorer — AI Workflow
 
-OpenCode superpowers framework + SDD (subagent-driven development / executing-plans)
-workflows. Every implementation run must leave a record: ledger + commits, not memory.
+Rust eframe/egui app for exploring vector fields (`f(x,y)` or `f(x,y,z)`) typed
+as formulas: arrows, streamlines, particles, colormaps, click-to-seed, camera
+presets, screenshots. Ships as a native app and a WebAssembly browser build.
 
-App: Rust eframe/egui GUI to explore vector fields (`f(x,y)` or `f(x,y,z)`)
-typed as formulas — live arrows, streamlines, particles, camera presets,
-colormaps. Vision spec: `docs/superpowers/specs/2026-11-05-vector-field-explorer-design.md`.
+- Vision: `docs/superpowers/specs/2026-11-05-vector-field-explorer-design.md`
+- Plans: `docs/superpowers/plans/2026-11-05-vector-field-explorer.md`,
+  `docs/superpowers/plans/2026-11-05-preset-persistence.md`
+- License: **GPL-3.0-only** (`LICENSE`; dependencies must stay compatible)
+- Remote: `git@github.com:ttgg1/vector-field-explorer.git` (private until ticket
+  16 starts; then public, because Pages and GPL source distribution require it)
 
-License: **GPL-3.0-only** (`LICENSE`; `Cargo.toml` carries
-`license = "GPL-3.0-only"`). Private GitHub remote:
-`git@github.com:ttgg1/vector-field-explorer.git`.
+**Authoritative progress:** `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md`
+(last dated section) plus `git log`. Tickets live in `.scratch/field-viewport/issues/`.
+Never trust an unverified status line over those two.
 
-## Implementation Plans & Status (verified against git 2026-11-06)
+## v0.1.0 goals (user-selected 2026-11-08)
 
-| Plan | Scope | Status |
-|------|-------|--------|
-| `docs/superpowers/plans/2026-11-05-preset-persistence.md` | Camera presets: `export::Preset` serde, save/load/delete to `presets.json`, sidebar Preset panel, app data-dir config | **COMPLETE** (Tasks 1–3; commits `037825f`, `40f98f4`, `87c4e23`, `2dcb1a6` on `feature/preset-persistence`; final review pass done → fix commit `331d72e`, no re-review needed per skill). Ruled behaviors: duplicate-name save replaces, corrupt `presets.json` fails fast with io::Error; RGBA (not BGRA) PNG contract pinned by test |
-| `docs/superpowers/plans/2026-11-05-vector-field-explorer.md` | The full app, 14 tasks T1–T14 | **T1–T6 complete** (T1 `caa7c09` shell; T2 `62b1c5c` field; T3 `fee0b18`+`e13b7b7` domain/field-presets; T4 `8fd8701` colormaps; T5 `a6790f8` sampling → `src/sampling.rs`; T6 `7e37254` OrbitCamera → `src/camera.rs`); **T7 complete** (`81d1b30` instanced wgpu renderer + fix round 1 `2020a31` arrow-shader world-space normal `b * normal`, scoped re-review clean); **T8A complete** (`522d011` viewmodel seam `src/viewmodel.rs` — pure State/dirty-flag/snapshot builder, 12 unit tests); **T8B + T9–T14 tracked as TICKETS 02–09** under `.scratch/field-viewport/issues/` (02 **COMPLETE** (c5cfd95..`c62507a`, review clean after fix round 1: zoom gated 3D-only; 4 minors parked for final review) → 03 **COMPLETE** (20701e0..`41fe108`, review clean after fix round 1: VfApp doc comment restored; 3 minors parked for final review) → 04 **COMPLETE** (00c4ee5..`13fa5dc`, review clean after fix round 1: both_directions composition, pinned `vortex_stays_bounded` verbatim, status-bar split counts; 2 minors parked for final review) → 05 **COMPLETE** (18307e6..`a42fa97`, review clean after fix round 1: `clear()` rng→`SPAWN_SEED` respawn contract + pinned covering test, cost note corrected; 4 minors parked for final review) → 11 **COMPLETE** (`fb4eca7`, review clean; shader parse fixed, dead `src/shaders.wgsl` deleted) → 12 **COMPLETE** (`d1b23c6`, review clean; smoke PASS 15s) → 06 **COMPLETE** (`ff5e708`, review clean after salvage; 3 minors parked) → 07 **COMPLETE** (`3db30e1`, review clean; 3 minors parked) → 08 **COMPLETE** (`9d0cb6d` + fix `43bd549`, review clean after fix round 1: physical-pixel capture; 1 cosmetic minor parked) → 14 **IMPLEMENTED** (`f4dbb1b`, task review pending; rails/navigation/help/persistence; 179 tests, smoke PASS) → frontier 15 top-bar menus; tickets 15 (menus), 16 (GitHub Pages site), 17 (Linux/macOS release pipeline) **filed**; 16 ← 17; 13 test/source separation ← 14,15; 09 final review ← 13,14,15,16,17; 10 codebase docs ← 09. ⚠ working tree (2026-11-08, post-ticket-14): `main` at docs `c27b793`; feature branch `feature/ux-window-mouse-sidebars` carries `f4dbb1b` awaiting review; only untracked `.scratch/vfe-tmp/`. Issue 01's "Related minors" + tickets 02–05 parked minors (4+3+2+4) all routed to final whole-branch review
+- **Native:** Linux x86_64 tarball; macOS x86_64/arm64 unsigned `.app` zips.
+  No signing, notarization, auto-update, or telemetry.
+- **Web:** real wasm build at `https://ttgg1.github.io/vector-field-explorer/`.
+  Visualization parity: formula, field presets, 2D/3D, arrows/streamlines/
+  particles, click-to-seed, colormaps, camera; persistence via browser storage;
+  screenshot via browser download.
+- **Firefox first, on WebGPU terms:** Firefox 141+ Windows, Firefox 145+ macOS
+  Tahoe ARM, Firefox Nightly on Linux; Chromium/Edge where WebGPU is available.
+  Unsupported browsers get a support page with enable instructions. No WebGL2
+  fallback in v0.1.0.
+- **One codebase:** `cfg(target_arch = "wasm32")` platform seam; eframe's
+  `WebRunner` + `trunk`; native-only dependencies (`rfd`, filesystem paths)
+  gated out.
+- **Onboarding:** README quickstart, three "Start here" presets, in-app help.
+  Manual five-minute check on native and web: launch → load preset → edit
+  formula → toggle 3D → click to seed.
+- **Performance floors:** native 60 fps default scene / 30 fps on the densest
+  preset at 1280×800 integrated GPU; web 30 fps default; startup <2 s native,
+  <5 s web.
+- **Release:** SemVer; first tag `v0.1.0` only after ticket 19 is green;
+  on-demand patch/minor releases from commits; no fixed cadence, no backports.
+  Local ticket tracker through v0.1.0; GitHub Issues/PRs accepted; no CLA.
+- **No localization in v0.1.0.** Delete the placeholder `src/i18n.rs` and
+  `data/locales/` in ticket 09.
+- **Post-v1 order:** Windows → time-dependent fields → div/curl overlays →
+  shareable presets → CSV import.
 
-**Session handoff 2026-11-08 (latest):** active SDD ledger = `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` — read `git log` + the ledger's LAST dated section (later sections supersede the older `## HANDOFF` block). State: tickets 02–08, 11, 12 COMPLETE (`513b31b..43bd549`, reviews clean, smoke PASS); ticket 14 IMPLEMENTED (`f4dbb1b`, 179 tests, smoke PASS) and awaiting task review; docs/design commit `c27b793` on `main` (GLOSSARY, ADR 0001, rewritten ticket 14). Next order: **15 top-bar menus → 13 test/source separation → 17 release pipeline → 16 Pages site → 09 final whole-branch review → 10 codebase docs**; first real `v*` tag only after 09 merges and `main` is green. Ticket 13 inventory (post-14): 152 inline tests across 18 `src/` files vs 27 in `tests/`, baseline 179. `feature/preset-persistence` is already fully merged (no-op for 09; delete stale branch there). After every reviewed merge: `git push origin main` (private repo), verify GitHub CI/smoke workflows. Lost-report protocol + gate-probe-before-redispatch rule + clippy `--` separator lesson in ledger tail.
+## Status and frontier
 
-**Spec for the remaining work (published, ready-for-agent):** `.scratch/field-viewport/spec.md` — seams confirmed with the user: existing pure-module seams + exactly ONE new seam (viewmodel/scene-builder of pure functions state→SceneGPU, input→camera actions); GPU paint stays behind SceneGPU, no unit tests. Issue tracker: local markdown under `.scratch/field-viewport/issues/`. |
+Completed: plan tasks T1–T8A; tickets 02–08, 11, 12. Ticket 14 is implemented
+(`f4dbb1b`) but its review requested changes; the fix-round work is **uncommitted**
+in the tree (patch: `.superpowers/sdd/2026-11-05-vector-field-explorer/ticket-14-fix-wip.patch`).
+See the ledger's `2026-11-08 — SESSION STATE` section before resuming.
 
-Ledgers (git-ignored SDD workspaces, authoritative progress record):
-- `.superpowers/sdd/2026-11-05-preset-persistence/progress.md`
-- `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md`
-  ⚠ correction recorded 2026-11-06: its old "Task 5/6 complete" lines were
-  phantom (commits `a1b2c3d4e5f6g7h8i9j0` / `a916cc0` exist in no ref). Never
-  ledger a task without a `git rev-parse`-verifiable commit hash.
+Next order: **20 logging (do first) → 15 top-bar menus → 18 right-drag orbit +
+expanded controls → 13 test/source separation → 17 release pipeline → 16 wasm
++ Pages → 09 README, cleanup, final whole-branch review → 10 codebase
+documentation → 19 final whole-codebase review + organization refactor.** Ticket
+18 depends on 15's Help/menu surface; ticket 16 inherits 18's bindings; ticket
+20 goes first so every later UI/wasm ticket has logs.
 
-Module map (branch state may lag; trust `git log` + ledger for what's merged):
-`src/field.rs` (parse/eval via meval), `src/domain.rs` (grid), `src/colormap.rs`
-(Viridis/Turbo/Mono via colorous), `src/presets.rs` (field-preset table — note:
-a *different* `Preset` type than `export::Preset`, which is the camera preset),
-`src/sampling.rs` (`sample_field`, `ArrowData`, `ViewOptions`, `magnitude_range`),
-`src/export.rs` (PNG/presets), `src/i18n.rs` (locale JSONs in `data/locales/`),
-`src/render.rs` (2D pan/zoom `Camera`), `src/camera.rs` (3D `OrbitCamera` + gesture seam),
-`src/screenshot.rs` (offscreen capture + save dialog), `src/window.rs` (window
-options), `src/persistence.rs` (single APP_KEY envelope + migration),
-`src/ui/presets.rs` (PresetPanel), `src/ui/style_panel.rs` (AppStyle),
-`src/ui/top_bar.rs` (menu row), `src/ui/layout.rs` (panel rails/layout state),
-`src/ui/sidebar.rs` (field controls), `src/ui/help_overlay.rs`, `src/ui/status_bar.rs`.
+Ticket 09 triages all parked minors (issue-01, tickets 02–05, 06–08) and deletes
+stale feature branches. Ticket 19 is the last development ticket: a complete
+repo-wide review by `claude-haiku-5-5#max` plus a behavior-preserving refactor;
+it is the final gate before the first tag.
+
+## Repo map
+
+Production code is under `src/`, tests under `tests/`.
+
+- `field.rs` parse/eval via meval · `domain.rs` grid · `colormap.rs`
+  Viridis/Turbo/Mono · `presets.rs` field presets (distinct from camera
+  `export::Preset`) · `sampling.rs` `sample_field`/`ArrowData`/`ViewOptions`
+- `viewmodel.rs` pure `State`, dirty flags, `SceneGPU` snapshot, camera-input
+  seam · `camera.rs` `OrbitCamera` · `renderer.rs` instanced wgpu · `render.rs`
+  2D pan/zoom camera
+- `export.rs` PNG + camera presets · `screenshot.rs` offscreen capture/save
+  dialog · `persistence.rs` single `APP_KEY` envelope + migration · `window.rs`
+  window options
+- `ui/` sidebar, presets, style panel, top bar, layout rails, help overlay,
+  status bar
+- `i18n.rs` placeholder, scheduled for deletion in ticket 09
 
 ## Conventions (mandatory)
 
-- **TDD**: no production code without a failing test first (superpowers:test-driven-development).
-  Watch RED fail for the right reason; keep the whole `cargo test` suite green per task.
-- Commits: `feat: <description>` / `fix: …` / `docs: …`, one commit set per task.
-- Record progress in the plan's SDD ledger (`task-start` / `task-done` scripts
-  under `~/.cache/opencode/npm/git-superpowers-*/…/skills/{executing-plans,subagent-driven-development}/scripts/`),
-  never in memory or todos alone.
-- Isolated work (trunk-based): one feature branch (`feature/<topic>`) or git worktree per
-  feature; develop the whole feature on that branch, then merge it into `main` once the
-  feature is reviewed (whole-branch review clean). `main` is the trunk: only reviewed,
-  merged work lands there.
-- Resolution ledgering (`Ruling: <decision> — <why>` in the ledger) is mandatory.
-- CI (`.github/workflows/ci.yml`, Rust-based) gates on `cargo clippy --all-targets -- -D warnings`,
-  `cargo test --all-targets`, `cargo build --all-targets` — keep code clippy-clean.
-- **Runtime smoke test**: `cargo build`/`cargo test` never create a wgpu device, so
-  broken WGSL and device-init errors surface only when the app launches. After
-  touching `src/renderer.rs` or any `src/*.wgsl`, and before claiming any rendering
-  task done, run `scripts/smoke-run.sh 15` — it launches the app under `timeout` and
-  fails on a panic or wgpu validation error. CI runs the same script headlessly
-  (Xvfb + software Vulkan) in the `smoke` job.
-- **GitHub workflow**: private remote `git@github.com:ttgg1/vector-field-explorer.git`.
-  After a reviewed feature branch is merged into `main`, `git push origin main` and
-  confirm the GitHub CI/smoke workflows are green. Never force-push `main`; feature
-  branches may be pushed for backup, but merging is the push gate.
-- **License**: GPL-3.0-only. `LICENSE` at repo root; new files and dependencies must
-  stay GPL-3.0-compatible.
-- **Test layout**: `tests/` holds tests, `src/` holds production code. The existing
-  inline `#[cfg(test)]` modules are debt tracked by ticket 13 — do not add new ones.
-- **Background seats**: dispatch implementer/reviewer subagents with
-  `background=true`; the controller continues ledger/docs work while waiting. Never
-  run two implementer seats concurrently.
+- **TDD:** no production code without a failing test first; watch RED fail for
+  the right reason, then keep the full suite green.
+- **Tests live in `tests/`.** Existing inline `#[cfg(test)]` modules are ticket
+  13 debt; add no new ones. Integration tests import
+  `vector_field_explorer::{…}` — `crate::` and `use super::*` do not resolve.
+- **Commits:** `feat:` / `fix:` / `docs:`, one commit set per task. Never ledger
+  a task without a `git rev-parse`-verifiable hash.
+- **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD
+  ledger, not only in todos or chat.
+- **Trunk-based:** one `feature/<topic>` branch or worktree per feature; merge
+  only after review; `main` is reviewed work only.
+- **Gates:** `cargo build`, `cargo test --all-targets`, `cargo
+  clippy --all-targets -- -D warnings` (note the `--` separator).
+- **Runtime smoke:** build/test create no wgpu device. After touching
+  `src/renderer.rs`, shaders, windowing, or input, run `scripts/smoke-run.sh 15`;
+  it fails on panics and wgpu validation errors. CI runs it headlessly.
+- **Push after merge:** `git push origin main`, then confirm GitHub CI and smoke
+  are green. Never force-push `main`.
+- **Background seats:** dispatch implementer/reviewer subagents with
+  `background=true`; one implementer at a time.
+- **Scope guard:** keep GPU paint behind `SceneGPU`; pure logic in testable
+  seams; no test-only API widening without a ledger ruling.
 
-## Egui / Rust API notes (learned the hard way)
+## Egui / Rust notes
 
-- **egui 0.37**: `App` trait method is `fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame)`
-  — there is **no** `update(ctx, frame)`. Panels are the unified
-  `egui::Panel::top/bottom/left/right(id)` with `.resizable()`, shown against the
-  `Ui`; `egui::CentralPanel::default_margins().show(ui, …)`.
-- tests in `tests/` are integration tests: import `vector_field_explorer::{…}` —
-  bare `crate::` / `use super::*` will not resolve.
-- Rust edition 2024: `std::env::set_var` / `remove_var` are `unsafe` — wrap them.
-- wgpu usage must go through eframe's re-exports; `rfd = "0.15"` is a deliberate
-  dependency for the screenshot save dialog.
+- egui 0.37: `App::ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame)`
+  — there is no `update(ctx, frame)`. Panels are
+  `egui::Panel::top/bottom/left/right(id)` shown against the `Ui`;
+  `egui::CentralPanel::default_margins().show(ui, …)`.
+- Rust edition 2024: `std::env::set_var` / `remove_var` are `unsafe`.
+- wgpu goes through eframe's re-exports. `rfd = "0.15"` is deliberate (screenshot
+  dialog), and is native-only.
+- Persistence uses one RON envelope under `eframe::APP_KEY`; camera state resets
+  on launch by design. Corrupt UI settings fall back/clamp; camera presets stay
+  fail-fast.
 
-## Subagent Usage (SDD mode — active from 2026-11-06)
+## SDD workflow
 
-Implementation runs in **subagent-driven-development (SDD)** mode: the session
-acts as controller and dispatches a fresh **implementer** subagent per task,
-then a **task reviewer** subagent against the task's diff; the controller
-keeps the ledger, never edits code during the loop, and fixes/moves on only
-after resolving review findings (read `references/fix-loop.md` before every
-fix round). A broad whole-branch review runs once at the end.
+The session is controller: one implementer subagent per task, then one task
+reviewer against the diff. The controller keeps the ledger, does not edit code
+during the loop, and runs a fix round before moving on (read
+`references/fix-loop.md`). A whole-branch review runs once at the end.
 
-Skill location (scripts + prompt templates):
+Scripts and prompt templates:
 `~/.cache/opencode/npm/git-superpowers-*/…/skills/subagent-driven-development/`
-— `implementer-prompt.md` and `task-reviewer-prompt.md` are the dispatch
-templates; `scripts/task-brief`, `scripts/review-package` generate the brief
-and diff-package artifacts; never make a subagent read the whole plan.
+(`implementer-prompt.md`, `task-reviewer-prompt.md`, `scripts/task-brief`,
+`scripts/review-package`). Subagents read the task brief, never the whole plan.
 
-**Model policy (user-selected 2026-11-08, supersedes all earlier policies):**
-coding seats use OpenCode Go models; review seats use the cheap OpenCode Go
-reviewer (`opencode-go/claude-haiku-5-5`, free `beam-free` fallback).
-Always pass the model explicitly — subagents never silently inherit the session
-model. No NVIDIA/Nemotron seats, no LM Studio seats, no `strata` seats.
+**Models — always pass explicitly; never inherit silently.**
 
-- **Coding seats** (implementer, fix rounds, research) — `opencode-go/deepseek-v4.1-flash`
-  by default. Raise the *variant* (`#high` → `#max`) when a seat needs more judgment,
-  and bump the variant for a stuck implementer (BLOCKED/NEEDS_CONTEXT twice). For heavier
-  work, escalate the model to `opencode-go/kimi-k3.1-pro` (`#high`/`#max`).
-- **Review seats** (task reviewer, scoped re-review, final whole-branch review) —
-  `opencode-go/claude-haiku-5-5#high` (cheap; user-selected 2026-11-08 to avoid
-  OpenCode Go usage limits). Use `#max` for the final whole-branch review. Free
-  fallback if unavailable: `opencode-go/beam-free`.
+- Coding seats: `opencode-go/deepseek-v4.1-flash`, variant `#high` for complex
+  work, `#max` when stuck (BLOCKED/NEEDS_CONTEXT twice). Heavier work may
+  escalate to `opencode-go/kimi-k3.1-pro`.
+- Review seats: `opencode-go/claude-haiku-5-5#high` (cheap, avoids usage
+  limits); `#max` for the final whole-branch review; free fallback
+  `opencode-go/beam-free`.
+- No NVIDIA/Nemotron, LM Studio, or `strata` seats.
 
-**Implementer contract (in every dispatch):** work from the task brief file
-only (never the whole plan); TDD when the brief requires tests (RED→GREEN
-watched); run the full `cargo test` suite before committing; commits
-`feat:/fix:/docs:`; self-review before reporting; never dispatch sub-subagents
-(review is the controller's job); report status
-DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT + commits + one-line test
-summary, full report to `…/task-N-report.md`.
+**Implementer contract:** work from the brief; TDD where required; run the full
+suite before committing; `feat:/fix:/docs:` commits; self-review; never dispatch
+sub-subagents; report DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT with
+commits, gate results, and a report at `…/task-N-report.md`.
 
-Dispatch flow per task:
-1. Record BASE (`git rev-parse HEAD`).
-2. `bash scripts/task-brief PLAN_FILE N` → brief path.
-3. Dispatch implementer (`opencode-go/deepseek-v4.1-flash`, variant per policy) in
-   the background (`background=true`) with:
-   how the task fits, brief path,
-   interfaces/decisions earlier tasks established, ambiguity resolutions,
-   report-file path + report contract.
-4. On DONE: `bash scripts/review-package PLAN_FILE BASE HEAD` → diff file.
-5. Dispatch task reviewer (`opencode-go/claude-haiku-5-5#high`, `#max` for the final whole-branch review) in the background with brief, report, diff paths +
-   binding global constraints; resolve findings via the fix loop (resume the
-   same implementer session with `sessionID`); ledger completion line.
-6. Merge the reviewed branch into `main`, then `git push origin main` and check
-   GitHub CI/smoke are green.
+**Dispatch flow:** record BASE → `task-brief` → background implementer →
+`review-package` → background reviewer → fix loop → ledger completion → merge,
+push, verify CI.
 
-## AI Workflow Integration
+## Skills, docs, context
 
-New feature modules follow the plans; write tests automatically alongside;
-run `cargo test` (and later `cargo clippy -- -D warnings`) before claiming done.
-All generated code lives under `src/` or `tests/`.
-
-## Skills & Workflow map (future agents — start here)
-
-Two skill families are installed:
-- **superpowers** — `~/.cache/opencode/npm/git-superpowers-*/…/skills/`
-  (brainstorming, writing-plans, executing-plans, subagent-driven-development,
-  test-driven-development, systematic-debugging, using-git-worktrees,
-  finishing-a-development-branch, requesting-code-review, receiving-code-review,
-  verification-before-completion, writing-skills, dispatching-parallel-agents, …)
-- **Matt Pocock skills** — `~/.agents/skills/` (code-review, codebase-design,
-  domain-modeling, to-tickets, implement-spec, implement, tdd, diagnosing-bugs,
-  grilling / grill-me / grill-with-docs, pr, research, prototype, wizard,
-  writing-for-agents, find-skills, setup-pre-commit, …)
-
-Skill rule: if a skill plausibly applies (even 1%), invoke it BEFORE acting.
-Process skills first (they set the approach), implementation skills carry it out.
-
-Workflow this repo uses, in order:
-1. **New feature/design** → `brainstorming` (superpowers) before any creative work;
-   stress-test the plan with `grilling` (mattpocock) if the user asks to "grill".
-2. **Spec/plan** → `writing-plans` (superpowers) → plan under `docs/superpowers/plans/`;
-   spec under `docs/superpowers/specs/`. Break a plan into tracker tickets with
-   `to-tickets` (mattpocock) — tickets land in `.scratch/<feature-slug>/issues/`.
-3. **Execution** → SDD loop: `subagent-driven-development` (superpowers) — controller
-   dispatches one implementer subagent at a time, then a task reviewer; or
-   `executing-plans` inline if the user chose that. Never both in parallel.
-4. **Per task** → `test-driven-development` (TDD, RED first) gates every change;
-   bugs/regressions → `systematic-debugging` (superpowers) or `diagnosing-bugs`
-   (mattpocock) BEFORE proposing fixes.
-5. **Reviews** → per-task review via SDD `task-reviewer-prompt.md`; branch/PR
-   standards+spec review → `code-review` (mattpocock); request review at
-   completion → `requesting-code-review`; consume feedback → `receiving-code-review`
-   (verify, don't blind-implement). PR body → `pr` (mattpocock).
-6. **Finish** → `verification-before-completion` before any "done" claim;
-   integrate via `finishing-a-development-branch` (trunk-based: reviewed feature branch
-   merged → `main`); isolated workspace via `using-git-worktrees` (one branch per feature).
-7. **Docs/meta** → `writing-for-agents` when editing AGENTS.md/skills;
-   `domain-modeling` for GLOSSARY.md + ADRs; `research` for primary-source facts;
-   `find-skills` to discover more skills.
-
-**Context management (mandatory):** this harness runs the `@tarquinen/opencode-dcp`
-plugin. Keep a fresh context window by calling the `compress` tool itself (DCP
-compression) as soon as a phase closes — do NOT rely on, wait for, or configure
-around OpenCode's built-in auto-compaction. Summaries are authoritative records:
-file paths, rulings, commit hashes.
-
-## Agent skills
-
-### Issue tracker
-Issues live as local markdown under `.scratch/<feature-slug>/` — no git
-remote, no gh/glab. See `docs/agents/issue-tracker.md`.
-
-### Domain docs
-Single-context: `GLOSSARY.md` at repo root + `docs/adr/`, created lazily by
-`/domain-modeling`. See `docs/agents/domain.md`.
+- Two skill families: superpowers (`~/.cache/opencode/npm/git-superpowers-*/…/skills/`)
+  and Matt Pocock (`~/.agents/skills/`). Invoke a skill whenever it plausibly
+  applies, process skills before implementation.
+- Feature path: `brainstorming` → `grilling` when requested → `writing-plans` →
+  `to-tickets` → SDD + TDD → `code-review`/`requesting-code-review` →
+  `verification-before-completion` → `finishing-a-development-branch`.
+- Bugs: `systematic-debugging`/`diagnosing-bugs` before proposing a fix.
+- Domain: `GLOSSARY.md` at repo root and `docs/adr/`; update terms and ADRs
+  through `domain-modeling`. Issue tracker conventions:
+  `docs/agents/issue-tracker.md`; domain conventions: `docs/agents/domain.md`.
+- **Context:** this harness runs `@tarquinen/opencode-dcp`. Call `compress` as
+  soon as a phase closes; do not rely on built-in auto-compaction. Summaries are
+  authoritative records: paths, rulings, commit hashes.
+- Editing this file or any skill: use `writing-for-agents` and prune deprecated
+  status detail rather than layering more onto it.
