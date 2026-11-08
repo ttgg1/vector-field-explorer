@@ -2,8 +2,12 @@
 //! dot instances.
 //!
 //! Moved out of `src/particles.rs`'s inline module (ticket 13). Every test body
-//! is unchanged; only the imports moved from `super::*` / `crate::` to
-//! `vector_field_explorer::`.
+//! is unchanged except `outside_particle_respawns_inside` and
+//! `zero_velocity_particle_respawns`, which now seed the cloud through the
+//! `#[doc(hidden)]` `Particles::with_positions` constructor (same default RNG
+//! seed as before) because the private `rng` field blocks a struct-update
+//! literal outside the crate. Otherwise only the imports moved, from `super::*`
+//! / `crate::` to `vector_field_explorer::`.
 
 use glam::Vec3;
 use vector_field_explorer::colormap::Colormap;
