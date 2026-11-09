@@ -22,6 +22,7 @@ use vector_field_explorer::ui::help_overlay::{FLY_HELP_ACTION, FLY_HELP_INPUT, r
 use vector_field_explorer::ui::menu::{self, MenuAction};
 use vector_field_explorer::view_command::{
     ViewCommand, ViewContext, apply_view_command, apply_view_command_with_fly,
+    domain_center, domain_centre_delta,
 };
 use vector_field_explorer::viewmodel::State;
 
@@ -271,6 +272,31 @@ fn translate_moves_the_eye_without_turning_or_changing_speed() {
     assert_eq!(fly.yaw, before.yaw, "translate keeps yaw");
     assert_eq!(fly.pitch, before.pitch, "translate keeps pitch");
     assert_eq!(fly.speed, before.speed, "translate keeps speed");
+}
+
+#[test]
+fn translating_by_the_domain_centre_delta_keeps_the_free_camera_relative_to_the_box() {
+    let old = Domain::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+    let moved = Domain::new(Vec3::new(5.0, 1.0, 2.0), Vec3::new(7.0, 3.0, 4.0));
+    let delta = domain_centre_delta(&old, &moved);
+
+    let mut fly = fly_at_origin();
+    fly.yaw = 0.8;
+    fly.pitch = -0.3;
+    fly.speed = 3.0;
+    let before = fly;
+    let relative_before = fly.position - domain_center(old);
+
+    fly.translate(delta);
+
+    assert_close(
+        fly.position - domain_center(moved),
+        relative_before,
+        "the free camera keeps its position relative to the new domain centre",
+    );
+    assert_eq!(fly.yaw, before.yaw, "translating with the domain keeps yaw");
+    assert_eq!(fly.pitch, before.pitch, "translating with the domain keeps pitch");
+    assert_eq!(fly.speed, before.speed, "translating with the domain keeps speed");
 }
 
 #[test]

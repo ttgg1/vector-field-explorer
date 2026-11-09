@@ -6,7 +6,11 @@
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use vector_field_explorer::camera::OrbitCamera;
+use vector_field_explorer::domain::Domain;
 use vector_field_explorer::render::Camera;
+use vector_field_explorer::view_command::{
+    ViewCommand, ViewContext, apply_view_command, domain_centre_delta,
+};
 
 #[test]
 fn world_to_ndc_basic() {
@@ -71,4 +75,70 @@ fn orbit_changes_view() {
     let before = c.view();
     c.orbit(0.5, 0.2);
     assert_ne!(before, c.view());
+}
+
+#[test]
+fn recentre_on_targets_the_domain_centre_without_changing_the_pose() {
+    let mut camera = OrbitCamera {
+        yaw: 1.3,
+        pitch: -0.45,
+        distance: 7.5,
+        target: Vec3::new(9.0, -4.0, 2.0),
+        fov_y: 0.8,
+        ortho_zoom: 4.0,
+    };
+    let before = camera;
+    // Asymmetric on every axis so a centre that only follows x/y cannot pass.
+    let domain = Domain::new(Vec3::new(-3.0, 2.0, -1.0), Vec3::new(1.0, 6.0, 4.0));
+
+    camera.recentre_on(&domain);
+
+    assert_eq!(camera.target, Vec3::new(-1.0, 4.0, 1.5), "the target is the box centre");
+    assert_eq!(camera.yaw, before.yaw, "recentring keeps yaw");
+    assert_eq!(camera.pitch, before.pitch, "recentring keeps pitch");
+    assert_eq!(camera.distance, before.distance, "recentring keeps the orbit distance");
+    assert_eq!(camera.fov_y, before.fov_y, "recentring keeps the field of view");
+    assert_eq!(camera.ortho_zoom, before.ortho_zoom, "recentring keeps the 2D zoom");
+}
+
+#[test]
+fn recentre_on_2d_follows_x_and_y_but_leaves_z_and_panning_still_works() {
+    let mut camera = OrbitCamera {
+        target: Vec3::new(0.5, -0.5, 0.75),
+        ortho_zoom: 2.5,
+        ..OrbitCamera::default()
+    };
+    let domain = Domain::new(Vec3::new(-3.0, 2.0, -1.0), Vec3::new(1.0, 6.0, 4.0));
+
+    camera.recentre_on_2d(&domain);
+
+    assert_eq!(camera.target, Vec3::new(-1.0, 4.0, 0.75), "2D keeps the depth target untouched");
+    assert_eq!(camera.ortho_zoom, 2.5, "2D recentring keeps the ortho zoom unchanged");
+
+    // The 2D pan is a world X/Y shift through the command seam; it must still
+    // move the recentred target and keep the zoom.
+    let panned = apply_view_command(
+        camera,
+        ViewContext::new(false, domain, 1.5),
+        ViewCommand::Pan { dx: 0.5, dy: -0.25 },
+    );
+    assert_eq!(panned.target, Vec3::new(-0.5, 3.75, 0.75), "a 2D pan still moves the target");
+    assert_eq!(panned.ortho_zoom, camera.ortho_zoom, "a 2D pan keeps the zoom");
+}
+
+#[test]
+fn domain_centre_delta_is_zero_for_equal_domains_and_follows_moved_ones() {
+    let domain = Domain::new(Vec3::new(-3.0, 2.0, -1.0), Vec3::new(1.0, 6.0, 4.0));
+    assert_eq!(
+        domain_centre_delta(&domain, &domain),
+        Vec3::ZERO,
+        "an unchanged domain needs no camera shift",
+    );
+
+    let moved = Domain::new(Vec3::new(5.0, 5.0, 2.0), Vec3::new(9.0, 9.0, 7.0));
+    assert_eq!(
+        domain_centre_delta(&domain, &moved),
+        Vec3::new(8.0, 3.0, 3.0),
+        "the delta is the shift between the two centres",
+    );
 }

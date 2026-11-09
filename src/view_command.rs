@@ -86,7 +86,13 @@ pub enum ViewCommand {
 /// The centre of the domain's box. Reset and fit both centre on it, so a
 /// domain dragged off the origin still comes into view.
 pub fn domain_center(domain: Domain) -> Vec3 {
-    (domain.min + domain.max) * 0.5
+    domain.center()
+}
+
+/// How far the domain's centre moved from `old` to `new`. Ticket 47 translates
+/// the fly camera by this so the free camera keeps its relative view.
+pub fn domain_centre_delta(old: &Domain, new: &Domain) -> Vec3 {
+    new.center() - old.center()
 }
 
 /// Orbit distance that fits the domain's bounding sphere in the viewport's

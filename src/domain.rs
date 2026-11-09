@@ -22,6 +22,11 @@ impl Domain {
         self.max - self.min
     }
 
+    /// The centre of the box, the point every camera framing command targets.
+    pub fn center(&self) -> Vec3 {
+        (self.min + self.max) * 0.5
+    }
+
     /// Samples `dims` points per axis covering the box inclusive on both
     /// ends. An axis with a single sample sits at that axis's midpoint.
     /// An empty iterator results if any dimension is zero.

@@ -3,6 +3,7 @@
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+use crate::domain::Domain;
 use crate::fly_camera::FlyCamera;
 use crate::render::Camera;
 
@@ -102,6 +103,22 @@ impl OrbitCamera {
     pub fn pan(&mut self, right: f32, up: f32) {
         let (right_axis, up_axis) = self.view_basis();
         self.target += right_axis * right + up_axis * up;
+    }
+
+    /// Follow a domain change in 3D: the target becomes the new box centre so
+    /// the field stays framed. Orientation, distance, FOV and the 2D zoom are
+    /// deliberately untouched — the user keeps their view angle and framing.
+    pub fn recentre_on(&mut self, domain: &Domain) {
+        self.target = domain.center();
+    }
+
+    /// The 2D convention of [`Self::recentre_on`]: the front view frames only
+    /// `target.x`/`target.y`, so the depth coordinate is left exactly where it
+    /// was instead of jumping to the box's z centre.
+    pub fn recentre_on_2d(&mut self, domain: &Domain) {
+        let centre = domain.center();
+        self.target.x = centre.x;
+        self.target.y = centre.y;
     }
 
     /// World-to-eye transform (look-at from the orbit position).

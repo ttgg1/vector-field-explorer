@@ -6,6 +6,7 @@ use eframe::Storage as _;
 use glam::Vec3;
 
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
+use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::ui::layout::LayoutState;
@@ -17,6 +18,7 @@ use vector_field_explorer::viewmodel::{
     ArrowLengthMode, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DOMAIN_EXTENT,
     MIN_MAGNITUDE_SCALE, State,
 };
+use vector_field_explorer::VfApp;
 
 /// In-memory stand-in for eframe's disk-backed storage.
 #[derive(Default)]
@@ -455,4 +457,73 @@ fn restore_recovers_a_reversed_out_of_range_domain_per_axis() {
     );
     assert_eq!(controls.domain_min, state.domain.min, "the mirror is refreshed");
     assert_eq!(controls.domain_max, state.domain.max, "…for both corners");
+}
+
+/// Store `settings` under the real `APP_KEY` and build the app from it, so the
+/// launch camera is exercised through the same storage path a real launch uses.
+fn app_from(settings: &AppSettings) -> VfApp {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, settings);
+    VfApp::new_with_storage(Some(&storage))
+}
+
+/// Ticket 47: a restored off-origin 3D box is framed on the first frame, not
+/// only after its first edit, and the rest of the default pose is untouched.
+#[test]
+fn a_restored_off_origin_3d_domain_is_framed_on_launch() {
+    let mut state = State::new(true);
+    assert!(
+        state.set_domain(Vec3::new(5.0, -2.0, 0.0), Vec3::new(7.0, 2.0, 2.0)),
+        "seed an off-origin 3D box",
+    );
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let app = app_from(&settings);
+
+    assert!(app.state.mode_3d, "the saved projection is restored");
+    assert_eq!(app.orbit.target, app.state.domain.center(), "launch frames the restored box");
+    let default = OrbitCamera::default();
+    assert_eq!(app.orbit.yaw, default.yaw, "launch keeps the default yaw");
+    assert_eq!(app.orbit.pitch, default.pitch, "launch keeps the default pitch");
+    assert_eq!(app.orbit.distance, default.distance, "launch keeps the default distance");
+}
+
+/// Ticket 47: in 2D only the screen-plane axes follow the restored box; the
+/// depth target stays at the default, exactly like a live 2D domain edit.
+#[test]
+fn a_restored_off_origin_2d_domain_is_framed_in_x_and_y_only_on_launch() {
+    let mut state = State::new(false);
+    assert!(
+        state.set_domain(Vec3::new(5.0, -2.0, 0.0), Vec3::new(7.0, 2.0, 2.0)),
+        "seed an off-origin 2D box",
+    );
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let app = app_from(&settings);
+
+    assert!(!app.state.mode_3d, "the saved 2D projection is restored");
+    let centre = app.state.domain.center();
+    assert_eq!(app.orbit.target.x, centre.x, "2D launch follows the box centre in x");
+    assert_eq!(app.orbit.target.y, centre.y, "2D launch follows the box centre in y");
+    assert_eq!(app.orbit.target.z, 0.0, "2D launch leaves the depth target at the default");
+}
+
+/// Ticket 47: no saved domain (or an empty storage) keeps the pre-ticket launch
+/// camera — the default box centres on the origin.
+#[test]
+fn a_launch_without_a_saved_domain_still_targets_the_origin() {
+    assert_eq!(VfApp::new().orbit.target, Vec3::ZERO, "no storage keeps the origin target");
+
+    let empty = MemoryStorage::default();
+    assert_eq!(
+        VfApp::new_with_storage(Some(&empty)).orbit.target,
+        Vec3::ZERO,
+        "empty storage keeps the origin target",
+    );
 }

@@ -165,6 +165,16 @@ impl VfApp {
         // Restore through the viewmodel setters so the first frame samples the
         // saved field; a corrupt record cannot poison the grid.
         settings.view.restore(&mut state, &mut sidebar);
+        // Ticket 47: a restored non-default domain must already be framed on
+        // the first frame, not only after the first edit. This is the same
+        // tested recentre helper the live domain editor uses; the default
+        // domain's centre is the origin, so a fresh session is unchanged.
+        let mut orbit = OrbitCamera::default();
+        if state.mode_3d {
+            orbit.recentre_on(&state.domain);
+        } else {
+            orbit.recentre_on_2d(&state.domain);
+        }
         let backdrop = reference_lines(&state.domain, state.is_3d());
         let arrow_style = state.arrow_style;
         let arrow_params = state.arrow_params;
@@ -179,7 +189,7 @@ impl VfApp {
                 streamline_count: 0,
             },
             camera: Camera::default(),
-            orbit: OrbitCamera::default(),
+            orbit,
             fly: None,
             fly_keys: FlyKeys::default(),
             presets: PresetPanel::new(),
@@ -454,6 +464,13 @@ impl eframe::App for VfApp {
         // any widget so a focused text field never receives a key the menu
         // owns. Ctrl+Q is the one global shortcut (it quits from anywhere);
         // view state is already persisted, so there is no save prompt.
+        //
+        // Ticket 47: every domain change this frame starts here. The Controls
+        // panel's extent editor (and `Edit > Reset all controls`, which lands
+        // during menu handling) can move the sampled box; remember it before
+        // any of that runs so the camera can follow the new centre once the
+        // sidebar's `apply` has committed the change below.
+        let domain_before = self.state.domain;
         let ctx = ui.ctx().clone();
         for action in menu::shortcut_actions(&ctx) {
             self.apply_menu_action(action, &ctx);
@@ -550,6 +567,27 @@ impl eframe::App for VfApp {
             .clicked
             {
                 self.layout.controls_expanded = true;
+            }
+        }
+
+        // Ticket 47: a domain edit moves the view with the box. The orbit record
+        // follows unconditionally — 3D to the full new centre, 2D in x/y with
+        // its depth kept — so exiting fly mode can never restore a target that
+        // frames the old box. While flying, the free camera also translates by
+        // the centre delta, keeping its relative view. Orientation, distance,
+        // FOV and the 2D zoom are untouched, and the Presets panel below still
+        // applies an explicit preset/Reset/Fit command afterwards, so those win.
+        if self.state.domain != domain_before {
+            if self.state.mode_3d {
+                self.orbit.recentre_on(&self.state.domain);
+            } else {
+                self.orbit.recentre_on_2d(&self.state.domain);
+            }
+            if let Some(fly) = self.fly.as_mut() {
+                fly.translate(view_command::domain_centre_delta(
+                    &domain_before,
+                    &self.state.domain,
+                ));
             }
         }
 
