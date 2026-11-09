@@ -50,6 +50,11 @@ pub struct Globals {
     pub camera_up: [f32; 4],
 }
 
+/// Vertices the arrow shader emits per instance: 24 shaft + 12 cone head + 6
+/// base plate. Kept in step with the `ARROW_VERTS` constant in
+/// `src/shaders.arrow.wgsl`; [`crate::arrow_geometry`] mirrors the geometry.
+pub const ARROW_VERTS: u32 = 42;
+
 /// Vertices the dot shader emits per instance: the two triangles of a
 /// camera-facing billboard quad. Kept in step with
 /// [`crate::particles::DOT_QUAD_CORNERS`] (the CPU mirror of the same table).
@@ -467,7 +472,7 @@ impl DrawState {
         if !scene.arrows.is_empty() {
             pass.set_pipeline(&self.arrow_pipeline);
             pass.set_bind_group(0, &self.arrow_bind, &[]);
-            pass.draw(0..(scene.arrows.len() as u32) * 54, 0..1);
+            pass.draw(0..(scene.arrows.len() as u32) * ARROW_VERTS, 0..1);
         }
 
         if !scene.dots.is_empty() {

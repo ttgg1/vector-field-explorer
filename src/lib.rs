@@ -1,4 +1,5 @@
 pub mod app;
+pub mod arrow_geometry;
 pub mod camera;
 pub mod colormap;
 pub mod domain;

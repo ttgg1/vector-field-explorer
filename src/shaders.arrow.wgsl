@@ -38,9 +38,9 @@ struct VertexOut {
 
 // Geometry layout per instance (triangle list, no vertex buffer):
 //   verts 0..24   : shaft, 4 side quads, radius tapers 0.055 -> 0.03, y 0..0.7
-//   verts 24..48  : cone head, 4 side quads, radius 0.12 -> 0, y 0.7..1.0
-//   verts 48..54  : cone base plate (fan of 2 triangles over 4 corners)
-const ARROW_VERTS: u32 = 54u;
+//   verts 24..36  : cone head, 4 side triangles, radius 0.12 -> 0, y 0.7..1.0
+//   verts 36..42  : cone base plate (fan of 2 triangles over 4 corners)
+const ARROW_VERTS: u32 = 42u;
 
 // Basis whose columns are u (side axis), a (arrow axis), v (second side axis).
 fn basis(axis: vec3<f32>) -> mat3x3<f32> {
@@ -84,24 +84,24 @@ fn vs_arrow(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
         let radius = select(0.03 * len, 0.055 * len, top);
         local = ring_point(t, y, radius);
         normal = vec3<f32>(cos(t), 0.0, sin(t));
-    } else if (j < 48u) {
-        // cone head side quads
-        let quad = (j - 24u) / 6u;
-        let r = (j - 24u) % 6u;
-        let ta = f32(quad) * (2.0 * 3.14159265 / 4.0);
+    } else if (j < 36u) {
+        // cone head side triangles: one real triangle per side, 4 x 3 vertices.
+        // k = 0 base at ta, k = 1 base at tb, k = 2 apex.
+        let side = (j - 24u) / 3u;
+        let k = (j - 24u) % 3u;
+        let ta = f32(side) * (2.0 * 3.14159265 / 4.0);
         let tb = ta + 2.0 * 3.14159265 / 4.0;
-        let at_a = (r == 0u) || (r == 2u) || (r == 5u);
-        let tip = (r == 2u) || (r == 3u) || (r == 4u);
-        let t = select(tb, ta, at_a);
-        let y = select(head_len, 0.0, tip) + shaft_len;
-        let radius = select(0.0, 0.12 * len, tip);
+        let tip = k == 2u;
+        let t = select(tb, ta, k != 1u);
+        let y = select(shaft_len, shaft_len + head_len, tip);
+        let radius = select(0.12 * len, 0.0, tip);
         local = ring_point(t, y, radius);
         let slope = normalize(vec3<f32>(0.0, head_len, 0.12 * len));
         normal = normalize(vec3<f32>(cos(t) * slope.x, slope.y, sin(t) * slope.x));
     } else {
         // cone base plate: 2 triangles over 4 ring corners at y = shaft_len
-        let tri = (j - 48u) / 3u;
-        let r = (j - 48u) % 3u;
+        let tri = (j - 36u) / 3u;
+        let r = (j - 36u) % 3u;
         let corner0 = select(2u, 0u, tri == 0u);
         let corner = corner0 + r;
         let t = f32(corner) * (2.0 * 3.14159265 / 4.0);
