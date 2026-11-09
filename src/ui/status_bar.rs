@@ -93,9 +93,14 @@ impl FpsMeter {
 /// Advance a transient hint by `elapsed` seconds of frame time since the hint
 /// was set, clearing it once [`HINT_LIFETIME`] has passed.
 ///
-/// Pure: the caller owns the accumulated frame time, so no wall clock enters
-/// the status bar. A non-finite or negative elapsed time is ignored. Ticket 60
-/// sets [`StatusBarState::hint`]; the app's fill point advances it.
+/// Pure: the caller owns the accumulated frame time, because an
+/// `Option<String>` has nowhere to store a countdown and no wall clock may
+/// enter the status bar. A non-finite or negative elapsed time is ignored.
+///
+/// Caller contract: set [`StatusBarState::hint`] only on the triggering event,
+/// never every frame. The app restarts the accumulated lifetime when the hint
+/// text changes, so re-setting the same text each frame would make the message
+/// flicker (live 2.5 s, gone, live again) instead of staying put.
 pub fn advance_hint(hint: &mut Option<String>, elapsed: f32) {
     if hint.is_none() || !elapsed.is_finite() || elapsed < 0.0 {
         return;
@@ -163,9 +168,11 @@ pub fn format_status(status: &StatusBarState, mask: StatsMask) -> String {
 /// transient hint or "ready"; the right side is the stats readout reduced to
 /// what fits the current width.
 pub fn show(ui: &mut egui::Ui, status: &StatusBarState) {
-    // The row's available width before the right-to-left group is the budget;
-    // measuring inside that layout would report only the leftover space.
-    let width = ui.available_width();
+    // The mask is a window contract (ticket 53 pins the thresholds), so feed it
+    // the full egui content width rather than this panel's inner budget: the
+    // bottom panel's own margins make `available_width()` ~16 pt narrower and
+    // would drop the 960 pt "all readouts" case at a 960 pt window.
+    let width = ui.ctx().content_rect().width();
     let mask = visible_stats(width);
     ui.horizontal(|ui| {
         if !status.parse_message.is_empty() {

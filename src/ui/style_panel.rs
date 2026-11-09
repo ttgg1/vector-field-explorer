@@ -152,10 +152,10 @@ fn relative_luminance(color: egui::Color32) -> f32 {
 
 /// A readable text colour for selected text on `accent`.
 ///
-/// Compares the WCAG contrast of white (`1.05 / (L + 0.05)`) against a
-/// near-black (`(L + 0.05) / 0.05`, using `Color32::from_gray(16)` for a softer
-/// result) and returns whichever wins. Every accent therefore gets the better
-/// of the two, so selected labels stay legible in both themes.
+/// Compares the WCAG contrast of white (`1.05 / (L + 0.05)`) against pure
+/// black (`(L + 0.05) / 0.05`) and returns whichever wins. The chosen colour is
+/// exactly the one the formula measured, so every accent clears 4.5:1 (the
+/// crossover sits at ~4.58:1) and selected labels stay legible in both themes.
 pub fn selection_text_color(accent: egui::Color32) -> egui::Color32 {
     let luminance = relative_luminance(accent);
     let on_white = 1.05 / (luminance + 0.05);
@@ -163,7 +163,7 @@ pub fn selection_text_color(accent: egui::Color32) -> egui::Color32 {
     if on_white >= on_black {
         egui::Color32::WHITE
     } else {
-        egui::Color32::from_gray(16)
+        egui::Color32::BLACK
     }
 }
 

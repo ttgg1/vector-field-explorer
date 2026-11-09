@@ -39,6 +39,19 @@ fn fps_meter_smooths_later_samples() {
 }
 
 #[test]
+fn fps_meter_takes_exactly_one_sample_per_update() {
+    let mut meter = FpsMeter::default();
+    meter.update(0.02); // 50 fps seed
+    assert_eq!(meter.fps(), 50.0);
+
+    // One 100 fps sample must move the EMA by exactly 10 points once:
+    // 0.9 * 50 + 0.1 * 100 = 55. A second application in the same call would
+    // land at 59.5, so this pins one sample per `update`.
+    meter.update(0.01);
+    assert!((meter.fps() - 55.0).abs() < 1e-3);
+}
+
+#[test]
 fn fps_meter_ignores_zero_negative_and_non_finite_dt() {
     let mut fresh = FpsMeter::default();
     for dt in [0.0, -0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -295,6 +308,29 @@ impl Harness {
             .flatten()
             .collect()
     }
+}
+
+#[test]
+fn status_bar_uses_the_window_width_for_the_full_mask() {
+    // The harness window is exactly the 960 pt minimum; `visible_stats(960)`
+    // is the full mask, so every optional readout must be on screen. Feeding
+    // the panel's inner width (~944) instead would drop simulation time here.
+    let mut harness = Harness::new(StatusBarState {
+        sim_time: Some(1.0),
+        density: 32,
+        particle_count: 5,
+        trail_count: 2,
+        ..StatusBarState::default()
+    });
+    let labels = harness.labels();
+    let stats = labels
+        .iter()
+        .find(|label| label.contains("fps"))
+        .unwrap_or_else(|| panic!("the stats readout is missing: {labels:?}"));
+    assert!(stats.contains("5 particles"), "particles stay: {stats}");
+    assert!(stats.contains("2 trail segs"), "trails stay: {stats}");
+    assert!(stats.contains("n²=32"), "density stays: {stats}");
+    assert!(stats.contains("t 1.0 s"), "sim time stays at 960 pt: {stats}");
 }
 
 #[test]

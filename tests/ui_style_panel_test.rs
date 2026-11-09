@@ -109,6 +109,22 @@ fn selection_text_color_is_readable_on_every_accent() {
 }
 
 #[test]
+fn selection_text_color_reads_every_gray_accent() {
+    // Exhaustive gray sweep: the chosen text colour must really be the one the
+    // WCAG formula measured, so no mid-luminance band falls below 4.5:1.
+    for gray in 0..=255u8 {
+        let accent = egui::Color32::from_gray(gray);
+        let text = selection_text_color(accent);
+        let ratio = contrast_ratio(text, accent);
+        assert!(
+            ratio >= 4.5,
+            "gray {gray} gets {ratio:.3}:1 from {:?}",
+            text
+        );
+    }
+}
+
+#[test]
 fn apply_sets_the_selection_stroke_in_both_themes() {
     for theme_dark in [true, false] {
         let ctx = egui::Context::default();

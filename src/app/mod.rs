@@ -103,6 +103,9 @@ pub struct StatusBarState {
     /// The fly camera is active, so the readout gets a `fly` prefix.
     pub flying: bool,
     /// Transient one-line hint (ticket 60 sets it); the parse error still wins.
+    /// Set it only on the triggering event, never every frame: the app starts a
+    /// fresh 2.5 s frame-time lifetime when the text changes, so re-setting the
+    /// same message each frame would make it flicker instead of expiring once.
     pub hint: Option<String>,
 }
 
