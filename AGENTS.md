@@ -82,6 +82,14 @@ Production code is under `src/`, tests under `tests/`.
   a task without a `git rev-parse`-verifiable hash.
 - **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD
   ledger, not only in todos or chat.
+- **Ticket creation from feedback:** before filing tickets from a user issue
+  list, testing notes, or a review, run `grilling` (with `domain-modeling` when
+  terminology or a hard-to-reverse decision is involved). Group findings
+  thematically, deduplicate against open tickets, and extend the owning ticket
+  when a finding refines existing scope; create a new ticket only for new
+  capability. Ask the whole current frontier in rounds, record every
+  `Ruling:` in the SDD ledger, and do not create one ticket per bullet. The
+  resulting ticket set is confirmed with the user before implementation.
 - **Trunk-based:** one `feature/<topic>` branch or worktree per feature; merge
   only after review; `main` is reviewed work only.
 - **Gates:** `cargo build`, `scripts/test.sh` (runs `cargo test --all-targets`
@@ -99,6 +107,16 @@ Production code is under `src/`, tests under `tests/`.
   capped at 10 jobs (`.cargo/config.toml`); do not raise it without a ruling.
 - **Scope guard:** keep GPU paint behind `SceneGPU`; pure logic in testable
   seams; no test-only API widening without a ledger ruling.
+- **Customization lives with its feature.** Every user-facing feature gets an
+  organized home in its owning panel: primary controls in the section body,
+  advanced parameters in nested `CollapsingHeader` subsections, each with a
+  tooltip and a section reset. Never add a flat settings dump or a global
+  "Advanced" page. When a panel outgrows a comfortable size, split it by
+  concept into another panel or column (the layout already has rails and
+  persists widths); record the split and its reason in the ledger. Prefer
+  multiple panels or columns for different parameter families when that keeps
+  clutter low; future physics panels (Sources, Materials, Maxwell, Plot)
+  follow this rule.
 
 ## Egui / Rust notes
 
@@ -106,6 +124,10 @@ Production code is under `src/`, tests under `tests/`.
   — there is no `update(ctx, frame)`. Panels are
   `egui::Panel::top/bottom/left/right(id)` shown against the `Ui`;
   `egui::CentralPanel::default_margins().show(ui, …)`.
+- Game-style movement keys use `Event::Key.physical_key` (QWERTY positions),
+  falling back to the logical `key` where the backend does not populate it
+  (eframe web today). `InputState::keys_down` is logical only; accumulate held
+  movement keys from events and clear on focus loss.
 - Rust edition 2024: `std::env::set_var` / `remove_var` are `unsafe`.
 - wgpu goes through eframe's re-exports. `rfd = "0.15"` is deliberate
   (screenshot dialog) and native-only.
@@ -154,9 +176,10 @@ push, verify CI.
   (`~/.cache/opencode/npm/git-superpowers-*/…/skills/`) and Matt Pocock
   (`~/.agents/skills/`). Invoke a skill whenever it plausibly applies; process
   skills before implementation.
-- Feature path: `brainstorming` → `grilling` when requested → `writing-plans` →
-  `to-tickets` → SDD + TDD → `code-review`/`requesting-code-review` →
-  `verification-before-completion` → `finishing-a-development-branch`.
+- Feature path: `brainstorming` → `grilling` (mandatory before ticket
+  creation) → `writing-plans` → `to-tickets` → SDD + TDD →
+  `code-review`/`requesting-code-review` → `verification-before-completion` →
+  `finishing-a-development-branch`.
 - Bugs: `systematic-debugging`/`diagnosing-bugs` before proposing a fix.
 - Domain: update `GLOSSARY.md` and `docs/adr/` through `domain-modeling`.
 - **Context:** this harness runs `@tarquinen/opencode-dcp`. Call `compress` as
