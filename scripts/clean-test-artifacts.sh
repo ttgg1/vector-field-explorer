@@ -16,7 +16,7 @@
 # `--incremental`: also remove `debug/incremental/` (cargo regenerates it).
 # `--strip-debug`: run `strip --strip-debug` on the kept binaries (GNU strip
 #   only; warns and skips elsewhere). Opt-in because it drops backtrace line
-#   info. Ticket 40 will handle link-time stripping.
+#   info; the dev profile now strips DWARF at link time (ticket 40).
 # `--dry-run`: print what would be removed and delete nothing.
 #
 # Only depth-1 regular files with the executable bit whose name is

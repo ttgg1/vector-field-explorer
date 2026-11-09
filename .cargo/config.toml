@@ -2,11 +2,19 @@
 #
 # `--all-targets` links ~18 test binaries at once. With full debug info each
 # binary is 200-400 MB, and parallel `ld.lld` writes saturate the disk before
-# they saturate the CPU. Line-tables-only debug info cuts that write volume
-# sharply. Jobs are capped at 10 so several parallel agents/worktrees each get
-# compute; do not raise this without a ledger ruling.
+# they saturate the CPU. Line-tables-only DWARF (`debug = 1`) and the link-time
+# strip below both cut that write volume. Jobs are capped at 10 so several
+# parallel agents/worktrees each get compute; do not raise this without a
+# ledger ruling.
 [build]
 jobs = 10
 
 [profile.dev]
 debug = 1
+# Strip DWARF sections from dev/test artifacts at link time (ticket 40).
+# `.debug_*` dominates the ~200-300 MB test binaries; the symbol table is what
+# panic backtraces name frames from, so keep it (`"symbols"` would break those
+# frames). Test binaries inherit the dev profile, so this covers `cargo test`.
+# For debugger-grade DWARF, override both the level and the strip:
+#   CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_DEV_STRIP=none cargo build
+strip = "debuginfo"
