@@ -50,28 +50,47 @@ fn src_carries_no_inline_test_modules() {
     );
 }
 
-/// The `name` of every `[[test]]` target declared in `Cargo.toml`.
-fn declared_test_targets(manifest: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut in_test = false;
+/// The `(name, path)` of every `[[test]]` target declared in `Cargo.toml`.
+fn declared_test_targets(manifest: &str) -> Vec<(String, String)> {
+    let mut targets = Vec::new();
+    let mut current: Option<(Option<String>, Option<String>)> = None;
+
     for line in manifest.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            in_test = line == "[[test]]";
+            if let Some((Some(name), Some(path))) = current.take() {
+                targets.push((name, path));
+            }
+            if line == "[[test]]" {
+                current = Some((None, None));
+            }
             continue;
         }
-        if !in_test {
+        let Some((name, path)) = current.as_mut() else {
             continue;
+        };
+        if let Some(value) = field_value(line, "name") {
+            *name = Some(value);
         }
-        let Some(value) = line.strip_prefix("name") else {
-            continue;
-        };
-        let Some(value) = value.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        names.push(value.trim().trim_matches('"').to_string());
+        if let Some(value) = field_value(line, "path") {
+            *path = Some(value);
+        }
     }
-    names
+    if let Some((Some(name), Some(path))) = current {
+        targets.push((name, path));
+    }
+    targets
+}
+
+/// The value of a simple `key = "value"` TOML line.
+fn field_value(line: &str, key: &str) -> Option<String> {
+    let value = line.strip_prefix(key)?.trim_start().strip_prefix('=')?.trim();
+    Some(value.trim_matches('"').to_string())
+}
+
+/// Strip the optional `./` cargo accepts at the start of a target path.
+fn normalized_target_path(path: &str) -> &str {
+    path.strip_prefix("./").unwrap_or(path)
 }
 
 /// Every test file must be registered for the single suite harness, either as
@@ -92,6 +111,9 @@ fn every_top_level_test_file_is_registered_in_the_suite() {
     let mut ignored = Vec::new();
     let mut test_attributes = 0usize;
     let mut files = 0usize;
+    // Built from parts so this guard's own source does not look like a test
+    // carrying the attribute.
+    let ignore_attr = concat!("#[", "ignore");
 
     for entry in fs::read_dir(&tests).expect("read tests/") {
         let path = entry.expect("directory entry").path();
@@ -103,14 +125,21 @@ fn every_top_level_test_file_is_registered_in_the_suite() {
             continue;
         }
         files += 1;
+        let expected_path = format!("tests/{stem}.rs");
         let in_suite = suite.lines().any(|line| line.trim() == format!("mod {stem};"));
-        let own_target = test_targets.iter().any(|name| name == stem);
+        let own_target = test_targets.iter().any(|(name, path)| {
+            name == stem && normalized_target_path(path) == expected_path
+        });
         if !in_suite && !own_target {
             missing.push(stem.to_string());
         }
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         test_attributes += text.lines().filter(|line| line.trim() == "#[test]").count();
-        if text.lines().any(|line| line.trim().starts_with("#[ignore")) {
+        // Scan code lines only, so this guard's own doc comment does not trip it.
+        if text.lines().any(|line| {
+            let code = line.trim();
+            !code.starts_with("//") && code.contains(ignore_attr)
+        }) {
             ignored.push(stem.to_string());
         }
     }
@@ -128,7 +157,7 @@ fn every_top_level_test_file_is_registered_in_the_suite() {
     );
     assert!(
         ignored.is_empty(),
-        "ticket 21 requires every test to run; remove #[ignore] from: {}",
+        "ticket 21 requires every test to run; remove {ignore_attr} from: {}",
         ignored.join(", "),
     );
     // 704 tests at the ticket-21 baseline, plus this guard (and one `#[test]`

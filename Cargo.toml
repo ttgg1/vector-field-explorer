@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/ttgg1/vector-field-explorer"
-# Ticket 21: `tests/suite.rs` is the single integration-test harness; the
-# `tests/*_test.rs` files are modules of it, not separate crates. One process
-# runs the whole suite (instead of 54 processes paying startup and getting no
-# cross-suite parallelism), and a lib change recompiles one test crate instead
-# of 54. A test that mutates process-global environment must stay its own
-# `[[test]]` target so it runs in an isolated process; see `config_test`.
+# Ticket 21: `tests/suite.rs` is the single integration-test harness; every
+# `tests/*_test.rs` is a module of it except the isolated `[[test]]` targets
+# below. One process runs the whole suite (instead of 54 processes paying
+# startup and getting no cross-suite parallelism), and a lib change recompiles
+# one test crate instead of 54. A test that mutates process-global environment
+# must stay its own `[[test]]` target so it runs in an isolated process; see
+# `config_test`.
 autotests = false
 
 [lib]

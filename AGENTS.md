@@ -79,9 +79,9 @@ Production code is under `src/`, tests under `tests/`.
   target so it runs alone in its process — `tests/config_test.rs` (which sets
   `XDG_CONFIG_HOME`) is the example, and the layout guard accepts either
   registration. Filter by module or test name (`cargo test particles_test::`);
-  run an isolated target with `cargo test --test config_test`. Most files are
-  not per-file `--test <file>` targets. Shared helpers live in `tests/support/`
-  and are declared once in
+  run an isolated target with `cargo test --test config_test`. Only
+  `config_test` has its own `--test` target; the other files are suite modules.
+  Shared helpers live in `tests/support/` and are declared once in
   `tests/suite.rs`. `src/` carries no `#[cfg(test)]` modules, and
   `tests/test_layout_test.rs` fails the suite if one comes back, if a test file
   is unregistered, or if a test is `#[ignore]`d. Integration tests import
