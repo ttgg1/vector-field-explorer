@@ -5,9 +5,10 @@
 // bar would count a scene the user never asked for).
 
 use vector_field_explorer::ui::sidebar::{
-    Controls, apply, arrow_scale_enabled, domain_summary, magnitude_scale_enabled,
+    ArrowStyleSet, Controls, apply, arrow_scale_enabled, arrow_style_set, domain_summary,
+    magnitude_scale_enabled, sides_control_enabled,
 };
-use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
+use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
@@ -28,6 +29,7 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.magnitude_scale, s.magnitude_scale, "magnitude scale agrees");
     assert_eq!(c.arrows, s.arrows, "arrows start visible");
     assert_eq!(c.arrow_style, s.arrow_style, "arrow style agrees");
+    assert_eq!(c.arrow_style_2d, s.arrow_style_2d, "2D arrow style agrees");
     assert_eq!(c.arrow_params, s.arrow_params, "arrow appearance agrees");
     assert_eq!(c.colormap, s.colormap, "colormap agrees");
     assert_eq!(c.auto_fit, s.auto_fit, "auto-fit agrees");
@@ -69,6 +71,7 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_magnitude_scale(c.magnitude_scale));
     assert!(!s.set_arrows(c.arrows));
     assert!(!s.set_arrow_style(c.arrow_style));
+    assert!(!s.set_arrow_style_2d(c.arrow_style_2d));
     assert!(!s.set_arrow_params(c.arrow_params));
     assert!(!s.set_colormap(c.colormap));
     assert!(!s.set_auto_fit(c.auto_fit));
@@ -279,13 +282,83 @@ fn display_reset_restores_arrow_visibility_style_and_appearance() {
     let mut c = Controls::new();
     c.arrows = false;
     c.arrow_style = ArrowStyle::Line;
+    c.arrow_style_2d = ArrowStyle2D::Line;
     c.arrow_params = ArrowParams { head_length: 0.5, head_width: 0.3, shaft_radius: 0.12, sides: 4 };
 
     c.reset_display();
 
     assert!(c.arrows, "arrows return");
     assert_eq!(c.arrow_style, ArrowStyle::Cone, "the default style returns");
+    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Line, "the default 2D style returns");
     assert_eq!(c.arrow_params, ArrowParams::default(), "the default appearance returns");
+}
+
+// --- Separate 2D arrow set (ticket 61) --------------------------------------
+
+#[test]
+fn the_sidebar_shows_the_matching_arrow_set() {
+    assert_eq!(arrow_style_set(true), ArrowStyleSet::ThreeD, "3D offers the 3D families");
+    assert_eq!(arrow_style_set(false), ArrowStyleSet::TwoD, "2D offers the 2D families");
+    assert_eq!(ArrowStyleSet::ThreeD.label(), "Arrow style");
+    assert_eq!(ArrowStyleSet::TwoD.label(), "2D arrow style");
+    assert_eq!(ArrowStyle::ALL.len(), 4, "the 3D selector keeps its four families");
+    assert_eq!(ArrowStyle2D::ALL, [ArrowStyle2D::Line], "the 2D selector starts with Line only");
+}
+
+#[test]
+fn sides_are_enabled_only_for_families_that_use_them() {
+    assert!(
+        !sides_control_enabled(false, ArrowStyle::Cone, ArrowStyle2D::Line),
+        "the 2D line has a fixed silhouette",
+    );
+    assert!(sides_control_enabled(true, ArrowStyle::Cone, ArrowStyle2D::Line));
+    assert!(sides_control_enabled(true, ArrowStyle::Cylinder, ArrowStyle2D::Line));
+    assert!(!sides_control_enabled(true, ArrowStyle::Pyramid, ArrowStyle2D::Line));
+    assert!(!sides_control_enabled(true, ArrowStyle::Line, ArrowStyle2D::Line));
+}
+
+#[test]
+fn switching_views_preserves_both_arrow_selections_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+
+    c.arrow_style = ArrowStyle::Cylinder;
+    c.arrow_style_2d = ArrowStyle2D::Line;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_style, ArrowStyle::Cylinder);
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line);
+
+    assert!(s.set_mode(true), "switch to 3D");
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_style, ArrowStyle::Cylinder, "the 3D selection survives the view switch");
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line, "the 2D selection survives too");
+    assert_eq!(c.arrow_style, ArrowStyle::Cylinder, "the mirror keeps the 3D family");
+    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Line, "the mirror keeps the 2D family");
+    assert_eq!(arrow_style_set(s.mode_3d), ArrowStyleSet::ThreeD);
+
+    assert!(s.set_mode(false), "switch back to 2D");
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_style, ArrowStyle::Cylinder, "the 3D selection still survives");
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line, "the 2D selection still survives");
+    assert_eq!(arrow_style_set(s.mode_3d), ArrowStyleSet::TwoD);
+}
+
+#[test]
+fn changing_one_arrow_set_never_changes_the_other_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+
+    c.arrow_style = ArrowStyle::Pyramid;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line, "the 2D set is untouched");
+
+    c.arrow_style_2d = ArrowStyle2D::Line;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_style, ArrowStyle::Pyramid, "the 3D set is untouched");
+    assert_eq!(c.arrow_style, ArrowStyle::Pyramid);
+    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Line);
 }
 
 // --- Domain summary, bounds and reset (ticket 32) ---------------------------

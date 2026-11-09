@@ -14,7 +14,7 @@ use super::plane::{DIM_ALPHA, PlaneAxis, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
-use crate::arrow_style::{ArrowParams, ArrowStyle};
+use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 
 use std::sync::Arc;
 
@@ -134,8 +134,10 @@ pub struct State {
     pub color_min: f32,
     pub color_max: f32,
     pub arrows: bool,
-    /// The 3D arrow family (ticket 45); 2D always draws the flat arrow.
+    /// The 3D arrow family (ticket 45); it never selects the 2D arrow.
     pub arrow_style: ArrowStyle,
+    /// The 2D arrow family (ticket 61); independent of [`State::arrow_style`].
+    pub arrow_style_2d: ArrowStyle2D,
     /// The head/shaft proportions shared by every 3D family.
     pub arrow_params: ArrowParams,
     pub streamlines: bool,
@@ -185,6 +187,7 @@ impl State {
             color_max: 1.0,
             arrows: true,
             arrow_style: ArrowStyle::Cone,
+            arrow_style_2d: ArrowStyle2D::Line,
             arrow_params: ArrowParams::default(),
             streamlines: false,
             particles: false,
@@ -339,12 +342,21 @@ impl State {
         self.mark_dirty()
     }
 
-    /// Choose the arrow shape family (3D only; 2D always draws flat arrows).
+    /// Choose the 3D arrow shape family. The 2D family is independent.
     pub fn set_arrow_style(self: &mut State, style: ArrowStyle) -> bool {
         if self.arrow_style == style {
             return false;
         }
         self.arrow_style = style;
+        self.mark_dirty()
+    }
+
+    /// Choose the 2D arrow family (ticket 61). The 3D family is independent.
+    pub fn set_arrow_style_2d(self: &mut State, style: ArrowStyle2D) -> bool {
+        if self.arrow_style_2d == style {
+            return false;
+        }
+        self.arrow_style_2d = style;
         self.mark_dirty()
     }
 
@@ -661,6 +673,7 @@ impl State {
             lines: Arc::new(self.streamlines_snapshot(&sampled)),
             dots: Arc::new(Vec::new()),
             arrow_style: self.arrow_style,
+            arrow_style_2d: self.arrow_style_2d,
             arrow_params: self.arrow_params,
             mode_3d: self.mode_3d,
         }

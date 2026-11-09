@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::arrow_style::{ArrowParams, ArrowStyle};
+use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
@@ -83,6 +83,10 @@ pub struct ViewRecord {
     /// The 3D arrow family (ticket 45).
     #[serde(default)]
     pub arrow_style: ArrowStyle,
+    /// The 2D arrow family (ticket 61). Missing on pre-61 records; the serde
+    /// default loads them as [`ArrowStyle2D::Line`].
+    #[serde(default)]
+    pub arrow_style_2d: ArrowStyle2D,
     /// The 3D arrow head/shaft proportions (ticket 45).
     #[serde(default)]
     pub arrow_params: ArrowParams,
@@ -117,6 +121,7 @@ impl ViewRecord {
             color_max: state.color_max,
             arrows: state.arrows,
             arrow_style: state.arrow_style,
+            arrow_style_2d: state.arrow_style_2d,
             arrow_params: state.arrow_params,
             streamlines: state.streamlines,
             particles: state.particles,
@@ -149,6 +154,7 @@ impl ViewRecord {
         controls.color_max = finite_or(self.color_max, defaults.color_max);
         controls.arrows = self.arrows;
         controls.arrow_style = self.arrow_style;
+        controls.arrow_style_2d = self.arrow_style_2d;
         controls.arrow_params = self.arrow_params.sanitized();
         controls.streamlines = self.streamlines;
         controls.particles = self.particles;

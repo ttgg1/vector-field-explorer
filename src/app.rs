@@ -177,6 +177,7 @@ impl VfApp {
         }
         let backdrop = reference_lines(&state.domain, state.is_3d());
         let arrow_style = state.arrow_style;
+        let arrow_style_2d = state.arrow_style_2d;
         let arrow_params = state.arrow_params;
         let mode_3d = state.mode_3d;
         Self {
@@ -205,6 +206,7 @@ impl VfApp {
                 lines: Arc::new(backdrop),
                 dots: Arc::new(Vec::new()),
                 arrow_style,
+                arrow_style_2d,
                 arrow_params,
                 mode_3d,
             },
@@ -655,6 +657,7 @@ impl eframe::App for VfApp {
         // seam emitted join them.
         if let Some(fresh) = self.state.snapshot_if_dirty() {
             self.scene.arrow_style = fresh.arrow_style;
+            self.scene.arrow_style_2d = fresh.arrow_style_2d;
             self.scene.arrow_params = fresh.arrow_params;
             self.scene.mode_3d = fresh.mode_3d;
             self.scene.arrows = fresh.arrows;
@@ -877,6 +880,7 @@ impl eframe::App for VfApp {
                 lines: Arc::clone(&self.scene.lines),
                 dots: Arc::clone(&self.scene.dots),
                 arrow_style: self.scene.arrow_style,
+                arrow_style_2d: self.scene.arrow_style_2d,
                 arrow_params: self.scene.arrow_params,
                 mode_3d: self.state.mode_3d,
             };

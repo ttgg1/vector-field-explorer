@@ -23,8 +23,8 @@
 use eframe::egui;
 
 use crate::arrow_style::{
-    ArrowParams, ArrowStyle, MAX_HEAD_LENGTH, MAX_HEAD_WIDTH, MAX_SHAFT_RADIUS, MAX_SIDES,
-    MIN_HEAD_LENGTH, MIN_HEAD_WIDTH, MIN_SHAFT_RADIUS, MIN_SIDES,
+    ArrowParams, ArrowStyle, ArrowStyle2D, MAX_HEAD_LENGTH, MAX_HEAD_WIDTH, MAX_SHAFT_RADIUS,
+    MAX_SIDES, MIN_HEAD_LENGTH, MIN_HEAD_WIDTH, MIN_SHAFT_RADIUS, MIN_SIDES,
 };
 use crate::colormap::Colormap;
 use crate::domain::Domain;
@@ -146,6 +146,43 @@ pub fn arrow_scale_enabled(mode: ArrowLengthMode) -> bool {
     mode != ArrowLengthMode::Magnitude
 }
 
+/// Which arrow-style family set the sidebar offers for the active view
+/// (ticket 61). The sets are independent: switching views only swaps which
+/// selector is shown, never which family the other view uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowStyleSet {
+    /// The 3D families in [`ArrowStyle::ALL`].
+    ThreeD,
+    /// The 2D families in [`ArrowStyle2D::ALL`].
+    TwoD,
+}
+
+impl ArrowStyleSet {
+    /// The selector's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            ArrowStyleSet::ThreeD => "Arrow style",
+            ArrowStyleSet::TwoD => "2D arrow style",
+        }
+    }
+}
+
+/// The arrow set the sidebar shows for the active view: 3D offers the 3D
+/// families, 2D offers the 2D families. Pure so the view swap is testable
+/// without a window.
+pub fn arrow_style_set(view_3d: bool) -> ArrowStyleSet {
+    if view_3d { ArrowStyleSet::ThreeD } else { ArrowStyleSet::TwoD }
+}
+
+/// Whether the Sides slider applies to the active view's selected family.
+pub fn sides_control_enabled(
+    view_3d: bool,
+    style_3d: ArrowStyle,
+    style_2d: ArrowStyle2D,
+) -> bool {
+    if view_3d { style_3d.uses_sides() } else { style_2d.uses_sides() }
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -158,6 +195,7 @@ pub struct Controls {
     /// Show arrows (ticket 45); unchecking hides only the arrow instances.
     pub arrows: bool,
     pub arrow_style: ArrowStyle,
+    pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
     pub colormap: Colormap,
     pub auto_fit: bool,
@@ -189,6 +227,7 @@ impl Controls {
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             arrows: true,
             arrow_style: ArrowStyle::Cone,
+            arrow_style_2d: ArrowStyle2D::Line,
             arrow_params: ArrowParams::default(),
             colormap: Colormap::Viridis,
             auto_fit: true,
@@ -214,6 +253,7 @@ impl Controls {
         self.magnitude_scale = defaults.magnitude_scale;
         self.arrows = defaults.arrows;
         self.arrow_style = defaults.arrow_style;
+        self.arrow_style_2d = defaults.arrow_style_2d;
         self.arrow_params = defaults.arrow_params;
         self.plane = defaults.plane;
         self.plane_drag = false;
@@ -327,16 +367,23 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         .response
         .on_hover_text("World length per unit of field magnitude");
         ui.horizontal(|ui| {
-            ui.label("Arrow style");
-            for style in ArrowStyle::ALL {
-                ui.selectable_value(&mut controls.arrow_style, style, style.label())
-                    .on_hover_text(style.tooltip());
+            let set = arrow_style_set(view_3d);
+            ui.label(set.label());
+            match set {
+                ArrowStyleSet::ThreeD => {
+                    for style in ArrowStyle::ALL {
+                        ui.selectable_value(&mut controls.arrow_style, style, style.label())
+                            .on_hover_text(style.tooltip());
+                    }
+                }
+                ArrowStyleSet::TwoD => {
+                    for style in ArrowStyle2D::ALL {
+                        ui.selectable_value(&mut controls.arrow_style_2d, style, style.label())
+                            .on_hover_text(style.tooltip());
+                    }
+                }
             }
         });
-        if !view_3d {
-            ui.label(egui::RichText::new("2D uses the flat arrow").small())
-                .on_hover_text("2D always draws the flat Line silhouette; the 3D style applies in 3D");
-        }
         egui::CollapsingHeader::new("Arrow appearance")
             .default_open(false)
             .show(ui, |ui| {
@@ -365,12 +412,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
                 )
                 .on_hover_text("Shaft radius as a fraction of the total arrow length");
                 ui.add_enabled(
-                    controls.arrow_style.uses_sides(),
+                    sides_control_enabled(view_3d, controls.arrow_style, controls.arrow_style_2d),
                     egui::Slider::new(&mut controls.arrow_params.sides, MIN_SIDES..=MAX_SIDES)
                         .text("Sides"),
                 )
-                .on_hover_text("Radial side count for Cone and Cylinder")
-                .on_disabled_hover_text("Pyramid and Line have a fixed silhouette");
+                .on_hover_text("Radial side count for the active arrow family")
+                .on_disabled_hover_text("This arrow family has a fixed silhouette");
                 if ui
                     .button("Reset arrow appearance")
                     .on_hover_text("Restore the default head and shaft geometry")
@@ -637,6 +684,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_color_range(controls.color_min, controls.color_max);
     state.set_arrows(controls.arrows);
     state.set_arrow_style(controls.arrow_style);
+    state.set_arrow_style_2d(controls.arrow_style_2d);
     state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
     state.set_particles(controls.particles);
@@ -665,6 +713,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.color_max = state.color_max;
     controls.arrows = state.arrows;
     controls.arrow_style = state.arrow_style;
+    controls.arrow_style_2d = state.arrow_style_2d;
     controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
     controls.particles = state.particles;

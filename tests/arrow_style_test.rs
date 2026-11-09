@@ -1,11 +1,11 @@
 //! Ticket 45: the arrow style families, their geometry parameters, and the
-//! scene's 2D/3D arrow selection.
+//! scene's 2D/3D arrow selection. Ticket 61 adds the independent 2D set.
 //!
 //! There is no GPU in the test harness, so these tests pin the pure data model,
 //! the draw-count helper the renderer uses, and the source constants the
 //! shaders must keep in step with.
 
-use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, MIN_SIDES};
+use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MIN_SIDES};
 use vector_field_explorer::renderer::{
     ARROW2D_VERTS, ARROW_VERTS, ARROW_VERTS_LINE, ArrowDrawPlan, SceneGPU,
 };
@@ -23,6 +23,19 @@ fn styles_have_the_display_order_and_labels() {
         ["Cone", "Pyramid", "Cylinder", "Line"],
         "the selector order is the enum order",
     );
+}
+
+#[test]
+fn the_2d_set_has_its_own_display_order_and_labels() {
+    assert_eq!(
+        ArrowStyle2D::ALL.map(ArrowStyle2D::label),
+        ["Line"],
+        "the 2D selector order is the 2D enum order",
+    );
+    for style in ArrowStyle2D::ALL {
+        assert!(!style.label().is_empty(), "{style:?} has a label");
+        assert!(!style.tooltip().is_empty(), "{style:?} has a tooltip");
+    }
 }
 
 #[test]
@@ -84,6 +97,7 @@ fn non_finite_params_fall_back_to_the_defaults_and_finite_ones_clamp() {
 fn scene_carries_the_style_params_and_mode() {
     let scene = SceneGPU::default();
     assert_eq!(scene.arrow_style, ArrowStyle::Cone, "the default keeps the old cone look");
+    assert_eq!(scene.arrow_style_2d, ArrowStyle2D::Line, "the 2D default is the flat line");
     assert_eq!(scene.arrow_params, ArrowParams::default());
     assert!(scene.mode_3d, "the default keeps the old 3D pipeline");
     assert_eq!(
@@ -102,9 +116,14 @@ fn scene_carries_the_style_params_and_mode() {
     assert!(!scene.uses_flat_arrow());
 
     scene.mode_3d = false;
-    scene.arrow_style = ArrowStyle::Line;
+    scene.arrow_style = ArrowStyle::Pyramid;
+    scene.arrow_style_2d = ArrowStyle2D::Line;
     scene.arrow_params.sides = 16;
-    assert_eq!(scene.arrow_vertex_count(), 9, "2D always draws the flat arrow");
+    assert_eq!(
+        scene.arrow_vertex_count(),
+        9,
+        "2D draws the flat arrow from its own set",
+    );
     assert!(scene.uses_flat_arrow(), "2D ignores the selected 3D family");
 }
 
@@ -127,8 +146,103 @@ fn arrow_draw_plan_selects_the_pipeline_and_count() {
     assert_eq!(
         scene.arrow_draw_plan(),
         ArrowDrawPlan::Flat2D,
-        "2D selects the flat pipeline regardless of the family",
+        "2D selects the flat pipeline from the 2D set",
     );
+}
+
+#[test]
+fn every_2d_family_has_a_draw_plan() {
+    for style in ArrowStyle2D::ALL {
+        let scene = SceneGPU { mode_3d: false, arrow_style_2d: style, ..SceneGPU::default() };
+        assert_eq!(
+            scene.arrow_draw_plan(),
+            ArrowDrawPlan::Flat2D,
+            "{style:?} selects the flat pipeline",
+        );
+        assert_eq!(scene.arrow_vertex_count(), ARROW2D_VERTS, "{style:?} emits the flat budget");
+        assert!(scene.uses_flat_arrow(), "{style:?} paints the flat arrow");
+    }
+}
+
+#[test]
+fn regression_2d_draw_plan_reads_only_the_2d_style() {
+    // Ticket 61 regression: the 3D family must never leak into the 2D plan.
+    let mut scene = SceneGPU { mode_3d: false, ..SceneGPU::default() };
+    for style in ArrowStyle::ALL {
+        scene.arrow_style = style;
+        assert_eq!(
+            scene.arrow_draw_plan(),
+            ArrowDrawPlan::Flat2D,
+            "the 3D {style:?} family does not affect the 2D plan",
+        );
+        assert!(scene.uses_flat_arrow(), "the 2D plan stays flat for {style:?}");
+    }
+    for style in ArrowStyle2D::ALL {
+        scene.arrow_style_2d = style;
+        assert_eq!(
+            scene.arrow_draw_plan(),
+            ArrowDrawPlan::Flat2D,
+            "the 2D {style:?} family drives the 2D plan",
+        );
+    }
+}
+
+#[test]
+fn three_d_draw_plan_ignores_the_2d_style() {
+    let mut scene = SceneGPU { mode_3d: true, ..SceneGPU::default() };
+    scene.arrow_style = ArrowStyle::Pyramid;
+    for style in ArrowStyle2D::ALL {
+        scene.arrow_style_2d = style;
+        assert_eq!(
+            scene.arrow_draw_plan(),
+            ArrowDrawPlan::Mesh3D { vertices: 42 },
+            "the 2D {style:?} family does not affect the 3D plan",
+        );
+    }
+}
+
+#[test]
+fn the_two_style_fields_never_alias() {
+    let mut state = State::new(false);
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Line, "2D starts on the line family");
+
+    assert!(state.set_arrow_style(ArrowStyle::Pyramid), "the 3D family changes");
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Line, "the 2D family is untouched");
+
+    for style in ArrowStyle2D::ALL {
+        let changed = state.arrow_style_2d != style;
+        assert_eq!(
+            state.set_arrow_style_2d(style),
+            changed,
+            "the 2D setter reports only a real change",
+        );
+        assert_eq!(state.arrow_style, ArrowStyle::Pyramid, "the 3D family is untouched");
+    }
+}
+
+#[test]
+fn snapshot_carries_the_2d_style_into_the_draw_plan() {
+    let state = State::new(false);
+    let scene = state.snapshot();
+    assert_eq!(scene.arrow_style_2d, ArrowStyle2D::Line, "the snapshot carries the 2D set");
+    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Flat2D, "2D draws the flat arrow");
+}
+
+#[test]
+fn set_arrow_style_2d_follows_the_mark_dirty_contract() {
+    // With one family today the change branch is empty, so this loops `ALL`:
+    // a second family automatically starts asserting that it dirties the scene.
+    let mut state = State::new(false);
+    for style in ArrowStyle2D::ALL {
+        let changed = state.arrow_style_2d != style;
+        state.dirty = false;
+        assert_eq!(
+            state.set_arrow_style_2d(style),
+            changed,
+            "the setter reports only a real change",
+        );
+        assert_eq!(state.dirty, changed, "the setter dirties exactly when the family changes");
+    }
 }
 
 #[test]

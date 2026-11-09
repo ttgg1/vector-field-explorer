@@ -1,9 +1,10 @@
 //! Arrow style families and their geometry parameters (ticket 45).
 //!
-//! The style set is deliberately small and extensible: one enum variant, one
-//! [`ArrowStyle::vertex_count`] arm, and one branch in `shaders.arrow.wgsl`.
-//! The same enum also selects the flat 2D arrow: 2D ignores the family and
-//! always draws [`ArrowStyle::Line`]'s nine-vertex silhouette.
+//! Two independent sets: [`ArrowStyle`] selects the 3D family and
+//! [`ArrowStyle2D`] selects the 2D family (ticket 61). Changing one never
+//! changes the other. Each set is deliberately small and extensible: one enum
+//! variant, one geometry/draw-plan arm, and (for 3D) one branch in
+//! `shaders.arrow.wgsl`.
 //!
 //! These types are persisted in the view record, so every numeric field has a
 //! documented range and [`ArrowParams::sanitized`] is the single clamp used by
@@ -34,8 +35,48 @@ pub enum ArrowStyle {
     Pyramid,
     /// Constant-radius n-sided shaft with a cone head.
     Cylinder,
-    /// Flat camera-facing ribbon; also the 2D arrow.
+    /// Flat camera-facing 3D ribbon family.
     Line,
+}
+
+/// The arrow family drawn in the 2D view (ticket 61).
+///
+/// Deliberately independent of [`ArrowStyle`]: the 2D selection never feeds the
+/// 3D draw plan and vice versa. Adding a 2D family is one variant here plus one
+/// arm in [`crate::renderer::SceneGPU::arrow_draw_plan`]; the sidebar selector
+/// and persistence pick it up from [`ArrowStyle2D::ALL`] automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ArrowStyle2D {
+    /// The flat nine-vertex silhouette drawn by `shaders.arrow2d.wgsl`.
+    #[default]
+    #[serde(rename = "Line")]
+    Line,
+}
+
+impl ArrowStyle2D {
+    /// Every 2D family, in the order the `2D arrow style` selector shows them.
+    pub const ALL: [ArrowStyle2D; 1] = [ArrowStyle2D::Line];
+
+    /// Short label for the 2D style selector.
+    pub fn label(self) -> &'static str {
+        match self {
+            ArrowStyle2D::Line => "Line",
+        }
+    }
+
+    /// One-line explanation, short enough for a tooltip.
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            ArrowStyle2D::Line => "Flat ribbon silhouette for the 2D view",
+        }
+    }
+
+    /// Whether the sides slider changes this family's geometry.
+    pub fn uses_sides(self) -> bool {
+        match self {
+            ArrowStyle2D::Line => false,
+        }
+    }
 }
 
 impl ArrowStyle {

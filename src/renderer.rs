@@ -19,7 +19,7 @@ use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3};
 
-use crate::arrow_style::{ArrowParams, ArrowStyle};
+use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 
 /// Per-arrow GPU instance: base position, unit direction + length, color.
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,6 +113,7 @@ pub struct SceneGPU {
     pub lines: Arc<Vec<LineInstanceGPU>>,
     pub dots: Arc<Vec<ArrowInstanceGPU>>,
     pub arrow_style: ArrowStyle,
+    pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
     pub mode_3d: bool,
 }
@@ -124,6 +125,7 @@ impl Default for SceneGPU {
             lines: Arc::new(Vec::new()),
             dots: Arc::new(Vec::new()),
             arrow_style: ArrowStyle::default(),
+            arrow_style_2d: ArrowStyle2D::default(),
             arrow_params: ArrowParams::default(),
             // The old renderer always drew the perspective mesh; keep that as
             // the default until the viewmodel's snapshot fills in the mode.
@@ -138,15 +140,17 @@ impl SceneGPU {
     }
 
     /// The pipeline and per-instance vertex count the next `record` call uses.
-    /// 2D always uses the flat nine-vertex arrow; 3D uses the selected
-    /// family's budget.
+    /// 3D uses the selected [`ArrowStyle`] family's budget; 2D uses the
+    /// independent [`ArrowStyle2D`] set (ticket 61), never the 3D selection.
     pub fn arrow_draw_plan(&self) -> ArrowDrawPlan {
         if self.mode_3d {
             ArrowDrawPlan::Mesh3D {
                 vertices: self.arrow_style.vertex_count(self.arrow_params.sides),
             }
         } else {
-            ArrowDrawPlan::Flat2D
+            match self.arrow_style_2d {
+                ArrowStyle2D::Line => ArrowDrawPlan::Flat2D,
+            }
         }
     }
 

@@ -5,7 +5,7 @@
 use eframe::Storage as _;
 use glam::Vec3;
 
-use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
+use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
@@ -71,6 +71,66 @@ struct LegacySettings {
     view: LegacyViewRecord,
 }
 
+/// The exact `ViewRecord` shape a build before ticket 61 wrote: it carries the
+/// 3D `arrow_style` and geometry but no `arrow_style_2d`. Writing this through
+/// real eframe storage proves the new field loads from its serde default while
+/// the existing 3D selection survives.
+#[derive(serde::Serialize)]
+struct Pre2DViewRecord {
+    formula: String,
+    mode_3d: bool,
+    domain_min: [f32; 3],
+    domain_max: [f32; 3],
+    density: u32,
+    arrow_scale: f32,
+    arrow_length_mode: ArrowLengthMode,
+    magnitude_scale: f32,
+    colormap: Colormap,
+    auto_fit: bool,
+    color_min: f32,
+    color_max: f32,
+    arrows: bool,
+    arrow_style: ArrowStyle,
+    arrow_params: ArrowParams,
+    streamlines: bool,
+    particles: bool,
+    speed: f32,
+}
+
+#[derive(serde::Serialize)]
+struct Pre2DSettings {
+    style: AppStyle,
+    layout: LayoutState,
+    view: Pre2DViewRecord,
+}
+
+fn pre_2d_style_settings() -> Pre2DSettings {
+    Pre2DSettings {
+        style: AppStyle::default(),
+        layout: LayoutState::default(),
+        view: Pre2DViewRecord {
+            formula: "(x, y, z)".to_string(),
+            mode_3d: true,
+            domain_min: [-1.0, -1.0, -1.0],
+            domain_max: [1.0, 1.0, 1.0],
+            density: 12,
+            arrow_scale: 1.5,
+            arrow_length_mode: ArrowLengthMode::Uniform,
+            magnitude_scale: 1.0,
+            colormap: Colormap::Turbo,
+            auto_fit: true,
+            color_min: 0.0,
+            color_max: 1.0,
+            arrows: true,
+            arrow_style: ArrowStyle::Pyramid,
+            arrow_params: ArrowParams::default(),
+            streamlines: false,
+            particles: false,
+            speed: 1.0,
+        },
+    }
+}
+
 fn legacy_settings(normalize: bool) -> LegacySettings {
     LegacySettings {
         style: AppStyle::default(),
@@ -118,6 +178,7 @@ fn configured() -> (State, Controls) {
     controls.speed = 2.2;
     controls.arrows = false;
     controls.arrow_style = ArrowStyle::Cylinder;
+    controls.arrow_style_2d = ArrowStyle2D::Line;
     controls.arrow_params = ArrowParams {
         head_length: 0.4,
         head_width: 0.2,
@@ -199,9 +260,54 @@ fn a_legacy_record_without_arrow_style_fields_gets_the_defaults() {
     settings.view.restore(&mut state, &mut controls);
     assert!(state.arrows, "older records show arrows");
     assert_eq!(state.arrow_style, ArrowStyle::Cone, "older records use the cone");
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Line, "older records use the 2D line");
     assert_eq!(state.arrow_params, ArrowParams::default(), "older records use default geometry");
     assert_eq!(controls.arrow_style, ArrowStyle::Cone, "the mirror follows");
+    assert_eq!(controls.arrow_style_2d, ArrowStyle2D::Line, "the 2D mirror follows");
     assert_eq!(controls.arrow_params, ArrowParams::default());
+}
+
+#[test]
+fn a_pre_ticket_61_record_keeps_its_3d_style_and_defaults_the_2d_style() {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &pre_2d_style_settings());
+
+    let loaded = load(Some(&storage));
+
+    assert_eq!(loaded.view.arrow_style, ArrowStyle::Pyramid, "the existing 3D style survives");
+    assert_eq!(
+        loaded.view.arrow_style_2d,
+        ArrowStyle2D::Line,
+        "the missing 2D field loads from its serde default",
+    );
+
+    let mut state = State::new(true);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+    assert_eq!(state.arrow_style, ArrowStyle::Pyramid, "restore keeps the 3D selection");
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Line, "restore defaults the 2D selection");
+    assert_eq!(controls.arrow_style, ArrowStyle::Pyramid, "the 3D mirror follows");
+    assert_eq!(controls.arrow_style_2d, ArrowStyle2D::Line, "the 2D mirror follows");
+}
+
+#[test]
+fn new_records_write_and_reload_the_2d_arrow_style() {
+    let settings = sample_settings();
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(
+        raw.contains("arrow_style:Cylinder"),
+        "the 3D style is written with its stable spelling:\n{raw}",
+    );
+    assert!(
+        raw.contains("arrow_style_2d:Line"),
+        "the 2D style is written with its stable spelling:\n{raw}",
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.arrow_style_2d, ArrowStyle2D::Line);
+    assert_eq!(loaded.view.arrow_style, ArrowStyle::Cylinder);
 }
 
 #[test]
@@ -326,6 +432,7 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.speed, state.speed, "speed");
     assert!(!restored_state.arrows, "the Show arrows toggle");
     assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
+    assert_eq!(restored_state.arrow_style_2d, ArrowStyle2D::Line, "2D arrow style");
     assert_eq!(restored_state.arrow_params.sides, 8, "arrow sides");
     assert_eq!(restored_state.arrow_params.head_length, 0.4, "arrow head length");
     assert_eq!(restored_controls.arrows, restored_state.arrows, "the mirror follows the toggle");
@@ -333,6 +440,11 @@ fn every_view_value_round_trips() {
         restored_controls.arrow_style,
         restored_state.arrow_style,
         "the mirror follows the style",
+    );
+    assert_eq!(
+        restored_controls.arrow_style_2d,
+        restored_state.arrow_style_2d,
+        "the mirror follows the 2D style",
     );
     assert_eq!(
         restored_controls.arrow_params,

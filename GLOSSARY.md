@@ -108,10 +108,16 @@ length derived from the vector's magnitude or a uniform scale.
 _Avoid_: vector glyph
 
 **Arrow style**:
-The shape family used to draw arrows (Cone, Pyramid, Cylinder, Line) together
-with its geometry parameters: head length and width, shaft radius, and sides. In
-2D the flat Line-style arrow is used.
+The shape family used to draw arrows in the 3D view (Cone, Pyramid, Cylinder,
+Line) together with its geometry parameters: head length and width, shaft
+radius, and sides.
 _Avoid_: arrow type, arrow texture
+
+**2D arrow style**:
+The separate, persisted shape-family selection used to draw arrows in the 2D
+view (`ArrowStyle2D`); Line is currently the only family, and 2D never reads the
+3D Arrow style set.
+_Avoid_: 2D arrow type, flat arrow
 
 **Plane dimming**:
 The greyscale and opacity applied to arrows that are not on the selected plane
