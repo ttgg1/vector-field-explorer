@@ -4,9 +4,9 @@ name: Pages
 # https://ttgg1.github.io/vector-field-explorer/. The push trigger is main-only;
 # a manual `workflow_dispatch` can be started from any branch, so both jobs pin
 # `github.ref == 'refs/heads/main'` and a dispatch from a feature branch skips
-# both jobs. The `v0.1.0` ordering gate is procedural (ticket 16a and
-# `scripts/check-site.sh`): this workflow does not check the release before
-# deploying.
+# both jobs. The `v0.1.0` ordering gate is procedural in the ticket-16a deploy
+# instructions; neither this workflow nor the site checker verifies the release
+# before deploying.
 #
 # Once the `github-pages` environment exists, restrict its deployment branches
 # and tags to `main` as defense in depth.
@@ -27,6 +27,7 @@ on:
       - 'site/**'
       - 'docs/images/**'
       - 'scripts/check-site.sh'
+      - 'scripts/check_site.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
