@@ -17,10 +17,10 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, State, StreamlineSeedMode, DEFAULT_DENSITY_2D,
-    MAX_ARROW_OPACITY, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_PARTICLE_SIZE,
-    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MIN_ARROW_OPACITY, MIN_DOMAIN_EXTENT,
-    MIN_PARTICLE_SIZE, domain_between,
+    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, LeftClickAction, State, StreamlineSeedMode,
+    DEFAULT_DENSITY_2D, MAX_ARROW_OPACITY, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT,
+    MAX_PARTICLE_SIZE, MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MIN_ARROW_OPACITY,
+    MIN_DOMAIN_EXTENT, MIN_PARTICLE_SIZE, domain_between,
 };
 use glam::Vec3;
 
@@ -51,6 +51,10 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.color_max, s.color_max, "color max agrees");
     assert_eq!(c.streamlines, s.streamlines, "streamlines start off");
     assert_eq!(c.seed_mode, s.seed_mode, "the seed mode starts with the seam's");
+    assert_eq!(
+        c.left_click_action, s.left_click_action,
+        "the left-click action starts with the seam's",
+    );
     assert_eq!(c.particles, s.particles, "particles start off");
     assert_eq!(c.domain_min, s.domain.min, "domain min agrees");
     assert_eq!(c.domain_max, s.domain.max, "domain max agrees");
@@ -96,6 +100,10 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_color_range(c.color_min, c.color_max));
     assert!(!s.set_streamlines(c.streamlines));
     assert!(!s.set_seed_mode(c.seed_mode), "synced seed mode does not re-dirty");
+    assert!(
+        !s.set_left_click_action(c.left_click_action),
+        "synced left-click action does not re-dirty",
+    );
     assert!(!s.set_particles(c.particles));
     assert!(!s.set_domain(c.domain_min, c.domain_max), "synced extrema are a no-op");
     assert!(s.snapshot_if_dirty().is_none(), "an untouched frame rebuilds nothing");
@@ -685,6 +693,46 @@ fn features_reset_returns_the_seed_mode_to_auto() {
 
     assert!(!c.streamlines, "the Features reset keeps hiding streamlines");
     assert_eq!(c.seed_mode, StreamlineSeedMode::Auto, "and returns the seed mode to Auto");
+}
+
+#[test]
+fn left_click_action_defaults_and_flows_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert_eq!(
+        c.left_click_action,
+        LeftClickAction::SeedStreamline,
+        "the row starts on Seed streamline",
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+
+    c.left_click_action = LeftClickAction::AddParticles;
+    apply(&mut s, &mut c);
+    assert_eq!(s.left_click_action, LeftClickAction::AddParticles, "the choice lands on the seam");
+    assert_eq!(c.left_click_action, s.left_click_action, "the mirror follows the seam");
+}
+
+#[test]
+fn left_click_action_stays_available_while_its_feature_is_off() {
+    // The row is never hidden or disabled by the feature toggles: it keeps both
+    // choices visible and the click is a hinted no-op instead.
+    assert_eq!(LeftClickAction::ALL.len(), 2, "both choices stay on the row");
+    assert!(!Controls::new().streamlines, "the default Features state hides streamlines");
+    assert!(!Controls::new().particles, "and particles");
+}
+
+#[test]
+fn features_reset_returns_the_left_click_action_to_seed_streamline() {
+    let mut c = Controls::new();
+    c.left_click_action = LeftClickAction::AddParticles;
+
+    c.reset_features();
+
+    assert_eq!(
+        c.left_click_action,
+        LeftClickAction::SeedStreamline,
+        "Reset Features restores Seed streamline",
+    );
 }
 
 // --- Ticket 30: particle size and count controls -----------------------

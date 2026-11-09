@@ -5,7 +5,8 @@
 
 use vector_field_explorer::ui::help_overlay::{
     FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTIONS, HELP_SECTION_TITLE_SIZE,
-    HELP_WINDOW_TITLE_SIZE, OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT,
+    HELP_WINDOW_TITLE_SIZE, LEFT_CLICK_HELP_ACTION, LEFT_CLICK_HELP_INPUT,
+    LEFT_CLICK_HELP_TOOLTIP, OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT,
     SEED_HELP_TOOLTIP, HelpRow, all_rows, rows_for, section_heading_style, sections_for,
     window_heading_color,
 };
@@ -24,6 +25,9 @@ const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
     ("F", "Fit domain"),
     ("Click", "Seed streamlines"),
     ("Seed:", "auto | click"),
+    ("Left click:", "seed streamline | add particles"),
+    ("S", "Seed streamline at pointer"),
+    ("P", "Particle burst at pointer"),
     (
         "C",
         "fly · WASD move · Q/E down/up · Shift boost · mouse look · Esc exit · Camera toggles it",
@@ -42,6 +46,9 @@ const VIEW_2D_BINDINGS: &[(&str, &str)] = &[
     ("F", "Fit domain"),
     ("Click", "Seed streamlines"),
     ("Seed:", "auto | click"),
+    ("Left click:", "seed streamline | add particles"),
+    ("S", "Seed streamline at pointer"),
+    ("P", "Particle burst at pointer"),
 ];
 
 const GLOBAL_BINDINGS: &[(&str, &str)] = &[
@@ -117,6 +124,33 @@ fn the_seed_mode_line_documents_both_modes_and_the_off_state() {
                 .any(|row| row.input == SEED_HELP_INPUT && row.action == SEED_HELP_ACTION),
             "both view overlays carry the seed-mode line",
         );
+    }
+}
+
+#[test]
+fn the_left_click_selector_is_documented_in_both_views() {
+    assert_eq!(
+        format!("{LEFT_CLICK_HELP_INPUT} {LEFT_CLICK_HELP_ACTION}"),
+        "Left click: seed streamline | add particles",
+        "the overlay names both choices",
+    );
+    assert!(
+        LEFT_CLICK_HELP_TOOLTIP.contains("Features") && LEFT_CLICK_HELP_TOOLTIP.contains("off"),
+        "the tooltip says where to choose and why an off feature is a no-op: \
+         {LEFT_CLICK_HELP_TOOLTIP}",
+    );
+    for mode_3d in [false, true] {
+        assert!(
+            rows_for(mode_3d).iter().any(|row| row.input == LEFT_CLICK_HELP_INPUT
+                && row.action == LEFT_CLICK_HELP_ACTION),
+            "both view overlays carry the left-click selector line",
+        );
+        for key in ["S", "P"] {
+            assert!(
+                rows_for(mode_3d).iter().any(|row| row.input == key),
+                "both view overlays document {key}",
+            );
+        }
     }
 }
 

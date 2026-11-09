@@ -36,8 +36,10 @@ use crate::particles::{
     MIN_STAGNATION_SECONDS, MAX_STAGNATION_SECONDS, ParticleAppearance, ParticleColorMode,
 };
 use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
+use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
     ArrowLengthMode,
+    LeftClickAction,
     State,
     StreamlineSeedMode,
     DEFAULT_DENSITY_2D,
@@ -342,6 +344,8 @@ pub struct Controls {
     pub streamlines: bool,
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
+    /// What one explicit left click does (ticket 60).
+    pub left_click_action: LeftClickAction,
     pub particles: bool,
     /// Dot radius multiplier on the grid spacing (ticket 30).
     pub particle_size: f32,
@@ -388,6 +392,7 @@ impl Controls {
             color_max: 1.0,
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
+            left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
             particle_count: 0,
@@ -427,6 +432,7 @@ impl Controls {
         let defaults = Controls::new();
         self.streamlines = defaults.streamlines;
         self.seed_mode = defaults.seed_mode;
+        self.left_click_action = defaults.left_click_action;
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
         self.particle_count = defaults.particle_count;
@@ -668,6 +674,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         .on_disabled_hover_text(
             "Turn Streamlines on to choose Auto or Click seeding",
         );
+        // Ticket 60: the left click action stays visible even while its feature
+        // is off; the click is then a hinted no-op rather than a dead control.
+        ui.horizontal(|ui| {
+            ui.label("Left click");
+            for action in LeftClickAction::ALL {
+                let hover = match click_action_plan(
+                    action,
+                    controls.streamlines,
+                    controls.particles,
+                    view_3d,
+                ) {
+                    ClickActionPlan::Ignore(reason) => {
+                        format!("{} — {reason}", action.tooltip())
+                    }
+                    _ => action.tooltip().to_owned(),
+                };
+                ui.selectable_value(&mut controls.left_click_action, action, action.label())
+                    .on_hover_text(hover);
+            }
+        });
         ui.checkbox(&mut controls.particles, "Particles")
             .on_hover_text("Animate dots carried by the field (3D view)");
         ui.horizontal(|ui| {
@@ -1077,6 +1103,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
     state.set_seed_mode(controls.seed_mode);
+    state.set_left_click_action(controls.left_click_action);
     state.set_particles(controls.particles);
     state.set_particle_size(controls.particle_size);
     state.set_particle_count(controls.particle_count);
@@ -1112,6 +1139,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
     controls.seed_mode = state.seed_mode;
+    controls.left_click_action = state.left_click_action;
     controls.particles = state.particles;
     controls.particle_size = state.particle_size;
     controls.particle_count = state.particle_count;

@@ -17,9 +17,9 @@ use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, MAX_ARROW_OPACITY,
-    MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT,
-    MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
+    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction,
+    MAX_ARROW_OPACITY, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT,
+    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
 };
 use vector_field_explorer::VfApp;
 
@@ -256,6 +256,7 @@ fn configured() -> (State, Controls) {
     controls.color_max = 3.0;
     controls.streamlines = true;
     controls.seed_mode = StreamlineSeedMode::Click;
+    controls.left_click_action = LeftClickAction::AddParticles;
     controls.particles = true;
     controls.arrows = false;
     controls.arrow_style = ArrowStyle::Cylinder;
@@ -658,6 +659,10 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.color_max, state.color_max, "color max");
     assert_eq!(restored_state.streamlines, state.streamlines, "streamlines");
     assert_eq!(restored_state.seed_mode, state.seed_mode, "streamline seed mode");
+    assert_eq!(
+        restored_state.left_click_action, state.left_click_action,
+        "left-click action",
+    );
     assert_eq!(restored_state.particles, state.particles, "particles");
     assert!(!restored_state.arrows, "the Show arrows toggle");
     assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
@@ -681,6 +686,10 @@ fn every_view_value_round_trips() {
         "the mirror follows the params",
     );
     assert_eq!(restored_controls.seed_mode, state.seed_mode, "the mirror follows the seed mode");
+    assert_eq!(
+        restored_controls.left_click_action, state.left_click_action,
+        "the mirror follows the left-click action",
+    );
     // The widget mirror is refreshed so the first sidebar frame agrees.
     assert_eq!(restored_controls.density, state.density);
     assert_eq!(restored_controls.arrow_length_mode, state.arrow_length_mode);
@@ -705,6 +714,11 @@ fn default_record_matches_a_fresh_two_d_state() {
         ViewRecord::default().seed_mode,
         StreamlineSeedMode::Auto,
         "the default view record resets the seed mode to Auto",
+    );
+    assert_eq!(
+        ViewRecord::default().left_click_action,
+        LeftClickAction::SeedStreamline,
+        "the default view record seeds streamlines on left click",
     );
 }
 
@@ -749,6 +763,85 @@ fn seed_mode_round_trips_through_storage() {
     loaded.view.restore(&mut restored_state, &mut restored_controls);
     assert_eq!(restored_state.seed_mode, StreamlineSeedMode::Click);
     assert_eq!(restored_controls.seed_mode, StreamlineSeedMode::Click);
+}
+
+#[test]
+fn a_record_without_a_left_click_action_loads_as_seed_streamline() {
+    // `load_legacy` writes a pre-ticket-60 shape: no `left_click_action` key.
+    let loaded = load_legacy(false);
+    assert_eq!(
+        loaded.view.left_click_action,
+        LeftClickAction::SeedStreamline,
+        "an older record defaults the left-click action instead of failing",
+    );
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+    assert_eq!(state.left_click_action, LeftClickAction::SeedStreamline);
+    assert_eq!(controls.left_click_action, LeftClickAction::SeedStreamline, "the mirror follows");
+}
+
+#[test]
+fn an_unknown_left_click_action_loads_as_seed_streamline() {
+    #[derive(serde::Serialize)]
+    struct UnknownActionView {
+        left_click_action: &'static str,
+    }
+
+    #[derive(serde::Serialize)]
+    struct UnknownActionSettings {
+        style: AppStyle,
+        view: UnknownActionView,
+    }
+
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(
+        &mut storage,
+        eframe::APP_KEY,
+        &UnknownActionSettings {
+            style: AppStyle::default(),
+            view: UnknownActionView { left_click_action: "Teleport" },
+        },
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.view.left_click_action,
+        LeftClickAction::SeedStreamline,
+        "an unknown spelling falls back instead of failing the envelope",
+    );
+    assert_eq!(
+        loaded.style,
+        AppStyle::default(),
+        "the rest of the envelope still loads",
+    );
+}
+
+#[test]
+fn left_click_action_round_trips_through_storage() {
+    let mut state = State::new(false);
+    assert!(state.set_left_click_action(LeftClickAction::AddParticles));
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(
+        raw.contains("left_click_action:AddParticles"),
+        "the action is written with its stable spelling:\n{raw}",
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.left_click_action, LeftClickAction::AddParticles);
+    let mut restored_state = State::new(false);
+    let mut restored_controls = Controls::new();
+    loaded.view.restore(&mut restored_state, &mut restored_controls);
+    assert_eq!(restored_state.left_click_action, LeftClickAction::AddParticles);
+    assert_eq!(restored_controls.left_click_action, LeftClickAction::AddParticles);
 }
 
 #[test]

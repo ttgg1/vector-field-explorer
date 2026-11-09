@@ -37,6 +37,7 @@ use crate::viewmodel::{
     DragButtons,
     DragChannel,
     LastClickSeed,
+    LeftClickAction,
     State,
     ViewGesture,
     apply_camera_input,

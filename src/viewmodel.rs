@@ -176,6 +176,44 @@ impl StreamlineSeedMode {
     }
 }
 
+/// What one explicit left click does (ticket 60). The S/P shortcuts use the
+/// same two actions regardless of this setting: the selector only changes the
+/// mouse gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LeftClickAction {
+    /// Plant one click streamline seed; no particle burst. The default.
+    #[default]
+    SeedStreamline,
+    /// Add one particle burst; store no click seed.
+    AddParticles,
+}
+
+impl LeftClickAction {
+    /// Every action, in the order the Features row shows them.
+    pub const ALL: [LeftClickAction; 2] =
+        [LeftClickAction::SeedStreamline, LeftClickAction::AddParticles];
+
+    /// Short label for the selector.
+    pub fn label(self) -> &'static str {
+        match self {
+            LeftClickAction::SeedStreamline => "Seed streamline",
+            LeftClickAction::AddParticles => "Add particles",
+        }
+    }
+
+    /// One-line explanation, short enough for a tooltip.
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            LeftClickAction::SeedStreamline => {
+                "A left click seeds one streamline (S does the same)"
+            }
+            LeftClickAction::AddParticles => {
+                "A left click adds a particle burst in 3D (P does the same)"
+            }
+        }
+    }
+}
+
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
 pub struct State {
@@ -213,6 +251,9 @@ pub struct State {
     /// Which seeds the on state paints (ticket 50): the automatic grid, the
     /// click bursts, or both.
     pub seed_mode: StreamlineSeedMode,
+    /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
+    /// it and always run their own action.
+    pub left_click_action: LeftClickAction,
     pub particles: bool,
     /// Dot radius multiplier on the base grid-spacing fraction (ticket 30).
     /// Painted by the per-frame dot rebuild, so changing it is never a scene
@@ -275,6 +316,7 @@ impl State {
             arrow_params: ArrowParams::default(),
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
+            left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
             particle_count: 0,
@@ -527,6 +569,16 @@ impl State {
             return false;
         }
         self.seed_mode = mode;
+        self.mark_dirty()
+    }
+
+    /// Choose what an explicit left click does (ticket 60). The keyboard
+    /// shortcuts are independent of this setting.
+    pub fn set_left_click_action(self: &mut State, action: LeftClickAction) -> bool {
+        if self.left_click_action == action {
+            return false;
+        }
+        self.left_click_action = action;
         self.mark_dirty()
     }
 
@@ -1156,9 +1208,9 @@ pub struct LastClickSeed {
     pub particles_before: usize,
     /// egui's frame time when the click happened.
     pub time: f64,
-    /// Whether [`State::accepts_click_seed`] let this click into the seed list.
-    /// An off-state click still bursts particles, but a double-click must not
-    /// delete a retained seed that happens to sit at the same point.
+    /// Whether this click stored a streamline seed. An `AddParticles` click
+    /// stores no seed but still records its burst, so a double-click truncates
+    /// the particles without deleting a coincident retained seed.
     pub stored: bool,
 }
 
@@ -1181,10 +1233,10 @@ pub struct ClickSeedUndo {
 /// its seed is removed and `particles` reports the pre-click count (when the
 /// cloud still has at least that many points, so a truncation is safe).
 ///
-/// An unstored click (`LastClickSeed::stored == false`, e.g. a click made while
-/// Streamlines was off) removes nothing: the deterministic pick can coincide
-/// with a retained seed, and the off-state promise is that retained clicks stay
-/// recoverable. Its particle burst is still rolled back when safe.
+/// An unstored click (`LastClickSeed::stored == false`, i.e. an `AddParticles`
+/// click) removes nothing: it never stored a seed, so a double-click must not
+/// delete a retained seed that happens to sit at the same point. Its particle
+/// burst is still rolled back when safe.
 pub fn undo_click_seed(
     seeds: &[Vec3],
     last: Option<LastClickSeed>,

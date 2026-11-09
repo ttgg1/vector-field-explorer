@@ -14,7 +14,7 @@ use glam::Vec3;
 use crate::camera::OrbitCamera;
 use crate::domain::Domain;
 use crate::fly_camera::FlyCamera;
-use crate::viewmodel::PLANE_MARGIN;
+use crate::viewmodel::{LeftClickAction, PLANE_MARGIN};
 
 /// Radians the view orbits per arrow-key press in 3D.
 pub const KEY_ORBIT_STEP: f32 = 0.06;
@@ -308,4 +308,91 @@ pub fn view_key_commands(
         }
     });
     commands
+}
+
+/// The one-line status hint for a left click that cannot seed because the
+/// Streamlines feature is off (ticket 60).
+pub const CLICK_HINT_STREAMLINES_OFF: &str = "Streamlines are off";
+/// The one-line status hint for AddParticles with the feature off.
+pub const CLICK_HINT_PARTICLES_OFF: &str = "Particles are off";
+/// The one-line status hint for AddParticles in the 2D view.
+pub const CLICK_HINT_PARTICLES_NEED_3D: &str = "Particles need the 3D view";
+
+/// What one explicit click action should do after the feature gates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickActionPlan {
+    /// Store one click streamline seed; never add a particle burst.
+    SeedStreamline,
+    /// Add the existing particle burst; never store a click seed.
+    AddParticles,
+    /// The action's feature is off or the view lacks depth: do nothing and show
+    /// `hint` in the status bar.
+    Ignore(&'static str),
+}
+
+/// Decide what one click does from the selected action and the two Feature
+/// toggles (ticket 60). Pure so the mouse click and both keyboard shortcuts
+/// share exactly one rule.
+///
+/// `mode_3d` is the projection gate, matching
+/// [`State::particle_target`](crate::viewmodel::State::particle_target), not the
+/// sampled dimension: a flat formula in 3D mode is still not a particle view and
+/// gets the hint.
+pub fn click_action_plan(
+    action: LeftClickAction,
+    streamlines: bool,
+    particles: bool,
+    mode_3d: bool,
+) -> ClickActionPlan {
+    match action {
+        LeftClickAction::SeedStreamline if streamlines => ClickActionPlan::SeedStreamline,
+        LeftClickAction::SeedStreamline => ClickActionPlan::Ignore(CLICK_HINT_STREAMLINES_OFF),
+        LeftClickAction::AddParticles if !particles => {
+            ClickActionPlan::Ignore(CLICK_HINT_PARTICLES_OFF)
+        }
+        LeftClickAction::AddParticles if !mode_3d => {
+            ClickActionPlan::Ignore(CLICK_HINT_PARTICLES_NEED_3D)
+        }
+        LeftClickAction::AddParticles => ClickActionPlan::AddParticles,
+    }
+}
+
+/// Map one plain S/P key press to the click action it runs (ticket 60). S seeds
+/// a streamline and P adds a particle burst, regardless of the selected
+/// left-click action.
+///
+/// The mapping is deliberately pure and only encodes the keyboard gates:
+/// feature availability is [`click_action_plan`]'s job. A text field keeps every
+/// key, OS key-repeat fires once per physical press, and only plain modifiers
+/// count (Ctrl/Alt/Command are menu/browser chords; Shift+S is not a seed).
+/// S is inert while flying because it is the fly camera's backward key; P is
+/// unused by fly and stays available.
+pub fn seed_shortcut(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    repeat: bool,
+    text_edit_focused: bool,
+    flying: bool,
+) -> Option<LeftClickAction> {
+    if text_edit_focused || repeat || !modifiers.matches_exact(egui::Modifiers::NONE) {
+        return None;
+    }
+    match key {
+        egui::Key::S if !flying => Some(LeftClickAction::SeedStreamline),
+        egui::Key::P => Some(LeftClickAction::AddParticles),
+        _ => None,
+    }
+}
+
+/// The point a keyboard seed/burst lands on: the pointer when it is inside the
+/// viewport, otherwise the viewport centre. A captured/locked pointer may not
+/// hover at all, which is why `pointer` is optional.
+pub fn shortcut_seed_point(
+    pointer: Option<egui::Pos2>,
+    viewport_rect: egui::Rect,
+) -> egui::Pos2 {
+    match pointer {
+        Some(pos) if viewport_rect.contains(pos) => pos,
+        _ => viewport_rect.center(),
+    }
 }

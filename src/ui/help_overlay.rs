@@ -90,6 +90,13 @@ pub const SEED_HELP_ACTION: &str = "auto | click";
 pub const SEED_HELP_TOOLTIP: &str =
     "Off hides both seed sources and disables click seeding";
 
+/// The left-click action selector line (ticket 60): the selector lives in the
+/// Features panel, and each choice is a no-op while its feature is off.
+pub const LEFT_CLICK_HELP_INPUT: &str = "Left click:";
+pub const LEFT_CLICK_HELP_ACTION: &str = "seed streamline | add particles";
+pub const LEFT_CLICK_HELP_TOOLTIP: &str =
+    "Choose the left-click action in Features; each does nothing while its feature is off";
+
 const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "Left-drag", action: "Orbit" },
     HelpRow { input: "Right-drag", action: "Orbit" },
@@ -103,6 +110,9 @@ const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "R", action: "Reset view" },
     HelpRow { input: "F", action: "Fit domain" },
     HelpRow { input: "Click", action: "Seed streamlines" },
+    HelpRow { input: LEFT_CLICK_HELP_INPUT, action: LEFT_CLICK_HELP_ACTION },
+    HelpRow { input: "S", action: "Seed streamline at pointer" },
+    HelpRow { input: "P", action: "Particle burst at pointer" },
     HelpRow { input: SEED_HELP_INPUT, action: SEED_HELP_ACTION },
     HelpRow { input: FLY_HELP_INPUT, action: FLY_HELP_ACTION },
 ];
@@ -118,6 +128,9 @@ const ROWS_2D: &[HelpRow] = &[
     HelpRow { input: "R", action: "Reset view" },
     HelpRow { input: "F", action: "Fit domain" },
     HelpRow { input: "Click", action: "Seed streamlines" },
+    HelpRow { input: LEFT_CLICK_HELP_INPUT, action: LEFT_CLICK_HELP_ACTION },
+    HelpRow { input: "S", action: "Seed streamline at pointer" },
+    HelpRow { input: "P", action: "Particle burst at pointer" },
     HelpRow { input: SEED_HELP_INPUT, action: SEED_HELP_ACTION },
 ];
 
@@ -216,6 +229,8 @@ fn table(
                     );
                     if row.input == SEED_HELP_INPUT {
                         action.on_hover_text(SEED_HELP_TOOLTIP);
+                    } else if row.input == LEFT_CLICK_HELP_INPUT {
+                        action.on_hover_text(LEFT_CLICK_HELP_TOOLTIP);
                     }
                     ui.end_row();
                 }

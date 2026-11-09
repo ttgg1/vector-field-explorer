@@ -24,7 +24,7 @@ use crate::particles::{
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
-use crate::viewmodel::{ArrowLengthMode, State, StreamlineSeedMode};
+use crate::viewmodel::{ArrowLengthMode, LeftClickAction, State, StreamlineSeedMode};
 use glam::Vec3;
 
 /// Everything the app remembers across restarts. `style` is a required field
@@ -113,6 +113,11 @@ pub struct ViewRecord {
     /// did not carry it; the container default loads them as Auto.
     #[serde(default)]
     pub seed_mode: StreamlineSeedMode,
+    /// What one explicit left click does (ticket 60). Older records did not
+    /// carry it; they load as SeedStreamline. An unknown spelling also falls
+    /// back to the default instead of failing the whole envelope.
+    #[serde(default, deserialize_with = "deserialize_left_click_action")]
+    pub left_click_action: LeftClickAction,
     pub particles: bool,
     /// The particle dot size multiplier (ticket 30). Missing on older
     /// records; the serde default loads them at the base fraction.
@@ -180,6 +185,7 @@ impl ViewRecord {
             arrow_params: state.arrow_params,
             streamlines: state.streamlines,
             seed_mode: state.seed_mode,
+            left_click_action: state.left_click_action,
             particles: state.particles,
             particle_size: state.particle_size,
             particle_count: state.particle_count,
@@ -231,6 +237,7 @@ impl ViewRecord {
         controls.arrow_params = self.arrow_params.sanitized();
         controls.streamlines = self.streamlines;
         controls.seed_mode = self.seed_mode;
+        controls.left_click_action = self.left_click_action;
         controls.particles = self.particles;
         controls.particle_size = finite_or(self.particle_size, defaults.particle_size);
         controls.particle_count = self.particle_count.min(MAX_PARTICLES as u32);
@@ -323,6 +330,75 @@ fn default_particle_loop_on_stagnation() -> bool {
 
 fn default_particle_stagnation_seconds() -> f32 {
     DEFAULT_STAGNATION_SECONDS
+}
+
+/// Decode a ticket-60 `left_click_action`, falling back to the default for an
+/// unknown variant instead of failing the whole settings envelope.
+///
+/// The derived enum decoder rejects an unknown unit variant; a corrupt or
+/// future record must still load every other setting. RON gives the variant
+/// name through the enum access; matching it by hand keeps the fallback local.
+fn deserialize_left_click_action<'de, D>(deserializer: D) -> Result<LeftClickAction, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{EnumAccess, VariantAccess, Visitor};
+
+    struct VariantName(String);
+
+    impl<'de> serde::Deserialize<'de> for VariantName {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct NameVisitor;
+
+            impl<'de> Visitor<'de> for NameVisitor {
+                type Value = VariantName;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    formatter.write_str("a left-click action name")
+                }
+
+                fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(VariantName(value.to_owned()))
+                }
+            }
+
+            deserializer.deserialize_identifier(NameVisitor)
+        }
+    }
+
+    struct ActionVisitor;
+
+    impl<'de> Visitor<'de> for ActionVisitor {
+        type Value = LeftClickAction;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a left-click action")
+        }
+
+        fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+        where
+            A: EnumAccess<'de>,
+        {
+            let (name, variant) = data.variant::<VariantName>()?;
+            variant.unit_variant()?;
+            Ok(match name.0.as_str() {
+                "AddParticles" => LeftClickAction::AddParticles,
+                _ => LeftClickAction::SeedStreamline,
+            })
+        }
+    }
+
+    deserializer.deserialize_enum(
+        "LeftClickAction",
+        &["SeedStreamline", "AddParticles"],
+        ActionVisitor,
+    )
 }
 
 /// Decode the ticket-14 `normalize` boolean, which was stored as a bare

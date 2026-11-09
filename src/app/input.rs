@@ -40,6 +40,12 @@ impl VfApp {
         // and consumes the key so a focused widget never also activates.
         crate::ui::transport::toggle_on_space(ctx, &self.state, &mut self.clock);
 
+        // Ticket 60: plain S/P seed a streamline or add a particle burst at the
+        // pointer (viewport centre as fallback). Runs after the menu and
+        // transport tables so their chords win, and before the camera keys; S
+        // is inert while flying because it is fly's backward key.
+        self.apply_seed_shortcuts(ctx);
+
         // One global clock advances once per frame from egui's stable frame
         // time, but only while something consumes it. `advance_for` clamps to
         // MAX_STEP, ignores non-finite frames, holds the held time while
@@ -231,11 +237,171 @@ impl VfApp {
         }
     }
 
-    /// Turn one viewport click into a deterministic streamline burst (and a
-    /// particle burst when particles are on). The pure entry point maps the
-    /// pointer position onto the camera ray (3D, at the focal plane) or the 2D
-    /// plane; the viewmodel retraces the bounded burst list.
-    pub(super) fn seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
+    /// Run this frame's plain S/P shortcut, if any: S seeds a streamline and P
+    /// adds the particle burst, each at the pointer or the viewport centre.
+    /// Feature availability and the hinted no-op live in the same pure plan as
+    /// the mouse click. A keyboard seed deliberately clears the mouse rollback
+    /// record: it is not the first half of a double-click and must never let a
+    /// later double-click take back an unrelated earlier mouse click.
+    pub(super) fn apply_seed_shortcuts(&mut self, ctx: &egui::Context) {
+        let text_focused = ctx.text_edit_focused();
+        let flying = self.fly.is_some();
+        let shortcut = ctx.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => {
+                    view_command::seed_shortcut(*key, *modifiers, *repeat, text_focused, flying)
+                }
+                _ => None,
+            })
+        });
+        let Some(action) = shortcut else {
+            return;
+        };
+        let key = match action {
+            LeftClickAction::SeedStreamline => egui::Key::S,
+            LeftClickAction::AddParticles => egui::Key::P,
+        };
+        ctx.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, key);
+        });
+        // The viewport rect is recorded by the central panel every frame, so a
+        // first-frame shortcut has no target and does nothing.
+        let Some(rect) = self.last_viewport_rect else {
+            return;
+        };
+        let aspect = rect.width().max(1.0) / rect.height().max(1.0);
+        // A captured/locked pointer is hidden and may not hover reliably; the
+        // crosshair-centre fallback is the correct target there. Otherwise the
+        // pointer seeds where the user is pointing.
+        let pointer = if self.capture_active {
+            None
+        } else {
+            ctx.input(|input| input.pointer.hover_pos())
+        };
+        let pos = view_command::shortcut_seed_point(pointer, rect);
+        let time = ctx.input(|input| input.time);
+        self.apply_click_action(action, pos, rect, aspect, time);
+        self.last_click_seed = None;
+    }
+
+    /// Turn one viewport click into the selected left-click action (ticket 60):
+    /// a single streamline seed or a particle burst, never both. The pure
+    /// [`view_command::click_action_plan`] owns the feature gates and the
+    /// one-line no-op hint; this wrapper owns the seed/burst side effects.
+    pub(super) fn seed_click(
+        &mut self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+        time: f64,
+    ) {
+        let action = self.state.left_click_action;
+        self.apply_click_action(action, pos, rect, aspect, time);
+    }
+
+    /// Apply one explicit click action at `pos`. Shared by the mouse and the
+    /// S/P shortcuts; a shortcut passes its own action, so it works whatever
+    /// the selector says.
+    pub(super) fn apply_click_action(
+        &mut self,
+        action: LeftClickAction,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+        time: f64,
+    ) {
+        match view_command::click_action_plan(
+            action,
+            self.state.streamlines,
+            self.state.particles,
+            self.state.mode_3d,
+        ) {
+            view_command::ClickActionPlan::Ignore(hint) => {
+                // No seed, no burst. Set the hint only on this event; the status
+                // bar owns its lifetime.
+                self.status.hint = Some(hint.to_owned());
+                self.last_click_seed = None;
+            }
+            view_command::ClickActionPlan::SeedStreamline => {
+                let Some(seed) = self.click_world_seed(pos, rect, aspect) else {
+                    // A click that lands off the domain plants nothing, so it
+                    // cannot be the first half of a seeding double-click either.
+                    self.last_click_seed = None;
+                    return;
+                };
+                if self.click_seeds.len() >= MAX_CLICK_SEEDS {
+                    self.click_seeds.remove(0);
+                }
+                self.click_seeds.push(seed);
+                self.click_lines =
+                    self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+                self.streamline_count = self.flow_lines.len() + self.click_lines.len();
+                self.scene.lines = Arc::new(compose_lines(
+                    &self.flow_lines,
+                    &self.click_lines,
+                    &self.state.domain,
+                    self.state.is_3d(),
+                ));
+                log::trace!(
+                    "click seed {} of {} at {seed:?}: {} click streamline segments",
+                    self.click_seeds.len(),
+                    MAX_CLICK_SEEDS,
+                    self.click_lines.len()
+                );
+                // No particle burst for a streamline click. The pre-click count
+                // keeps the double-click rollback a safe no-op.
+                self.last_click_seed = Some(LastClickSeed {
+                    seed,
+                    particles_before: particle_count(&self.particles),
+                    time,
+                    stored: true,
+                });
+            }
+            view_command::ClickActionPlan::AddParticles => {
+                let Some(seed) = self.click_world_seed(pos, rect, aspect) else {
+                    self.last_click_seed = None;
+                    return;
+                };
+                // Particles only exist in the 3D view (the plan already gated
+                // this). If the cloud has not spawned yet, fill it first so the
+                // click does not leave a cloud of just this burst. The count
+                // after that ambient spawn is what a double-click truncates to.
+                let mut particles_before = particle_count(&self.particles);
+                if let Some(target) = self.state.particle_target() {
+                    if particle_count(&self.particles) == 0 {
+                        spawn(&mut self.particles, &self.state.domain, target, 3);
+                    }
+                    particles_before = particle_count(&self.particles);
+                    spawn_at(
+                        &mut self.particles,
+                        &self.state.domain,
+                        seed,
+                        CLICK_BURST_PARTICLES,
+                        3,
+                    );
+                }
+                // No streamline seed. `stored = false` still models the burst so
+                // a following double-click truncates the particles back, while
+                // never deleting a coincident retained seed.
+                self.last_click_seed = Some(LastClickSeed {
+                    seed,
+                    particles_before,
+                    time,
+                    stored: false,
+                });
+            }
+        }
+    }
+
+    /// Map one viewport point onto the active camera to get a seed position.
+    /// The pure `click_seed` seam maps the pointer to the orbit ray (3D) or the
+    /// 2D plane; `None` means the point is off the domain.
+    fn click_world_seed(
+        &self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> Option<Vec3> {
         let width = rect.width().max(1.0);
         let height = rect.height().max(1.0);
         let ndc = Vec2::new(
@@ -247,59 +413,7 @@ impl VfApp {
             Some(fly) => ViewCamera::Fly(fly),
             None => ViewCamera::Orbit(&self.orbit),
         };
-        let Some(seed) = click_seed(view_camera, &self.state.domain, aspect, ndc, ortho) else {
-            // A click that lands off the domain plants nothing, so it cannot
-            // be the first half of a seeding double-click either.
-            self.last_click_seed = None;
-            return;
-        };
-        // Streamlines off hides both seed sources and refuses new seeds, but
-        // the click's particle burst is out of scope (ticket 60 owns the
-        // left-click action): it still happens below. An off-state click is
-        // recorded as unstored so a following double-click cannot delete a
-        // retained seed that a deterministic click at the same point matches.
-        let stored = self.state.accepts_click_seed();
-        if stored {
-            if self.click_seeds.len() >= MAX_CLICK_SEEDS {
-                self.click_seeds.remove(0);
-            }
-            self.click_seeds.push(seed);
-            self.click_lines =
-                self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
-            self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            self.scene.lines = Arc::new(compose_lines(
-                &self.flow_lines,
-                &self.click_lines,
-                &self.state.domain,
-                self.state.is_3d(),
-            ));
-            log::trace!(
-                "click seed {} of {} at {seed:?}: {} click streamline segments",
-                self.click_seeds.len(),
-                MAX_CLICK_SEEDS,
-                self.click_lines.len()
-            );
-        }
-        // Particles only exist in the 3D view; a click adds a capped burst
-        // around the pick (the per-frame dot rebuild picks it up next frame).
-        // If the cloud has not spawned yet, fill it first so the click does not
-        // leave a cloud of just this burst. The count after that ambient spawn
-        // is what a double-click truncates back to.
-        let mut particles_before = particle_count(&self.particles);
-        if let Some(target) = self.state.particle_target() {
-            if particle_count(&self.particles) == 0 {
-                spawn(&mut self.particles, &self.state.domain, target, 3);
-            }
-            particles_before = particle_count(&self.particles);
-            spawn_at(
-                &mut self.particles,
-                &self.state.domain,
-                seed,
-                CLICK_BURST_PARTICLES,
-                3,
-            );
-        }
-        self.last_click_seed = Some(LastClickSeed { seed, particles_before, time, stored });
+        click_seed(view_camera, &self.state.domain, aspect, ndc, ortho)
     }
 
     /// Take back the burst the previous single click planted when it turns out

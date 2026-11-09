@@ -18,7 +18,7 @@ use vector_field_explorer::viewmodel::{
     MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE, MAX_PROPORTIONAL_EXPONENT,
     MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE,
     MIN_PROPORTIONAL_EXPONENT, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
-    clamp_domain_extent, domain_between,
+    LeftClickAction, clamp_domain_extent, domain_between,
 };
 
 #[test]
@@ -944,6 +944,22 @@ fn click_streamlines_are_deterministic_and_bounded_by_the_clicks() {
 }
 
 // --- Streamline seed modes (ticket 50) -------------------------------------
+
+#[test]
+fn left_click_action_defaults_and_setter_track_changes() {
+    let mut s = State::new(false);
+    assert_eq!(
+        s.left_click_action,
+        LeftClickAction::SeedStreamline,
+        "a fresh state seeds streamlines on left click",
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    assert!(s.set_left_click_action(LeftClickAction::AddParticles));
+    assert_eq!(s.left_click_action, LeftClickAction::AddParticles);
+    assert!(s.snapshot_if_dirty().is_some(), "a changed action rebuilds once");
+    assert!(!s.set_left_click_action(LeftClickAction::AddParticles));
+    assert!(s.snapshot_if_dirty().is_none(), "the same action does not rebuild");
+}
 
 #[test]
 fn streamline_seed_mode_defaults_to_auto_and_accepts_clicks() {
