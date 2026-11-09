@@ -42,6 +42,10 @@ pub const ABOUT_TAGLINE: &str = "A formula-driven vector-field explorer for 2D a
 pub const ABOUT_COPYRIGHT: &str = "Copyright © 2026 The Vector Field Explorer authors.";
 /// The deployed browser build, linked from About.
 pub const ABOUT_SITE_URL: &str = "https://ttgg1.github.io/vector-field-explorer/";
+/// The static native-download page beside the browser build (ticket 16a),
+/// linked from Help. It is not deployed until the repository goes public, so
+/// the item stays inert until then (it only opens the URL).
+pub const DOWNLOAD_URL: &str = "https://ttgg1.github.io/vector-field-explorer/download.html";
 
 /// Every command a menu item (or a shortcut) can dispatch. Adding a variant
 /// requires adding it to a menu: `tests/menu_test.rs` pins reachability.
@@ -77,6 +81,7 @@ menu_actions! {
     ToggleHelp,
     ShowHelpTable,
     OpenAppearance,
+    OpenDownloadPage,
     About,
 }
 
@@ -98,6 +103,8 @@ pub enum SideEffect {
     Quit,
     /// Put `text` on the clipboard.
     CopyText(String),
+    /// Open `url` in the user's browser.
+    OpenUrl(String),
     /// Give the side panels fresh ids so the default widths apply again.
     ResetLayout,
     /// Clear the highlighted camera preset after a camera reset.
@@ -161,6 +168,7 @@ pub const MENUS: &[Menu] = &[
         title: "Help",
         items: &[
             MenuItem { label: "Keyboard & mouse", action: MenuAction::ShowHelpTable },
+            MenuItem { label: "Download desktop app", action: MenuAction::OpenDownloadPage },
             MenuItem { label: "About Vector Field Explorer", action: MenuAction::About },
         ],
     },
@@ -371,6 +379,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         }
         MenuAction::ShowHelpTable => SideEffect::ShowHelp,
         MenuAction::OpenAppearance => SideEffect::OpenAppearance,
+        MenuAction::OpenDownloadPage => SideEffect::OpenUrl(DOWNLOAD_URL.to_string()),
         MenuAction::About => SideEffect::ShowAbout,
     }
 }

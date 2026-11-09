@@ -120,6 +120,9 @@ impl VfApp {
             menu::SideEffect::Screenshot => self.screenshot.request(),
             menu::SideEffect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             menu::SideEffect::CopyText(text) => ctx.copy_text(text),
+            // Help > Download desktop app (ticket 16a): hand the static page to
+            // the platform opener; on wasm this is a new browser tab.
+            menu::SideEffect::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             menu::SideEffect::ResetLayout => {
                 // New panel ids forget egui's remembered drag width, so the
                 // default widths really apply. The compact sheet closes through

@@ -24,6 +24,7 @@ mod click_seed_zoom_test;
 mod colormap_test;
 mod domain_test;
 mod dot_billboard_test;
+mod download_link_test;
 mod export_test;
 mod field_test;
 mod fly_camera_test;

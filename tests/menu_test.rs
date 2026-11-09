@@ -117,7 +117,11 @@ fn the_bar_carries_the_v1_menu_table() {
             ),
             (
                 "Help",
-                vec!["Keyboard & mouse", "About Vector Field Explorer"],
+                vec![
+                    "Keyboard & mouse",
+                    "Download desktop app",
+                    "About Vector Field Explorer",
+                ],
             ),
         ],
         "the v1 menu table is pinned; no placeholder entries",
@@ -142,6 +146,10 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ToggleHelp, SideEffect::None),
         (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
         (MenuAction::OpenAppearance, SideEffect::OpenAppearance),
+        (
+            MenuAction::OpenDownloadPage,
+            SideEffect::OpenUrl(menu::DOWNLOAD_URL.to_string()),
+        ),
         (MenuAction::About, SideEffect::ShowAbout),
     ];
     for (action, expected) in expected {
