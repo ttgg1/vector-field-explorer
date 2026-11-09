@@ -18,6 +18,7 @@ use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_gr
 use std::sync::Arc;
 
 use glam::{UVec3, Vec2, Vec3};
+use serde::{Deserialize, Serialize};
 
 /// Number of samples along one axis of a 2D grid.
 pub const DEFAULT_DENSITY_2D: u32 = 24;
@@ -34,6 +35,12 @@ pub const PLANE_MARGIN: f32 = 1.35;
 /// Bounds of the arrow-length slider.
 pub const MIN_ARROW_SCALE: f32 = 0.1;
 pub const MAX_ARROW_SCALE: f32 = 4.0;
+/// Bounds and default of the magnitude scale: world units per unit of field
+/// magnitude in [`ArrowLengthMode::Magnitude`]. Bounded here so the widget and
+/// the seam share one range; the resulting arrow length itself is not clamped.
+pub const MIN_MAGNITUDE_SCALE: f32 = 0.01;
+pub const MAX_MAGNITUDE_SCALE: f32 = 10.0;
+pub const DEFAULT_MAGNITUDE_SCALE: f32 = 1.0;
 /// Bounds of the particle and streamline speed slider.
 pub const MIN_SPEED: f32 = 0.1;
 pub const MAX_SPEED: f32 = 3.0;
@@ -54,6 +61,61 @@ pub const STREAMLINE_JITTER: f32 = 0.45;
 pub const FORMULA_2D: &str = "(x, y)";
 pub const FORMULA_3D: &str = "(x, y, z)";
 
+/// How a sampled field magnitude becomes an arrow's world-space length
+/// (ticket 33). Replaces the old `normalize` bool; persisted records that still
+/// carry one migrate through [`ArrowLengthMode::from_normalize`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ArrowLengthMode {
+    /// Length follows magnitude, normalised so the longest arrow is exactly
+    /// `arrow_scale` grid cells. The default.
+    #[default]
+    Proportional,
+    /// Every arrow is exactly `arrow_scale` grid cells; only direction
+    /// survives.
+    Uniform,
+    /// Length is the sampled magnitude itself in world units, multiplied by
+    /// `magnitude_scale`, so fields of different magnitude can be compared
+    /// directly. The arrow scale does not apply in this mode.
+    Magnitude,
+}
+
+impl ArrowLengthMode {
+    /// Every mode, in the order the Display selector shows them.
+    pub const ALL: [ArrowLengthMode; 3] = [
+        ArrowLengthMode::Proportional,
+        ArrowLengthMode::Uniform,
+        ArrowLengthMode::Magnitude,
+    ];
+
+    /// Short label for the mode selector.
+    pub fn label(self) -> &'static str {
+        match self {
+            ArrowLengthMode::Proportional => "Proportional",
+            ArrowLengthMode::Uniform => "Uniform",
+            ArrowLengthMode::Magnitude => "Magnitude",
+        }
+    }
+
+    /// One-line explanation, short enough for a tooltip.
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            ArrowLengthMode::Proportional => {
+                "Length follows magnitude; the longest arrow is the arrow length scale"
+            }
+            ArrowLengthMode::Uniform => {
+                "Every arrow has the same length, keeping only its direction"
+            }
+            ArrowLengthMode::Magnitude => "Length is the field magnitude in world units",
+        }
+    }
+
+    /// The mode a legacy persisted `normalize` bool means: `true` painted every
+    /// arrow the same length, `false` kept the magnitude proportion.
+    pub fn from_normalize(normalize: bool) -> Self {
+        if normalize { ArrowLengthMode::Uniform } else { ArrowLengthMode::Proportional }
+    }
+}
+
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
 pub struct State {
@@ -64,7 +126,8 @@ pub struct State {
     pub density: u32,
     pub domain: Domain,
     pub arrow_scale: f32,
-    pub normalize: bool,
+    pub arrow_length_mode: ArrowLengthMode,
+    pub magnitude_scale: f32,
     pub colormap: Colormap,
     pub auto_fit: bool,
     pub color_min: f32,
@@ -109,7 +172,8 @@ impl State {
             density,
             domain: Domain::default(),
             arrow_scale: 1.0,
-            normalize: false,
+            arrow_length_mode: ArrowLengthMode::Proportional,
+            magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             colormap: Colormap::Viridis,
             auto_fit: true,
             color_min: 0.0,
@@ -200,12 +264,30 @@ impl State {
         self.mark_dirty()
     }
 
-    /// Draw every arrow the same length, keeping only its direction.
-    pub fn set_normalize(self: &mut State, normalize: bool) -> bool {
-        if self.normalize == normalize {
+    /// Choose how magnitude becomes arrow length.
+    pub fn set_arrow_length_mode(self: &mut State, mode: ArrowLengthMode) -> bool {
+        if self.arrow_length_mode == mode {
             return false;
         }
-        self.normalize = normalize;
+        self.arrow_length_mode = mode;
+        self.mark_dirty()
+    }
+
+    /// World length per unit of field magnitude, used only by
+    /// [`ArrowLengthMode::Magnitude`]. The value is clamped into
+    /// [`MIN_MAGNITUDE_SCALE`]..=[`MAX_MAGNITUDE_SCALE`] and a NaN is rejected
+    /// (the previous scale stays), but the resulting arrow length is never
+    /// clamped: the user chose the scale and the camera can still fit the
+    /// domain around an extreme arrow.
+    pub fn set_magnitude_scale(self: &mut State, scale: f32) -> bool {
+        if scale.is_nan() {
+            return false;
+        }
+        let scale = scale.clamp(MIN_MAGNITUDE_SCALE, MAX_MAGNITUDE_SCALE);
+        if self.magnitude_scale == scale {
+            return false;
+        }
+        self.magnitude_scale = scale;
         self.mark_dirty()
     }
 
@@ -391,9 +473,14 @@ impl State {
     }
 
     /// Convert sampled arrows into GPU instances at this state's arrow
-    /// lengths: with `normalize` off, lengths are proportional to magnitude
-    /// and the longest arrow is exactly `arrow_scale` grid cells; with it on
-    /// every arrow is exactly `arrow_scale` cells.
+    /// lengths. `arrow_scale` is the length multiplier for
+    /// [`ArrowLengthMode::Proportional`] (longest arrow exactly `arrow_scale`
+    /// grid cells, shorter ones following their magnitude) and
+    /// [`ArrowLengthMode::Uniform`] (every arrow exactly `arrow_scale` cells).
+    /// With [`ArrowLengthMode::Magnitude`] the length is instead
+    /// `magnitude_scale * mag` in world units — `arrow_scale` does not apply,
+    /// and the result is deliberately not clamped, so a field with a huge
+    /// magnitude produces a huge arrow and the camera does the fitting.
     ///
     /// Plane-by-plane mode (ticket 23) keeps the selected slice's colormap
     /// colour at full alpha and lerps every other arrow toward grey at
@@ -408,12 +495,19 @@ impl State {
         arrows
             .iter()
             .map(|a| {
-                let len = if self.normalize || max_mag <= 0.0 { unit } else { unit * (a.mag / max_mag) };
-                let (rgb, alpha) = if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
-                    (dim_color(a.color), DIM_ALPHA)
-                } else {
-                    (a.color, 1.0)
+                let len = match self.arrow_length_mode {
+                    ArrowLengthMode::Uniform => unit,
+                    ArrowLengthMode::Proportional => {
+                        if max_mag <= 0.0 { unit } else { unit * (a.mag / max_mag) }
+                    }
+                    ArrowLengthMode::Magnitude => a.mag * self.magnitude_scale,
                 };
+                let (rgb, alpha) =
+                    if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
+                        (dim_color(a.color), DIM_ALPHA)
+                    } else {
+                        (a.color, 1.0)
+                    };
                 ArrowInstanceGPU {
                     origin: [a.position.x, a.position.y, a.position.z, 1.0],
                     dir_len: [a.dir.x, a.dir.y, a.dir.z, len],

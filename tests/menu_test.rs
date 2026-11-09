@@ -13,7 +13,7 @@ use vector_field_explorer::ui::menu::{
     apply_action,
 };
 use vector_field_explorer::ui::sidebar::Controls;
-use vector_field_explorer::viewmodel::{DEFAULT_DENSITY_2D, State};
+use vector_field_explorer::viewmodel::{ArrowLengthMode, DEFAULT_DENSITY_2D, State};
 
 /// The mutable state the menu actions touch, owned so each test can build one
 /// and borrow it into [`UiState`].
@@ -216,6 +216,8 @@ fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
     assert!(fixture.state.set_streamlines(true));
     fixture.controls.density = 99;
     fixture.controls.arrow_scale = 3.0;
+    fixture.controls.arrow_length_mode = ArrowLengthMode::Magnitude;
+    fixture.controls.magnitude_scale = 4.0;
     fixture.controls.colormap = Colormap::Turbo;
     fixture.controls.streamlines = true;
     fixture.controls.domain_min = Vec3::splat(-3.0);
@@ -228,6 +230,13 @@ fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
     assert_eq!(fixture.state.density, DEFAULT_DENSITY_2D, "and the state follows it");
     assert_eq!(fixture.controls.colormap, Colormap::Viridis);
     assert_eq!(fixture.state.colormap, Colormap::Viridis);
+    assert_eq!(
+        fixture.state.arrow_length_mode,
+        ArrowLengthMode::Proportional,
+        "the default length mode returns",
+    );
+    assert_eq!(fixture.state.arrow_scale, 1.0, "the default arrow scale returns");
+    assert_eq!(fixture.state.magnitude_scale, 1.0, "the default magnitude scale returns");
     assert!(!fixture.state.streamlines, "traces are off at the defaults");
     assert_eq!(fixture.state.domain.min, Vec3::splat(-1.0), "the unit cube returns");
     assert_eq!(fixture.state.formula, "(-y, x)", "the field itself is not a control");

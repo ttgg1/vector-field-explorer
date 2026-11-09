@@ -3,6 +3,7 @@
 use glam::Vec3;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::ui::sidebar::{Controls, SECTIONS, Section};
+use vector_field_explorer::viewmodel::ArrowLengthMode;
 
 #[test]
 fn sections_are_ordered_display_features_coloring_domain() {
@@ -24,7 +25,8 @@ fn each_reset_restores_only_its_own_section() {
     let mut controls = Controls::new();
     controls.density = 77;
     controls.arrow_scale = 3.5;
-    controls.normalize = true;
+    controls.arrow_length_mode = ArrowLengthMode::Magnitude;
+    controls.magnitude_scale = 4.0;
     controls.colormap = Colormap::Turbo;
     controls.auto_fit = false;
     controls.color_min = -4.0;
@@ -38,7 +40,8 @@ fn each_reset_restores_only_its_own_section() {
     controls.reset_display();
     assert_eq!(controls.density, defaults.density);
     assert_eq!(controls.arrow_scale, defaults.arrow_scale);
-    assert!(!controls.normalize);
+    assert_eq!(controls.arrow_length_mode, defaults.arrow_length_mode);
+    assert_eq!(controls.magnitude_scale, defaults.magnitude_scale);
     assert_eq!(controls.colormap, Colormap::Turbo, "Display reset leaves Coloring alone");
     assert_eq!(controls.speed, 2.7, "Display reset leaves Features alone");
     assert_eq!(controls.domain_max, Vec3::splat(5.0), "Display reset leaves Domain alone");

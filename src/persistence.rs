@@ -18,7 +18,7 @@ use crate::colormap::Colormap;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
-use crate::viewmodel::State;
+use crate::viewmodel::{ArrowLengthMode, State};
 use glam::Vec3;
 
 /// Everything the app remembers across restarts. `style` is a required field
@@ -57,7 +57,20 @@ pub struct ViewRecord {
     pub domain_max: [f32; 3],
     pub density: u32,
     pub arrow_scale: f32,
-    pub normalize: bool,
+    /// Ticket-14's normalization flag. Only read: a record written before
+    /// ticket 33 still carries a bare `normalize: true|false`, and
+    /// [`ViewRecord::restore`] maps it onto [`ArrowLengthMode`]. New records
+    /// never write the key, so it stays `None` and the old flat bool decodes
+    /// through [`deserialize_legacy_normalize`] rather than `Option`'s RON
+    /// `Some(...)` spelling.
+    #[serde(default, skip_serializing, deserialize_with = "deserialize_legacy_normalize")]
+    pub normalize: Option<bool>,
+    /// The three-way replacement for `normalize` (ticket 33). Missing on a
+    /// legacy record; the container-level default then supplies Proportional.
+    pub arrow_length_mode: ArrowLengthMode,
+    /// World units per unit of magnitude, used only in Magnitude mode.
+    /// Missing on a legacy record; the container-level default supplies 1.0.
+    pub magnitude_scale: f32,
     pub colormap: Colormap,
     pub auto_fit: bool,
     pub color_min: f32,
@@ -84,7 +97,9 @@ impl ViewRecord {
             domain_max: state.domain.max.to_array(),
             density: state.density,
             arrow_scale: state.arrow_scale,
-            normalize: state.normalize,
+            normalize: None,
+            arrow_length_mode: state.arrow_length_mode,
+            magnitude_scale: state.magnitude_scale,
             colormap: state.colormap,
             auto_fit: state.auto_fit,
             color_min: state.color_min,
@@ -108,7 +123,12 @@ impl ViewRecord {
 
         controls.density = self.density;
         controls.arrow_scale = finite_or(self.arrow_scale, defaults.arrow_scale);
-        controls.normalize = self.normalize;
+        // Legacy records carried a `normalize` bool instead of a mode; it wins
+        // when present so old settings land in the matching mode, and new
+        // records (where it is absent) use the stored three-way mode.
+        controls.arrow_length_mode =
+            self.normalize.map(ArrowLengthMode::from_normalize).unwrap_or(self.arrow_length_mode);
+        controls.magnitude_scale = finite_or(self.magnitude_scale, defaults.magnitude_scale);
         controls.colormap = self.colormap;
         controls.auto_fit = self.auto_fit;
         controls.color_min = finite_or(self.color_min, defaults.color_min);
@@ -127,6 +147,16 @@ impl ViewRecord {
 /// `value` when finite, `fallback` otherwise.
 pub fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
+}
+
+/// Decode the ticket-14 `normalize` boolean, which was stored as a bare
+/// `bool`, into the `Option` the legacy-aware [`ViewRecord`] carries. Ticket-33
+/// records omit the key entirely, so this only runs for old settings.
+fn deserialize_legacy_normalize<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
 }
 
 /// Load the settings envelope, migrating a ticket-07 bare `AppStyle` record and

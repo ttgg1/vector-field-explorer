@@ -6,10 +6,11 @@ use glam::Vec3;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
 use vector_field_explorer::renderer::LineInstanceGPU;
+use vector_field_explorer::sampling::ArrowData;
 use vector_field_explorer::viewmodel::{
-    DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D, MAX_DENSITY_2D,
-    MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MIN_DENSITY, MIN_DOMAIN_EXTENT, State, clamp_domain_extent,
-    domain_between,
+    ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D,
+    MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DENSITY,
+    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, State, clamp_domain_extent, domain_between,
 };
 
 #[test]
@@ -363,7 +364,8 @@ fn unchanged_setters_report_false_and_stay_clean() {
     assert!(!s.set_formula(s.formula.clone()), "same text is not a change");
     assert!(!s.set_domain(s.domain.min, s.domain.max));
     assert!(!s.set_arrow_scale(s.arrow_scale));
-    assert!(!s.set_normalize(s.normalize));
+    assert!(!s.set_arrow_length_mode(s.arrow_length_mode));
+    assert!(!s.set_magnitude_scale(s.magnitude_scale));
     assert!(!s.set_mode(s.mode_3d));
     assert!(!s.dirty, "a failed setter must not re-dirty the state");
     assert!(s.snapshot_if_dirty().is_none(), "no rebuild when nothing changed");
@@ -390,14 +392,22 @@ fn pump_snapshot_has_the_whole_grid() {
 }
 
 #[test]
-fn normalized_arrows_share_one_length() {
+fn uniform_arrows_share_one_length() {
+    // Ticket 27's bug report: Uniform must still paint every arrow exactly
+    // `arrow_scale` grid cells long through the real state path.
     let mut s = State::new(false);
-    assert!(s.set_normalize(true), "normalize toggle marks dirty");
+    assert!(
+        s.set_arrow_length_mode(ArrowLengthMode::Uniform),
+        "the mode change marks dirty",
+    );
     let inst = s.arrow_instances(&s.sample());
     let expected = s.arrow_scale * s.spacing();
     assert!(expected > 0.0);
     for a in &inst {
-        assert!((a.dir_len[3] - expected).abs() < 1e-5, "every normalized arrow is arrow_scale cells long");
+        assert!(
+            (a.dir_len[3] - expected).abs() < 1e-5,
+            "every uniform arrow is arrow_scale cells long",
+        );
     }
 }
 
@@ -427,6 +437,182 @@ fn speaking_arrows_are_magnitude_proportional() {
             "length must follow magnitude (speaking arrows)",
         );
     }
+}
+
+// --- Arrow length modes and magnitude scale (ticket 33) ---------------------
+
+/// A sampled arrow with a synthetic magnitude, so a test can pin exact
+/// lengths without depending on the sampling grid's own values.
+fn raw_arrow(position: Vec3, dir: Vec3, mag: f32) -> ArrowData {
+    ArrowData { position, dir, mag, color: [128, 128, 128] }
+}
+
+#[test]
+fn magnitude_mode_uses_the_raw_magnitude_as_world_length() {
+    let mut s = State::new(false);
+    assert_eq!(s.arrow_length_mode, ArrowLengthMode::Proportional, "proportional is the default");
+    assert!(s.set_arrow_length_mode(ArrowLengthMode::Magnitude));
+    assert!(s.set_magnitude_scale(0.25));
+    assert!(s.set_arrow_scale(3.0), "a non-default arrow scale must not leak in");
+    // A 100:1 magnitude ratio: proportional normalises both against the max,
+    // magnitude mode keeps each sampled magnitude as the world length.
+    let arrows = [
+        raw_arrow(Vec3::new(-0.5, 0.0, 0.0), Vec3::X, 100.0),
+        raw_arrow(Vec3::new(0.5, 0.0, 0.0), Vec3::Y, 1.0),
+    ];
+    let inst = s.arrow_instances(&arrows);
+    assert!((inst[0].dir_len[3] - 25.0).abs() < 1e-5, "100 x 0.25 world units");
+    assert!((inst[1].dir_len[3] - 0.25).abs() < 1e-5, "1 x 0.25 world units");
+    assert_eq!(inst[0].dir_len[..3], [1.0, 0.0, 0.0], "direction stays unit");
+    assert_eq!(inst[1].dir_len[..3], [0.0, 1.0, 0.0]);
+}
+
+#[test]
+fn magnitude_mode_differs_from_proportional_on_a_varying_field() {
+    let mut s = State::new(false);
+    assert!(s.set_formula("(x, y * 3.0)".to_string()), "a field whose magnitude varies");
+    let arrows = s.sample();
+    let proportional = s.arrow_instances(&arrows);
+    assert!(s.set_arrow_length_mode(ArrowLengthMode::Magnitude));
+    let magnitude = s.arrow_instances(&arrows);
+    let differing = proportional
+        .iter()
+        .zip(&magnitude)
+        .filter(|(p, m)| (p.dir_len[3] - m.dir_len[3]).abs() > 1e-5)
+        .count();
+    assert!(
+        differing > arrows.len() / 2,
+        "magnitude mode is a visibly different length mapping, not a relabel",
+    );
+}
+
+#[test]
+fn every_mode_keeps_unit_direction_and_magnitude_colour() {
+    let mut s = State::new(false);
+    assert!(s.set_formula("(x, y * 3.0)".to_string()));
+    let arrows = s.sample();
+    let min = arrows.iter().min_by(|a, b| a.mag.total_cmp(&b.mag)).unwrap();
+    let max = arrows.iter().max_by(|a, b| a.mag.total_cmp(&b.mag)).unwrap();
+    assert_ne!(min.color, max.color, "the colormap really varies with magnitude");
+    let min_index = arrows.iter().position(|a| a.mag == min.mag).unwrap();
+    let max_index = arrows.iter().position(|a| a.mag == max.mag).unwrap();
+
+    for mode in ArrowLengthMode::ALL {
+        s.set_arrow_length_mode(mode);
+        let inst = s.arrow_instances(&arrows);
+        for (arrow, instance) in arrows.iter().zip(&inst) {
+            let len = (instance.dir_len[0].powi(2)
+                + instance.dir_len[1].powi(2)
+                + instance.dir_len[2].powi(2))
+            .sqrt();
+            assert!((len - 1.0).abs() < 1e-5, "{mode:?} keeps the direction unit");
+            for channel in 0..3 {
+                assert!(
+                    (instance.color[channel] - arrow.color[channel] as f32 / 255.0).abs() < 1e-6,
+                    "{mode:?} keeps the magnitude colour",
+                );
+            }
+        }
+        assert_ne!(
+            inst[min_index].color, inst[max_index].color,
+            "{mode:?} still colours by magnitude",
+        );
+    }
+}
+
+#[test]
+fn arrow_scale_and_magnitude_scale_are_independent() {
+    let mut s = State::new(false);
+    let arrows = s.sample();
+    for mode in ArrowLengthMode::ALL {
+        s.set_arrow_length_mode(mode);
+        s.set_arrow_scale(1.0);
+        s.set_magnitude_scale(1.0);
+        let base = s.arrow_instances(&arrows);
+        assert!(s.set_arrow_scale(2.0), "the shared length scale moves");
+        let wider = s.arrow_instances(&arrows);
+        s.set_arrow_scale(1.0);
+        assert!(s.set_magnitude_scale(3.0), "the magnitude scale moves");
+        let stronger = s.arrow_instances(&arrows);
+        let arrow_factor = if mode == ArrowLengthMode::Magnitude { 1.0 } else { 2.0 };
+        let magnitude_factor = if mode == ArrowLengthMode::Magnitude { 3.0 } else { 1.0 };
+        for i in 0..base.len() {
+            assert!(
+                (wider[i].dir_len[3] - arrow_factor * base[i].dir_len[3]).abs() < 1e-5,
+                "{mode:?}: arrow_scale applies only to Proportional/Uniform",
+            );
+            assert!(
+                (stronger[i].dir_len[3] - magnitude_factor * base[i].dir_len[3]).abs() < 1e-5,
+                "{mode:?}: magnitude_scale applies only to Magnitude",
+            );
+        }
+        s.set_magnitude_scale(1.0);
+    }
+}
+
+#[test]
+fn uniform_snapshot_has_one_length_on_a_high_contrast_field() {
+    // Ticket 27 carry-over through the real snapshot path: Uniform paints one
+    // length while the same field's Proportional arrows vary with magnitude.
+    let formula = "(x, y * 50.0)".to_string();
+    let mut uniform = State::new(false);
+    assert!(uniform.set_formula(formula.clone()));
+    assert!(uniform.set_arrow_length_mode(ArrowLengthMode::Uniform));
+    let scene = uniform.snapshot();
+    assert!(!scene.arrows.is_empty(), "the high-contrast field samples arrows");
+    let expected = uniform.arrow_scale * uniform.spacing();
+    let first = scene.arrows[0].dir_len[3];
+    assert!((first - expected).abs() < 1e-5, "the shared length is arrow_scale * spacing");
+    for arrow in scene.arrows.iter() {
+        assert!(
+            (arrow.dir_len[3] - first).abs() < 1e-5,
+            "every uniform snapshot arrow has the same length",
+        );
+    }
+
+    let mut proportional = State::new(false);
+    assert!(proportional.set_formula(formula));
+    let lengths: Vec<f32> =
+        proportional.snapshot().arrows.iter().map(|a| a.dir_len[3]).collect();
+    let min = lengths.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = lengths.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        max - min > 1e-3,
+        "the same field's proportional snapshot has distinct lengths",
+    );
+}
+
+#[test]
+fn magnitude_scale_clamps_and_rejects_nan() {
+    let mut s = State::new(false);
+    assert_eq!(s.arrow_length_mode, ArrowLengthMode::Proportional);
+    assert!(!s.set_arrow_length_mode(ArrowLengthMode::Proportional), "same mode is a no-op");
+    assert!(s.set_arrow_length_mode(ArrowLengthMode::Magnitude), "a new mode marks dirty");
+    assert_eq!(s.arrow_length_mode, ArrowLengthMode::Magnitude);
+
+    assert!(s.set_magnitude_scale(0.001), "below the floor clamps up");
+    assert_eq!(s.magnitude_scale, MIN_MAGNITUDE_SCALE);
+    assert!(s.set_magnitude_scale(1_000.0), "above the ceiling clamps down");
+    assert_eq!(s.magnitude_scale, MAX_MAGNITUDE_SCALE);
+    let kept = s.magnitude_scale;
+    assert!(!s.set_magnitude_scale(f32::NAN), "NaN is rejected");
+    assert_eq!(s.magnitude_scale, kept, "a rejected NaN cannot poison the scene");
+    s.set_magnitude_scale(1.0);
+    assert!(s.set_magnitude_scale(f32::INFINITY), "+inf clamps to the ceiling");
+    assert_eq!(s.magnitude_scale, MAX_MAGNITUDE_SCALE);
+}
+
+#[test]
+fn extreme_magnitudes_are_not_clamped_because_the_user_owns_the_scale() {
+    let mut s = State::new(false);
+    assert!(s.set_arrow_length_mode(ArrowLengthMode::Magnitude));
+    assert!(s.set_magnitude_scale(MAX_MAGNITUDE_SCALE));
+    let arrows = [raw_arrow(Vec3::ZERO, Vec3::X, 1.0e6)];
+    let inst = s.arrow_instances(&arrows);
+    assert!(
+        (inst[0].dir_len[3] - 1.0e7).abs() < 1.0,
+        "length = magnitude x scale in world units, deliberately not clamped",
+    );
 }
 
 #[test]

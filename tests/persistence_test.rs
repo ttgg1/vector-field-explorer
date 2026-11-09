@@ -12,7 +12,10 @@ use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
-use vector_field_explorer::viewmodel::{MAX_DOMAIN_EXTENT, MIN_DOMAIN_EXTENT, State};
+use vector_field_explorer::viewmodel::{
+    ArrowLengthMode, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DOMAIN_EXTENT,
+    MIN_MAGNITUDE_SCALE, State,
+};
 
 /// In-memory stand-in for eframe's disk-backed storage.
 #[derive(Default)]
@@ -36,6 +39,64 @@ impl eframe::Storage for MemoryStorage {
     fn flush(&mut self) {}
 }
 
+/// The ticket-14 `ViewRecord` shape, before ticket 33 replaced the `normalize`
+/// bool with an arrow-length mode and added `magnitude_scale`. Serializing this
+/// into real eframe storage makes `load` see exactly what an old build wrote,
+/// including the two missing new fields.
+#[derive(serde::Serialize)]
+struct LegacyViewRecord {
+    formula: String,
+    mode_3d: bool,
+    domain_min: [f32; 3],
+    domain_max: [f32; 3],
+    density: u32,
+    arrow_scale: f32,
+    normalize: bool,
+    colormap: Colormap,
+    auto_fit: bool,
+    color_min: f32,
+    color_max: f32,
+    streamlines: bool,
+    particles: bool,
+    speed: f32,
+}
+
+#[derive(serde::Serialize)]
+struct LegacySettings {
+    style: AppStyle,
+    layout: LayoutState,
+    view: LegacyViewRecord,
+}
+
+fn legacy_settings(normalize: bool) -> LegacySettings {
+    LegacySettings {
+        style: AppStyle::default(),
+        layout: LayoutState::default(),
+        view: LegacyViewRecord {
+            formula: "(x, y)".to_string(),
+            mode_3d: false,
+            domain_min: [-1.0, -1.0, -1.0],
+            domain_max: [1.0, 1.0, 1.0],
+            density: 24,
+            arrow_scale: 2.0,
+            normalize,
+            colormap: Colormap::Turbo,
+            auto_fit: true,
+            color_min: 0.0,
+            color_max: 1.0,
+            streamlines: false,
+            particles: false,
+            speed: 1.0,
+        },
+    }
+}
+
+fn load_legacy(normalize: bool) -> AppSettings {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &legacy_settings(normalize));
+    load(Some(&storage))
+}
+
 fn configured() -> (State, Controls) {
     let mut state = State::new(false);
     let mut controls = Controls::new();
@@ -43,7 +104,8 @@ fn configured() -> (State, Controls) {
     state.set_formula("(x, y, z)".to_string());
     controls.density = 12;
     controls.arrow_scale = 2.5;
-    controls.normalize = true;
+    controls.arrow_length_mode = ArrowLengthMode::Magnitude;
+    controls.magnitude_scale = 2.5;
     controls.colormap = Colormap::Mono;
     controls.auto_fit = false;
     controls.color_min = -2.0;
@@ -84,6 +146,62 @@ fn settings_round_trip_through_eframe_storage() {
     let mut storage = MemoryStorage::default();
     save(&mut storage, &settings);
     assert_eq!(load(Some(&storage)), settings);
+}
+
+#[test]
+fn a_legacy_normalize_true_migrates_to_uniform_without_fail_fast() {
+    let settings = load_legacy(true);
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    settings.view.restore(&mut state, &mut controls);
+    assert_eq!(
+        state.arrow_length_mode,
+        ArrowLengthMode::Uniform,
+        "old normalize = true means Uniform",
+    );
+    assert_eq!(state.magnitude_scale, 1.0, "the missing magnitude scale defaults to 1");
+    assert_eq!(state.arrow_scale, 2.0, "the rest of the legacy record still loads");
+    assert_eq!(controls.arrow_length_mode, ArrowLengthMode::Uniform, "the mirror follows");
+    assert_eq!(controls.magnitude_scale, 1.0);
+}
+
+#[test]
+fn a_legacy_normalize_false_migrates_to_proportional() {
+    let settings = load_legacy(false);
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    settings.view.restore(&mut state, &mut controls);
+    assert_eq!(
+        state.arrow_length_mode,
+        ArrowLengthMode::Proportional,
+        "old normalize = false means Proportional",
+    );
+    assert_eq!(state.magnitude_scale, 1.0);
+    assert_eq!(controls.arrow_length_mode, ArrowLengthMode::Proportional);
+}
+
+#[test]
+fn new_records_round_trip_mode_and_scales_and_stop_writing_the_legacy_bool() {
+    let mut state = State::new(false);
+    assert!(state.set_arrow_length_mode(ArrowLengthMode::Magnitude));
+    assert!(state.set_arrow_scale(1.5));
+    assert!(state.set_magnitude_scale(0.25));
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.arrow_length_mode, ArrowLengthMode::Magnitude);
+    assert_eq!(record.magnitude_scale, 0.25);
+    assert_eq!(record.normalize, None, "new records carry no legacy bool");
+
+    let settings = AppSettings { view: record, ..AppSettings::default() };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(!raw.contains("normalize"), "the legacy key is no longer written:\n{raw}");
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.arrow_length_mode, ArrowLengthMode::Magnitude);
+    assert_eq!(loaded.view.magnitude_scale, 0.25);
+    assert_eq!(loaded.view.arrow_scale, 1.5);
+    assert_eq!(loaded.view.normalize, None);
 }
 
 #[test]
@@ -173,7 +291,8 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.domain, state.domain, "domain");
     assert_eq!(restored_state.density, state.density, "density");
     assert_eq!(restored_state.arrow_scale, state.arrow_scale, "arrow scale");
-    assert_eq!(restored_state.normalize, state.normalize, "normalize");
+    assert_eq!(restored_state.arrow_length_mode, state.arrow_length_mode, "arrow length mode");
+    assert_eq!(restored_state.magnitude_scale, state.magnitude_scale, "magnitude scale");
     assert_eq!(restored_state.colormap, state.colormap, "colormap");
     assert_eq!(restored_state.auto_fit, state.auto_fit, "auto-fit");
     assert_eq!(restored_state.color_min, state.color_min, "color min");
@@ -183,6 +302,8 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.speed, state.speed, "speed");
     // The widget mirror is refreshed so the first sidebar frame agrees.
     assert_eq!(restored_controls.density, state.density);
+    assert_eq!(restored_controls.arrow_length_mode, state.arrow_length_mode);
+    assert_eq!(restored_controls.magnitude_scale, state.magnitude_scale);
     assert_eq!(restored_controls.domain_min, state.domain.min);
     assert_eq!(restored_controls.domain_max, state.domain.max);
     assert_eq!(controls.density, state.density, "the captured mirror stays in sync");
@@ -202,6 +323,7 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
     let record = ViewRecord {
         density: 99_999,
         arrow_scale: f32::NAN,
+        magnitude_scale: f32::NAN,
         speed: f32::INFINITY,
         color_min: f32::NAN,
         color_max: f32::NEG_INFINITY,
@@ -214,10 +336,25 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
     record.restore(&mut state, &mut controls);
     assert!(state.density <= 200, "density is clamped");
     assert!(state.arrow_scale.is_finite(), "a NaN arrow scale falls back");
+    assert!(state.magnitude_scale.is_finite(), "a NaN magnitude scale falls back");
+    assert!(
+        (MIN_MAGNITUDE_SCALE..=MAX_MAGNITUDE_SCALE).contains(&state.magnitude_scale),
+        "the magnitude scale stays inside its documented bounds",
+    );
     assert!(state.speed.is_finite(), "an infinite speed falls back");
     assert!(state.color_min.is_finite() && state.color_max.is_finite());
     assert!(state.domain.min.is_finite() && state.domain.max.is_finite());
     assert!(state.domain.min.x < state.domain.max.x, "the domain stays a real box");
+}
+
+#[test]
+fn restore_clamps_a_huge_magnitude_scale() {
+    let record = ViewRecord { magnitude_scale: 1.0e9, ..Default::default() };
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    record.restore(&mut state, &mut controls);
+    assert_eq!(state.magnitude_scale, MAX_MAGNITUDE_SCALE, "the seam bounds the stored value");
+    assert_eq!(controls.magnitude_scale, MAX_MAGNITUDE_SCALE, "the mirror follows the clamp");
 }
 
 #[test]

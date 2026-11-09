@@ -1,5 +1,5 @@
 //! Left sidebar: every scene knob the widgets expose — sampling density,
-//! arrow length and normalization, colormap and color range, streamlines and
+//! arrow length modes and magnitude scale, colormap and color range, streamlines and
 //! particles with their trace speed, and the six domain extrema.
 //!
 //! Sections follow the agreed order (ticket 14): **Display → Features →
@@ -26,13 +26,17 @@ use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
 use crate::viewmodel::{
+    ArrowLengthMode,
     State,
     DEFAULT_DENSITY_2D,
+    DEFAULT_MAGNITUDE_SCALE,
     MIN_DENSITY,
     MAX_DENSITY_2D,
     MAX_DENSITY_3D,
     MIN_ARROW_SCALE,
     MAX_ARROW_SCALE,
+    MIN_MAGNITUDE_SCALE,
+    MAX_MAGNITUDE_SCALE,
     MIN_SPEED,
     MAX_SPEED,
     MIN_DOMAIN_EXTENT,
@@ -123,6 +127,21 @@ fn extent_text(value: f32) -> String {
     }
 }
 
+/// Whether the Magnitude-scale control applies. Only `Magnitude` uses it, so
+/// the widget is disabled everywhere else: no dead control that looks
+/// adjustable but changes nothing. Pure so the rule is testable without a
+/// window, matching the sidebar's other seams.
+pub fn magnitude_scale_enabled(mode: ArrowLengthMode) -> bool {
+    mode == ArrowLengthMode::Magnitude
+}
+
+/// Whether the shared arrow length scale applies. `Magnitude` lengths are the
+/// field magnitude times the magnitude scale alone, so the arrow scale is
+/// disabled there rather than silently ignored.
+pub fn arrow_scale_enabled(mode: ArrowLengthMode) -> bool {
+    mode != ArrowLengthMode::Magnitude
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -130,7 +149,8 @@ fn extent_text(value: f32) -> String {
 pub struct Controls {
     pub density: u32,
     pub arrow_scale: f32,
-    pub normalize: bool,
+    pub arrow_length_mode: ArrowLengthMode,
+    pub magnitude_scale: f32,
     pub colormap: Colormap,
     pub auto_fit: bool,
     pub color_min: f32,
@@ -157,7 +177,8 @@ impl Controls {
         Controls {
             density: DEFAULT_DENSITY_2D,
             arrow_scale: 1.0,
-            normalize: false,
+            arrow_length_mode: ArrowLengthMode::Proportional,
+            magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             colormap: Colormap::Viridis,
             auto_fit: true,
             color_min: 0.0,
@@ -172,13 +193,14 @@ impl Controls {
         }
     }
 
-    /// Restore the Display section's defaults (density, arrow length,
-    /// normalization, plane-by-plane).
+    /// Restore the Display section's defaults (density, arrow length mode and
+    /// both scales, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
         self.arrow_scale = defaults.arrow_scale;
-        self.normalize = defaults.normalize;
+        self.arrow_length_mode = defaults.arrow_length_mode;
+        self.magnitude_scale = defaults.magnitude_scale;
         self.plane = defaults.plane;
         self.plane_drag = false;
     }
@@ -238,13 +260,55 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             ui.add(egui::DragValue::new(&mut controls.density).range(MIN_DENSITY..=max_density))
                 .on_hover_text("Samples per axis; 3D sampling makes it the cube of this count");
         });
-        ui.add(
-            egui::Slider::new(&mut controls.arrow_scale, MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
-                .text("Arrow length (grid cells)"),
-        )
-        .on_hover_text("Arrow length as a multiple of one grid cell");
-        ui.checkbox(&mut controls.normalize, "Normalize lengths")
-            .on_hover_text("Scale arrows to unit length, keeping only their direction");
+        let arrow_scale_on = arrow_scale_enabled(controls.arrow_length_mode);
+        let arrow_scale_text = if arrow_scale_on {
+            "Arrow length (grid cells)"
+        } else {
+            "Arrow length (Proportional/Uniform)"
+        };
+        let arrow_scale_hover = if arrow_scale_on {
+            "Arrow length as a multiple of one grid cell"
+        } else {
+            "Disabled in Magnitude mode; use Magnitude scale instead"
+        };
+        ui.add_enabled_ui(arrow_scale_on, |ui| {
+            ui.add(
+                egui::Slider::new(&mut controls.arrow_scale, MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
+                    .text(arrow_scale_text),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Exact length");
+                ui.add(
+                    egui::DragValue::new(&mut controls.arrow_scale)
+                        .speed(0.01)
+                        .range(MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
+                        .max_decimals(2),
+                );
+            });
+        })
+        .response
+        .on_hover_text(arrow_scale_hover)
+        .on_disabled_hover_text("Disabled in Magnitude mode; use Magnitude scale instead");
+        ui.horizontal(|ui| {
+            ui.label("Length mode");
+            for mode in ArrowLengthMode::ALL {
+                ui.selectable_value(&mut controls.arrow_length_mode, mode, mode.label())
+                    .on_hover_text(mode.tooltip());
+            }
+        });
+        ui.add_enabled_ui(magnitude_scale_enabled(controls.arrow_length_mode), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Magnitude scale");
+                ui.add(
+                    egui::DragValue::new(&mut controls.magnitude_scale)
+                        .speed(0.01)
+                        .range(MIN_MAGNITUDE_SCALE..=MAX_MAGNITUDE_SCALE)
+                        .max_decimals(2),
+                );
+            });
+        })
+        .response
+        .on_hover_text("World length per unit of field magnitude");
         if sampling_3d {
             commit_plane |= plane_controls(ui, controls, &domain, grid);
         }
@@ -496,7 +560,8 @@ fn extent_or_previous(value: f32, previous: f32) -> f32 {
 pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_density(controls.density);
     state.set_arrow_scale(controls.arrow_scale);
-    state.set_normalize(controls.normalize);
+    state.set_arrow_length_mode(controls.arrow_length_mode);
+    state.set_magnitude_scale(controls.magnitude_scale);
     state.set_colormap(controls.colormap);
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
@@ -519,7 +584,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
 
     controls.density = state.density;
     controls.arrow_scale = state.arrow_scale;
-    controls.normalize = state.normalize;
+    controls.arrow_length_mode = state.arrow_length_mode;
+    controls.magnitude_scale = state.magnitude_scale;
     controls.colormap = state.colormap;
     controls.auto_fit = state.auto_fit;
     controls.color_min = state.color_min;

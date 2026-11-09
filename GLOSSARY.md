@@ -37,6 +37,19 @@ _Avoid_: preset (unqualified)
 The left side panel holding field controls, grouped into Display, Features,
 Coloring, and Domain.
 
+**Arrow length mode**:
+How a sampled field magnitude becomes an arrow's world-space length: Proportional
+(the longest arrow is the arrow length scale in grid cells), Uniform (every
+arrow has the same length), or Magnitude (length is the field magnitude itself,
+scaled by the magnitude scale). The retired `normalize` boolean migrated
+`true` → Uniform and `false` → Proportional.
+_Avoid_: normalize, normalize lengths
+
+**Magnitude scale**:
+The world-units-per-unit-of-magnitude factor used only in Magnitude arrow-length
+mode, where it is the sole length multiplier. The arrow length scale applies
+only to Proportional and Uniform.
+
 **Presets panel**:
 The right side panel holding camera presets.
 

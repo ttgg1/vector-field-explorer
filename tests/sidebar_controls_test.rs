@@ -4,12 +4,15 @@
 // sidebar frame would change settings the user never touched (and the status
 // bar would count a scene the user never asked for).
 
-use vector_field_explorer::ui::sidebar::{Controls, apply, domain_summary};
+use vector_field_explorer::ui::sidebar::{
+    Controls, apply, arrow_scale_enabled, domain_summary, magnitude_scale_enabled,
+};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
-    State, DEFAULT_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MIN_DOMAIN_EXTENT, domain_between,
+    ArrowLengthMode, State, DEFAULT_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT,
+    MIN_DOMAIN_EXTENT, domain_between,
 };
 use glam::Vec3;
 
@@ -20,7 +23,8 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.density, s.density, "density starts at the seam default");
     assert_eq!(c.density, DEFAULT_DENSITY_2D, "…and that default is pinned");
     assert_eq!(c.arrow_scale, s.arrow_scale, "arrow scale agrees");
-    assert_eq!(c.normalize, s.normalize, "normalize agrees");
+    assert_eq!(c.arrow_length_mode, s.arrow_length_mode, "arrow length mode agrees");
+    assert_eq!(c.magnitude_scale, s.magnitude_scale, "magnitude scale agrees");
     assert_eq!(c.colormap, s.colormap, "colormap agrees");
     assert_eq!(c.auto_fit, s.auto_fit, "auto-fit agrees");
     assert_eq!(c.color_min, s.color_min, "color min agrees");
@@ -57,7 +61,8 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(s.snapshot_if_dirty().is_some(), "the fresh scene builds once");
     assert!(!s.set_density(c.density), "synced density does not re-dirty");
     assert!(!s.set_arrow_scale(c.arrow_scale));
-    assert!(!s.set_normalize(c.normalize));
+    assert!(!s.set_arrow_length_mode(c.arrow_length_mode));
+    assert!(!s.set_magnitude_scale(c.magnitude_scale));
     assert!(!s.set_colormap(c.colormap));
     assert!(!s.set_auto_fit(c.auto_fit));
     assert!(!s.set_color_range(c.color_min, c.color_max));
@@ -155,9 +160,12 @@ fn every_control_dirties_the_scene_through_apply() {
     c.arrow_scale = 2.0;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "arrow scale dirties the scene");
-    c.normalize = true;
+    c.arrow_length_mode = ArrowLengthMode::Magnitude;
     apply(&mut s, &mut c);
-    assert!(s.snapshot_if_dirty().is_some(), "normalize dirties the scene");
+    assert!(s.snapshot_if_dirty().is_some(), "arrow length mode dirties the scene");
+    c.magnitude_scale = 2.0;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "magnitude scale dirties the scene");
     c.colormap = Colormap::Mono;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "colormap dirties the scene");
@@ -180,6 +188,74 @@ fn every_control_dirties_the_scene_through_apply() {
     c.domain_max.x = 0.5;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "domain extrema dirty the scene");
+}
+
+// --- Arrow length modes and magnitude scale (ticket 33) ---------------------
+
+#[test]
+fn magnitude_scale_is_enabled_only_in_magnitude_mode() {
+    assert!(
+        !magnitude_scale_enabled(ArrowLengthMode::Proportional),
+        "Proportional has no separate magnitude scale",
+    );
+    assert!(!magnitude_scale_enabled(ArrowLengthMode::Uniform), "Uniform has no magnitude scale");
+    assert!(
+        magnitude_scale_enabled(ArrowLengthMode::Magnitude),
+        "Magnitude is the one mode the scale applies to",
+    );
+}
+
+#[test]
+fn arrow_scale_is_disabled_only_in_magnitude_mode() {
+    assert!(
+        arrow_scale_enabled(ArrowLengthMode::Proportional),
+        "Proportional lengths follow the arrow scale",
+    );
+    assert!(arrow_scale_enabled(ArrowLengthMode::Uniform), "Uniform lengths are the arrow scale");
+    assert!(
+        !arrow_scale_enabled(ArrowLengthMode::Magnitude),
+        "Magnitude length is magnitude x magnitude_scale alone",
+    );
+}
+
+#[test]
+fn length_mode_and_both_scales_flow_through_apply_and_the_mirror_stays_in_sync() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.arrow_length_mode = ArrowLengthMode::Magnitude;
+    c.arrow_scale = 2.0;
+    c.magnitude_scale = 0.25;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_length_mode, ArrowLengthMode::Magnitude, "the mode lands on the seam");
+    assert_eq!(s.arrow_scale, 2.0, "the numeric arrow scale lands too");
+    assert_eq!(s.magnitude_scale, 0.25, "the magnitude scale lands too");
+    assert_eq!(c.arrow_length_mode, s.arrow_length_mode, "the mirror follows the mode");
+    assert_eq!(c.arrow_scale, s.arrow_scale, "the mirror follows the arrow scale");
+    assert_eq!(c.magnitude_scale, s.magnitude_scale, "the mirror follows the magnitude scale");
+    assert!(
+        !arrow_scale_enabled(s.arrow_length_mode),
+        "Magnitude mode disables the arrow scale widget",
+    );
+    assert!(
+        magnitude_scale_enabled(s.arrow_length_mode),
+        "Magnitude mode enables the magnitude scale widget",
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "the edit rebuilds the scene once");
+}
+
+#[test]
+fn display_reset_restores_proportional_and_both_scales() {
+    let mut c = Controls::new();
+    c.arrow_length_mode = ArrowLengthMode::Magnitude;
+    c.arrow_scale = 3.5;
+    c.magnitude_scale = 4.0;
+
+    c.reset_display();
+
+    assert_eq!(c.arrow_length_mode, ArrowLengthMode::Proportional, "the default mode returns");
+    assert_eq!(c.arrow_scale, 1.0, "the default arrow scale returns");
+    assert_eq!(c.magnitude_scale, 1.0, "the default magnitude scale returns");
 }
 
 // --- Domain summary, bounds and reset (ticket 32) ---------------------------
