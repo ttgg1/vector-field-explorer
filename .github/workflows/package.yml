@@ -160,12 +160,17 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          for f in README.md LICENSE THIRD_PARTY_LICENSES.md; do
+          for f in README.md LICENSE THIRD_PARTY_LICENSES.md \
+            packaging/THIRD_PARTY_NOTICES.txt; do
             if [ ! -f "$f" ]; then
-              echo "::error::release assets require $f in the repo root"
+              echo "::error::release assets require ${f}"
               exit 1
             fi
           done
+          if [ ! -s packaging/THIRD_PARTY_NOTICES.txt ]; then
+            echo "::error::packaging/THIRD_PARTY_NOTICES.txt is empty; run scripts/generate-notices.sh"
+            exit 1
+          fi
 
           name="vector-field-explorer-${VERSION}-${TARGET}"
           bin="target/${TARGET}/release/vector-field-explorer"
@@ -195,6 +200,8 @@ jobs:
               "${appdir}/usr/share/doc/vector-field-explorer/LICENSE"
             install -Dm644 THIRD_PARTY_LICENSES.md \
               "${appdir}/usr/share/doc/vector-field-explorer/THIRD_PARTY_LICENSES.md"
+            install -Dm644 packaging/THIRD_PARTY_NOTICES.txt \
+              "${appdir}/usr/share/doc/vector-field-explorer/THIRD_PARTY_NOTICES.txt"
 
             # Bundle the copyright notice for every shared library linuxdeploy
             # copied. The list is derived from the AppDir (not guessed) so a new
@@ -321,6 +328,7 @@ jobs:
               usr/share/doc/vector-field-explorer/README.md \
               usr/share/doc/vector-field-explorer/LICENSE \
               usr/share/doc/vector-field-explorer/THIRD_PARTY_LICENSES.md \
+              usr/share/doc/vector-field-explorer/THIRD_PARTY_NOTICES.txt \
               usr/share/doc/vector-field-explorer/system-libraries \
               usr/share/doc/vector-field-explorer/system-libraries/SOURCES.txt \
               usr/share/doc/vector-field-explorer/system-libraries/common-licenses; do
@@ -438,8 +446,8 @@ jobs:
               exit 1
             fi
             file "${app}/Contents/Resources/vector-field-explorer.icns"
-            cp README.md LICENSE THIRD_PARTY_LICENSES.md dist/
-            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE THIRD_PARTY_LICENSES.md )
+            cp README.md LICENSE THIRD_PARTY_LICENSES.md packaging/THIRD_PARTY_NOTICES.txt dist/
+            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt )
             echo "asset=${name}.zip" >> "$GITHUB_OUTPUT"
           fi
 

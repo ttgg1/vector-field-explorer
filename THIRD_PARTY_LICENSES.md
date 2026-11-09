@@ -229,11 +229,19 @@ notice says otherwise.
   AppDir, resolves each library's Debian/Ubuntu package, and copies that
   package's copyright notice into
   `usr/share/doc/vector-field-explorer/system-libraries/` inside the AppImage,
-  with a `SOURCES.txt` mapping each library to its package. The package step
-  fails if a bundled library has no notice. The workflow deliberately excludes
-  `libvulkan*`, `libGL*`, `libEGL*`, `libOpenGL*`, `libdrm*`, and `libgbm*`, so
-  the host GPU driver and its licences stay on the host.
+  with a `SOURCES.txt` mapping each library to its package. When a `-dev` or
+  `-dbg` package and a runtime package both own a library, the runtime package
+  wins; an ambiguous or empty owner set fails the step with the library paths
+  and candidate packages. Debian/Ubuntu copyright files often reference
+  `/usr/share/common-licenses/...` instead of inlining GPL/LGPL text, so every
+  referenced file is copied into
+  `.../system-libraries/common-licenses/` and the extracted AppImage is
+  re-checked for unresolved references. The package step fails if a bundled
+  library has no notice. The workflow deliberately excludes `libvulkan*`,
+  `libGL*`, `libEGL*`, `libOpenGL*`, `libdrm*`, and `libgbm*`, so the host GPU
+  driver and its licences stay on the host.
 - **macOS:** the app links against the system frameworks supplied by macOS; no
   Apple framework binaries are redistributed in the `.app.zip`.
-- The release archives include this file, `README.md`, and `LICENSE` alongside
-  the application.
+- The release archives include this file, the generated per-crate
+  [`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt),
+  `README.md`, and `LICENSE` alongside the application.
