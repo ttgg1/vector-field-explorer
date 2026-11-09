@@ -40,9 +40,9 @@ Pillow.
 | `web/og-image.png` | 1280×640 PNG (Open Graph / Twitter card) |
 
 The `packaging/linux/vector-field-explorer-256.png` file is intentionally a
-byte-identical copy of the 256 px ladder image: linuxdeploy expects the icon at
-that stable path, so the packaging workflow does not have to depend on the
-ladder's layout.
+byte-identical copy of the 256 px ladder image. The packaging workflow passes
+this file to linuxdeploy's `--icon-file`, so the copy keeps that path stable
+if the ladder layout under `packaging/icons/` changes.
 
 ## Exact commands
 
