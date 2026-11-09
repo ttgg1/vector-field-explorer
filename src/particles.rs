@@ -54,9 +54,12 @@ pub const MAX_TRAIL_LEN: u32 = 32;
 /// at most 25 points each (24 segments), so a dense cloud cannot blow the
 /// line-instance budget up by 32x (ticket 48).
 pub const MAX_TRAIL_SEGMENTS: usize = 100_000;
-/// A step whose displacement is at or below this fraction of the domain's
-/// smallest positive extent counts as stagnation.
-pub const STAGNATION_EPSILON: f32 = 1e-4;
+/// A particle moving at or below this fraction of the domain's smallest
+/// positive extent per simulated second counts as stagnant: less than 1% of
+/// the box width per second is effectively standing still. Speed rather than
+/// per-step displacement keeps the verdict independent of the frame's `dt`
+/// (ticket 48 fix round).
+pub const STAGNATION_SPEED_EPSILON: f32 = 1e-2;
 
 /// Particle opacity bounds and default (ticket 48).
 pub const MIN_PARTICLE_OPACITY: f32 = 0.05;
@@ -64,7 +67,6 @@ pub const MAX_PARTICLE_OPACITY: f32 = 1.0;
 pub const DEFAULT_PARTICLE_OPACITY: f32 = 1.0;
 /// Requested trail points: `0` turns trails off.
 pub const MIN_TRAIL_LEN: u32 = 0;
-pub const MAX_TRAIL_LEN_UI: u32 = MAX_TRAIL_LEN;
 pub const DEFAULT_TRAIL_LEN: u32 = 0;
 /// Per-segment alpha multiplier toward the tail; `1` means no fade.
 pub const MIN_TRAIL_FADE: f32 = 0.0;
@@ -132,7 +134,8 @@ pub struct ParticleAppearance {
     pub opacity: f32,
     /// How dots and trails choose their RGB.
     pub color_mode: ParticleColorMode,
-    /// RGBA for [`ParticleColorMode::Fixed`].
+    /// Opaque RGBA for [`ParticleColorMode::Fixed`]. The UI edits RGB only and
+    /// sanitizing pins alpha to 255; alpha is ignored at render.
     pub fixed_color: [u8; 4],
     /// Requested trail points, `0..=32`; `0` turns trails off.
     pub trail_len: u32,
@@ -175,7 +178,9 @@ impl ParticleAppearance {
                 defaults.opacity,
             ),
             color_mode: self.color_mode,
-            fixed_color: self.fixed_color,
+            // The picker edits RGB only; alpha is ignored at render, so the
+            // stored colour is always opaque (ticket 48 fix round).
+            fixed_color: [self.fixed_color[0], self.fixed_color[1], self.fixed_color[2], 255],
             trail_len: self.trail_len.min(MAX_TRAIL_LEN),
             trail_fade: finite_clamped(
                 self.trail_fade,
@@ -229,13 +234,12 @@ const UNIT_SCALE: f32 = 2.0 / 2097152.0;
 pub struct Particles {
     pub pos: Vec<Vec3>,
     /// Trail history per particle, oldest first and newest last (ticket 48).
-    /// Always aligned with [`pos`](Particles::pos); public like `pos` so the
-    /// integration tests can inspect the spatial history without a GPU.
-    pub trails: Vec<Vec<Vec3>>,
+    /// Always aligned with [`pos`](Particles::pos).
+    trails: Vec<Vec<Vec3>>,
     /// Simulated seconds each particle has been stagnant (ticket 48).
-    pub stuck: Vec<f32>,
+    stuck: Vec<f32>,
     /// Last step's numerical speed per particle, `|q - p| / dt` (ticket 48).
-    pub speeds: Vec<f32>,
+    speeds: Vec<f32>,
     /// The cloud's whole pseudo-random state (see [`lcg_next`]).
     rng: u64,
 }
@@ -273,6 +277,19 @@ impl Particles {
             speeds: vec![0.0; len],
             ..Particles::default()
         }
+    }
+
+    /// Read-only view of the per-particle history parallel to
+    /// [`pos`](Particles::pos): trails (oldest first), stagnation times and
+    /// last speeds.
+    ///
+    /// Test seam (ticket 48 fix round): the integration tests need to observe
+    /// the ring, stuck counters and speeds, but the fields stay private so
+    /// production callers cannot desynchronise the parallel vectors. This is
+    /// the single read-only window; there is deliberately no setter.
+    #[doc(hidden)]
+    pub fn history(&self) -> (&[Vec<Vec3>], &[f32], &[f32]) {
+        (&self.trails, &self.stuck, &self.speeds)
     }
 
     /// Keep every parallel vector the same length as `pos`: older test-built
@@ -430,6 +447,7 @@ fn rk4_step(field: &FieldExpr, p: Vec3, h: f32) -> Vec3 {
 /// [`MAX_PARTICLES`] and drawn from the cloud's stream (so a respawn mid-
 /// [`advect`] and a fresh spawn agree).
 pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize, dimension: usize) {
+    particles.align_parallel();
     let region = spawn_box(domain);
     let band = if dimension == 3 { region.band } else { region.band * Vec3::new(1.0, 1.0, 0.0) };
     let mut state = particles.rng;
@@ -457,6 +475,7 @@ pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize, dimension
 /// spawn). Never exceeds [`MAX_PARTICLES`]. The app calls this with the
 /// viewmodel's per-frame target; it must not be called while particles are off.
 pub fn resize(particles: &mut Particles, domain: &Domain, target: usize, dimension: usize) {
+    particles.align_parallel();
     let target = target.min(MAX_PARTICLES);
     if particles.pos.len() > target {
         particles.pos.truncate(target);
@@ -503,6 +522,7 @@ pub fn spawn_at(
     count: usize,
     dimension: usize,
 ) -> usize {
+    particles.align_parallel();
     if count == 0 || !center.is_finite() || !inside(domain, center) {
         return 0;
     }
@@ -589,18 +609,20 @@ fn smallest_extent(domain: &Domain) -> Option<f32> {
 
 /// Process one particle's advection outcome for the stagnation loop, returning
 /// `true` when the particle respawned. Shared by the moving and stuck paths.
+/// The verdict is on speed (world units per simulated second), so it does not
+/// change when the frame's `dt` changes.
 #[allow(clippy::too_many_arguments)]
 fn stagnated_respawn(
     particles: &mut Particles,
     index: usize,
-    displacement: f32,
+    speed: f32,
     dt: f32,
-    epsilon: f32,
+    stagnation_speed: f32,
     settings: AdvectSettings,
     region: &SpawnBox,
     state: u64,
 ) -> bool {
-    if displacement <= epsilon {
+    if speed <= stagnation_speed {
         particles.stuck[index] += dt;
     } else {
         particles.stuck[index] = 0.0;
@@ -625,9 +647,11 @@ fn stagnated_respawn(
 ///
 /// Each successful step appends the new position to that particle's trail and
 /// trims the oldest points to [`effective_trail_len`]; a stagnant particle
-/// (displacement at or below [`STAGNATION_EPSILON`] of the smallest extent)
-/// accumulates simulated `dt` and, when looping is on, respawns once it reaches
-/// the threshold. A respawn resets that particle's trail, stuck time and speed.
+/// (speed at or below [`STAGNATION_SPEED_EPSILON`] of the smallest extent per
+/// simulated second) accumulates simulated `dt` and, when looping is on,
+/// respawns once it reaches the threshold. A respawn resets that particle's
+/// trail, stuck time and speed. An exact zero-velocity point still takes the
+/// pre-existing RK4 NaN respawn immediately, in both loop toggle states.
 pub fn advect(
     particles: &mut Particles,
     field: &FieldExpr,
@@ -641,7 +665,8 @@ pub fn advect(
     }
     let region = spawn_box(domain);
     let effective = effective_trail_len(particles.pos.len(), settings.trail_len);
-    let epsilon = smallest_extent(domain).map_or(0.0, |extent| STAGNATION_EPSILON * extent);
+    let stagnation_speed =
+        smallest_extent(domain).map_or(0.0, |extent| STAGNATION_SPEED_EPSILON * extent);
     let threshold = finite_clamped(
         settings.stagnation_seconds,
         MIN_STAGNATION_SECONDS,
@@ -664,15 +689,16 @@ pub fn advect(
             continue;
         }
         let displacement = (q - p).length();
+        let speed = displacement / dt;
         particles.pos[i] = q;
-        particles.speeds[i] = if dt > 0.0 { displacement / dt } else { 0.0 };
+        particles.speeds[i] = speed;
         push_trail_point(&mut particles.trails[i], q, effective);
         stagnated_respawn(
             particles,
             i,
-            displacement,
+            speed,
             dt,
-            epsilon,
+            stagnation_speed,
             settings,
             &region,
             state,
@@ -790,11 +816,9 @@ pub fn dot_instances(
 /// proportionally wider trails. Trails are skipped entirely when the requested
 /// length is below two points or the cloud is empty, and the whole result is
 /// hard-capped at [`MAX_TRAIL_SEGMENTS`].
-#[allow(clippy::too_many_arguments)]
 pub fn trail_instances(
     particles: &Particles,
     field: &FieldExpr,
-    _domain: &Domain,
     colormap: Colormap,
     color_range: (f32, f32),
     appearance: &ParticleAppearance,

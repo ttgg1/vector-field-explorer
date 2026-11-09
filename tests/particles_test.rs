@@ -586,15 +586,40 @@ fn close(actual: f32, expected: f32) -> bool {
     (actual - expected).abs() < 1e-5
 }
 
-/// A cloud whose trails and speeds are supplied directly, for the render
-/// tests that do not need to advect.
-fn cloud_with_trails(trails: Vec<Vec<Vec3>>, speeds: Vec<f32>) -> Particles {
-    let last = trails.iter().map(|trail| *trail.last().expect("non-empty trail")).collect();
-    let mut cloud = Particles::with_positions(last);
-    cloud.stuck = vec![0.0; trails.len()];
-    cloud.trails = trails;
-    cloud.speeds = speeds;
-    cloud
+/// Build a one-particle cloud whose trail has `points` points by advecting a
+/// gentle pump. History is never written directly; the tests exercise the real
+/// advect path.
+fn cloud_with_one_trail(points: usize) -> (Particles, FieldExpr, Domain) {
+    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
+    let domain = Domain::default();
+    let mut cloud = Particles::with_positions(vec![Vec3::new(-0.5, 0.0, 0.0)]);
+    let settings = AdvectSettings {
+        dt: 0.001,
+        trail_len: points as u32,
+        ..AdvectSettings::default()
+    };
+    for _ in 0..points.saturating_sub(1) {
+        advect(&mut cloud, &field, &domain, settings);
+    }
+    (cloud, field, domain)
+}
+
+/// Two particles carried at visibly different speeds by a linear field, with a
+/// two-point trail each. Used by the Speed colour tests.
+fn cloud_with_two_speeds() -> (Particles, FieldExpr, Domain) {
+    let field = FieldExpr::parse("(x + 2, 0)").expect("linear field parses");
+    let domain = Domain::default();
+    let mut cloud = Particles::with_positions(vec![
+        Vec3::new(-0.5, 0.0, 0.0),
+        Vec3::new(0.5, 0.0, 0.0),
+    ]);
+    advect(
+        &mut cloud,
+        &field,
+        &domain,
+        AdvectSettings { dt: 0.01, trail_len: 2, ..AdvectSettings::default() },
+    );
+    (cloud, field, domain)
 }
 
 #[test]
@@ -626,7 +651,7 @@ fn trails_append_cap_and_keep_the_newest_point_last() {
     for _ in 0..6 {
         advect(&mut cloud, &field, &domain, settings);
     }
-    for (i, trail) in cloud.trails.iter().enumerate() {
+    for (i, trail) in cloud.history().0.iter().enumerate() {
         assert_eq!(trail.len(), 4, "the ring stays at the requested length");
         assert_eq!(trail.last(), Some(&cloud.pos[i]), "the newest point is last");
         for pair in trail.windows(2) {
@@ -637,40 +662,38 @@ fn trails_append_cap_and_keep_the_newest_point_last() {
 
 #[test]
 fn trails_trim_to_the_effective_length_after_a_density_rise() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
-    let domain = Domain::default();
-    let start = Vec3::new(-0.5, 0.0, 0.0);
-    let mut cloud = Particles::with_positions(vec![start]);
-    cloud.trails = vec![vec![start; 20]];
-    cloud.speeds = vec![1.0];
-    cloud.stuck = vec![0.0];
+    let (mut cloud, field, domain) = cloud_with_one_trail(20);
     advect(
         &mut cloud,
         &field,
         &domain,
         AdvectSettings { dt: 0.001, trail_len: 8, ..AdvectSettings::default() },
     );
-    assert_eq!(cloud.trails[0].len(), 8, "an older longer trail trims on the next step");
+    assert_eq!(
+        cloud.history().0[0].len(),
+        8,
+        "an older longer trail trims on the next step",
+    );
 }
 
 #[test]
 fn respawn_resets_the_trail_stuck_time_and_speed() {
-    let field = FieldExpr::parse("(0, 0)").expect("zero field parses");
-    let domain = Domain::default();
-    let mut cloud = Particles::with_positions(vec![Vec3::ZERO]);
-    cloud.trails = vec![vec![Vec3::new(-0.5, 0.0, 0.0), Vec3::ZERO]];
-    cloud.stuck = vec![0.4];
-    cloud.speeds = vec![3.0];
+    let (mut cloud, field, domain) = cloud_with_one_trail(2);
+    assert_eq!(cloud.history().0[0].len(), 2, "two points before the respawn");
+    // Move the position just outside the domain while keeping the built trail;
+    // the next step's out-of-domain check must reset the whole history.
+    cloud.pos[0] = Vec3::new(0.999, 0.0, 0.0);
     advect(
         &mut cloud,
         &field,
         &domain,
-        AdvectSettings { dt: 0.016, trail_len: 8, ..AdvectSettings::default() },
+        AdvectSettings { dt: 0.01, trail_len: 8, ..AdvectSettings::default() },
     );
-    assert_eq!(cloud.trails[0].len(), 1, "a respawn keeps only the new point");
-    assert_eq!(cloud.trails[0][0], cloud.pos[0], "and that point is the new position");
-    assert_eq!(cloud.stuck[0], 0.0, "stuck time restarts");
-    assert_eq!(cloud.speeds[0], 0.0, "a fresh particle has no speed yet");
+    let (trails, stuck, speeds) = cloud.history();
+    assert_eq!(trails[0].len(), 1, "a respawn keeps only the new point");
+    assert_eq!(trails[0][0], cloud.pos[0], "and that point is the new position");
+    assert_eq!(stuck[0], 0.0, "stuck time restarts");
+    assert_eq!(speeds[0], 0.0, "a fresh particle has no speed yet");
 }
 
 #[test]
@@ -686,10 +709,11 @@ fn clear_empties_trails_stuck_times_and_speeds() {
         AdvectSettings { dt: 0.016, trail_len: 8, ..AdvectSettings::default() },
     );
     clear(&mut cloud);
+    let (trails, stuck, speeds) = cloud.history();
     assert!(cloud.pos.is_empty());
-    assert!(cloud.trails.is_empty(), "trail history is dropped with the cloud");
-    assert!(cloud.stuck.is_empty(), "stuck times are dropped");
-    assert!(cloud.speeds.is_empty(), "speeds are dropped");
+    assert!(trails.is_empty(), "trail history is dropped with the cloud");
+    assert!(stuck.is_empty(), "stuck times are dropped");
+    assert!(speeds.is_empty(), "speeds are dropped");
 }
 
 #[test]
@@ -698,35 +722,88 @@ fn speed_is_displacement_over_dt() {
     let domain = Domain::default();
     let mut cloud = Particles::with_positions(vec![Vec3::new(-0.5, 0.0, 0.0)]);
     advect(&mut cloud, &field, &domain, step(0.01));
-    assert!(close(cloud.speeds[0], 1.0), "a unit pump moves one unit per second");
+    assert!(close(cloud.history().2[0], 1.0), "a unit pump moves one unit per second");
 }
 
 #[test]
-fn stagnation_accumulates_and_respawns_when_looping() {
-    // A tiny but non-zero flow: the RK4 step survives the zero-velocity guard,
-    // yet its displacement is below the stagnation band.
+fn exact_zero_velocity_respawns_immediately_in_both_toggle_states() {
+    let field = FieldExpr::parse("(0, 0)").expect("zero field parses");
+    let domain = Domain::default();
+    for loop_on_stagnation in [true, false] {
+        let mut cloud = Particles::with_positions(vec![Vec3::ZERO]);
+        advect(
+            &mut cloud,
+            &field,
+            &domain,
+            AdvectSettings {
+                dt: 0.01,
+                trail_len: 8,
+                loop_on_stagnation,
+                stagnation_seconds: 5.0,
+            },
+        );
+        let (trails, stuck, speeds) = cloud.history();
+        assert_ne!(
+            cloud.pos[0], Vec3::ZERO,
+            "the RK4 NaN sentinel respawns an exact zero-velocity point (loop={loop_on_stagnation})",
+        );
+        assert_eq!(trails[0].len(), 1, "the respawn resets the trail");
+        assert_eq!(stuck[0], 0.0, "the respawn resets the stuck counter");
+        assert_eq!(speeds[0], 0.0, "the respawn resets the speed");
+    }
+}
+
+#[test]
+fn stagnation_accumulates_and_respawns_at_the_threshold() {
+    // A tiny but non-zero flow: the RK4 zero-velocity guard does not fire, but
+    // the speed is far below the stagnation band. 0.25 s steps and a 0.5 s
+    // threshold make the respawn step exact.
     let field = FieldExpr::parse("(0.000001, 0)").expect("tiny field parses");
     let domain = Domain::default();
     let start = Vec3::new(-0.5, 0.0, 0.0);
     let mut cloud = Particles::with_positions(vec![start]);
     let settings = AdvectSettings {
-        dt: 0.01,
-        trail_len: 0,
+        dt: 0.25,
+        trail_len: 8,
         loop_on_stagnation: true,
-        stagnation_seconds: 0.1,
+        stagnation_seconds: 0.5,
     };
-    for _ in 0..30 {
-        advect(&mut cloud, &field, &domain, settings);
+    advect(&mut cloud, &field, &domain, settings);
+    assert!(cloud.history().1[0] > 0.0, "the first step accumulates stuck time");
+    advect(&mut cloud, &field, &domain, settings);
+    let (trails, stuck, speeds) = cloud.history();
+    assert_ne!(cloud.pos[0], start, "the particle looped at the threshold");
+    assert_eq!(stuck[0], 0.0, "the respawn resets the stuck counter");
+    assert_eq!(trails[0].len(), 1, "the respawn resets the trail to one point");
+    assert_eq!(speeds[0], 0.0, "the respawn clears the speed");
+}
+
+#[test]
+fn stagnation_verdict_uses_speed_not_step_displacement() {
+    // Speed 0.001 units/s is below 0.01 × the domain's 2-unit extent
+    // (0.02 units/s). At dt = 1.0 the per-step displacement would be 0.001,
+    // well above the old displacement band, so a displacement test would call
+    // this moving. The speed test must call it stagnant at both dt values.
+    let field = FieldExpr::parse("(0.001, 0)").expect("slow field parses");
+    let domain = Domain::default();
+    for dt in [0.01, 1.0] {
+        let mut cloud = Particles::with_positions(vec![Vec3::new(-0.5, 0.0, 0.0)]);
+        advect(
+            &mut cloud,
+            &field,
+            &domain,
+            AdvectSettings {
+                dt,
+                trail_len: 0,
+                loop_on_stagnation: false,
+                stagnation_seconds: 5.0,
+            },
+        );
+        assert!(
+            cloud.history().1[0] > 0.0,
+            "speed 0.001 is stagnant at dt {dt}",
+        );
     }
-    assert!(
-        (cloud.pos[0] - start).length() > 0.01,
-        "the particle looped away from the stagnant point: {:?}",
-        cloud.pos[0],
-    );
-    assert!(
-        cloud.stuck[0] < settings.stagnation_seconds,
-        "a respawn resets the accumulation",
-    );
 }
 
 #[test]
@@ -746,19 +823,21 @@ fn stagnation_never_respawns_when_looping_is_off() {
     }
     assert!((cloud.pos[0] - start).length() < 1e-4, "the particle stays put");
     assert!(
-        cloud.stuck[0] > 0.2,
+        cloud.history().1[0] > 0.2,
         "stuck time still accumulates when looping is off",
     );
 }
 
 #[test]
 fn a_moving_particle_resets_its_stuck_time() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
+    let still = FieldExpr::parse("(0.000001, 0)").expect("tiny field parses");
+    let pump = FieldExpr::parse("(1, 0)").expect("pump field parses");
     let domain = Domain::default();
     let mut cloud = Particles::with_positions(vec![Vec3::new(-0.5, 0.0, 0.0)]);
-    cloud.stuck = vec![0.09];
-    advect(&mut cloud, &field, &domain, step(0.01));
-    assert_eq!(cloud.stuck[0], 0.0, "real motion clears the stuck counter");
+    advect(&mut cloud, &still, &domain, step(0.01));
+    assert!(cloud.history().1[0] > 0.0, "the slow field accumulates stuck time");
+    advect(&mut cloud, &pump, &domain, step(0.01));
+    assert_eq!(cloud.history().1[0], 0.0, "real motion clears the stuck counter");
 }
 
 #[test]
@@ -773,29 +852,21 @@ fn a_paused_step_leaves_trails_and_stuck_times_alone() {
         &domain,
         AdvectSettings { dt: 0.01, trail_len: 8, ..AdvectSettings::default() },
     );
-    let trails = cloud.trails.clone();
-    let stuck = cloud.stuck.clone();
+    let trails = cloud.history().0.to_vec();
+    let stuck = cloud.history().1.to_vec();
     advect(
         &mut cloud,
         &field,
         &domain,
         AdvectSettings { dt: 0.0, trail_len: 8, ..AdvectSettings::default() },
     );
-    assert_eq!(cloud.trails, trails, "pause appends nothing");
-    assert_eq!(cloud.stuck, stuck, "pause freezes the stagnation counter");
+    assert_eq!(cloud.history().0.to_vec(), trails, "pause appends nothing");
+    assert_eq!(cloud.history().1.to_vec(), stuck, "pause freezes the stagnation counter");
 }
 
 #[test]
 fn trail_alpha_fades_from_opacity_and_width_follows_spacing() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
-    let domain = Domain::default();
-    let points = vec![
-        Vec3::new(-0.4, 0.0, 0.0),
-        Vec3::new(-0.2, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.2, 0.0, 0.0),
-    ];
-    let cloud = cloud_with_trails(vec![points], vec![1.0]);
+    let (cloud, field, _domain) = cloud_with_one_trail(4);
     let appearance = ParticleAppearance {
         opacity: 0.8,
         trail_len: 4,
@@ -806,7 +877,6 @@ fn trail_alpha_fades_from_opacity_and_width_follows_spacing() {
     let segments = trail_instances(
         &cloud,
         &field,
-        &domain,
         Colormap::Mono,
         (0.0, 1.0),
         &appearance,
@@ -828,12 +898,7 @@ fn trail_alpha_fades_from_opacity_and_width_follows_spacing() {
 
 #[test]
 fn trails_are_empty_below_two_points_or_at_zero_length() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
-    let domain = Domain::default();
-    let cloud = cloud_with_trails(
-        vec![vec![Vec3::new(-0.2, 0.0, 0.0), Vec3::new(0.2, 0.0, 0.0)]],
-        vec![1.0],
-    );
+    let (cloud, field, _domain) = cloud_with_one_trail(2);
     for requested in [0, 1] {
         let appearance =
             ParticleAppearance { trail_len: requested, ..ParticleAppearance::default() };
@@ -841,7 +906,6 @@ fn trails_are_empty_below_two_points_or_at_zero_length() {
             trail_instances(
                 &cloud,
                 &field,
-                &domain,
                 Colormap::Viridis,
                 (0.0, 1.0),
                 &appearance,
@@ -856,12 +920,7 @@ fn trails_are_empty_below_two_points_or_at_zero_length() {
 
 #[test]
 fn fixed_trails_use_the_fixed_colour_exactly() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
-    let domain = Domain::default();
-    let cloud = cloud_with_trails(
-        vec![vec![Vec3::new(-0.2, 0.0, 0.0), Vec3::new(0.2, 0.0, 0.0)]],
-        vec![1.0],
-    );
+    let (cloud, field, _domain) = cloud_with_one_trail(2);
     let appearance = ParticleAppearance {
         color_mode: ParticleColorMode::Fixed,
         fixed_color: [10, 20, 30, 255],
@@ -871,7 +930,6 @@ fn fixed_trails_use_the_fixed_colour_exactly() {
     let segments = trail_instances(
         &cloud,
         &field,
-        &domain,
         Colormap::Viridis,
         (0.0, 1.0),
         &appearance,
@@ -882,13 +940,23 @@ fn fixed_trails_use_the_fixed_colour_exactly() {
 }
 
 #[test]
-fn magnitude_trails_use_the_provided_range() {
-    let field = FieldExpr::parse("(2, 0)").expect("constant field parses");
-    let domain = Domain::default();
-    let cloud = cloud_with_trails(
-        vec![vec![Vec3::new(-0.2, 0.0, 0.0), Vec3::new(0.2, 0.0, 0.0)]],
-        vec![1.0],
+fn fixed_colour_round_trip_drops_alpha_and_keeps_rgb() {
+    let stored = ParticleAppearance {
+        fixed_color: [10, 20, 30, 7],
+        ..ParticleAppearance::default()
+    }
+    .sanitized();
+    assert_eq!(
+        stored.fixed_color,
+        [10, 20, 30, 255],
+        "a translucent stored colour is sanitized to opaque, RGB untouched",
     );
+}
+
+#[test]
+fn magnitude_trails_use_the_provided_range() {
+    let (cloud, _field, _domain) = cloud_with_one_trail(2);
+    let field = FieldExpr::parse("(2, 0)").expect("constant field parses");
     let appearance = ParticleAppearance {
         color_mode: ParticleColorMode::Magnitude,
         trail_len: 2,
@@ -897,7 +965,6 @@ fn magnitude_trails_use_the_provided_range() {
     let at_max = trail_instances(
         &cloud,
         &field,
-        &domain,
         Colormap::Mono,
         (0.0, 2.0),
         &appearance,
@@ -908,7 +975,6 @@ fn magnitude_trails_use_the_provided_range() {
     let at_quarter = trail_instances(
         &cloud,
         &field,
-        &domain,
         Colormap::Mono,
         (0.0, 8.0),
         &appearance,
@@ -921,30 +987,38 @@ fn magnitude_trails_use_the_provided_range() {
 
 #[test]
 fn speed_trails_normalise_over_the_observed_cloud_and_handle_equal_speeds() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
-    let domain = Domain::default();
-    let trail = |x: f32| vec![Vec3::new(x - 0.1, 0.0, 0.0), Vec3::new(x + 0.1, 0.0, 0.0)];
-    let cloud = cloud_with_trails(vec![trail(-0.5), trail(0.5)], vec![1.0, 3.0]);
+    let (cloud, field, _domain) = cloud_with_two_speeds();
+    let observed = speed_range(&cloud);
+    assert!(observed.0 < observed.1, "the two particles move at different speeds");
     let appearance = ParticleAppearance {
         color_mode: ParticleColorMode::Speed,
         trail_len: 2,
         ..ParticleAppearance::default()
     };
-    assert_eq!(speed_range(&cloud), (1.0, 3.0), "the observed range spans the cloud");
     let segments = trail_instances(
         &cloud,
         &field,
-        &domain,
         Colormap::Mono,
         (0.0, 1.0),
         &appearance,
-        speed_range(&cloud),
+        observed,
         1.0,
     );
     assert_eq!(segments[0].color[..3], [0.0, 0.0, 0.0], "slowest at the ramp bottom");
     assert_eq!(segments[1].color[..3], [1.0, 1.0, 1.0], "fastest at the ramp top");
 
-    let equal = cloud_with_trails(vec![trail(-0.5), trail(0.5)], vec![2.0, 2.0]);
+    let pump = FieldExpr::parse("(1, 0)").expect("pump field parses");
+    let domain = Domain::default();
+    let mut equal = Particles::with_positions(vec![
+        Vec3::new(-0.5, 0.0, 0.0),
+        Vec3::new(0.5, 0.0, 0.0),
+    ]);
+    advect(
+        &mut equal,
+        &pump,
+        &domain,
+        AdvectSettings { dt: 0.01, trail_len: 2, ..AdvectSettings::default() },
+    );
     assert_eq!(speed_range(&equal), (0.0, 1.0), "all-equal speeds fall back to 0..1");
 }
 
@@ -952,23 +1026,21 @@ fn speed_trails_normalise_over_the_observed_cloud_and_handle_equal_speeds() {
 fn a_full_cloud_with_requested_32_stays_inside_the_segment_cap() {
     let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
     let domain = Domain::default();
-    let mut cloud = Particles::with_positions(vec![Vec3::ZERO; MAX_PARTICLES]);
-    cloud.trails = (0..MAX_PARTICLES)
-        .map(|i| {
-            let base = (i as f32 / MAX_PARTICLES as f32) - 0.5;
-            (0..MAX_TRAIL_LEN)
-                .map(|j| Vec3::new(base, j as f32 * 1e-4, 0.0))
-                .collect()
-        })
-        .collect();
-    cloud.speeds = vec![1.0; MAX_PARTICLES];
-    cloud.stuck = vec![0.0; MAX_PARTICLES];
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, MAX_PARTICLES, 3);
+    let settings = AdvectSettings {
+        dt: 0.0001,
+        trail_len: MAX_TRAIL_LEN,
+        ..AdvectSettings::default()
+    };
+    for _ in 0..(effective_trail_len(MAX_PARTICLES, MAX_TRAIL_LEN) + 2) {
+        advect(&mut cloud, &field, &domain, settings);
+    }
     let appearance =
         ParticleAppearance { trail_len: MAX_TRAIL_LEN, ..ParticleAppearance::default() };
     let segments = trail_instances(
         &cloud,
         &field,
-        &domain,
         Colormap::Viridis,
         (0.0, 1.0),
         &appearance,
@@ -1015,11 +1087,7 @@ fn dot_alpha_is_the_opacity_and_rgb_is_unchanged() {
 
 #[test]
 fn fixed_dots_use_the_fixed_colour_and_speed_dots_use_speed_range() {
-    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
-    let domain = Domain::default();
-    let mut cloud = Particles::default();
-    spawn(&mut cloud, &domain, 2, 3);
-    cloud.speeds = vec![1.0, 3.0];
+    let (cloud, field, domain) = cloud_with_two_speeds();
     let fixed = dot_instances(
         &cloud,
         &field,

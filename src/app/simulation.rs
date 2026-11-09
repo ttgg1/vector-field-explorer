@@ -118,7 +118,6 @@ impl VfApp {
             self.scene.trails = Arc::new(trail_instances(
                 &self.particles,
                 &self.state.field,
-                &self.state.domain,
                 self.state.colormap,
                 self.dots_range,
                 &appearance,

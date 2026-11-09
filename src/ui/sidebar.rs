@@ -31,7 +31,7 @@ use crate::arrow_style::{
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::particles::{
-    MAX_PARTICLES, MAX_TRAIL_LEN_UI, MIN_PARTICLE_OPACITY, MAX_PARTICLE_OPACITY,
+    MAX_PARTICLES, MAX_TRAIL_LEN, MIN_PARTICLE_OPACITY, MAX_PARTICLE_OPACITY,
     MIN_TRAIL_FADE, MAX_TRAIL_FADE, MIN_TRAIL_WIDTH, MAX_TRAIL_WIDTH,
     MIN_STAGNATION_SECONDS, MAX_STAGNATION_SECONDS, ParticleAppearance, ParticleColorMode,
 };
@@ -270,6 +270,18 @@ pub fn particle_size_enabled(particles: bool) -> bool {
 /// [`ParticleColorMode::Fixed`] reads it.
 pub fn particle_fixed_color_enabled(mode: ParticleColorMode) -> bool {
     mode == ParticleColorMode::Fixed
+}
+
+/// The RGB the fixed-colour picker edits. Alpha is not user-editable and is
+/// ignored at render, so it never enters the picker (ticket 48 fix round).
+pub fn fixed_color_rgb(color: [u8; 4]) -> [u8; 3] {
+    [color[0], color[1], color[2]]
+}
+
+/// Store the picker's RGB as an opaque colour: the vec4 alpha stays 255 so a
+/// previous translucent value can never darken the shown RGB.
+pub fn fixed_color_opaque(rgb: [u8; 3]) -> [u8; 4] {
+    [rgb[0], rgb[1], rgb[2], 255]
 }
 
 /// Whether the trail fade control applies: trails need at least two stored
@@ -638,8 +650,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             .on_hover_text("Animate dots carried by the field (3D view)");
         ui.horizontal(|ui| {
             ui.label("Particle count");
-            ui.add_enabled(
-                controls.particles,
+            ui.add(
                 egui::DragValue::new(&mut controls.particle_count)
                     .range(0..=MAX_PARTICLES as u32)
                     .speed(1.0)
@@ -671,9 +682,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
                                 "Dot radius relative to the grid spacing (0.25–3.0, default 1.0)",
                             );
                         });
-                    })
-                    .response
-                    .on_disabled_hover_text("Turn Particles on to change the dot size");
+                    });
                     ui.add(
                         egui::Slider::new(
                             &mut appearance.opacity,
@@ -693,24 +702,19 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
                             .on_hover_text(mode.tooltip());
                         }
                     });
-                    let mut fixed = egui::Color32::from_rgba_unmultiplied(
-                        appearance.fixed_color[0],
-                        appearance.fixed_color[1],
-                        appearance.fixed_color[2],
-                        appearance.fixed_color[3],
-                    );
+                    let mut fixed = fixed_color_rgb(appearance.fixed_color);
                     let picker = ui.add_enabled_ui(
                         particle_fixed_color_enabled(appearance.color_mode),
                         |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Fixed colour");
-                                ui.color_edit_button_srgba(&mut fixed)
+                                ui.color_edit_button_srgb(&mut fixed)
                             })
                             .inner
                         },
                     );
                     if picker.inner.changed() {
-                        appearance.fixed_color = fixed.to_array();
+                        appearance.fixed_color = fixed_color_opaque(fixed);
                     }
                     picker.response.on_hover_text(
                         "Colour used by the Fixed mode (default teal)",
@@ -720,7 +724,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
                     ui.add(
                         egui::Slider::new(
                             &mut appearance.trail_len,
-                            0..=MAX_TRAIL_LEN_UI,
+                            0..=MAX_TRAIL_LEN,
                         )
                         .integer()
                         .text("Trail length"),

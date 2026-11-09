@@ -1000,6 +1000,7 @@ fn particle_appearance_round_trips_and_defaults_when_absent() {
 fn restore_clamps_and_sanitizes_hostile_particle_appearance() {
     let record = ViewRecord {
         particle_opacity: f32::NAN,
+        particle_fixed_color: [9, 8, 7, 3],
         particle_trail_len: 99_999,
         particle_trail_fade: f32::INFINITY,
         particle_trail_width: -50.0,
@@ -1012,6 +1013,10 @@ fn restore_clamps_and_sanitizes_hostile_particle_appearance() {
     record.restore(&mut state, &mut controls);
     let appearance = state.particle_appearance;
     assert_eq!(appearance.opacity, ParticleAppearance::default().opacity);
+    assert_eq!(
+        appearance.fixed_color, [9, 8, 7, 255],
+        "a translucent stored colour loads opaque, RGB unchanged",
+    );
     assert_eq!(appearance.trail_len, 32, "trail length clamps to the ring size");
     assert_eq!(appearance.trail_fade, ParticleAppearance::default().trail_fade);
     assert_eq!(appearance.trail_width, 0.05, "a negative width clamps to the min");

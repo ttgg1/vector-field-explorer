@@ -6,10 +6,10 @@
 
 use vector_field_explorer::ui::sidebar::{
     ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
-    domain_summary, head_control_enabled, magnitude_scale_enabled, particle_count_label,
-    particle_fixed_color_enabled, particle_size_enabled, proportional_exponent_enabled,
-    seed_mode_enabled, sides_control_enabled, stagnation_seconds_enabled, trail_fade_enabled,
-    trail_width_enabled,
+    domain_summary, fixed_color_opaque, fixed_color_rgb, head_control_enabled,
+    magnitude_scale_enabled, particle_count_label, particle_fixed_color_enabled,
+    particle_size_enabled, proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
+    stagnation_seconds_enabled, trail_fade_enabled, trail_width_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
@@ -794,4 +794,15 @@ fn appearance_controls_enable_only_when_they_can_do_something() {
 
     assert!(!stagnation_seconds_enabled(false));
     assert!(stagnation_seconds_enabled(true));
+}
+
+#[test]
+fn fixed_colour_picker_round_trip_stores_opaque_rgb_unchanged() {
+    // The stored vec4 may arrive translucent from an older edit; the picker
+    // edits RGB only and stores the same RGB as fully opaque.
+    let stored = [10u8, 20, 30, 7];
+    let picker = fixed_color_rgb(stored);
+    assert_eq!(picker, [10, 20, 30], "the picker sees the true RGB");
+    let round_trip = fixed_color_opaque(picker);
+    assert_eq!(round_trip, [10, 20, 30, 255], "alpha is forced opaque");
 }
