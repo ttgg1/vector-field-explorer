@@ -12,13 +12,12 @@ khronos_api 3.1.0, spirv 0.4.0+sdk-1.4.341.0), 24 use a checked-in upstream
 MIT text from packaging/notice-sources/, and 1 is BSL-1.0 (`clipboard-win`),
 which is not linked into any shipped target under current features.
 
-The 513-package list is a metadata superset of the shipped binaries: it covers
-every target and optional feature. Per-target distinct non-workspace packages:
-345 / 233 / 234 (normal edges);
-353 / 237 / 238 (normal+build) for
-Linux x86_64 / macOS arm64 / macOS x86_64. The remainder are optional or
-inactive packages and packages for other targets (for example Windows-only
-crates).
+The 513-package list is a metadata superset of the shipped
+binaries: it covers every target and optional feature. The per-target
+shipped subsets are enumerated during release packaging; their package
+counts depend on the resolved graph and are not duplicated here.
+Packages outside a given target's shipped graph are optional, inactive,
+or for other targets (for example Windows-only crates).
 
 Licence texts are normalised to LF line endings and have trailing whitespace
 stripped. Identical texts are deduplicated by SHA-256 content hash; each

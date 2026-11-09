@@ -111,59 +111,6 @@ def cargo_metadata():
         fail(f"cargo metadata returned invalid JSON: {error}")
 
 
-def target_graph_counts(workspace_prefixes):
-    """Exact per-target distinct non-workspace package counts."""
-    targets = (
-        ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"),
-        ("aarch64-apple-darwin", "aarch64-apple-darwin"),
-        ("x86_64-apple-darwin", "x86_64-apple-darwin"),
-    )
-    counts = {}
-    for label, target in targets:
-        for edges in ("normal", "normal,build"):
-            try:
-                result = subprocess.run(
-                    [
-                        "cargo",
-                        "tree",
-                        "--locked",
-                        "--target",
-                        target,
-                        "--edges",
-                        edges,
-                        "--prefix",
-                        "none",
-                        "--format",
-                        "{p}",
-                    ],
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-            except FileNotFoundError:
-                fail("cargo is not installed")
-            except subprocess.CalledProcessError as error:
-                if error.stderr:
-                    sys.stderr.write(error.stderr)
-                fail(f"cargo tree failed for {target} ({edges})")
-            packages = set()
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if line.endswith(" (*)"):
-                    line = line[:-4].rstrip()
-                if not line:
-                    continue
-                if any(
-                    line == prefix or line.startswith(f"{prefix} (")
-                    for prefix in workspace_prefixes
-                ):
-                    continue
-                packages.add(line)
-            counts[(label, edges)] = len(packages)
-    return counts
-
-
 def version_key(version):
     """Order numeric release components numerically and text components last."""
     parts = []
@@ -290,12 +237,6 @@ for index, entry in enumerate(manifest.get("mit", [])):
 
 metadata = cargo_metadata()
 workspace = set(metadata["workspace_members"])
-workspace_prefixes = {
-    f"{package['name']} v{package['version']}"
-    for package in metadata["packages"]
-    if package["id"] in workspace
-}
-graph_counts = target_graph_counts(workspace_prefixes)
 
 packages = []
 texts = {}
@@ -441,17 +382,12 @@ lines = [
         width=78,
     ),
     "",
-    "The 513-package list is a metadata superset of the shipped binaries: it covers",
-    "every target and optional feature. Per-target distinct non-workspace packages:",
-    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal')]} / "
-    f"{graph_counts[('aarch64-apple-darwin', 'normal')]} / "
-    f"{graph_counts[('x86_64-apple-darwin', 'normal')]} (normal edges);",
-    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal,build')]} / "
-    f"{graph_counts[('aarch64-apple-darwin', 'normal,build')]} / "
-    f"{graph_counts[('x86_64-apple-darwin', 'normal,build')]} (normal+build) for",
-    "Linux x86_64 / macOS arm64 / macOS x86_64. The remainder are optional or",
-    "inactive packages and packages for other targets (for example Windows-only",
-    "crates).",
+    f"The {len(packages)}-package list is a metadata superset of the shipped",
+    "binaries: it covers every target and optional feature. The per-target",
+    "shipped subsets are enumerated during release packaging; their package",
+    "counts depend on the resolved graph and are not duplicated here.",
+    "Packages outside a given target's shipped graph are optional, inactive,",
+    "or for other targets (for example Windows-only crates).",
     "",
     "Licence texts are normalised to LF line endings and have trailing whitespace",
     "stripped. Identical texts are deduplicated by SHA-256 content hash; each",
