@@ -86,11 +86,18 @@ impl VfApp {
                 // suppressed so the first finger cannot also orbit. Pinch zoom
                 // stays on `top_bar::wheel_zoom` (egui folds the pinch into
                 // `zoom_delta`).
-                let touch = ui.ctx().input(|input| {
-                    input
-                        .multi_touch()
-                        .map(|info| (info.num_touches, info.translation_delta))
-                });
+                let viewport_active = resp.hovered() || resp.dragged();
+                let touch = if viewport_active {
+                    ui.ctx().input(|input| {
+                        input
+                            .multi_touch()
+                            .map(|info| (info.num_touches, info.translation_delta))
+                    })
+                } else {
+                    // A two-finger gesture over the tab bar/sheet/top bar must
+                    // not move the camera behind it.
+                    None
+                };
                 let (num_touches, translation) = touch.unwrap_or((0, egui::Vec2::ZERO));
                 let touch_pan = two_finger_pan(
                     self.state.mode_3d,
@@ -120,7 +127,7 @@ impl VfApp {
                     None => (Vec2::ZERO, Vec2::ZERO),
                 };
                 let pan = pan + touch_pan.pan;
-                let zoom = if resp.hovered() || resp.dragged() {
+                let zoom = if viewport_active {
                     crate::ui::top_bar::wheel_zoom(ui.ctx())
                 } else {
                     1.0

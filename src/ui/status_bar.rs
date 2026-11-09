@@ -12,6 +12,7 @@
 use eframe::egui;
 
 use crate::app::StatusBarState;
+use crate::ui::layout::LayoutMode;
 
 /// How long a transient hint stays live, in seconds of frame time.
 pub const HINT_LIFETIME: f32 = 2.5;
@@ -210,7 +211,10 @@ fn status_lines(text: &str) -> (&str, &str) {
 /// Draw the status bar: the parse error wins on the left, otherwise a live
 /// transient hint or "ready"; the right side is the stats readout reduced to
 /// what fits the current width.
-pub fn show(ui: &mut egui::Ui, status: &StatusBarState) {
+///
+/// `mode` is the frame's layout mode, passed in by the app; the readout mask
+/// still comes from the window width exactly as ticket 51 pinned it.
+pub fn show(ui: &mut egui::Ui, status: &StatusBarState, mode: LayoutMode) {
     // The mask is a window contract (ticket 53 pins the thresholds), so feed it
     // the full egui content width rather than this panel's inner budget: the
     // bottom panel's own margins make `available_width()` ~16 pt narrower and
@@ -219,7 +223,7 @@ pub fn show(ui: &mut egui::Ui, status: &StatusBarState) {
     let mask = visible_stats(width);
     let text = format_status(status, mask);
 
-    if width <= crate::ui::layout::COMPACT_WIDTH {
+    if mode == LayoutMode::Compact {
         // Phone/compact: the message and the full masked readout do not fit on
         // one row at 360-390 pt, so stack the timing row above the composition
         // row. The mask is ticket 51's, not a compact re-derivation; only the

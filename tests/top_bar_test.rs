@@ -10,7 +10,7 @@ use vector_field_explorer::screenshot::Screenshot;
 use vector_field_explorer::ui::branding;
 use vector_field_explorer::ui::menu::{
     ABOUT_COPYRIGHT, ABOUT_LICENSE, ABOUT_NAME, ABOUT_SITE_URL, ABOUT_TAGLINE, ABOUT_URL,
-    ABOUT_VERSION, MENUS, MenuAction,
+    ABOUT_VERSION, MENUS, item_shortcut_label,
 };
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
@@ -72,6 +72,41 @@ impl Harness {
     fn click(&mut self, pos: egui::Pos2) {
         self.frame(pointer(pos, true));
         self.frame(pointer(pos, false));
+    }
+
+    /// One headless pass running the compact bar (ticket 53).
+    fn compact_frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(360.0, 640.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let (mut output, open) = {
+            let style = &mut self.style;
+            let screenshot = &self.screenshot;
+            let open = &mut self.open;
+            let output = self.ctx.run_ui(input, |ui| {
+                egui::Panel::top("compact_top_bar_test").show(ui, |ui| {
+                    let _ = top_bar::show_compact(ui, style, screenshot, open);
+                });
+            });
+            (output, *open)
+        };
+        output.textures_delta.clear();
+        self.open = open;
+        output
+    }
+
+    fn compact_idle(&mut self) -> egui::FullOutput {
+        self.compact_frame(Vec::new())
+    }
+
+    fn compact_click(&mut self, pos: egui::Pos2) {
+        self.compact_frame(pointer(pos, true));
+        self.compact_frame(pointer(pos, false));
     }
 }
 
@@ -147,36 +182,52 @@ fn no_scroll_is_no_zoom() {
     assert_eq!(wheel_zoom_factor(0.0), 1.0);
 }
 
-/// Every action the wide bar exposes: the whole menu table, the Appearance
-/// gear and the Screenshot button.
-fn wide_actions() -> Vec<MenuAction> {
-    let mut actions: Vec<MenuAction> = MENUS
-        .iter()
-        .flat_map(|menu| menu.items.iter().map(|item| item.action))
-        .collect();
-    actions.push(MenuAction::OpenAppearance);
-    actions.push(MenuAction::ExportScreenshot);
-    actions
-}
-
+/// Ticket 53 fix round: inspect the real compact hamburger dropdown instead of
+/// comparing a helper with a copied action table. Every command the wide
+/// `MENUS` table exposes must be a button in the hamburger, and the hamburger
+/// must not invent commands.
 #[test]
-fn compact_bar_exposes_the_same_actions_as_wide() {
-    let compact = top_bar::compact_menu_actions();
-    let wide = wide_actions();
+fn compact_hamburger_lists_every_wide_menu_item() {
+    let mut h = Harness::new(false);
+    let out = h.compact_idle();
+    let hamburger = labelled(&nodes(&out), egui::Role::Button, HAMBURGER_LABEL)
+        .expect("the compact bar renders the hamburger")
+        .rect;
+    h.compact_click(hamburger.center());
+    let out = h.compact_idle();
 
-    // The compact bar is the wide bar re-arranged: same commands, no extras
-    // and none dropped. (ToggleFly is keyboard-only and absent from both.)
-    for action in &wide {
-        assert!(compact.contains(action), "compact is missing {action:?}");
+    let button_labels: Vec<String> = nodes(&out)
+        .into_iter()
+        .filter(|node| node.role == egui::Role::Button)
+        .filter_map(|node| node.label)
+        .collect();
+
+    let mut menu_labels = Vec::new();
+    for menu in MENUS {
+        for item in menu.items {
+            // Accesskit appends the shortcut text to a button's label.
+            let label = match item_shortcut_label(item) {
+                Some(shortcut) => format!("{} {shortcut}", item.label),
+                None => item.label.to_string(),
+            };
+            menu_labels.push(label.clone());
+            assert!(
+                button_labels.contains(&label),
+                "the hamburger is missing `{label}` from {}; buttons={button_labels:?}",
+                menu.title,
+            );
+        }
     }
-    for action in &compact {
+
+    for label in &button_labels {
+        if [HAMBURGER_LABEL, "Screenshot", APPEARANCE_BUTTON_LABEL].contains(&label.as_str()) {
+            continue;
+        }
         assert!(
-            wide.contains(action),
-            "compact exposes {action:?}, which the wide bar does not"
+            menu_labels.contains(label),
+            "the hamburger exposes `{label}`, which the wide menu table does not",
         );
     }
-    assert!(compact.contains(&MenuAction::ExportScreenshot));
-    assert!(compact.contains(&MenuAction::OpenAppearance));
 }
 
 #[test]

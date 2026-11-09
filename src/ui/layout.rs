@@ -171,6 +171,8 @@ pub struct CompactPlan {
     pub controls_panel: bool,
     /// Draw the Presets side panel (or its rail).
     pub presets_panel: bool,
+    /// Draw the hamburger top bar instead of the full menu row.
+    pub compact_top_bar: bool,
     /// Draw the compact bottom tab bar (Controls/Presets).
     pub tab_bar: bool,
     /// A bottom sheet may be registered.
@@ -178,18 +180,21 @@ pub struct CompactPlan {
 }
 
 /// The surfaces for `mode`: Wide keeps both side panels and no bar/sheet;
-/// Compact hides both panels and shows the tab bar plus one sheet.
+/// Compact hides both panels, swaps the top bar and shows the tab bar plus one
+/// sheet. The app reads every assembly gate from this plan.
 pub const fn compact_plan(mode: LayoutMode) -> CompactPlan {
     match mode {
         LayoutMode::Wide => CompactPlan {
             controls_panel: true,
             presets_panel: true,
+            compact_top_bar: false,
             tab_bar: false,
             sheet: false,
         },
         LayoutMode::Compact => CompactPlan {
             controls_panel: false,
             presets_panel: false,
+            compact_top_bar: true,
             tab_bar: true,
             sheet: true,
         },

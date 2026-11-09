@@ -71,7 +71,8 @@ fn reset_restores_first_launch_layout() {
 }
 
 #[test]
-fn widths_clamp_and_corrupt_widths_fall_back() {    assert_eq!(clamp_width(10.0, 250.0), MIN_PANEL_WIDTH);
+fn widths_clamp_and_corrupt_widths_fall_back() {
+    assert_eq!(clamp_width(10.0, 250.0), MIN_PANEL_WIDTH);
     assert_eq!(clamp_width(10_000.0, 250.0), MAX_PANEL_WIDTH);
     assert_eq!(clamp_width(212.5, 250.0), 212.5, "a sane width passes through");
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -106,7 +107,13 @@ fn compact_mode_does_not_mutate_stored_widths() {
 
     assert_eq!(layout_mode(360.0), LayoutMode::Compact);
     let plan = compact_plan(LayoutMode::Compact);
-    assert!(!plan.controls_panel && !plan.presets_panel && plan.tab_bar);
+    assert!(
+        !plan.controls_panel
+            && !plan.presets_panel
+            && plan.compact_top_bar
+            && plan.tab_bar
+            && plan.sheet
+    );
 
     assert_eq!(layout, before, "compact mode reads the record, never writes it");
 

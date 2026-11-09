@@ -121,11 +121,13 @@ fn compact_plan_hides_the_side_panels_and_shows_the_tab_bar() {
     let compact = compact_plan(LayoutMode::Compact);
     assert!(!compact.controls_panel, "compact hides the Controls side panel");
     assert!(!compact.presets_panel, "compact hides the Presets side panel");
+    assert!(compact.compact_top_bar, "compact swaps in the hamburger bar");
     assert!(compact.tab_bar, "compact shows the bottom tab bar");
     assert!(compact.sheet, "compact can open a bottom sheet");
 
     let wide = compact_plan(LayoutMode::Wide);
     assert!(wide.controls_panel && wide.presets_panel, "wide keeps both panels");
+    assert!(!wide.compact_top_bar, "wide keeps the full menu row");
     assert!(!wide.tab_bar, "wide has no tab bar");
     assert!(!wide.sheet, "wide has no sheet");
 }

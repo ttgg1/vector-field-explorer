@@ -27,14 +27,11 @@ impl VfApp {
         // through the one `sync_fly_mirror` seam.
         self.sidebar.fly = self.fly.is_some();
 
-        if self.layout_mode == LayoutMode::Compact {
-            // Ticket 53: phone layout. Both side panels and rails are hidden;
-            // Controls/Presets become one bottom sheet registered after the
-            // status bar, so only the camera mirror and domain recentre run
-            // here. A Controls-sheet edit reconciles after the sheet draws.
-            self.sync_presets_camera();
-            self.recentre_domain(domain_before);
-        } else {
+        // Ticket 53: one plan decides the real assembly. Compact hides both
+        // side panels/rails and moves Controls/Presets into the bottom sheet,
+        // so only the camera mirror and domain recentre run here.
+        let plan = layout::compact_plan(self.layout_mode);
+        if plan.controls_panel {
             self.show_controls_panel(ui);
 
             // Ticket 65: a click on the Camera section's checkbox edits only the
@@ -45,9 +42,15 @@ impl VfApp {
                 &self.orbit,
                 self.state.is_3d(),
             );
+        }
 
-            self.recentre_domain(domain_before);
+        self.recentre_domain(domain_before);
+        if plan.presets_panel {
             self.show_presets_panel(ui);
+        } else {
+            // The sheet draws after the status bar; mirror the camera now so
+            // "Save current view" captures the recentred view.
+            self.sync_presets_camera();
         }
 
         // Ticket 65: capture is edge-triggered after every path that can
@@ -63,8 +66,9 @@ impl VfApp {
         // it. Ticket 53: compact replaces the menu row with a hamburger that
         // exposes the same actions plus the gear and Screenshot button.
         let mut style_changed = false;
+        let plan = layout::compact_plan(self.layout_mode);
         egui::Panel::top("top_bar").show(ui, |ui| {
-            let (action, changed) = if self.layout_mode == LayoutMode::Compact {
+            let (action, changed) = if plan.compact_top_bar {
                 top_bar::show_compact(
                     ui,
                     &mut self.style,
@@ -288,14 +292,17 @@ impl VfApp {
         }
 
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            crate::ui::status_bar::show(ui, &self.status);
+            crate::ui::status_bar::show(ui, &self.status, self.layout_mode);
         });
 
         // Ticket 53: compact bottom chrome registers after the status bar and
         // before the central viewport, so the viewport reflows above it and the
         // sheet can never cover the status or tab bars.
-        if self.layout_mode == LayoutMode::Compact {
+        let plan = layout::compact_plan(self.layout_mode);
+        if plan.tab_bar {
             self.show_compact_tab_bar(ui);
+        }
+        if plan.sheet {
             self.show_compact_sheet(ui);
         }
     }
@@ -370,10 +377,15 @@ impl VfApp {
         let sheet = self.sheet;
         if !sheet.is_open() {
             return;
-        }        let window_height = ui.ctx().content_rect().height();
+        }
+        let window_height = ui.ctx().content_rect().height();
         let available_height = ui.available_height();
         let height = layout::sheet_height(window_height, available_height);
         if height < 1.0 {
+            // No room above the status/tab bars: an invisible open sheet would
+            // leave the tab UI claiming a panel with nothing on screen.
+            self.sheet.close();
+            ui.ctx().request_repaint();
             return;
         }
 
@@ -414,7 +426,10 @@ impl VfApp {
                 let weak = ui.visuals().weak_text_color();
                 let bar = egui::Rect::from_center_size(rect.center(), egui::vec2(36.0, 4.0));
                 ui.painter().rect_filled(bar, 2.0, weak);
-                let swiped_down = handle.dragged() && handle.drag_delta().y > 24.0;
+                let swiped_down = handle.drag_stopped()
+                    && handle
+                        .total_drag_delta()
+                        .is_some_and(|delta| delta.y > 24.0);
                 if handle
                     .on_hover_text("Tap or swipe down to close")
                     .clicked()

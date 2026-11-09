@@ -4,6 +4,7 @@
 
 use eframe::egui;
 use vector_field_explorer::app::StatusBarState;
+use vector_field_explorer::ui::layout::LayoutMode;
 use vector_field_explorer::ui::status_bar::{
     COMPACT_STATS_SIZE, FpsMeter, StatsMask, advance_hint, format_status, restart_hint, visible_stats,
 };
@@ -189,7 +190,8 @@ fn visible_stats_is_full_at_960_and_drops_in_priority_order() {
 }
 
 #[test]
-fn visible_stats_is_a_strict_subset_and_never_hides_fps() {    let full = StatsMask::FULL;
+fn visible_stats_is_a_strict_subset_and_never_hides_fps() {
+    let full = StatsMask::FULL;
     let narrow = visible_stats(0.0);
     assert!(!narrow.sim_time && !narrow.density && !narrow.trails && !narrow.particles);
 
@@ -408,7 +410,7 @@ impl Harness {
         let status = &self.status;
         let mut output = self.ctx.run_ui(input, |ui| {
             egui::Panel::bottom("status_bar").show(ui, |ui| {
-                vector_field_explorer::ui::status_bar::show(ui, status);
+                vector_field_explorer::ui::status_bar::show(ui, status, LayoutMode::Wide);
             });
         });
         output.textures_delta.clear();

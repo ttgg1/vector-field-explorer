@@ -230,10 +230,15 @@ pub fn show_compact(
     let mut action = None;
     let mut style_changed = false;
     let mut appearance_button = None;
+    let touch = crate::ui::layout::TOUCH_TARGET;
 
-    ui.spacing_mut().interact_size.y = crate::ui::layout::TOUCH_TARGET;
+    ui.spacing_mut().interact_size.y = touch;
     ui.horizontal(|ui| {
-        ui.menu_button(HAMBURGER_LABEL, |ui| {
+        // The hamburger is a menu button, so it needs the explicit 44 pt size
+        // instead of the row's height alone.
+        let hamburger =
+            egui::Button::new(HAMBURGER_LABEL).min_size(egui::vec2(touch, touch));
+        egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
             // One flat dropdown: nested submenus are awkward to hit with a
             // thumb, and every group title still labels its commands.
             for menu in MENUS {
@@ -248,7 +253,10 @@ pub fn show_compact(
         });
 
         let gear = ui
-            .button(APPEARANCE_BUTTON_LABEL)
+            .add_sized(
+                [touch, touch],
+                egui::Button::new(APPEARANCE_BUTTON_LABEL),
+            )
             .on_hover_text("Appearance");
         if gear.clicked() {
             *appearance_open = !*appearance_open;
@@ -268,20 +276,6 @@ pub fn show_compact(
 
     (action, style_changed)
 }
-
-/// Every action the compact bar can dispatch: the whole menu table plus the
-/// Appearance gear and the Screenshot button. Pure so a test can pin that the
-/// compact bar is the wide bar re-arranged, not a reduced menu.
-pub fn compact_menu_actions() -> Vec<MenuAction> {
-    let mut actions: Vec<MenuAction> = MENUS
-        .iter()
-        .flat_map(|menu| menu.items.iter().map(|item| item.action))
-        .collect();
-    actions.push(MenuAction::OpenAppearance);
-    actions.push(MenuAction::ExportScreenshot);
-    actions
-}
-
 
 /// The About dialog: the 128 px mark, name, build version, tagline, copyright,
 /// licence and both project links. `open` is the visibility flag; the window's
