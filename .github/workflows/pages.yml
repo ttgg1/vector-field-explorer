@@ -1,12 +1,11 @@
 name: Pages
 
 # Ticket 16a: publish the wasm build and the static native-download page to
-# https://ttgg1.github.io/vector-field-explorer/. This workflow is prepared but
-# inert until the repository is public, Pages is enabled, and v0.1.0 exists
-# (ticket 63/16b/19). The push trigger is main-only; a manual
-# `workflow_dispatch` can be started from any branch, so both jobs pin
-# `github.ref == 'refs/heads/main'` and a dispatch from a feature branch only
-# builds/skips without deploying.
+# https://ttgg1.github.io/vector-field-explorer/. The push trigger is main-only;
+# a manual `workflow_dispatch` can be started from any branch, so both jobs pin
+# `github.ref == 'refs/heads/main'` and a dispatch from a feature branch skips
+# both jobs. The `v0.1.0` ordering gate is procedural (see the task-16a report):
+# this workflow does not check the release before deploying.
 #
 # Once the `github-pages` environment exists, restrict its deployment branches
 # and tags to `main` as defense in depth.
