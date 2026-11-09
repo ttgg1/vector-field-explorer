@@ -80,6 +80,93 @@ pub fn dismisses_appearance_popover(
     true
 }
 
+/// The compact bar's hamburger button. It opens one flat dropdown with every
+/// [`MENUS`] group, so the same commands stay one tap away on a phone.
+pub const HAMBURGER_LABEL: &str = "☰";
+
+/// Add one menu item and close the current dropdown when it is picked. Shared
+/// by the wide menu bar and the compact hamburger so the two cannot drift.
+fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem) -> bool {
+    // Ticket 65: no menu item is a toggle any more; the fly control lives in
+    // the sidebar Camera section.
+    let mut button = egui::Button::new(item.label);
+    if let Some(label) = menu::item_shortcut_label(item) {
+        button = button.shortcut_text(label);
+    }
+    let clicked = ui.add(button).clicked();
+    if clicked {
+        // Every item is a one-shot command: close the dropdown so the next
+        // click lands on the app, not the menu.
+        ui.close();
+    }
+    clicked
+}
+
+/// The screenshot button shared by both bars. Returns whether it was clicked.
+fn screenshot_button(ui: &mut egui::Ui, screenshot: &Screenshot) -> bool {
+    let tooltip = match menu::shortcut_label(MenuAction::ExportScreenshot) {
+        Some(label) => format!("Save the viewport exactly as it looks now ({label})"),
+        None => "Save the viewport exactly as it looks now".to_string(),
+    };
+    let clicked = ui.button("Screenshot").on_hover_text(tooltip).clicked();
+    screenshot.toast(ui);
+    clicked
+}
+
+/// The Appearance popover anchored to the gear, including ticket 41's
+/// color-picker dismissal rule. Returns whether the style record changed.
+fn appearance_popover(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    button: &egui::Response,
+    appearance_open: &mut bool,
+) -> bool {
+    let mut style_changed = false;
+    let mut accent_popup_id = egui::Id::NULL;
+    let response = egui::Popup::new(
+        button.id.with("appearance_popover"),
+        ui.ctx().clone(),
+        button,
+        button.layer_id,
+    )
+    .anchor_widget(button.id)
+    .open_bool(appearance_open)
+    // Dismissal is decided below, where the nested color picker's layer
+    // can be excluded from "outside" (ticket 41).
+    .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+    .show(|ui| {
+        ui.set_width(260.0);
+        ui.label(egui::RichText::new("Appearance").strong());
+        let controls = style_panel::show_controls(ui, style);
+        style_changed = controls.changed;
+        accent_popup_id = controls.accent_popup_id;
+    });
+
+    if let Some(popover) = response {
+        let accent_open = accent_popup_id != egui::Id::NULL
+            && egui::Popup::is_id_open(ui.ctx(), accent_popup_id);
+        let accent_layer =
+            accent_open.then(|| egui::LayerId::new(egui::Order::Foreground, accent_popup_id));
+        let (any_click, click_pos) =
+            ui.ctx().input(|input| (input.pointer.any_click(), input.pointer.interact_pos()));
+        let layer_under_pointer = click_pos.and_then(|pos| ui.ctx().layer_id_at(pos));
+        // The gear click that opens the popover is outside its rect this
+        // frame, so it must not immediately dismiss what it just opened.
+        if !button.clicked()
+            && dismisses_appearance_popover(
+                any_click,
+                click_pos,
+                popover.response.rect,
+                layer_under_pointer,
+                accent_layer,
+            )
+        {
+            *appearance_open = false;
+        }
+    }
+    style_changed
+}
+
 /// Draw the menu bar. Returns the action the user picked (if any) and whether
 /// the appearance popover changed the style record (the app re-applies it in
 /// the same frame). `appearance_open` is the popover's visibility flag, toggled
@@ -98,17 +185,8 @@ pub fn show(
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
-                    // Ticket 65: no menu item is a toggle any more; the fly
-                    // control lives in the sidebar Camera section.
-                    let mut button = egui::Button::new(item.label);
-                    if let Some(label) = menu::item_shortcut_label(item) {
-                        button = button.shortcut_text(label);
-                    }
-                    if ui.add(button).clicked() {
+                    if add_menu_item(ui, item) {
                         action = Some(item.action);
-                        // Every item is a one-shot command: close the dropdown
-                        // so the next click lands on the app, not the menu.
-                        ui.close();
                     }
                 }
             });
@@ -127,65 +205,83 @@ pub fn show(
         // The screenshot action lives at the right end of the bar and
         // dispatches the same ExportScreenshot action as File > Export.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let tooltip = match menu::shortcut_label(MenuAction::ExportScreenshot) {
-                Some(label) => format!("Save the viewport exactly as it looks now ({label})"),
-                None => "Save the viewport exactly as it looks now".to_string(),
-            };
-            if ui.button("Screenshot").on_hover_text(tooltip).clicked() {
+            if screenshot_button(ui, screenshot) {
                 action = Some(MenuAction::ExportScreenshot);
             }
-            screenshot.toast(ui);
         });
     });
 
     if let Some(button) = appearance_button {
-        let mut accent_popup_id = egui::Id::NULL;
-        let response = egui::Popup::new(
-            button.id.with("appearance_popover"),
-            ui.ctx().clone(),
-            &button,
-            button.layer_id,
-        )
-        .anchor_widget(button.id)
-        .open_bool(appearance_open)
-        // Dismissal is decided below, where the nested color picker's layer
-        // can be excluded from "outside" (ticket 41).
-        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
-        .show(|ui| {
-            ui.set_width(260.0);
-            ui.label(egui::RichText::new("Appearance").strong());
-            let controls = style_panel::show_controls(ui, style);
-            style_changed = controls.changed;
-            accent_popup_id = controls.accent_popup_id;
-        });
-
-        if let Some(popover) = response {
-            let accent_open = accent_popup_id != egui::Id::NULL
-                && egui::Popup::is_id_open(ui.ctx(), accent_popup_id);
-            let accent_layer = accent_open.then(|| {
-                egui::LayerId::new(egui::Order::Foreground, accent_popup_id)
-            });
-            let (any_click, click_pos) =
-                ui.ctx().input(|input| (input.pointer.any_click(), input.pointer.interact_pos()));
-            let layer_under_pointer = click_pos.and_then(|pos| ui.ctx().layer_id_at(pos));
-            // The gear click that opens the popover is outside its rect this
-            // frame, so it must not immediately dismiss what it just opened.
-            if !button.clicked()
-                && dismisses_appearance_popover(
-                    any_click,
-                    click_pos,
-                    popover.response.rect,
-                    layer_under_pointer,
-                    accent_layer,
-                )
-            {
-                *appearance_open = false;
-            }
-        }
+        style_changed = appearance_popover(ui, style, &button, appearance_open);
     }
 
     (action, style_changed)
 }
+
+/// Draw the compact (phone) bar: hamburger with every [`MENUS`] command, the
+/// Appearance gear, and the Screenshot action. Same return contract as
+/// [`show`], and the same actions — only the arrangement changes.
+pub fn show_compact(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    appearance_open: &mut bool,
+) -> (Option<MenuAction>, bool) {
+    let mut action = None;
+    let mut style_changed = false;
+    let mut appearance_button = None;
+
+    ui.spacing_mut().interact_size.y = crate::ui::layout::TOUCH_TARGET;
+    ui.horizontal(|ui| {
+        ui.menu_button(HAMBURGER_LABEL, |ui| {
+            // One flat dropdown: nested submenus are awkward to hit with a
+            // thumb, and every group title still labels its commands.
+            for menu in MENUS {
+                ui.label(egui::RichText::new(menu.title).strong());
+                for item in menu.items {
+                    if add_menu_item(ui, item) {
+                        action = Some(item.action);
+                    }
+                }
+                ui.separator();
+            }
+        });
+
+        let gear = ui
+            .button(APPEARANCE_BUTTON_LABEL)
+            .on_hover_text("Appearance");
+        if gear.clicked() {
+            *appearance_open = !*appearance_open;
+        }
+        appearance_button = Some(gear);
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if screenshot_button(ui, screenshot) {
+                action = Some(MenuAction::ExportScreenshot);
+            }
+        });
+    });
+
+    if let Some(button) = appearance_button {
+        style_changed = appearance_popover(ui, style, &button, appearance_open);
+    }
+
+    (action, style_changed)
+}
+
+/// Every action the compact bar can dispatch: the whole menu table plus the
+/// Appearance gear and the Screenshot button. Pure so a test can pin that the
+/// compact bar is the wide bar re-arranged, not a reduced menu.
+pub fn compact_menu_actions() -> Vec<MenuAction> {
+    let mut actions: Vec<MenuAction> = MENUS
+        .iter()
+        .flat_map(|menu| menu.items.iter().map(|item| item.action))
+        .collect();
+    actions.push(MenuAction::OpenAppearance);
+    actions.push(MenuAction::ExportScreenshot);
+    actions
+}
+
 
 /// The About dialog: the 128 px mark, name, build version, tagline, copyright,
 /// licence and both project links. `open` is the visibility flag; the window's

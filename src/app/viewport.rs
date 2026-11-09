@@ -79,20 +79,47 @@ impl VfApp {
                 // right-drag orbit, middle-drag and Shift+right-drag pan; in 2D
                 // every drag pans. The wheel/pinch factor zooms both views (the
                 // camera clamps it).
-                let pointer_delta = resp.drag_delta();
-                let pointer_delta = Vec2::new(pointer_delta.x, pointer_delta.y);
+                //
+                // Ticket 53 adds two-finger 3D pan. `MultiTouchInfo`'s
+                // translation feeds the same `ViewGesture.pan` channel, and
+                // while that gesture is active the pointer-drag channel is
+                // suppressed so the first finger cannot also orbit. Pinch zoom
+                // stays on `top_bar::wheel_zoom` (egui folds the pinch into
+                // `zoom_delta`).
+                let touch = ui.ctx().input(|input| {
+                    input
+                        .multi_touch()
+                        .map(|info| (info.num_touches, info.translation_delta))
+                });
+                let (num_touches, translation) = touch.unwrap_or((0, egui::Vec2::ZERO));
+                let touch_pan = two_finger_pan(
+                    self.state.mode_3d,
+                    num_touches,
+                    Vec2::new(translation.x, translation.y),
+                );
+                let pointer_delta = if touch_pan.active {
+                    Vec2::ZERO
+                } else {
+                    let delta = resp.drag_delta();
+                    Vec2::new(delta.x, delta.y)
+                };
                 let buttons = DragButtons {
                     primary: resp.dragged_by(egui::PointerButton::Primary),
                     secondary: resp.dragged_by(egui::PointerButton::Secondary),
                     middle: resp.dragged_by(egui::PointerButton::Middle),
                     shift: ui.ctx().input(|input| input.modifiers.shift),
                 };
-                let channel = drag_channel(self.state.mode_3d, buttons);
+                let channel = if touch_pan.active {
+                    None
+                } else {
+                    drag_channel(self.state.mode_3d, buttons)
+                };
                 let (drag, pan) = match channel {
                     Some(DragChannel::Orbit) => (pointer_delta, Vec2::ZERO),
                     Some(DragChannel::Pan) => (Vec2::ZERO, pointer_delta),
                     None => (Vec2::ZERO, Vec2::ZERO),
                 };
+                let pan = pan + touch_pan.pan;
                 let zoom = if resp.hovered() || resp.dragged() {
                     crate::ui::top_bar::wheel_zoom(ui.ctx())
                 } else {
@@ -113,11 +140,15 @@ impl VfApp {
                 // Cursor feedback (ticket 18): orbiting shows grab/grabbing,
                 // panning shows move; the wheel zoom leaves the cursor alone.
                 if resp.hovered() || resp.dragged() {
-                    let icon = match channel {
-                        Some(DragChannel::Orbit) => egui::CursorIcon::Grabbing,
-                        Some(DragChannel::Pan) => egui::CursorIcon::Move,
-                        None if self.state.mode_3d => egui::CursorIcon::Grab,
-                        None => egui::CursorIcon::Move,
+                    let icon = if touch_pan.active {
+                        egui::CursorIcon::Move
+                    } else {
+                        match channel {
+                            Some(DragChannel::Orbit) => egui::CursorIcon::Grabbing,
+                            Some(DragChannel::Pan) => egui::CursorIcon::Move,
+                            None if self.state.mode_3d => egui::CursorIcon::Grab,
+                            None => egui::CursorIcon::Move,
+                        }
                     };
                     ui.ctx().set_cursor_icon(icon);
                 }

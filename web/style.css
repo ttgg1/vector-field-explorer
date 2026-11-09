@@ -14,6 +14,13 @@ body {
 body {
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  /* Ticket 53: the display cutout/home indicator must not cover the app
+     chrome. The insets are 0 on a desktop browser, so the full-bleed canvas is
+     unchanged there; with viewport-fit=cover the flex column shrinks to the
+     safe area instead of pushing the chrome off-screen. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
   color: #e7ecf3;
 }
 

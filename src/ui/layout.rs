@@ -59,6 +59,182 @@ pub const MIN_PANEL_WIDTH: f32 = 180.0;
 /// Widest an expanded panel may be dragged to.
 pub const MAX_PANEL_WIDTH: f32 = 460.0;
 
+// --- Ticket 53: compact/phone-portrait layout ------------------------------
+
+/// Compact layout breakpoint, points. A root width at or below this uses the
+/// phone layout; wider windows keep the desktop panels pixel-for-pixel.
+///
+/// The contract calls the boundary "compact", so 700.0 itself is Compact and
+/// 700.1 is Wide. A non-finite width is Wide (see [`layout_mode`]).
+pub const COMPACT_WIDTH: f32 = 700.0;
+
+/// Largest share of the window height a compact bottom sheet may take.
+pub const SHEET_MAX_FRACTION: f32 = 0.55;
+
+/// Share of the window height the viewport keeps even with a sheet open.
+pub const VIEWPORT_MIN_FRACTION: f32 = 0.45;
+
+/// Room reserved for the central panel's own frame margins and the panel
+/// separator lines, points, so [`VIEWPORT_MIN_FRACTION`] describes the field the
+/// user actually sees rather than the raw remaining rect.
+pub const VIEWPORT_CHROME_ALLOWANCE: f32 = 20.0;
+
+/// Height of the compact bottom tab bar, points: a 44 pt touch target plus the
+/// bottom panel's frame margins.
+pub const TAB_BAR_HEIGHT: f32 = 48.0;
+
+/// Minimum tap target, points (Apple/Google's 44 pt guideline).
+pub const TOUCH_TARGET: f32 = 44.0;
+
+/// Minimum share of the formula bar the flexing field keeps on a phone.
+pub const FORMULA_MIN_FRACTION: f32 = 0.40;
+
+/// Which assembly the frame uses: the persisted desktop panels or the
+/// transient compact tab bar/sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutMode {
+    /// Side panels and rails, exactly as before ticket 53.
+    Wide,
+    /// Hidden side panels, bottom tab bar, at most one bottom sheet.
+    Compact,
+}
+
+/// The layout mode for a root width, computed once per frame before any panel.
+///
+/// Compact applies at or below [`COMPACT_WIDTH`]. A non-finite width must not
+/// flip the desktop into the phone layout, so it stays Wide.
+pub fn layout_mode(width: f32) -> LayoutMode {
+    if width.is_finite() && width <= COMPACT_WIDTH {
+        LayoutMode::Compact
+    } else {
+        LayoutMode::Wide
+    }
+}
+
+/// Which compact bottom sheet is open. Transient: never stored in
+/// [`LayoutState`], [`crate::persistence::AppSettings`] or the view record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SheetState {
+    /// No sheet; the viewport keeps the full reflowed height.
+    #[default]
+    None,
+    /// The left Controls panel, as a bottom sheet.
+    Controls,
+    /// The right Presets panel, as a bottom sheet.
+    Presets,
+}
+
+impl SheetState {
+    /// Whether any sheet is open.
+    pub fn is_open(self) -> bool {
+        !matches!(self, SheetState::None)
+    }
+
+    /// Whether `panel` is the open sheet. `None` never "shows".
+    pub fn shows(self, panel: SheetState) -> bool {
+        !matches!(panel, SheetState::None) && self == panel
+    }
+
+    /// Open `panel`, replacing any other sheet so only one exists.
+    pub fn open(&mut self, panel: SheetState) {
+        *self = panel;
+    }
+
+    /// Open `panel`, or close it if it is already the open sheet. Tapping the
+    /// other tab always switches; tapping the active tab closes.
+    pub fn toggle(&mut self, panel: SheetState) {
+        *self = if self.shows(panel) {
+            SheetState::None
+        } else {
+            panel
+        };
+    }
+
+    /// Close whichever sheet is open.
+    pub fn close(&mut self) {
+        *self = SheetState::None;
+    }
+}
+
+/// The transient half of `Reset layout`: close any compact sheet. The persisted
+/// record is reset separately by [`LayoutState::reset`]; keeping the pair split
+/// is what guarantees reset never writes sheet/mode state.
+pub fn reset_sheet(sheet: &mut SheetState) {
+    sheet.close();
+}
+
+/// Which surfaces the frame assembles for `mode`. Pure so the compact/wide
+/// switch is pinned without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactPlan {
+    /// Draw the Controls side panel (or its rail).
+    pub controls_panel: bool,
+    /// Draw the Presets side panel (or its rail).
+    pub presets_panel: bool,
+    /// Draw the compact bottom tab bar (Controls/Presets).
+    pub tab_bar: bool,
+    /// A bottom sheet may be registered.
+    pub sheet: bool,
+}
+
+/// The surfaces for `mode`: Wide keeps both side panels and no bar/sheet;
+/// Compact hides both panels and shows the tab bar plus one sheet.
+pub const fn compact_plan(mode: LayoutMode) -> CompactPlan {
+    match mode {
+        LayoutMode::Wide => CompactPlan {
+            controls_panel: true,
+            presets_panel: true,
+            tab_bar: false,
+            sheet: false,
+        },
+        LayoutMode::Compact => CompactPlan {
+            controls_panel: false,
+            presets_panel: false,
+            tab_bar: true,
+            sheet: true,
+        },
+    }
+}
+
+/// Height of the compact bottom sheet for a window of `window_h` with
+/// `available_h` points left after the status bar and tab bar.
+///
+/// The sheet takes at most [`SHEET_MAX_FRACTION`] of the window and at most the
+/// room left after reserving [`VIEWPORT_MIN_FRACTION`] of the window plus
+/// [`VIEWPORT_CHROME_ALLOWANCE`] for the viewport. Nonsense or non-positive
+/// inputs yield zero (no sheet) rather than an inverted or negative panel.
+pub fn sheet_height(window_h: f32, available_h: f32) -> f32 {
+    if !window_h.is_finite() || window_h <= 0.0 || !available_h.is_finite() || available_h <= 0.0 {
+        return 0.0;
+    }
+    let cap = window_h * SHEET_MAX_FRACTION;
+    let viewport_floor = window_h * VIEWPORT_MIN_FRACTION + VIEWPORT_CHROME_ALLOWANCE;
+    let room = (available_h - viewport_floor).max(0.0);
+    cap.min(room).min(available_h).max(0.0)
+}
+
+/// Width the flexing formula field gets in a bar of `available_width` points
+/// after `chrome_width` points of 2D/3D toggles.
+///
+/// The field normally takes the remainder, but never less than
+/// [`FORMULA_MIN_FRACTION`] of the bar, so the 360 pt phone bar stays editable.
+/// Nonsense inputs are treated as zero and can never produce a negative width.
+pub fn formula_field_width(available_width: f32, chrome_width: f32) -> f32 {
+    let available = if available_width.is_finite() && available_width > 0.0 {
+        available_width
+    } else {
+        0.0
+    };
+    let chrome = if chrome_width.is_finite() && chrome_width > 0.0 {
+        chrome_width
+    } else {
+        0.0
+    };
+    (available - chrome)
+        .max(0.0)
+        .max(available * FORMULA_MIN_FRACTION)
+}
+
 /// Which edge a rail sits on: decides the label's reading direction and the
 /// chevron's outward direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

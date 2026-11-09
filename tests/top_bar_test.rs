@@ -10,11 +10,11 @@ use vector_field_explorer::screenshot::Screenshot;
 use vector_field_explorer::ui::branding;
 use vector_field_explorer::ui::menu::{
     ABOUT_COPYRIGHT, ABOUT_LICENSE, ABOUT_NAME, ABOUT_SITE_URL, ABOUT_TAGLINE, ABOUT_URL,
-    ABOUT_VERSION,
+    ABOUT_VERSION, MENUS, MenuAction,
 };
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
-    self, APPEARANCE_BUTTON_LABEL, dismisses_appearance_popover, wheel_zoom_factor,
+    self, APPEARANCE_BUTTON_LABEL, HAMBURGER_LABEL, dismisses_appearance_popover, wheel_zoom_factor,
 };
 
 /// One headless window running the real top menu bar and Appearance popover.
@@ -145,6 +145,79 @@ fn color_well(nodes: &[Node]) -> Option<egui::Rect> {
 #[test]
 fn no_scroll_is_no_zoom() {
     assert_eq!(wheel_zoom_factor(0.0), 1.0);
+}
+
+/// Every action the wide bar exposes: the whole menu table, the Appearance
+/// gear and the Screenshot button.
+fn wide_actions() -> Vec<MenuAction> {
+    let mut actions: Vec<MenuAction> = MENUS
+        .iter()
+        .flat_map(|menu| menu.items.iter().map(|item| item.action))
+        .collect();
+    actions.push(MenuAction::OpenAppearance);
+    actions.push(MenuAction::ExportScreenshot);
+    actions
+}
+
+#[test]
+fn compact_bar_exposes_the_same_actions_as_wide() {
+    let compact = top_bar::compact_menu_actions();
+    let wide = wide_actions();
+
+    // The compact bar is the wide bar re-arranged: same commands, no extras
+    // and none dropped. (ToggleFly is keyboard-only and absent from both.)
+    for action in &wide {
+        assert!(compact.contains(action), "compact is missing {action:?}");
+    }
+    for action in &compact {
+        assert!(
+            wide.contains(action),
+            "compact exposes {action:?}, which the wide bar does not"
+        );
+    }
+    assert!(compact.contains(&MenuAction::ExportScreenshot));
+    assert!(compact.contains(&MenuAction::OpenAppearance));
+}
+
+#[test]
+fn the_compact_bar_renders_hamburger_appearance_and_screenshot() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut style = AppStyle::default();
+    let screenshot = Screenshot::new();
+    let mut open = false;
+    let mut published = Vec::new();
+
+    // Two frames: the first publishes accesskit nodes, the second settles them.
+    for _ in 0..2 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(360.0, 640.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::Panel::top("compact_top_bar").show(ui, |ui| {
+                let _ = top_bar::show_compact(ui, &mut style, &screenshot, &mut open);
+            });
+        });
+        output.textures_delta.clear();
+        published = nodes(&output);
+    }
+
+    assert!(
+        labelled(&published, egui::Role::Button, HAMBURGER_LABEL).is_some(),
+        "the compact bar has a hamburger menu button"
+    );
+    assert!(
+        labelled(&published, egui::Role::Button, APPEARANCE_BUTTON_LABEL).is_some(),
+        "the Appearance gear survives in compact"
+    );
+    assert!(
+        labelled(&published, egui::Role::Button, "Screenshot").is_some(),
+        "the Screenshot action stays one tap away"
+    );
 }
 
 #[test]

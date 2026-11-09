@@ -1147,6 +1147,40 @@ pub fn drag_channel(mode_3d: bool, buttons: DragButtons) -> Option<DragChannel> 
     None
 }
 
+/// One frame of multi-touch pan input, points.
+///
+/// `active` says the touch gesture owns the camera this frame, which the caller
+/// uses to suppress the pointer-drag orbit channel so the first finger cannot
+/// orbit while two fingers pan. `pan` is the delta to add to the existing
+/// [`ViewGesture::pan`] channel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TouchPan {
+    /// True while a two-finger (or more) gesture owns the camera this frame.
+    pub active: bool,
+    /// Pan-channel delta, points; zero when inactive or non-finite.
+    pub pan: Vec2,
+}
+
+/// Map one frame of `egui::MultiTouchInfo` onto the existing 3D pan channel.
+///
+/// Two-finger pan is a 3D gesture: one finger keeps orbiting in 3D and panning
+/// in 2D through the pointer path, so this is inactive for `mode_3d == false`
+/// and for fewer than two touches. Pinch zoom does not pass through here —
+/// `top_bar::wheel_zoom` already folds in `MultiTouchInfo::zoom_delta`.
+///
+/// A zero translation is an active gesture with a no-op pan; a non-finite
+/// translation keeps the gesture active (so the pointer channel stays
+/// suppressed) but contributes no camera motion.
+pub fn two_finger_pan(mode_3d: bool, num_touches: usize, translation: Vec2) -> TouchPan {
+    let active = mode_3d && num_touches >= 2;
+    let pan = if active && translation.is_finite() {
+        translation
+    } else {
+        Vec2::ZERO
+    };
+    TouchPan { active, pan }
+}
+
 /// What a completed pointer gesture in the viewport should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickOutcome {

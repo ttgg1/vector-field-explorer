@@ -19,6 +19,14 @@ pub const HINT_LIFETIME: f32 = 2.5;
 /// Parse-error colour, matching the old status bar's red.
 const PARSE_ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(230, 70, 70);
 
+/// Largest font size the compact readout uses, points.
+///
+/// Ticket 53: the mask ticket 51 pins keeps particle counts at 360 pt, but the
+/// full readable string at the 13 pt body size is ~355 pt wide and does not fit
+/// a 360 pt panel beside the message. Compact stacks the message and readout and
+/// pins the readout to this size; the mask itself is unchanged.
+pub const COMPACT_STATS_SIZE: f32 = 12.0;
+
 /// Which optional readouts fit at a given width. FPS, frame time, arrow count
 /// and streamline count are never masked.
 ///
@@ -171,6 +179,34 @@ pub fn format_status(status: &StatusBarState, mask: StatsMask) -> String {
     out
 }
 
+/// The left slot: the parse error wins, otherwise a live transient hint, else
+/// "ready".
+fn status_message(ui: &mut egui::Ui, status: &StatusBarState) {
+    if !status.parse_message.is_empty() {
+        ui.colored_label(PARSE_ERROR_COLOR, status.parse_message.as_str());
+    } else if let Some(hint) = status.hint.as_deref() {
+        ui.weak(hint);
+    } else {
+        ui.weak("ready");
+    }
+}
+
+/// Split a formatted readout into the timing line (`fps · frame ms`, with the
+/// optional `fly | ` prefix) and the composition line (counts, density, time).
+///
+/// The separator is the `|` that follows the frame-time field, so a `fly | `
+/// prefix stays with the timing line. A string without that shape (an empty
+/// readout, or future formats) is returned whole as the timing line.
+fn status_lines(text: &str) -> (&str, &str) {
+    if let Some(after_frame_ms) = text.find(" ms").map(|ms| ms + " ms".len())
+        && let Some(offset) = text[after_frame_ms..].find(" | ")
+    {
+        let split = after_frame_ms + offset;
+        return (&text[..split], &text[split + " | ".len()..]);
+    }
+    (text, "")
+}
+
 /// Draw the status bar: the parse error wins on the left, otherwise a live
 /// transient hint or "ready"; the right side is the stats readout reduced to
 /// what fits the current width.
@@ -181,17 +217,36 @@ pub fn show(ui: &mut egui::Ui, status: &StatusBarState) {
     // would drop the 960 pt "all readouts" case at a 960 pt window.
     let width = ui.ctx().content_rect().width();
     let mask = visible_stats(width);
-    ui.horizontal(|ui| {
-        if !status.parse_message.is_empty() {
-            ui.colored_label(PARSE_ERROR_COLOR, status.parse_message.as_str());
-        } else if let Some(hint) = status.hint.as_deref() {
-            ui.weak(hint);
-        } else {
-            ui.weak("ready");
-        }
+    let text = format_status(status, mask);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.weak(format_status(status, mask));
+    if width <= crate::ui::layout::COMPACT_WIDTH {
+        // Phone/compact: the message and the full masked readout do not fit on
+        // one row at 360-390 pt, so stack the timing row above the composition
+        // row. The mask is ticket 51's, not a compact re-derivation; only the
+        // layout and type size adapt.
+        let (timing, composition) = status_lines(&text);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                status_message(ui, status);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.weak(egui::RichText::new(timing).size(COMPACT_STATS_SIZE));
+                });
+            });
+            if !composition.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(composition).size(COMPACT_STATS_SIZE),
+                    )
+                    .truncate(),
+                );
+            }
         });
-    });
+    } else {
+        ui.horizontal(|ui| {
+            status_message(ui, status);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(text);
+            });
+        });
+    }
 }

@@ -27,19 +27,28 @@ impl VfApp {
         // through the one `sync_fly_mirror` seam.
         self.sidebar.fly = self.fly.is_some();
 
-        self.show_controls_panel(ui);
+        if self.layout_mode == LayoutMode::Compact {
+            // Ticket 53: phone layout. Both side panels and rails are hidden;
+            // Controls/Presets become one bottom sheet registered after the
+            // status bar, so only the camera mirror and domain recentre run
+            // here. A Controls-sheet edit reconciles after the sheet draws.
+            self.sync_presets_camera();
+            self.recentre_domain(domain_before);
+        } else {
+            self.show_controls_panel(ui);
 
-        // Ticket 65: a click on the Camera section's checkbox edits only the
-        // mirror; apply it through the same fly seam C uses, then resync.
-        sync_fly_mirror(
-            &mut self.sidebar.fly,
-            &mut self.fly,
-            &self.orbit,
-            self.state.is_3d(),
-        );
+            // Ticket 65: a click on the Camera section's checkbox edits only the
+            // mirror; apply it through the same fly seam C uses, then resync.
+            sync_fly_mirror(
+                &mut self.sidebar.fly,
+                &mut self.fly,
+                &self.orbit,
+                self.state.is_3d(),
+            );
 
-        self.recentre_domain(domain_before);
-        self.show_presets_panel(ui);
+            self.recentre_domain(domain_before);
+            self.show_presets_panel(ui);
+        }
 
         // Ticket 65: capture is edge-triggered after every path that can
         // enter or leave fly this frame (C, the sidebar, Esc, 2D switch,
@@ -51,15 +60,25 @@ impl VfApp {
     fn show_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Top menu bar: File / Edit / View / Help, the Appearance gear, and the
         // screenshot action. The bar only reports the action; the app dispatches
-        // it.
+        // it. Ticket 53: compact replaces the menu row with a hamburger that
+        // exposes the same actions plus the gear and Screenshot button.
         let mut style_changed = false;
         egui::Panel::top("top_bar").show(ui, |ui| {
-            let (action, changed) = top_bar::show(
-                ui,
-                &mut self.style,
-                &self.screenshot,
-                &mut self.appearance_open,
-            );
+            let (action, changed) = if self.layout_mode == LayoutMode::Compact {
+                top_bar::show_compact(
+                    ui,
+                    &mut self.style,
+                    &self.screenshot,
+                    &mut self.appearance_open,
+                )
+            } else {
+                top_bar::show(
+                    ui,
+                    &mut self.style,
+                    &self.screenshot,
+                    &mut self.appearance_open,
+                )
+            };
             style_changed = changed;
             if let Some(action) = action {
                 self.apply_menu_action(action, ctx);
@@ -76,7 +95,12 @@ impl VfApp {
         // edit goes through a viewmodel setter, which owns parsing, clamping
         // and the dirty flag.
         egui::Panel::top("formula_bar").show(ui, |ui| {
-            crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
+            crate::ui::formula_bar::show(
+                ui,
+                &mut self.state,
+                &mut self.bar,
+                self.layout_mode == LayoutMode::Compact,
+            );
             // The transport is a compact strip, not a panel: it appears in the
             // same top panel directly under the formula row, and only while a
             // clock consumer exists (ticket 26).
@@ -150,13 +174,34 @@ impl VfApp {
         }
     }
 
+    /// Mirror the live 2D view into the preset record so "Save current view"
+    /// captures what is on screen. Called before either the wide panel or the
+    /// compact sheet draws.
+    fn sync_presets_camera(&mut self) {
+        self.camera.position = [self.orbit.target.x, self.orbit.target.y];
+        self.camera.scale = self.orbit.ortho_zoom;
+    }
+
+    /// Apply what the Presets body reported this frame: a camera button picked
+    /// inside the panel/sheet, then any applied preset record.
+    fn finish_presets(&mut self, camera_request: Option<ViewCommand>) {
+        if let Some(command) = camera_request {
+            self.apply_view_command(command);
+        }
+        if let Some(applied) = self.presets.take_applied() {
+            // Presets are orbit views: apply one to the untouched orbit camera
+            // and leave fly mode, with the hand-editable file's non-finite
+            // components ignored (review M-3).
+            apply_camera_record(&applied, &mut self.orbit, &mut self.fly);
+        }
+    }
+
     fn show_presets_panel(&mut self, ui: &mut egui::Ui) {
         // Right Presets panel, or its rail; same pin/collapse contract. The
         // preset record's camera mirrors the live 2D view (target + zoom), so
         // "Save current view" captures what is on screen; loading a preset
         // hands its camera back and moves the orbit target/zoom.
-        self.camera.position = [self.orbit.target.x, self.orbit.target.y];
-        self.camera.scale = self.orbit.ortho_zoom;
+        self.sync_presets_camera();
         // A camera button (Reset view / Fit domain) picked in the Presets panel
         // this frame; applied after the panel so the view-command seam owns the
         // camera update.
@@ -186,28 +231,18 @@ impl VfApp {
             if collapse {
                 self.layout.presets_expanded = false;
             }
-        } else {
-            if layout::rail_panel(
-                ui,
-                ("presets_rail", self.panel_generation),
-                layout::RailSide::Right,
-                "Presets",
-                menu::PRESETS_SHORTCUT,
-            )
-            .clicked
-            {
-                self.layout.presets_expanded = true;
-            }
+        } else if layout::rail_panel(
+            ui,
+            ("presets_rail", self.panel_generation),
+            layout::RailSide::Right,
+            "Presets",
+            menu::PRESETS_SHORTCUT,
+        )
+        .clicked
+        {
+            self.layout.presets_expanded = true;
         }
-        if let Some(command) = camera_request {
-            self.apply_view_command(command);
-        }
-        if let Some(applied) = self.presets.take_applied() {
-            // Presets are orbit views: apply one to the untouched orbit camera
-            // and leave fly mode, with the hand-editable file's non-finite
-            // components ignored (review M-3).
-            apply_camera_record(&applied, &mut self.orbit, &mut self.fly);
-        }
+        self.finish_presets(camera_request);
     }
 
     /// Frame phase: the bottom status bar readouts and the panel itself.
@@ -255,6 +290,170 @@ impl VfApp {
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             crate::ui::status_bar::show(ui, &self.status);
         });
+
+        // Ticket 53: compact bottom chrome registers after the status bar and
+        // before the central viewport, so the viewport reflows above it and the
+        // sheet can never cover the status or tab bars.
+        if self.layout_mode == LayoutMode::Compact {
+            self.show_compact_tab_bar(ui);
+            self.show_compact_sheet(ui);
+        }
+    }
+
+    /// Compact bottom tab bar: one Controls/Presets tab each, with a 44 pt
+    /// target and a close affordance while a sheet is open. Tapping the active
+    /// tab closes its sheet; tapping the other switches.
+    fn show_compact_tab_bar(&mut self, ui: &mut egui::Ui) {
+        let sheet_before = self.sheet;
+        egui::Panel::bottom("compact_tab_bar")
+            .exact_size(layout::TAB_BAR_HEIGHT)
+            .show(ui, |ui| {
+                ui.spacing_mut().interact_size.y = layout::TOUCH_TARGET;
+                ui.horizontal(|ui| {
+                    let spacing = ui.spacing().item_spacing.x;
+                    let close_width = if self.sheet.is_open() {
+                        layout::TOUCH_TARGET + spacing
+                    } else {
+                        0.0
+                    };
+                    let tab_width = ((ui.available_width() - close_width) / 2.0 - spacing)
+                        .max(layout::TOUCH_TARGET);
+                    if ui
+                        .add_sized(
+                            [tab_width, layout::TOUCH_TARGET],
+                            egui::Button::selectable(
+                                self.sheet.shows(SheetState::Controls),
+                                "Controls",
+                            ),
+                        )
+                        .clicked()
+                    {
+                        self.sheet.toggle(SheetState::Controls);
+                    }
+                    if ui
+                        .add_sized(
+                            [tab_width, layout::TOUCH_TARGET],
+                            egui::Button::selectable(
+                                self.sheet.shows(SheetState::Presets),
+                                "Presets",
+                            ),
+                        )
+                        .clicked()
+                    {
+                        self.sheet.toggle(SheetState::Presets);
+                    }
+                    if self.sheet.is_open()
+                        && ui
+                            .add_sized(
+                                [layout::TOUCH_TARGET, layout::TOUCH_TARGET],
+                                egui::Button::new("✕"),
+                            )
+                            .on_hover_text("Close panel")
+                            .clicked()
+                    {
+                        self.sheet.close();
+                    }
+                });
+            });
+        if self.sheet != sheet_before {
+            // The sheet/viewport split changes size; ask for the frame that
+            // applies the new panel height even if the click was the last input.
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Compact bottom sheet: at most one of Controls/Presets, clamped to 55% of
+    /// the window and to the room above the viewport floor. The body keeps the
+    /// wide panel's [`egui::ScrollArea`]; the stored wide widths are never read
+    /// or written here.
+    fn show_compact_sheet(&mut self, ui: &mut egui::Ui) {
+        let sheet = self.sheet;
+        if !sheet.is_open() {
+            return;
+        }        let window_height = ui.ctx().content_rect().height();
+        let available_height = ui.available_height();
+        let height = layout::sheet_height(window_height, available_height);
+        if height < 1.0 {
+            return;
+        }
+
+        let mut close = false;
+        let mut camera_request = None;
+        let controls_shown = sheet == SheetState::Controls;
+        egui::Panel::bottom("compact_sheet")
+            .exact_size(height)
+            .show(ui, |ui| {
+                ui.spacing_mut().interact_size.y = layout::TOUCH_TARGET;
+                let title = match sheet {
+                    SheetState::Controls => "Controls",
+                    SheetState::Presets => "Presets",
+                    SheetState::None => "",
+                };
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(title).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_sized(
+                                [layout::TOUCH_TARGET, layout::TOUCH_TARGET],
+                                egui::Button::new("✕"),
+                            )
+                            .on_hover_text("Close panel")
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                });
+
+                // A visible drag handle that is also a 44 pt-wide close target:
+                // tapping it (or a swipe that ends on it) dismisses the sheet.
+                let (rect, handle) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 20.0),
+                    egui::Sense::click_and_drag(),
+                );
+                let weak = ui.visuals().weak_text_color();
+                let bar = egui::Rect::from_center_size(rect.center(), egui::vec2(36.0, 4.0));
+                ui.painter().rect_filled(bar, 2.0, weak);
+                let swiped_down = handle.dragged() && handle.drag_delta().y > 24.0;
+                if handle
+                    .on_hover_text("Tap or swipe down to close")
+                    .clicked()
+                    || swiped_down
+                {
+                    close = true;
+                }
+
+                egui::ScrollArea::vertical().show(ui, |ui| match sheet {
+                    SheetState::Controls => {
+                        crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+                    }
+                    SheetState::Presets => {
+                        camera_request =
+                            self.presets.show(ui, &mut self.camera, &mut self.state);
+                    }
+                    SheetState::None => {}
+                });
+            });
+
+        if close {
+            self.sheet.close();
+            // The sheet is gone; request the frame that grows the viewport.
+            ui.ctx().request_repaint();
+        }
+        self.finish_presets(camera_request);
+        if controls_shown {
+            // Ticket 65: a Camera-section checkbox edited in the sheet must
+            // enter/leave fly in this same frame, exactly like the wide panel.
+            sync_fly_mirror(
+                &mut self.sidebar.fly,
+                &mut self.fly,
+                &self.orbit,
+                self.state.is_3d(),
+            );
+        }
+        // A preset (or the sheet's camera toggle) can leave fly; release the
+        // pointer in this same frame, as the wide chrome path does.
+        self.sync_fly_capture(ui.ctx());
     }
 
     /// Frame phase: the help overlay and the two help windows, painted last
@@ -263,7 +462,18 @@ impl VfApp {
         // Help overlay last, so it paints over the viewport (and the field
         // callback). Anchored at the viewport's bottom-left corner; the ×
         // persists the hidden state through the layout record.
+        //
+        // Ticket 53: the overlay is a mouse/keyboard reference sized for the
+        // desktop. At phone width it would cover and clip the whole viewport, so
+        // compact suppresses the persistent overlay below this width while the
+        // full Help > Keyboard & mouse window stays reachable from the menu.
+        const HELP_OVERLAY_MIN_WIDTH: f32 = 520.0;
+        let overlay_fits = self.layout_mode == LayoutMode::Wide
+            || self
+                .last_viewport_rect
+                .is_some_and(|rect| rect.width() >= HELP_OVERLAY_MIN_WIDTH);
         if self.layout.help_visible
+            && overlay_fits
             && let Some(rect) = self.last_viewport_rect
         {
             let anchor = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);

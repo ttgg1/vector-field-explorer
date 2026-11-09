@@ -8,9 +8,10 @@ use eframe::egui;
 mod support;
 
 use vector_field_explorer::ui::layout::{
-    DEFAULT_CONTROLS_WIDTH, DEFAULT_PRESETS_WIDTH, LayoutState, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH,
-    RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel, RailSide,
-    clamp_width, collapse_chevron, rail_chevron, rail_chevron_pos, rail_text_angle, rail_tooltip,
+    DEFAULT_CONTROLS_WIDTH, DEFAULT_PRESETS_WIDTH, LayoutMode, LayoutState, MAX_PANEL_WIDTH,
+    MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel,
+    RailSide, clamp_width, collapse_chevron, compact_plan, layout_mode, rail_chevron,
+    rail_chevron_pos, rail_text_angle, rail_tooltip,
 };
 
 // The rail must stay narrower than any expanded panel.
@@ -70,8 +71,7 @@ fn reset_restores_first_launch_layout() {
 }
 
 #[test]
-fn widths_clamp_and_corrupt_widths_fall_back() {
-    assert_eq!(clamp_width(10.0, 250.0), MIN_PANEL_WIDTH);
+fn widths_clamp_and_corrupt_widths_fall_back() {    assert_eq!(clamp_width(10.0, 250.0), MIN_PANEL_WIDTH);
     assert_eq!(clamp_width(10_000.0, 250.0), MAX_PANEL_WIDTH);
     assert_eq!(clamp_width(212.5, 250.0), 212.5, "a sane width passes through");
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -86,6 +86,54 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
     assert_eq!(corrupt.controls_width, DEFAULT_CONTROLS_WIDTH);
     assert_eq!(corrupt.presets_width, MAX_PANEL_WIDTH);
     assert!(corrupt.controls_expanded && corrupt.presets_expanded, "visibility survives");
+}
+
+// --- Ticket 53: compact mode is transient and never rewrites the record -----
+
+#[test]
+fn compact_mode_does_not_mutate_stored_widths() {
+    // Computing the mode and the compact plan is read-only: the persisted
+    // widths and expanded flags must survive a narrow frame untouched so a
+    // return to wide restores the user's panels exactly.
+    let layout = LayoutState {
+        controls_expanded: false,
+        presets_expanded: true,
+        controls_width: 300.0,
+        presets_width: 210.0,
+        help_visible: false,
+    };
+    let before = layout.clone();
+
+    assert_eq!(layout_mode(360.0), LayoutMode::Compact);
+    let plan = compact_plan(LayoutMode::Compact);
+    assert!(!plan.controls_panel && !plan.presets_panel && plan.tab_bar);
+
+    assert_eq!(layout, before, "compact mode reads the record, never writes it");
+
+    // The same record is what wide re-reads after a resize.
+    assert_eq!(layout_mode(1200.0), LayoutMode::Wide);
+    assert_eq!(layout.controls_width, 300.0);
+    assert_eq!(layout.presets_width, 210.0);
+    assert!(!layout.controls_expanded && layout.presets_expanded);
+}
+
+#[test]
+fn layout_state_serializes_exactly_its_five_persisted_fields() {
+    // Ticket 53 adds no fields to the persisted record: a saved layout may only
+    // carry the ticket-14 knobs, never the transient mode or sheet.
+    let value = serde_json::to_value(LayoutState::default()).expect("layout serializes");
+    let object = value.as_object().expect("layout is a map");
+    let keys: std::collections::BTreeSet<&str> = object.keys().map(String::as_str).collect();
+    let expected: std::collections::BTreeSet<&str> = [
+        "controls_expanded",
+        "presets_expanded",
+        "controls_width",
+        "presets_width",
+        "help_visible",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(keys, expected, "the persisted layout record gained a field");
 }
 
 // --- Ticket 22: rotated rail label -----------------------------------------

@@ -80,6 +80,24 @@ impl VfApp {
     /// Everything the seam can mutate goes in through [`menu::UiState`], so
     /// there is no second copy of the layout, camera or controls records.
     pub(super) fn apply_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
+        // Ticket 53: in compact the side panels are bottom sheets, so the two
+        // panel toggles must not flip the persisted wide-layout flags. Route
+        // them to the transient sheet; everything else dispatches as usual.
+        if self.layout_mode == LayoutMode::Compact {
+            match action {
+                MenuAction::ToggleControls => {
+                    self.sheet.toggle(SheetState::Controls);
+                    ctx.request_repaint();
+                    return;
+                }
+                MenuAction::TogglePresets => {
+                    self.sheet.toggle(SheetState::Presets);
+                    ctx.request_repaint();
+                    return;
+                }
+                _ => {}
+            }
+        }
         let effect = menu::apply_action(
             action,
             &mut menu::UiState {
@@ -104,8 +122,11 @@ impl VfApp {
             menu::SideEffect::CopyText(text) => ctx.copy_text(text),
             menu::SideEffect::ResetLayout => {
                 // New panel ids forget egui's remembered drag width, so the
-                // default widths really apply.
+                // default widths really apply. The compact sheet closes through
+                // the transient helper: reset never writes sheet/mode state.
                 self.panel_generation = self.panel_generation.wrapping_add(1);
+                layout::reset_sheet(&mut self.sheet);
+                ctx.request_repaint();
             }
             menu::SideEffect::ResetCamera => self.presets.clear_active(),
         }

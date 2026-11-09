@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vector Field Explorer</title>
     <meta
       name="description"
@@ -192,5 +192,13 @@
     </noscript>
 
     <script src="webgpu.js"></script>
+    <script>
+      // Ticket 53: right-drag orbits in 3D and the two-finger gestures own the
+      // canvas, so the browser context menu would interrupt a camera gesture.
+      // The canvas is the only surface that needs the suppression.
+      document.getElementById("vfe-canvas").addEventListener("contextmenu", function (event) {
+        event.preventDefault();
+      });
+    </script>
   </body>
 </html>

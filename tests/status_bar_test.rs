@@ -5,8 +5,10 @@
 use eframe::egui;
 use vector_field_explorer::app::StatusBarState;
 use vector_field_explorer::ui::status_bar::{
-    FpsMeter, StatsMask, advance_hint, format_status, restart_hint, visible_stats,
+    COMPACT_STATS_SIZE, FpsMeter, StatsMask, advance_hint, format_status, restart_hint, visible_stats,
 };
+
+mod support;
 
 fn all_stats() -> StatsMask {
     StatsMask {
@@ -187,8 +189,7 @@ fn visible_stats_is_full_at_960_and_drops_in_priority_order() {
 }
 
 #[test]
-fn visible_stats_is_a_strict_subset_and_never_hides_fps() {
-    let full = StatsMask::FULL;
+fn visible_stats_is_a_strict_subset_and_never_hides_fps() {    let full = StatsMask::FULL;
     let narrow = visible_stats(0.0);
     assert!(!narrow.sim_time && !narrow.density && !narrow.trails && !narrow.particles);
 
@@ -218,6 +219,104 @@ fn visible_stats_is_a_strict_subset_and_never_hides_fps() {
             "the mask at {width} is a subset of the full readout"
         );
     }
+}
+
+/// Ticket 53 consumes this exact mask for the phone layout: the compact bar is
+/// whatever `visible_stats` yields at that width, never a second priority list.
+#[test]
+fn compact_widths_keep_fps_and_frame_time_through_the_same_mask() {
+    let mask = visible_stats(360.0);
+    assert!(mask.particles, "360 pt keeps particles");
+    assert!(!mask.trails && !mask.density && !mask.sim_time);
+
+    let status = StatusBarState {
+        fps: 60.0,
+        frame_ms: 16.7,
+        arrow_count: 1_200,
+        streamline_count: 240,
+        particle_count: 800,
+        trail_count: 1_200,
+        density: 32,
+        sim_time: Some(12.4),
+        ..StatusBarState::default()
+    };
+    let text = format_status(&status, mask);
+    assert!(text.contains("60 fps") && text.contains("16.7 ms"), "{text}");
+    assert!(text.contains("1.2k arrows") && text.contains("240 streamlines"), "{text}");
+    assert!(text.contains("800 particles"), "{text}");
+    assert!(!text.contains("trail segs") && !text.contains("n²") && !text.contains("| t "), "{text}");
+}
+
+/// Ticket 53: the compact readout is stacked on two rows and pinned to
+/// [`COMPACT_STATS_SIZE`]. Measured with the shipped faces, each row must fit
+/// the 360 pt panel's inner budget (8 pt frame each side).
+#[test]
+fn compact_readout_lines_fit_a_360_point_panel_with_production_faces() {
+    let ctx = support::context();
+    let status = StatusBarState {
+        fps: 60.0,
+        frame_ms: 16.7,
+        arrow_count: 1_200,
+        streamline_count: 240,
+        particle_count: 800,
+        ..StatusBarState::default()
+    };
+    let text = format_status(&status, visible_stats(360.0));
+
+    // Same documented split as the status bar: the separator follows " ms".
+    let after_frame_ms = text.find(" ms").map(|ms| ms + " ms".len()).unwrap();
+    let split = after_frame_ms + text[after_frame_ms..].find(" | ").unwrap();
+    let timing = &text[..split];
+    let composition = &text[split + " | ".len()..];
+
+    let inner = 360.0 - 16.0;
+    for (name, line, size) in [
+        ("timing", timing, COMPACT_STATS_SIZE),
+        ("composition", composition, COMPACT_STATS_SIZE),
+        ("message", "ready", 13.0),
+    ] {
+        let width = measure_text(&ctx, line, size);
+        assert!(
+            width <= inner,
+            "the compact {name} line is {width:.1} pt; the 360 pt panel allows {inner:.1}"
+        );
+    }
+    let first_row = measure_text(&ctx, "ready", 13.0)
+        + 8.0
+        + measure_text(&ctx, timing, COMPACT_STATS_SIZE);
+    assert!(
+        first_row <= inner,
+        "the compact message plus timing is {first_row:.1} pt; the panel allows {inner:.1}"
+    );
+}
+
+fn measure_text(ctx: &egui::Context, text: &str, size: f32) -> f32 {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 200.0));
+    let mut width = 0.0;
+    let mut output = ctx.run_pass(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        },
+        |ctx| {
+            let ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique(("measure_status_text", text)),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            width = ui
+                .painter()
+                .layout_no_wrap(
+                    text.to_owned(),
+                    egui::FontId::proportional(size),
+                    egui::Color32::WHITE,
+                )
+                .size()
+                .x;
+        },
+    );
+    output.textures_delta.clear();
+    width
 }
 
 #[test]

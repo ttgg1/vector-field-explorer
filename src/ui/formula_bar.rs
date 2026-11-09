@@ -23,8 +23,20 @@ impl FormulaBarState {
 
 /// Draw the bar and apply every edit to `state`. Typed garbage keeps the last
 /// good field (the setter's rule) and shows up in the status bar.
-pub fn show(ui: &mut egui::Ui, state: &mut State, bar: &mut FormulaBarState) {
+///
+/// `compact` keeps the same widgets but gives them finger-sized hit targets and
+/// applies the formula-field width floor; the wide path is unchanged.
+pub fn show(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    bar: &mut FormulaBarState,
+    compact: bool,
+) {
     ui.horizontal(|ui| {
+        if compact {
+            ui.spacing_mut().interact_size.y = crate::ui::layout::TOUCH_TARGET;
+        }
+        let full_width = ui.available_width();
         if ui.selectable_label(state.mode_3d, "3D view").clicked() {
             state.set_mode(true);
         }
@@ -35,10 +47,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, bar: &mut FormulaBarState) {
         if bar.text != state.formula {
             bar.text = state.formula.clone();
         }
+        // Compact pins the field's 40% floor after the 2D/3D toggles; wide keeps
+        // the historical "fill the rest of the bar" behaviour exactly.
+        let field_width = if compact {
+            crate::ui::layout::formula_field_width(full_width, full_width - ui.available_width())
+        } else {
+            f32::INFINITY
+        };
         ui.add(
             egui::TextEdit::singleline(&mut bar.text)
                 .hint_text("(x, y)")
-                .desired_width(f32::INFINITY),
+                .desired_width(field_width),
         );
         if bar.text != state.formula {
             state.set_formula(bar.text.clone());

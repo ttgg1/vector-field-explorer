@@ -302,6 +302,21 @@ fn settings_round_trip_through_eframe_storage() {
     assert_eq!(load(Some(&storage)), settings);
 }
 
+/// Ticket 53: compact mode and the bottom-sheet state are transient. The one
+/// saved envelope must keep carrying only the ticket-14 layout knobs.
+#[test]
+fn compact_mode_and_sheet_are_never_written_to_storage() {
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &sample_settings());
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    for key in ["compact", "sheet", "layout_mode", "sheet_state"] {
+        assert!(
+            !raw.to_ascii_lowercase().contains(key),
+            "the persisted envelope must not carry `{key}`:\n{raw}"
+        );
+    }
+}
+
 #[test]
 fn a_legacy_normalize_true_migrates_to_uniform_without_fail_fast() {
     let settings = load_legacy(true);

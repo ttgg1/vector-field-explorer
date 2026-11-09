@@ -10,6 +10,20 @@ impl eframe::App for VfApp {
         // keeps the UI in sync even if a theme/visual was changed elsewhere.
         style_panel::apply(ui.ctx(), &self.style);
 
+        // Ticket 53: one layout decision per frame from the root width, before
+        // the top/formula bars or any side panel consume width. The mode is
+        // transient; a wide frame closes any stale compact sheet. A mode change
+        // requests one more frame so the bottom panels resize before the app
+        // can go idle (the first narrow frame measures the two-row status).
+        let mode = layout::layout_mode(ui.available_width());
+        if mode != self.layout_mode {
+            self.layout_mode = mode;
+            ui.ctx().request_repaint();
+        }
+        if self.layout_mode == LayoutMode::Wide {
+            self.sheet.close();
+        }
+
         // Input, chrome, simulation, status, viewport, then the overlays on
         // top: the same statement order as the pre-split `ui` body.
         let ctx = ui.ctx().clone();
