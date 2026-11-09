@@ -45,7 +45,7 @@
           src="icons/favicon-32.png"
           width="32"
           height="32"
-          alt="Vector Field Explorer logo"
+          alt=""
         />
         <span>Vector Field Explorer</span>
       </a>
@@ -97,7 +97,7 @@
             width="1280"
             height="800"
             loading="lazy"
-            alt="Vector Field Explorer's 3D view with a formula in the top bar, controls sidebar and a colorful arrow field"
+            alt="Vector Field Explorer's 2D view with the formula (-y, x) in the top bar, the 2D View tab selected, and a colorful arrow field with streamlines"
           />
           <figcaption>
             Pick a preset or type your own formula, tune the arrows, streamlines
@@ -212,7 +212,7 @@ cargo build --release
         <div class="controls-grid">
           <dl>
             <dt>Orbit / pan / zoom</dt>
-            <dd>Left- or right-drag to orbit, middle-drag to pan, wheel or pinch to zoom.</dd>
+            <dd>In 3D, left- or right-drag orbits and middle-drag or <kbd>Shift</kbd>+right-drag pans. In 2D, left- or right-drag pans. Wheel or pinch zooms in both views.</dd>
             <dt>Reset / fit</dt>
             <dd><kbd>R</kbd> resets the view; <kbd>F</kbd> fits the domain.</dd>
             <dt>Seed</dt>
@@ -229,8 +229,9 @@ cargo build --release
           The web app renders with WebGPU and needs a browser that supports it:
           Firefox 141+ on Windows, Firefox 145+ on macOS Tahoe ARM, Firefox
           Nightly on Linux, or Chromium/Edge 113+ where WebGPU is available. If
-          WebGPU is missing, the page explains how to enable it. Prefer a
-          desktop build? Use the downloads above, or read the
+          WebGPU is missing, the web app's unsupported-browser panel explains
+          how to enable it. Prefer a desktop build? Use the downloads above, or
+          read the
           <a href="./">in-app help and keyboard reference</a> in the browser.
         </p>
       </section>
