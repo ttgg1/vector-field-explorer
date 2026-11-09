@@ -49,3 +49,50 @@ fn src_carries_no_inline_test_modules() {
         offenders.join("\n"),
     );
 }
+
+/// The single suite harness (`tests/suite.rs`) lists every test file as a
+/// module (ticket 21). A new `tests/*_test.rs` that nobody registers would
+/// silently never run, so this guard fails on an unregistered file and pins the
+/// test inventory: deleting a real test drops the count below the baseline.
+#[test]
+fn every_top_level_test_file_is_registered_in_the_suite() {
+    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let suite = fs::read_to_string(tests.join("suite.rs")).expect("read tests/suite.rs");
+    let mut missing = Vec::new();
+    let mut test_attributes = 0usize;
+    let mut files = 0usize;
+
+    for entry in fs::read_dir(&tests).expect("read tests/") {
+        let path = entry.expect("directory entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).expect("utf-8 file stem");
+        if stem == "suite" {
+            continue;
+        }
+        files += 1;
+        if !suite.lines().any(|line| line.trim() == format!("mod {stem};")) {
+            missing.push(stem.to_string());
+        }
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        test_attributes += text.lines().filter(|line| line.trim() == "#[test]").count();
+    }
+
+    assert!(
+        files > 40,
+        "the walk must find the test files, found {files} under {}",
+        tests.display(),
+    );
+    assert!(
+        missing.is_empty(),
+        "tests/suite.rs must include every tests/*_test.rs as a module; missing: {}",
+        missing.join(", "),
+    );
+    // 704 tests at the ticket-21 baseline, plus this guard (and one `#[test]`
+    // line whose sibling platform gate excludes it from the harness).
+    assert!(
+        test_attributes >= 706,
+        "the suite lost tests: found {test_attributes} `#[test]` lines (baseline 706)",
+    );
+}

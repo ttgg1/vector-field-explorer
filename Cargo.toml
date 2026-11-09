@@ -6,7 +6,7 @@ license = "GPL-3.0-only"
 repository = "https://github.com/ttgg1/vector-field-explorer"
 # Ticket 21: `tests/suite.rs` is the single integration-test harness; the
 # `tests/*_test.rs` files are modules of it, not separate crates. One process
-# runs all 704 tests (instead of 54 processes paying startup and getting no
+# runs the whole suite (instead of 54 processes paying startup and getting no
 # cross-suite parallelism), and a lib change recompiles one test crate instead
 # of 54.
 autotests = false
