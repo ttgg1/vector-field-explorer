@@ -42,6 +42,13 @@ pub const FOV_Y: f32 = 55.0_f32.to_radians();
 pub const NEAR: f32 = 0.01;
 /// Perspective far plane.
 pub const FAR: f32 = 100.0;
+/// Half the full arm length of the capture crosshair, in points. Two 12 px
+/// lines meet at the viewport centre so a captured click's landing point is
+/// visible even with the cursor hidden.
+pub const CROSSHAIR_HALF_LENGTH: f32 = 6.0;
+/// The crosshair's alpha: 60% white, bright enough over any field colour but
+/// never mistaken for field geometry.
+pub const CROSSHAIR_ALPHA: u8 = 153;
 /// `speed *= exp(WHEEL_RATE * notches)` per wheel notch.
 pub const WHEEL_RATE: f32 = 0.1;
 /// One conventional wheel notch in egui's scroll points. egui reports wheel
@@ -318,6 +325,119 @@ pub fn toggle_fly(fly: &mut Option<FlyCamera>, orbit: &OrbitCamera, is_3d: bool)
 pub fn sync_fly(fly: &mut Option<FlyCamera>, is_3d: bool) {
     if !is_3d {
         *fly = None;
+    }
+}
+
+/// Grabs attempted on entering capture, in order. `Confined` comes first so
+/// platforms that refuse `Locked` (winit's X11 backend returns `NotSupported`)
+/// still keep the pointer inside the window; Wayland/macOS/Windows accept
+/// `Locked` second and end there. egui logs a refused grab and continues, so
+/// this is best-effort and fly never depends on it.
+const ENTER_GRABS: [egui::CursorGrab; 2] =
+    [egui::CursorGrab::Confined, egui::CursorGrab::Locked];
+/// Leaving capture releases the grab.
+const EXIT_GRABS: [egui::CursorGrab; 1] = [egui::CursorGrab::None];
+
+/// The ordered viewport commands that enter (`active`) or leave pointer
+/// capture: the grabs to attempt in order plus whether the cursor is visible.
+/// Entering attempts `Confined` then `Locked` and hides the cursor; leaving
+/// clears the grab and shows the cursor. Pure so the order is pinned without a
+/// window; every platform applies it best-effort.
+pub fn capture_commands(active: bool) -> (&'static [egui::CursorGrab], bool) {
+    if active {
+        (&ENTER_GRABS, false)
+    } else {
+        (&EXIT_GRABS, true)
+    }
+}
+
+/// The commands to send on a capture transition: exactly once when `desired`
+/// differs from the previous frame's state, nothing while it stays the same.
+pub fn capture_transition(
+    previous: bool,
+    desired: bool,
+) -> Option<(&'static [egui::CursorGrab], bool)> {
+    (previous != desired).then(|| capture_commands(desired))
+}
+
+/// Whether capture must be torn down for a safety reason while it is active:
+/// a text field taking the keyboard, or the web pointer lock being dropped
+/// (typically browser Esc). Capture never exits on an ordinary flying frame,
+/// so the release commands are not spammed every frame.
+pub fn capture_exit_required(
+    capture_active: bool,
+    text_focused: bool,
+    lock_lost: bool,
+) -> bool {
+    capture_active && (text_focused || lock_lost)
+}
+
+/// Whether the capture crosshair is painted: only while flying with pointer
+/// capture active. `capture_active` normally implies fly, but the explicit
+/// conjunction keeps a stale transition from drawing a crosshair in orbit.
+pub fn crosshair_visible(fly_active: bool, captured: bool) -> bool {
+    fly_active && captured
+}
+
+/// One frame's look delta. Drag-look is the orbit/fallback channel; while
+/// captured, raw pointer-lock motion wins, but a captured frame without raw
+/// motion (platform refused the grab, web bridge missing) still drags. Raw and
+/// drag are never summed, so one physical mouse move cannot look twice.
+pub fn frame_look(captured: bool, raw: Vec2, drag: Vec2) -> Vec2 {
+    if captured && raw.is_finite() && raw != Vec2::ZERO {
+        raw
+    } else {
+        drag
+    }
+}
+
+/// The two centred crosshair segments (horizontal, vertical) for a viewport
+/// centre. `(half length * 2)` = a 12 px line at the default constant.
+pub fn crosshair_segments(center: egui::Pos2) -> [(egui::Pos2, egui::Pos2); 2] {
+    let half = CROSSHAIR_HALF_LENGTH;
+    [
+        (
+            egui::pos2(center.x - half, center.y),
+            egui::pos2(center.x + half, center.y),
+        ),
+        (
+            egui::pos2(center.x, center.y - half),
+            egui::pos2(center.x, center.y + half),
+        ),
+    ]
+}
+
+/// Window focus loss cancels fly outright: a locked/hidden cursor must never
+/// be stranded in a background window. The capture release follows from the
+/// now-empty fly state in the same frame's capture sync.
+pub fn exit_on_focus_loss(
+    fly: &mut Option<FlyCamera>,
+    keys: &mut FlyKeys,
+    events: &[egui::Event],
+) {
+    if events
+        .iter()
+        .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+    {
+        *fly = None;
+        keys.clear();
+    }
+}
+
+/// Reconcile the sidebar's fly checkbox mirror with the app's real fly state.
+/// `mirror` is what the checkbox edited this frame; when it disagrees with the
+/// active camera, the one [`toggle_fly`] seam applies the change and the mirror
+/// is resynced (2D stays inert and unchecks). External changes are mirrored
+/// before the sidebar is drawn, so this only acts on a user click.
+pub fn sync_fly_mirror(
+    mirror: &mut bool,
+    fly: &mut Option<FlyCamera>,
+    orbit: &OrbitCamera,
+    is_3d: bool,
+) {
+    if *mirror != fly.is_some() {
+        toggle_fly(fly, orbit, is_3d);
+        *mirror = fly.is_some();
     }
 }
 

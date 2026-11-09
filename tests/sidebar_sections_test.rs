@@ -6,14 +6,16 @@ use vector_field_explorer::ui::sidebar::{Controls, SECTIONS, Section};
 use vector_field_explorer::viewmodel::ArrowLengthMode;
 
 #[test]
-fn sections_are_ordered_display_features_coloring_domain() {
+fn sections_are_ordered_display_camera_features_coloring_domain() {
     let titles: Vec<&str> = SECTIONS.iter().map(|section| section.title()).collect();
-    assert_eq!(titles, ["Display", "Features", "Coloring", "Domain"]);
+    assert_eq!(titles, ["Display", "Camera", "Features", "Coloring", "Domain"]);
+    assert_eq!(Section::Camera.title(), "Camera");
 }
 
 #[test]
-fn display_and_features_open_first_the_others_stay_collapsed() {
+fn display_camera_and_features_open_first_the_others_stay_collapsed() {
     assert!(Section::Display.default_open(), "Display is the primary knob group");
+    assert!(Section::Camera.default_open(), "the fly toggle starts discoverable");
     assert!(Section::Features.default_open(), "Features is the second everyday group");
     assert!(!Section::Coloring.default_open(), "Coloring starts collapsed");
     assert!(!Section::Domain.default_open(), "Domain starts collapsed");
@@ -35,6 +37,7 @@ fn each_reset_restores_only_its_own_section() {
     controls.particles = true;
     controls.domain_min = Vec3::splat(-5.0);
     controls.domain_max = Vec3::splat(5.0);
+    controls.fly = true;
 
     controls.reset_display();
     assert_eq!(controls.density, defaults.density);
@@ -59,4 +62,12 @@ fn each_reset_restores_only_its_own_section() {
     controls.reset_domain();
     assert_eq!(controls.domain_min, defaults.domain_min);
     assert_eq!(controls.domain_max, defaults.domain_max);
+    assert!(controls.fly, "the Domain reset leaves Camera's fly toggle alone");
+
+    controls.reset_camera();
+    assert!(!controls.fly, "the Camera reset exits fly");
+    assert_eq!(controls.density, defaults.density, "the Camera reset leaves Display alone");
+    assert!(!controls.streamlines, "the Camera reset leaves Features alone");
+    assert_eq!(controls.colormap, defaults.colormap, "the Camera reset leaves Coloring alone");
+    assert_eq!(controls.domain_min, defaults.domain_min, "the Camera reset leaves Domain alone");
 }

@@ -5,7 +5,11 @@ use glam::{Vec2, Vec3};
 
 use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use crate::domain::Domain;
-use crate::fly_camera::{FlyCamera, FlyKeys, is_command_chord, sync_fly};
+use crate::fly_camera::{
+    CROSSHAIR_ALPHA, FlyCamera, FlyKeys, capture_exit_required, capture_transition,
+    crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
+    sync_fly, sync_fly_mirror,
+};
 use crate::reference::reference_lines;
 use crate::render::Camera;
 use crate::renderer::{
@@ -27,6 +31,7 @@ use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
 use crate::view_command::{self, ViewCommand, ViewContext};
 use crate::viewmodel::{
+    CapturedClickOutcome,
     ClickOutcome,
     DragButtons,
     DragChannel,
@@ -34,6 +39,7 @@ use crate::viewmodel::{
     State,
     ViewGesture,
     apply_camera_input,
+    captured_click_outcome,
     click_outcome,
     drag_channel,
     undo_click_seed,
@@ -104,6 +110,13 @@ pub struct VfApp {
     /// Movement keys held this frame, accumulated from `Event::Key` so the
     /// physical QWERTY positions drive movement on native.
     pub fly_keys: FlyKeys,
+    /// Whether pointer capture is active (ticket 65): the last state sent to
+    /// the platform. The commands are edge-triggered from this flag, never
+    /// every frame.
+    capture_active: bool,
+    /// The click that entered fly (the sidebar checkbox, normally) must not
+    /// also seed the field through the captured-click path.
+    suppress_capture_click: bool,
     pub presets: PresetPanel,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
@@ -201,6 +214,8 @@ impl VfApp {
             orbit,
             fly: None,
             fly_keys: FlyKeys::default(),
+            capture_active: false,
+            suppress_capture_click: false,
             presets: PresetPanel::new(),
             style: settings.style,
             layout: settings.layout,
@@ -335,6 +350,62 @@ impl VfApp {
         if exit {
             self.fly = None;
             self.fly_keys.clear();
+        }
+    }
+
+    /// Edge-triggered pointer capture for fly mode (ticket 65). Capture is
+    /// best-effort: fly never depends on it, and drag-look remains the
+    /// fallback when the platform refuses the locked grab (winit's X11 backend
+    /// never locks; some compositors/browsers refuse it) or the web bridge is
+    /// missing. While captured, a text field taking focus exits fly so a
+    /// hidden pointer cannot be stranded in the formula bar; on the web a lost
+    /// pointer lock (browser Esc) does the same.
+    fn sync_fly_capture(&mut self, ctx: &egui::Context) {
+        let text_focused = ctx.text_edit_focused();
+        #[cfg(target_arch = "wasm32")]
+        let lock_lost = crate::pointer_lock::lock_lost();
+        #[cfg(not(target_arch = "wasm32"))]
+        let lock_lost = false;
+        if capture_exit_required(self.capture_active, text_focused, lock_lost) {
+            self.fly = None;
+            self.fly_keys.clear();
+        }
+
+        let desired = self.fly.is_some() && self.state.is_3d();
+        if let Some((grabs, visible)) = capture_transition(self.capture_active, desired) {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Confined first, then Locked: X11 refuses Locked and keeps
+                // the confinement; other platforms upgrade to a real lock.
+                for grab in grabs {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(*grab));
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(visible));
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = (grabs, visible);
+                if desired {
+                    crate::pointer_lock::request();
+                } else {
+                    crate::pointer_lock::release();
+                    // Drop any motion accumulated before the exit.
+                    let _ = crate::pointer_lock::take_delta();
+                }
+            }
+            self.capture_active = desired;
+            if desired {
+                // The click that checked the sidebar box must not also seed
+                // the field at the crosshair this frame.
+                self.suppress_capture_click = true;
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if self.capture_active {
+            // Locked-pointer motion does not arrive as egui events, so keep a
+            // frame coming to drain the bridge even without movement keys.
+            ctx.request_repaint();
         }
     }
 
@@ -485,6 +556,14 @@ impl eframe::App for VfApp {
         // sidebar's `apply` has committed the change below.
         let domain_before = self.state.domain;
         let ctx = ui.ctx().clone();
+
+        // Ticket 65: a window that loses focus leaves fly immediately so the
+        // locked/hidden pointer is never stranded in the background. The
+        // capture release follows later this frame from `sync_fly_capture`.
+        ctx.input(|input| {
+            exit_on_focus_loss(&mut self.fly, &mut self.fly_keys, &input.events);
+        });
+
         for action in menu::shortcut_actions(&ctx) {
             self.apply_menu_action(action, &ctx);
         }
@@ -532,8 +611,6 @@ impl eframe::App for VfApp {
                 &mut self.style,
                 &self.screenshot,
                 &mut self.appearance_open,
-                self.fly.is_some(),
-                self.state.is_3d(),
             );
             style_changed = changed;
             if let Some(action) = action {
@@ -563,6 +640,12 @@ impl eframe::App for VfApp {
         // camera work this frame, then the held movement keys are accumulated.
         sync_fly(&mut self.fly, self.state.is_3d());
         self.update_fly_keys(&ctx);
+
+        // Ticket 65: mirror the real camera into the sidebar's Camera section
+        // before it draws, so C/Esc, a 2D switch, Reset/Fit and presets are all
+        // reflected on this frame. A user edit is reconciled after the panel
+        // through the one `sync_fly_mirror` seam.
+        self.sidebar.fly = self.fly.is_some();
 
         // Left Controls panel, or its collapsed rail. The panel is shown
         // before the scene rebuild below so a control edit is reflected in this
@@ -602,6 +685,15 @@ impl eframe::App for VfApp {
                 self.layout.controls_expanded = true;
             }
         }
+
+        // Ticket 65: a click on the Camera section's checkbox edits only the
+        // mirror; apply it through the same fly seam C uses, then resync.
+        sync_fly_mirror(
+            &mut self.sidebar.fly,
+            &mut self.fly,
+            &self.orbit,
+            self.state.is_3d(),
+        );
 
         // Ticket 47: a domain edit moves the view with the box. The orbit record
         // follows unconditionally — 3D to the full new centre, 2D in x/y with
@@ -681,6 +773,12 @@ impl eframe::App for VfApp {
             // components ignored (review M-3).
             apply_camera_record(&applied, &mut self.orbit, &mut self.fly);
         }
+
+        // Ticket 65: capture is edge-triggered after every path that can
+        // enter or leave fly this frame (C, the sidebar, Esc, 2D switch,
+        // Reset/Fit, presets), so a preset that exits releases the pointer in
+        // the same frame it applies.
+        self.sync_fly_capture(&ctx);
 
         // Rebuild the scene only when a setter marked the state dirty. The
         // app keeps owning the backdrop lines: fresh snapshots arrive on top
@@ -799,17 +897,33 @@ impl eframe::App for VfApp {
             // orbit camera keeps the pose the exit will restore.
             let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
             if let Some(fly) = self.fly.as_mut() {
+                let captured = self.capture_active;
                 let drag = if resp.dragged_by(egui::PointerButton::Primary) {
                     let delta = resp.drag_delta();
                     Vec2::new(delta.x, delta.y)
                 } else {
                     Vec2::ZERO
                 };
+                // Raw pointer-lock motion (native `Event::MouseMoved`, or the
+                // web bridge) is the captured look channel. Without it the
+                // drag delta is the fallback. `frame_look` never sums both, so
+                // one physical move cannot look twice.
+                let raw = if captured {
+                    crate::pointer_lock::motion_delta(ui.ctx())
+                } else {
+                    Vec2::ZERO
+                };
+                let look = frame_look(captured, raw, drag);
                 let boost = ui.ctx().input(|input| input.modifiers.shift);
-                let input = self.fly_keys.input(drag, boost);
+                let input = self.fly_keys.input(look, boost);
                 let dt = ui.ctx().input(|input| input.stable_dt);
                 fly.step(input, dt);
-                if resp.hovered() || resp.dragged() {
+                if captured {
+                    // A locked pointer may not hover the viewport response, so
+                    // the wheel scales speed regardless of hover.
+                    let scroll = ui.ctx().input(|input| input.smooth_scroll_delta.y);
+                    fly.adjust_speed(scroll);
+                } else if resp.hovered() || resp.dragged() {
                     let scroll = ui.ctx().input(|input| input.smooth_scroll_delta.y);
                     fly.adjust_speed(scroll);
                     let icon = if resp.dragged() {
@@ -882,17 +996,37 @@ impl eframe::App for VfApp {
             // resets the view instead — taking back the seed its first click
             // planted so the gesture leaves no burst behind.
             let now = ui.ctx().input(|input| input.time);
-            match click_outcome(resp.clicked(), resp.double_clicked(), resp.dragged()) {
-                ClickOutcome::ResetView => {
-                    self.undo_last_click_seed(now);
-                    self.apply_view_command(ViewCommand::Reset);
-                }
-                ClickOutcome::Seed => {
-                    if let Some(pos) = resp.interact_pointer_pos() {
-                        self.seed_click(pos, rect, aspect, now);
+            if self.capture_active {
+                // Captured pointer is FPS-modal: every click seeds at the
+                // crosshair (the viewport centre, NDC 0,0), and double-click
+                // reset is orbit-only, so a second click seeds again. A locked
+                // pointer may sit outside the response, so use the global
+                // pointer click rather than `resp.clicked()`.
+                let clicked = ui.ctx().input(|input| input.pointer.primary_clicked());
+                if self.suppress_capture_click {
+                    // Swallow the click that checked the sidebar toggle.
+                    self.suppress_capture_click = false;
+                } else {
+                    match captured_click_outcome(clicked, resp.dragged()) {
+                        CapturedClickOutcome::SeedCentre => {
+                            self.seed_click(rect.center(), rect, aspect, now);
+                        }
+                        CapturedClickOutcome::Ignore => {}
                     }
                 }
-                ClickOutcome::None => {}
+            } else {
+                match click_outcome(resp.clicked(), resp.double_clicked(), resp.dragged()) {
+                    ClickOutcome::ResetView => {
+                        self.undo_last_click_seed(now);
+                        self.apply_view_command(ViewCommand::Reset);
+                    }
+                    ClickOutcome::Seed => {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            self.seed_click(pos, rect, aspect, now);
+                        }
+                    }
+                    ClickOutcome::None => {}
+                }
             }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so
@@ -1065,6 +1199,19 @@ impl eframe::App for VfApp {
                 },
             );
             ui.painter().add(callback);
+
+            // Ticket 65: the cursor is hidden while captured, so mark where a
+            // click will land. Two centred 12 px lines over the field pass;
+            // painter-only, no interaction.
+            if crosshair_visible(self.fly.is_some(), self.capture_active) {
+                let stroke = egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_white_alpha(CROSSHAIR_ALPHA),
+                );
+                for (from, to) in crosshair_segments(rect.center()) {
+                    ui.painter().line_segment([from, to], stroke);
+                }
+            }
         });
 
         // Help overlay last, so it paints over the viewport (and the field

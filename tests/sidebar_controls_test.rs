@@ -40,6 +40,7 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.domain_min, s.domain.min, "domain min agrees");
     assert_eq!(c.domain_max, s.domain.max, "domain max agrees");
     assert_eq!(c.plane, s.plane, "the plane mirror starts where the seam does");
+    assert!(!c.fly, "fly mode starts off; the app mirrors the active camera into it");
 }
 
 #[test]

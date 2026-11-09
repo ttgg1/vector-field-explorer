@@ -4,9 +4,9 @@
 // and reject the stale "right-drag pans" copy.
 
 use vector_field_explorer::ui::help_overlay::{
-    HELP_ROW_SIZE, HELP_SECTIONS, HELP_SECTION_TITLE_SIZE, HELP_WINDOW_TITLE_SIZE,
-    OVERLAY_HEADING_COLOR, HelpRow, all_rows, rows_for, section_heading_style, sections_for,
-    window_heading_color,
+    FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTIONS, HELP_SECTION_TITLE_SIZE,
+    HELP_WINDOW_TITLE_SIZE, OVERLAY_HEADING_COLOR, HelpRow, all_rows, rows_for,
+    section_heading_style, sections_for, window_heading_color,
 };
 
 const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
@@ -22,7 +22,10 @@ const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
     ("R", "Reset view"),
     ("F", "Fit domain"),
     ("Click", "Seed streamlines"),
-    ("C", "fly · WASD move · Q/E down/up · Shift boost · drag look · Esc exit"),
+    (
+        "C",
+        "fly · WASD move · Q/E down/up · Shift boost · mouse look · Esc exit · Camera toggles it",
+    ),
 ];
 
 const VIEW_2D_BINDINGS: &[(&str, &str)] = &[
@@ -91,6 +94,29 @@ fn every_binding_is_listed_exactly_once_in_its_group() {
     assert_lists_once(section("3D view"), VIEW_3D_BINDINGS, "3D view");
     assert_lists_once(section("2D view"), VIEW_2D_BINDINGS, "2D view");
     assert_lists_once(section("Global"), GLOBAL_BINDINGS, "Global");
+}
+
+#[test]
+fn help_actions_fit_the_overlay_width_budget() {
+    // Ticket-65 review LOW-2: the fly row had grown to 95 characters without a
+    // visual width check. The compact overlay wraps neither column, so keep
+    // every action inside the 88-character budget (the shortened fly row is
+    // 87). A future row that needs more should split rather than widen.
+    const MAX_ACTION_CHARS: usize = 88;
+    for row in all_rows() {
+        let length = row.action.chars().count();
+        assert!(
+            length <= MAX_ACTION_CHARS,
+            "`{}: {}` is {length} characters, over the {MAX_ACTION_CHARS}-character overlay budget",
+            row.input,
+            row.action,
+        );
+    }
+    assert_eq!(
+        FLY_HELP_ACTION.chars().count(),
+        87,
+        "the fly row is pinned at the shortened length",
+    );
 }
 
 #[test]

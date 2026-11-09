@@ -107,7 +107,6 @@ fn the_bar_carries_the_v1_menu_table() {
                 vec![
                     "Toggle Controls",
                     "Toggle Presets",
-                    "Fly camera",
                     "Reset layout",
                     "Reset camera",
                     "Appearance…",
@@ -430,6 +429,43 @@ fn plain_c_toggles_fly_but_modified_c_does_not() {
         .all(|action| *action != MenuAction::ToggleFly),
         "Ctrl+Shift+C is Copy formula, never the fly toggle",
     );
+}
+
+#[test]
+fn c_types_in_a_focused_text_field_instead_of_toggling_fly() {
+    // Ticket 65 keeps C as the fly shortcut, but the menu table's text-field
+    // rule still wins: typing C in the formula bar inserts a character.
+    let ctx = egui::Context::default();
+    let mut text = String::new();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.text_edit_singleline(&mut text).request_focus();
+    });
+    output.textures_delta.clear();
+
+    let mut input = egui::RawInput::default();
+    input.events.push(egui::Event::Text("c".to_string()));
+    input.events.push(egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let mut fired = None;
+    let mut output = ctx.run_ui(input, |ui| {
+        if fired.is_none() {
+            fired = Some(menu::shortcut_actions(ui.ctx()));
+        }
+        ui.text_edit_singleline(&mut text);
+    });
+    output.textures_delta.clear();
+
+    assert_eq!(
+        fired.unwrap_or_default(),
+        Vec::<MenuAction>::new(),
+        "C must not toggle fly while a text field owns the keyboard",
+    );
+    assert!(text.contains('c'), "the focused field receives the keystroke: {text:?}");
 }
 
 #[test]

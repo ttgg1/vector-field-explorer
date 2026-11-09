@@ -13,7 +13,8 @@ use vector_field_explorer::view_command::{
 };
 use vector_field_explorer::viewmodel::{
     ClickOutcome, DOUBLE_CLICK_WINDOW, DragButtons, DragChannel, LastClickSeed, ViewGesture,
-    apply_camera_input, click_outcome, drag_channel, undo_click_seed,
+    CapturedClickOutcome, apply_camera_input, captured_click_outcome, click_outcome,
+    drag_channel, undo_click_seed,
 };
 
 /// A view context at the default (square, 1.0) aspect. The aspect-aware fit
@@ -475,6 +476,34 @@ fn click_seeds_only_when_the_gesture_never_became_a_drag() {
 
 fn last_click(seed: Vec3, particles_before: usize, time: f64) -> LastClickSeed {
     LastClickSeed { seed, particles_before, time }
+}
+
+#[test]
+fn captured_clicks_seed_the_centre_and_never_reset_the_view() {
+    // Ticket 65: a captured pointer is FPS-modal, so a click seeds at the
+    // crosshair. The outcome type has no reset variant, so both clicks of a
+    // captured double-click run this same decision and seed again; reset
+    // belongs to orbit mode.
+    assert_eq!(
+        captured_click_outcome(true, false),
+        CapturedClickOutcome::SeedCentre,
+        "a captured click seeds at the centre",
+    );
+    assert_eq!(
+        captured_click_outcome(true, true),
+        CapturedClickOutcome::Ignore,
+        "a captured drag never seeds",
+    );
+    assert_eq!(
+        captured_click_outcome(false, false),
+        CapturedClickOutcome::Ignore,
+        "no click, no seed",
+    );
+    assert_eq!(
+        click_outcome(true, true, false),
+        ClickOutcome::ResetView,
+        "an orbit double-click still resets",
+    );
 }
 
 #[test]

@@ -13,8 +13,10 @@ use glam::{Vec2, Vec3};
 use vector_field_explorer::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::fly_camera::{
-    DEFAULT_SPEED, FlyCamera, FlyInput, FlyKeys, MAX_PITCH, MAX_SPEED, MIN_SPEED,
-    WHEEL_NOTCH_POINTS, is_command_chord, sync_fly, toggle_fly,
+    CROSSHAIR_ALPHA, CROSSHAIR_HALF_LENGTH, DEFAULT_SPEED, FlyCamera, FlyInput, FlyKeys,
+    MAX_PITCH, MAX_SPEED, MIN_SPEED, WHEEL_NOTCH_POINTS, capture_commands,
+    capture_exit_required, capture_transition, crosshair_segments, crosshair_visible,
+    exit_on_focus_loss, frame_look, is_command_chord, sync_fly, sync_fly_mirror, toggle_fly,
 };
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load};
 use vector_field_explorer::render::Camera;
@@ -508,21 +510,21 @@ fn applying_a_camera_preset_exits_fly_and_matches_the_no_fly_result() {
 }
 
 #[test]
-fn the_view_menu_and_help_expose_fly_mode() {
+fn fly_has_one_visible_entry_and_keeps_the_c_shortcut() {
+    // Ticket 65: the sidebar Camera section is the one visible control; the
+    // View menu no longer carries a duplicate item, but C stays bound.
     let view = menu::MENUS
         .iter()
         .find(|menu| menu.title == "View")
         .expect("the View menu exists");
-    let item = view
-        .items
-        .iter()
-        .find(|item| item.label == "Fly camera")
-        .expect("View > Fly camera exists");
-    assert_eq!(item.action, MenuAction::ToggleFly);
-    assert!(!menu::item_enabled(item, false), "the item is disabled in 2D");
-    assert!(menu::item_enabled(item, true), "the item is enabled in 3D");
-    assert!(!menu::item_checked(item, false), "no checkmark while orbit is active");
-    assert!(menu::item_checked(item, true), "the checkmark follows the active fly camera");
+    assert!(
+        !view.items.iter().any(|item| item.action == MenuAction::ToggleFly),
+        "View > Fly camera was removed in favour of the sidebar Camera section",
+    );
+    assert!(
+        !view.items.iter().any(|item| item.label == "Fly camera"),
+        "no stale Fly camera label remains",
+    );
 
     let shortcut = menu::shortcut_for(MenuAction::ToggleFly).expect("C is bound to fly mode");
     assert_eq!(shortcut.key, egui::Key::C);
@@ -536,8 +538,170 @@ fn the_view_menu_and_help_expose_fly_mode() {
     );
     assert_eq!(
         format!("{FLY_HELP_INPUT} {FLY_HELP_ACTION}"),
-        "C fly · WASD move · Q/E down/up · Shift boost · drag look · Esc exit",
+        "C fly · WASD move · Q/E down/up · Shift boost · mouse look · Esc exit · Camera toggles it",
     );
+}
+
+#[test]
+fn capture_commands_confine_before_locking_and_hide_only_while_active() {
+    assert_eq!(
+        capture_commands(true),
+        (
+            &[egui::CursorGrab::Confined, egui::CursorGrab::Locked][..],
+            false,
+        ),
+        "entering attempts Confined first, then Locked, and hides the cursor",
+    );
+    let (enter_grabs, _) = capture_commands(true);
+    assert_eq!(
+        enter_grabs.first(),
+        Some(&egui::CursorGrab::Confined),
+        "the X11-safe fallback is sent first",
+    );
+    assert_eq!(
+        enter_grabs.last(),
+        Some(&egui::CursorGrab::Locked),
+        "platforms that grant Locked end in a real lock",
+    );
+    assert_eq!(
+        capture_commands(false),
+        (&[egui::CursorGrab::None][..], true),
+        "leaving fly clears the grab and restores the cursor",
+    );
+}
+
+#[test]
+fn capture_commands_are_edge_triggered_once_per_transition() {
+    assert_eq!(
+        capture_transition(false, false),
+        None,
+        "staying out of fly sends nothing",
+    );
+    assert_eq!(
+        capture_transition(true, true),
+        None,
+        "staying in fly sends nothing every frame",
+    );
+    assert_eq!(
+        capture_transition(false, true),
+        Some((
+            &[egui::CursorGrab::Confined, egui::CursorGrab::Locked][..],
+            false,
+        )),
+        "entering fly sends the capture once",
+    );
+    assert_eq!(
+        capture_transition(true, false),
+        Some((&[egui::CursorGrab::None][..], true)),
+        "leaving fly releases the capture once",
+    );
+}
+
+#[test]
+fn capture_exits_only_for_text_focus_or_a_lost_web_lock() {
+    assert!(
+        capture_exit_required(true, true, false),
+        "a focused text field exits capture so the pointer is usable",
+    );
+    assert!(
+        capture_exit_required(true, false, true),
+        "a dropped web pointer lock exits capture",
+    );
+    assert!(
+        !capture_exit_required(true, false, false),
+        "ordinary flying never releases capture every frame",
+    );
+    assert!(
+        !capture_exit_required(false, true, true),
+        "no capture, no release",
+    );
+}
+
+#[test]
+fn frame_look_prefers_raw_motion_only_while_captured() {
+    let drag = Vec2::new(8.0, -3.0);
+    let raw = Vec2::new(-12.0, 5.0);
+
+    assert_eq!(frame_look(false, raw, drag), drag, "orbit/drag-look ignores raw motion");
+    assert_eq!(frame_look(true, raw, drag), raw, "captured look uses raw motion");
+    assert_eq!(
+        frame_look(true, Vec2::ZERO, drag),
+        drag,
+        "a captured frame with no raw motion falls back to drag-look",
+    );
+    assert_eq!(
+        frame_look(true, Vec2::new(f32::NAN, 1.0), drag),
+        drag,
+        "a non-finite raw delta never poisons the look",
+    );
+}
+
+#[test]
+fn a_raw_mouse_delta_changes_yaw_and_pitch_once() {
+    let mut fly = fly_at_origin();
+    let raw = Vec2::new(20.0, -10.0);
+    let input = FlyInput {
+        look: frame_look(true, raw, Vec2::new(999.0, 999.0)),
+        ..FlyInput::default()
+    };
+    fly.step(input, 0.016);
+    assert!((fly.yaw + 0.1).abs() < 1e-5, "raw x turns yaw by 0.005 rad/point: {}", fly.yaw);
+    assert!((fly.pitch - 0.05).abs() < 1e-5, "raw y pitches by 0.005 rad/point: {}", fly.pitch);
+}
+
+#[test]
+fn focus_loss_exits_fly_and_clears_the_keys() {
+    let mut fly = Some(FlyCamera::default());
+    let mut keys = FlyKeys::default();
+    keys.apply_key(egui::Key::W, None, true);
+
+    exit_on_focus_loss(&mut fly, &mut keys, &[egui::Event::WindowFocused(true)]);
+    assert!(fly.is_some(), "gaining focus is not a reason to leave fly");
+    assert!(keys.movement_held(), "unrelated events keep the held keys");
+
+    exit_on_focus_loss(&mut fly, &mut keys, &[egui::Event::WindowFocused(false)]);
+    assert!(fly.is_none(), "focus loss leaves fly so a hidden cursor cannot be stranded");
+    assert!(!keys.movement_held(), "focus loss clears the held movement keys");
+}
+
+#[test]
+fn the_sidebar_mirror_enters_fly_through_the_one_toggle_seam() {
+    let orbit = OrbitCamera::default();
+    let mut fly = None;
+    let mut mirror = true;
+
+    sync_fly_mirror(&mut mirror, &mut fly, &orbit, true);
+    assert!(fly.is_some(), "checking Fly camera in 3D enters fly");
+    assert!(mirror, "the mirror follows the new state");
+
+    let mut mirror = false;
+    sync_fly_mirror(&mut mirror, &mut fly, &orbit, true);
+    assert!(fly.is_none(), "unchecking Fly camera leaves fly");
+    assert!(!mirror);
+
+    // 2D is inert: the checkbox cannot force fly mode on.
+    let mut fly = None;
+    let mut mirror = true;
+    sync_fly_mirror(&mut mirror, &mut fly, &orbit, false);
+    assert!(fly.is_none(), "2D ignores the checkbox");
+    assert!(!mirror, "the mirror is resynced to the inert state");
+}
+
+#[test]
+fn the_crosshair_is_two_twelve_pixel_lines_centred_on_the_viewport() {
+    assert_eq!(CROSSHAIR_HALF_LENGTH, 6.0, "the full crosshair arm is 12 px");
+    assert_eq!(CROSSHAIR_ALPHA, 153, "60% alpha white");
+    let center = egui::pos2(400.0, 300.0);
+    let [(left, right), (top, bottom)] = crosshair_segments(center);
+    assert_eq!(left, egui::pos2(394.0, 300.0));
+    assert_eq!(right, egui::pos2(406.0, 300.0));
+    assert_eq!(top, egui::pos2(400.0, 294.0));
+    assert_eq!(bottom, egui::pos2(400.0, 306.0));
+
+    assert!(crosshair_visible(true, true), "the crosshair shows while flying captured");
+    assert!(!crosshair_visible(false, true), "no fly, no crosshair");
+    assert!(!crosshair_visible(true, false), "no capture, no crosshair");
+    assert!(!crosshair_visible(false, false));
 }
 
 #[test]

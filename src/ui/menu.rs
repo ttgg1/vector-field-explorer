@@ -140,7 +140,8 @@ pub const MENUS: &[Menu] = &[
         items: &[
             MenuItem { label: "Toggle Controls", action: MenuAction::ToggleControls },
             MenuItem { label: "Toggle Presets", action: MenuAction::TogglePresets },
-            MenuItem { label: "Fly camera", action: MenuAction::ToggleFly },
+            // Ticket 65: the sidebar Camera section is the one visible fly
+            // control; C keeps dispatching `ToggleFly` through this table.
             MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
             MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
             // The user reported looking for color controls under View (ticket
@@ -245,22 +246,6 @@ pub fn item_shortcut_label(item: &MenuItem) -> Option<&'static str> {
     }
 }
 
-/// Whether `item` shows its checked (active) state. Fly camera is the one
-/// checkable command; its state mirrors the active camera.
-pub fn item_checked(item: &MenuItem, fly_active: bool) -> bool {
-    item.action == MenuAction::ToggleFly && fly_active
-}
-
-/// Whether `item` is enabled in the current view. Fly camera is 3D-only, so it
-/// renders disabled in 2D while `C` stays ignored there (the shortcut path
-/// reuses [`toggle_fly`](crate::fly_camera::toggle_fly)).
-pub fn item_enabled(item: &MenuItem, is_3d: bool) -> bool {
-    match item.action {
-        MenuAction::ToggleFly => is_3d,
-        _ => true,
-    }
-}
-
 /// Whether `shortcut` may fire this frame. Every shortcut stays inert while a
 /// text field has focus except the global ones (Ctrl+Q).
 pub fn shortcut_allowed(shortcut: &Shortcut, text_edit_focused: bool) -> bool {
@@ -332,6 +317,11 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             // The Controls panel's knobs, not the field itself: the formula is
             // the document, the controls are how it is displayed.
             *ui.controls = Controls::new();
+            // Ticket 65: the Camera section's fly toggle is also a control.
+            // Clear the real camera too, otherwise the app's pre-sidebar
+            // mirror sync would silently restore it from the still-active fly
+            // mode and the reset would look undone.
+            *ui.fly = None;
             sidebar::apply(ui.state, ui.controls);
             // The transport is session state, not part of the Controls panel,
             // but "Reset all controls" means a fresh session: time 0, playing,

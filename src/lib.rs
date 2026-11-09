@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod particles;
 pub mod persistence;
 pub mod plane;
+pub mod pointer_lock;
 pub mod presets;
 pub mod reference;
 pub mod render;

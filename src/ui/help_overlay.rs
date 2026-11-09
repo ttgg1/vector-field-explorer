@@ -80,7 +80,7 @@ pub struct HelpSection {
 /// the overlay.
 pub const FLY_HELP_INPUT: &str = "C";
 pub const FLY_HELP_ACTION: &str =
-    "fly · WASD move · Q/E down/up · Shift boost · drag look · Esc exit";
+    "fly · WASD move · Q/E down/up · Shift boost · mouse look · Esc exit · Camera toggles it";
 
 const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "Left-drag", action: "Orbit" },

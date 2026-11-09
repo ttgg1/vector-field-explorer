@@ -3,10 +3,11 @@
 //! and particles, and the six domain extrema. Transport speed lives in the
 //! strip under the formula bar (ticket 26), not here.
 //!
-//! Sections follow the agreed order (ticket 14): **Display → Features →
-//! Coloring → Domain**. Display and Features start open, the two less-used
-//! sections start collapsed, and every section has a reset-to-defaults button
-//! in its header.
+//! Sections follow the agreed order (tickets 14 and 65): **Display → Camera →
+//! Features → Coloring → Domain**. Display, Camera and Features start open,
+//! the two less-used sections start collapsed, and every section has a
+//! reset-to-defaults button in its header. Camera hosts the fly toggle and is
+//! the future home of FOV/near-far/projection settings.
 //!
 //! The widgets edit a sidebar-local mirror ([`Controls`], like the formula
 //! bar's [`FormulaBarState`]); `show` hands those values to the viewmodel
@@ -52,14 +53,16 @@ use glam::Vec3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     Display,
+    Camera,
     Features,
     Coloring,
     Domain,
 }
 
 /// The sections in the order they appear in the panel.
-pub const SECTIONS: [Section; 4] = [
+pub const SECTIONS: [Section; 5] = [
     Section::Display,
+    Section::Camera,
     Section::Features,
     Section::Coloring,
     Section::Domain,
@@ -70,16 +73,22 @@ impl Section {
     pub fn title(self) -> &'static str {
         match self {
             Section::Display => "Display",
+            Section::Camera => "Camera",
             Section::Features => "Features",
             Section::Coloring => "Coloring",
             Section::Domain => "Domain",
         }
     }
 
-    /// Display and Features are the everyday controls, so they start open;
-    /// Coloring and Domain keep their space until the user asks for them.
+    /// Display, Camera and Features are the everyday controls, so they start
+    /// open; Coloring and Domain keep their space until the user asks for
+    /// them. Camera starts open so the fly toggle is discoverable (ticket 65
+    /// ruling).
     pub fn default_open(self) -> bool {
-        matches!(self, Section::Display | Section::Features)
+        matches!(
+            self,
+            Section::Display | Section::Camera | Section::Features
+        )
     }
 }
 
@@ -221,6 +230,10 @@ pub struct Controls {
     /// True while the plane slider is being dragged: the mirror must keep the
     /// in-flight value instead of following the state.
     pub plane_drag: bool,
+    /// The Camera section's fly toggle (ticket 65). The app mirrors the active
+    /// camera into this every frame and reconciles a user edit through
+    /// `fly_camera::sync_fly_mirror`; the sidebar itself never owns fly state.
+    pub fly: bool,
 }
 
 impl Controls {
@@ -248,6 +261,7 @@ impl Controls {
             domain_max: domain.max,
             plane: PlaneView::default(),
             plane_drag: false,
+            fly: false,
         }
     }
 
@@ -290,6 +304,13 @@ impl Controls {
         let defaults = Controls::new();
         self.domain_min = defaults.domain_min;
         self.domain_max = defaults.domain_max;
+    }
+
+    /// Restore the Camera section's defaults: leave fly mode (which releases
+    /// the pointer capture). Fly speed is not stored here — dropping the
+    /// `FlyCamera` already restores `DEFAULT_SPEED` on the next entry.
+    pub fn reset_camera(&mut self) {
+        self.fly = false;
     }
 }
 
@@ -446,6 +467,23 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             });
         if sampling_3d {
             commit_plane |= plane_controls(ui, controls, &domain, grid);
+        }
+    });
+
+    // Camera (ticket 65): view controls sit between Display and Features. The
+    // fly toggle keys to the sampled dimension (`is_3d`), the same gate as
+    // `toggle_fly`: a 2D formula in 3D mode must stay inert. The app mirrors
+    // the real camera into `controls.fly` each frame, so C, Esc, a 2D switch,
+    // Reset/Fit and presets all land here on the next frame.
+    section(ui, Section::Camera, controls, None, |ui, controls| {
+        ui.add_enabled_ui(sampling_3d, |ui| {
+            ui.checkbox(&mut controls.fly, "Fly camera")
+                .on_hover_text("Free flight in the 3D view (C); Esc releases the mouse");
+        })
+        .response
+        .on_disabled_hover_text("3D only");
+        if controls.fly && sampling_3d {
+            ui.label("Flying — Esc to release");
         }
     });
 
@@ -644,6 +682,7 @@ fn section(
     if reset {
         match section {
             Section::Display => controls.reset_display(),
+            Section::Camera => controls.reset_camera(),
             Section::Features => controls.reset_features(),
             Section::Coloring => controls.reset_coloring(),
             Section::Domain => controls.reset_domain(),

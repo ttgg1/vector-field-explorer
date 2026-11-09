@@ -874,6 +874,29 @@ pub fn click_outcome(clicked: bool, double_clicked: bool, dragged: bool) -> Clic
     }
 }
 
+/// What a captured (pointer-locked) viewport gesture does. Capture is
+/// FPS-modal, so there is deliberately no reset variant: every click seeds at
+/// the crosshair, and the second click of a double-click seeds again. A drag
+/// never seeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapturedClickOutcome {
+    /// Seed at the viewport centre (NDC `(0, 0)`).
+    SeedCentre,
+    /// No click (a drag, a hover, or nothing).
+    Ignore,
+}
+
+/// Decide a captured viewport gesture. Unlike [`click_outcome`], a double
+/// click cannot become [`ClickOutcome::ResetView`]: reset belongs to orbit
+/// mode, so a captured second click seeds again.
+pub fn captured_click_outcome(clicked: bool, dragged: bool) -> CapturedClickOutcome {
+    if clicked && !dragged {
+        CapturedClickOutcome::SeedCentre
+    } else {
+        CapturedClickOutcome::Ignore
+    }
+}
+
 /// How long after a single click a second click still counts as a double-click,
 /// in seconds. Matches egui's default `max_double_click_delay`: the app uses it
 /// to take back the first click's seed when a double-click resets the view.
