@@ -9,6 +9,10 @@
 # DIST_DIR lets a negative check run against a throwaway copy instead of the
 # working tree (remove a file or a required string, then expect a non-zero
 # exit). The real artifact is always `dist/` in the repository root.
+#
+# The "does not run in browsers" guard is best-effort literal matching, not
+# natural-language detection: it catches the recorded phrasings but cannot
+# prove the absence of every possible claim.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -97,10 +101,15 @@ require_pattern "$download" 'src="screenshots/vector-field-explorer\.png"'
 require_pattern "$download" 'src="og-image\.png"'
 
 # The site must never claim the app is native-only or that no browser works.
+# (Best-effort literal matching; see the header.)
 for file in "$index" "$download"; do
   for claim in \
     "does not run in a browser" \
     "does not run in the browser" \
+    "doesn't run in a browser" \
+    "won't run in a browser" \
+    "does not work in a browser" \
+    "not a browser app" \
     "no browser support" \
     "not supported in browsers" \
     "not available in the browser" \
@@ -111,9 +120,26 @@ for file in "$index" "$download"; do
 done
 
 # --- No external runtime dependencies -------------------------------------
+# Positive checks, not a CDN-host deny-list: scripts, images and iframes must
+# load from this artifact, and a stylesheet link must be local unless it is the
+# canonical URL declaration. This catches any new CDN host, not just the ones
+# recorded in a blocklist.
 for file in "$index" "$download"; do
-  if grep -Eqi 'cdn\.|unpkg\.com|jsdelivr|fonts\.googleapis|fonts\.gstatic' "$file"; then
-    fail "external CDN/font reference in ${file#"$root"/}"
+  if grep -Eqi '<(script|img|iframe)[^>]*src="https?://' "$file"; then
+    fail "external script/image/iframe src in ${file#"$root"/}"
+  fi
+  while IFS= read -r line; do
+    if [[ "$line" == *"<link"* && "$line" == *'href="http'* && "$line" != *'rel="canonical"'* ]]; then
+      fail "external stylesheet/asset link in ${file#"$root"/}: $line"
+    fi
+  done < <(grep -i '<link' "$file" || true)
+done
+
+# CSS must not fetch anything at runtime or import another sheet.
+shopt -s nullglob
+for sheet in "$dist"/*.css; do
+  if grep -Eqi 'url\(\s*["'"'"']?https?://|@import' "$sheet"; then
+    fail "external CSS dependency in ${sheet#"$root"/}"
   fi
 done
 
@@ -130,20 +156,21 @@ for file in "$index" "$download"; do
     esac
     target="${ref%%#*}"
     target="${target%%\?*}"
-    [ -n "$target" ] || continue
-    if [[ "$target" == "./" || "$target" == "." ]]; then
-      require_file "$index"
-      checked_links=$((checked_links + 1))
-      continue
-    fi
-    # Trunk rewrites the project-site base path to an absolute URL; it must
-    # still name a file inside this artifact.
+    # Normalize first so `/vector-field-explorer/` becomes the empty target and
+    # falls through to index.html below, like `./` does.
     if [[ "$target" == /vector-field-explorer/* ]]; then
+      # Trunk rewrites the project-site base path to an absolute URL; it must
+      # still name a file inside this artifact.
       target="${target#/vector-field-explorer/}"
     elif [[ "$target" == /* ]]; then
       fail "absolute local reference '$ref' in ${file#"$root"/}"
     else
       target="${target#./}"
+    fi
+    if [[ -z "$target" || "$target" == "." ]]; then
+      require_file "$index"
+      checked_links=$((checked_links + 1))
+      continue
     fi
     require_file "$dist/$target"
     checked_links=$((checked_links + 1))
