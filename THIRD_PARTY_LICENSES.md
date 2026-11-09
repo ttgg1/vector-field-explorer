@@ -241,9 +241,11 @@ SOFTWARE.
 Per-crate copyright lines for MIT-licensed crates are in the appendix.
 
 The Apache License 2.0 text is available at
-<https://www.apache.org/licenses/LICENSE-2.0>. Crates that ship their own
-licence files keep them; crates that omit them are recorded in the appendix as
-electing Apache-2.0, with the canonical Apache-2.0 text.
+<https://www.apache.org/licenses/LICENSE-2.0>. Crates that ship their own licence
+files keep them. Dual or multi-licensed crates that omit them are recorded in
+the appendix as electing Apache-2.0 with the canonical text; MIT-only crates
+that omit them use the checked-in MIT texts; the single BSL-1.0 crate is marked
+`NO LICENCE FILE`.
 
 ## System libraries and the release archives
 

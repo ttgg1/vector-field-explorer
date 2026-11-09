@@ -74,6 +74,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 
 target = sys.argv[1]
 manifest_path = os.path.join("packaging", "notice-sources", "manifest.json")
@@ -110,8 +111,8 @@ def cargo_metadata():
         fail(f"cargo metadata returned invalid JSON: {error}")
 
 
-def target_graph_counts():
-    """Exact per-target cargo tree package counts for the bundle header."""
+def target_graph_counts(workspace_prefixes):
+    """Exact per-target distinct non-workspace package counts."""
     targets = (
         ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"),
         ("aarch64-apple-darwin", "aarch64-apple-darwin"),
@@ -125,6 +126,7 @@ def target_graph_counts():
                     [
                         "cargo",
                         "tree",
+                        "--locked",
                         "--target",
                         target,
                         "--edges",
@@ -145,9 +147,19 @@ def target_graph_counts():
                 if error.stderr:
                     sys.stderr.write(error.stderr)
                 fail(f"cargo tree failed for {target} ({edges})")
-            packages = {
-                line.strip() for line in result.stdout.splitlines() if line.strip()
-            }
+            packages = set()
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.endswith(" (*)"):
+                    line = line[:-4].rstrip()
+                if not line:
+                    continue
+                if any(
+                    line == prefix or line.startswith(f"{prefix} (")
+                    for prefix in workspace_prefixes
+                ):
+                    continue
+                packages.add(line)
             counts[(label, edges)] = len(packages)
     return counts
 
@@ -277,8 +289,13 @@ for index, entry in enumerate(manifest.get("mit", [])):
         mit_by_package[key] = loaded
 
 metadata = cargo_metadata()
-graph_counts = target_graph_counts()
 workspace = set(metadata["workspace_members"])
+workspace_prefixes = {
+    f"{package['name']} v{package['version']}"
+    for package in metadata["packages"]
+    if package["id"] in workspace
+}
+graph_counts = target_graph_counts(workspace_prefixes)
 
 packages = []
 texts = {}
@@ -377,8 +394,8 @@ for package in metadata["packages"]:
 
 for key in sorted(set(mit_by_package) - used_mit_keys):
     sys.stderr.write(
-        f"generate-notices: warning: {manifest_path} maps {key}, which has no "
-        "no-file MIT package in this graph\n"
+        f"generate-notices: warning: {manifest_path} maps {key}, which matches no "
+        "file-less MIT package in this graph\n"
     )
 
 packages.sort(
@@ -414,24 +431,27 @@ lines = [
     "hand. The hand-written summary is THIRD_PARTY_LICENSES.md beside this file.",
     "",
     f"{len(packages)} non-workspace packages: {with_file} ship a crate licence file.",
-    f"Of the {without_file} that do not, {apache_elected} take Apache-2.0 from their SPDX",
-    f"expression ({apache_elected - len(apache_only)} dual/triple, {len(apache_only)} "
-    f"Apache-only: {', '.join(sorted(apache_only))}), {mit_manifest_used} use a checked-in",
-    "upstream MIT text from packaging/notice-sources/, and 1 is BSL-1.0",
-    "(`clipboard-win`), which is not linked into any shipped target under current",
-    "features.",
+    *textwrap.wrap(
+        f"Of the {without_file} that do not, {apache_elected} take Apache-2.0 from "
+        f"their SPDX expression ({apache_elected - len(apache_only)} dual/triple, "
+        f"{len(apache_only)} Apache-only: {', '.join(sorted(apache_only))}), "
+        f"{mit_manifest_used} use a checked-in upstream MIT text from "
+        "packaging/notice-sources/, and 1 is BSL-1.0 (`clipboard-win`), which is "
+        "not linked into any shipped target under current features.",
+        width=78,
+    ),
     "",
     "The 513-package list is a metadata superset of the shipped binaries: it covers",
-    f"every target and optional feature. cargo tree normal-edge counts are "
-    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal')]}/"
-    f"{graph_counts[('aarch64-apple-darwin', 'normal')]}/"
-    f"{graph_counts[('x86_64-apple-darwin', 'normal')]}",
-    f"and normal+build counts are "
-    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal,build')]}/"
-    f"{graph_counts[('aarch64-apple-darwin', 'normal,build')]}/"
-    f"{graph_counts[('x86_64-apple-darwin', 'normal,build')]} for Linux x86_64 /",
-    "macOS arm64 / macOS x86_64; host-only proc-macro and build units account for",
-    "part of the gap, and the remainder are optional or inactive target packages.",
+    "every target and optional feature. Per-target distinct non-workspace packages:",
+    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal')]} / "
+    f"{graph_counts[('aarch64-apple-darwin', 'normal')]} / "
+    f"{graph_counts[('x86_64-apple-darwin', 'normal')]} (normal edges);",
+    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal,build')]} / "
+    f"{graph_counts[('aarch64-apple-darwin', 'normal,build')]} / "
+    f"{graph_counts[('x86_64-apple-darwin', 'normal,build')]} (normal+build) for",
+    "Linux x86_64 / macOS arm64 / macOS x86_64. The remainder are optional or",
+    "inactive packages and packages for other targets (for example Windows-only",
+    "crates).",
     "",
     "Licence texts are normalised to LF line endings and have trailing whitespace",
     "stripped. Identical texts are deduplicated by SHA-256 content hash; each",
