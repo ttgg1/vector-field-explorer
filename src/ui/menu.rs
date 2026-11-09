@@ -70,6 +70,7 @@ menu_actions! {
     ToggleHelp,
     ShowHelpTable,
     OpenSettings,
+    OpenAppearance,
     About,
 }
 
@@ -142,6 +143,11 @@ pub const MENUS: &[Menu] = &[
             MenuItem { label: "Toggle Presets", action: MenuAction::TogglePresets },
             MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
             MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
+            // The user reported looking for color controls under View (ticket
+            // 41). This is deliberately a second entry point to the one
+            // Appearance popover, not a second picker: `OpenAppearance` maps
+            // to the same `SideEffect::OpenSettings`.
+            MenuItem { label: "Appearance…", action: MenuAction::OpenAppearance },
         ],
     },
     Menu {
@@ -331,7 +337,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             SideEffect::None
         }
         MenuAction::ShowHelpTable => SideEffect::ShowHelp,
-        MenuAction::OpenSettings => SideEffect::OpenSettings,
+        MenuAction::OpenSettings | MenuAction::OpenAppearance => SideEffect::OpenSettings,
         MenuAction::About => SideEffect::ShowAbout,
     }
 }

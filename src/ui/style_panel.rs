@@ -140,10 +140,19 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
     });
 }
 
+/// What one [`show_controls`] pass reports back to the owning popover.
+pub struct StyleControls {
+    /// A control moved, so the caller re-applies the style this frame.
+    pub changed: bool,
+    /// The nested color-picker popup's egui id. The picker is a floating area
+    /// of its own, so the popover that owns these controls needs its id to
+    /// tell "the user is using the picker" from "the user clicked outside".
+    pub accent_popup_id: egui::Id,
+}
+
 /// Draw the bare appearance controls, without a collapsing header, for the
-/// Settings popover (ticket 14 moved them out of the sidebar). Returns `true`
-/// when a control moved so the caller can re-apply the same frame.
-pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
+/// Settings popover (ticket 14 moved them out of the sidebar).
+pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.label("Theme");
@@ -154,8 +163,14 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
             .selectable_value(&mut style.theme_dark, true, "Dark")
             .changed();
     });
+    // `color_edit_button_srgba` anchors a popup to this button, deriving the
+    // popup id from the row ui's next auto id *before* it allocates the
+    // swatch. Reading that id here is what lets the owning popover recognise
+    // clicks on the picker as inside (ticket 41).
+    let mut accent_popup_id = egui::Id::NULL;
     ui.horizontal(|ui| {
         ui.label("Accent");
+        accent_popup_id = ui.auto_id_with("popup");
         changed |= ui.color_edit_button_srgba(&mut style.accent).changed();
     });
     changed |= ui
@@ -167,6 +182,9 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
     changed |= ui
         .add(egui::Slider::new(&mut style.font_size, MIN_FONT_SIZE..=MAX_FONT_SIZE).text("Font size"))
         .changed();
-    changed
+    StyleControls {
+        changed,
+        accent_popup_id,
+    }
 }
 

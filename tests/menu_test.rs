@@ -101,6 +101,7 @@ fn the_bar_carries_the_v1_menu_table() {
                     "Toggle Presets",
                     "Reset layout",
                     "Reset camera",
+                    "Appearance…",
                 ],
             ),
             ("Settings", vec!["Appearance…"]),
@@ -130,6 +131,7 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ToggleHelp, SideEffect::None),
         (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
         (MenuAction::OpenSettings, SideEffect::OpenSettings),
+        (MenuAction::OpenAppearance, SideEffect::OpenSettings),
         (MenuAction::About, SideEffect::ShowAbout),
     ];
     for (action, expected) in expected {
@@ -473,6 +475,29 @@ fn the_removed_view_help_overlay_entry_is_gone() {
             .any(|item| item.label == "Help overlay"),
         "the removed `Help overlay` label appears in no menu",
     );
+}
+
+#[test]
+fn view_appearance_opens_the_existing_appearance_popover() {
+    // Ticket 41: the user looked for color controls under View. The View entry
+    // must dispatch the same side effect as Settings > Appearance, never a
+    // second picker or a parallel appearance surface.
+    let view = menu::MENUS
+        .iter()
+        .find(|menu| menu.title == "View")
+        .expect("the View menu exists");
+    let item = view
+        .items
+        .iter()
+        .find(|item| item.label == "Appearance…")
+        .expect("View > Appearance… exists");
+    assert_eq!(item.action, MenuAction::OpenAppearance);
+    assert_eq!(
+        effect_of(item.action),
+        effect_of(MenuAction::OpenSettings),
+        "both entries raise the one Appearance popover",
+    );
+    assert_eq!(effect_of(item.action), SideEffect::OpenSettings);
 }
 
 /// Run one egui pass with one `?` press and report what the real help-key

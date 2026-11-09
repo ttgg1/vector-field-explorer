@@ -45,10 +45,39 @@ pub fn wheel_zoom(ctx: &egui::Context) -> f32 {
     })
 }
 
+/// Whether a click this frame dismisses the Appearance popover.
+///
+/// The popover owns a nested color-picker popup, which egui draws as a separate
+/// floating area — often beyond the popover's own rect. `CloseOnClickOutside`
+/// compares layers, so it treated every picker click as an outside click and
+/// closed the popover mid-pick (ticket 41). A click on the popover, or on the
+/// picker's own layer while it is open, is inside; any other click dismisses.
+pub fn dismisses_appearance_popover(
+    any_click: bool,
+    click_pos: Option<egui::Pos2>,
+    popover_rect: egui::Rect,
+    layer_under_pointer: Option<egui::LayerId>,
+    accent_popup_layer: Option<egui::LayerId>,
+) -> bool {
+    if !any_click {
+        return false;
+    }
+    let Some(pos) = click_pos else {
+        return false;
+    };
+    if popover_rect.contains(pos) {
+        return false;
+    }
+    if accent_popup_layer.is_some() && accent_popup_layer == layer_under_pointer {
+        return false;
+    }
+    true
+}
+
 /// Draw the menu bar. Returns the action the user picked (if any) and whether
 /// the appearance popover changed the style record (the app re-applies it in
 /// the same frame). `settings_open` is the popover's visibility flag, set by
-/// the Settings > Appearance… item.
+/// the Settings > Appearance… or View > Appearance… item.
 pub fn show(
     ui: &mut egui::Ui,
     style: &mut AppStyle,
@@ -96,7 +125,8 @@ pub fn show(
     });
 
     if let Some(button) = settings_button {
-        egui::Popup::new(
+        let mut accent_popup_id = egui::Id::NULL;
+        let response = egui::Popup::new(
             button.id.with("appearance_popover"),
             ui.ctx().clone(),
             &button,
@@ -104,12 +134,36 @@ pub fn show(
         )
         .anchor_widget(button.id)
         .open_bool(settings_open)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        // Dismissal is decided below, where the nested color picker's layer
+        // can be excluded from "outside" (ticket 41).
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
         .show(|ui| {
             ui.set_width(260.0);
             ui.label(egui::RichText::new("Appearance").strong());
-            style_changed = style_panel::show_controls(ui, style);
+            let controls = style_panel::show_controls(ui, style);
+            style_changed = controls.changed;
+            accent_popup_id = controls.accent_popup_id;
         });
+
+        if let Some(popover) = response {
+            let accent_open = accent_popup_id != egui::Id::NULL
+                && egui::Popup::is_id_open(ui.ctx(), accent_popup_id);
+            let accent_layer = accent_open.then(|| {
+                egui::LayerId::new(egui::Order::Foreground, accent_popup_id)
+            });
+            let (any_click, click_pos) =
+                ui.ctx().input(|input| (input.pointer.any_click(), input.pointer.interact_pos()));
+            let layer_under_pointer = click_pos.and_then(|pos| ui.ctx().layer_id_at(pos));
+            if dismisses_appearance_popover(
+                any_click,
+                click_pos,
+                popover.response.rect,
+                layer_under_pointer,
+                accent_layer,
+            ) {
+                *settings_open = false;
+            }
+        }
     }
 
     (action, style_changed)
