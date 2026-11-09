@@ -15,6 +15,15 @@ run() {
   echo "exit=$? lines=$(grep -c 'BENCH,' "$out/$label.log")"
 }
 
+run_gpu() {
+  local label="$1"; local seconds="$2"; shift 2
+  echo "=== $label (GPU) ==="
+  env VFE_BENCH_SECONDS="$seconds" VFE_BENCH_GPU=1 VFE_BENCH_LABEL="$label" \
+    RUST_LOG=info "$@" \
+    timeout --kill-after=5s 60s "$bin" 2>"$out/$label.log"
+  echo "exit=$? gpu_lines=$(grep -c 'BENCHGPU,' "$out/$label.log")"
+}
+
 # 1. Default scene: fresh app defaults (2D Pump, density 24, arrows, no particles).
 run default_2d_pump \
   VFE_BENCH_MODE=2d VFE_BENCH_DENSITY=24 VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=0
@@ -65,3 +74,27 @@ run worst_3d_4000_trail32_particles_off \
 run worst_3d_4000_trail32_both_off \
   VFE_BENCH_MODE=3d VFE_BENCH_FORMULA='(x, y, z)' VFE_BENCH_DENSITY=16 \
   VFE_BENCH_ARROWS=0 VFE_BENCH_PARTICLES=0
+
+# 4. GPU microbench. The instrumentation gates this on VFE_BENCH_GPU and runs
+# it once after frame 60; each process emits six BENCHGPU lines (clear/lines/
+# trails/arrows/dots/scene). These are separate invocations from the app scenes.
+run_gpu gpu_default_2d 25 \
+  VFE_BENCH_MODE=2d VFE_BENCH_DENSITY=24 VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=0
+
+run_gpu gpu_dense_radial_16 25 \
+  VFE_BENCH_MODE=3d VFE_BENCH_FORMULA='(x, y, z)' VFE_BENCH_DENSITY=16 \
+  VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=0
+
+run_gpu gpu_dense_radial_40 25 \
+  VFE_BENCH_MODE=3d VFE_BENCH_FORMULA='(x, y, z)' VFE_BENCH_DENSITY=40 \
+  VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=0
+
+run_gpu gpu_worst_4000_t32 25 \
+  VFE_BENCH_MODE=3d VFE_BENCH_FORMULA='(x, y, z)' VFE_BENCH_DENSITY=16 \
+  VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=1 VFE_BENCH_COUNT=4000 VFE_BENCH_TRAIL=32
+
+# Optional early smoke (8 s): trails are sampled before the ring fills, so this
+# is not a report source (the report uses gpu_worst_4000_t32).
+run_gpu gpusmoke 8 \
+  VFE_BENCH_MODE=3d VFE_BENCH_FORMULA='(x, y, z)' VFE_BENCH_DENSITY=16 \
+  VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=1 VFE_BENCH_COUNT=4000 VFE_BENCH_TRAIL=32

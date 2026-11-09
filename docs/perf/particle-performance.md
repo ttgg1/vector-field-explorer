@@ -6,12 +6,15 @@ Research record for ticket 35 (2026-11-09). Measurements were taken at base
 the release-binary measurements describe the same code.
 
 **Provenance.** The full report is
-`.superpowers/sdd/2026-11-05-vector-field-explorer/task-35-report.md`. The
-tracked reproduction set is `docs/perf/bench-35/`: the std-only CPU harness is
+`.superpowers/sdd/2026-11-05-vector-field-explorer/task-35-report.md` (local,
+untracked SDD workspace). The tracked reproduction set is
+`docs/perf/bench-35/`: the std-only CPU harness is
 `docs/perf/bench-35/bench-35.rs`, and the instrumentation patch, runner,
 analyzer, derived summary, and CPU microbenchmark log are tracked alongside it.
 The app frame/upload probes and the GPU microbench were temporary and were
-reverted from production; app-level and GPU numbers can be re-run from the
+reverted from production. The tracked runner reproduces the app scenes and the
+GPU runs; the GPU block sets `VFE_BENCH_GPU=1` (required for the microbench)
+and runs after frame 60. App-level and GPU numbers can be re-run from the
 tracked patch plus the runner on the same hardware, but they are **not**
 reproducible from the shipped code. Exact values depend on the same
 hardware/driver. The raw per-scene logs are **local/untracked** (about 10 MB in
@@ -73,7 +76,8 @@ costs (3.20 ms CPU viewport + 0.28 ms upload + 0.45 ms GPU) are still far below
 the frame budget.
 
 Worst-case 37.07 ms splits as: advect 22.39, dot build/colour 5.68, trail
-build 5.32 (live app probe, median 33 255 segments), trail clone+sort 1.89,
+build 5.32 (live app probe, median ≈31 800 segments over the steady window,
+range ≈30 400–33 600), trail clone+sort 1.89,
 combined build+sort 0.31, buffer upload 0.18, GPU draw 0.12, residual
 egui/submit ~1.15 ms after subtracting the GPU (~1.27 ms before it). The
 synthetic CPU harness reports 5.86 ms for the same 4000×32 setting at 54 450

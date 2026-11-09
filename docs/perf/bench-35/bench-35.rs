@@ -1,4 +1,4 @@
-//! Ticket 35 temporary CPU benchmark harness. Not committed.
+//! Ticket 35 CPU benchmark harness (tracked reproduction artifact).
 //!
 //! Run: cargo run --release --example bench35
 //!
