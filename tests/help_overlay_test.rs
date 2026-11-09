@@ -4,7 +4,9 @@
 // and reject the stale "right-drag pans" copy.
 
 use vector_field_explorer::ui::help_overlay::{
-    HELP_SECTIONS, HelpRow, all_rows, rows_for, sections_for,
+    HELP_ROW_SIZE, HELP_SECTIONS, HELP_SECTION_TITLE_SIZE, HELP_WINDOW_TITLE_SIZE,
+    OVERLAY_HEADING_COLOR, HelpRow, all_rows, rows_for, section_heading_style, sections_for,
+    window_heading_color,
 };
 
 const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
@@ -189,6 +191,105 @@ fn both_modes_document_the_panel_shortcuts_and_their_text_field_rule() {
             panel.action.contains("not while typing"),
             "the panel row itself carries the text-field rule: {}",
             panel.action,
+        );
+    }
+}
+
+#[test]
+fn help_typography_ranks_the_window_title_above_section_headings_and_rows() {
+    // Ticket 28: the window/overlay title is the largest line, then a section
+    // heading, then a binding row. A regression that flattens or inverts the
+    // hierarchy fails here. The sizes arrive as parameters so clippy does not
+    // fold the comparison into an `assertions_on_constants` warning.
+    fn assert_size_ladder(window: f32, section: f32, row: f32) {
+        assert!(
+            window > section,
+            "the help window title ({window} pt) must outrank a section heading ({section} pt)",
+        );
+        assert!(
+            section > row,
+            "a section heading ({section} pt) must outrank a binding row ({row} pt)",
+        );
+    }
+
+    assert_size_ladder(
+        HELP_WINDOW_TITLE_SIZE,
+        HELP_SECTION_TITLE_SIZE,
+        HELP_ROW_SIZE,
+    );
+}
+
+#[test]
+fn the_section_heading_helper_uses_the_section_title_size() {
+    // The shared table in `src/ui/help_overlay.rs` renders headings through
+    // this helper. This pins the size only; emphasis is a colour, covered by
+    // `the_heading_emphasis_colour_differs_from_normal_text_in_both_themes`.
+    let heading = section_heading_style();
+    assert_eq!(
+        heading.size, HELP_SECTION_TITLE_SIZE,
+        "the section heading style must use HELP_SECTION_TITLE_SIZE",
+    );
+}
+
+#[test]
+fn the_overlay_heading_colour_is_light_and_outranks_the_row_colours() {
+    // The compact overlay sits on a fixed `from_black_alpha(140)` fill in both
+    // themes, so its headings must use the fixed light colour rather than the
+    // theme's strong text colour (which is black in the light theme). The
+    // colour must also be brighter than the 185/155/150 row/footer greys.
+    for (theme, visuals) in [
+        ("dark", eframe::egui::Visuals::dark()),
+        ("light", eframe::egui::Visuals::light()),
+    ] {
+        let overlay = OVERLAY_HEADING_COLOR;
+        assert_eq!(
+            overlay.r(),
+            overlay.g(),
+            "{theme}: the overlay heading colour is a neutral grey",
+        );
+        assert_eq!(
+            overlay.g(),
+            overlay.b(),
+            "{theme}: the overlay heading colour is a neutral grey",
+        );
+        let gray = overlay.r();
+        assert!(
+            gray >= 200,
+            "{theme}: the overlay heading ({gray}) must stay light on the dark fill",
+        );
+        for row_gray in [185u8, 155, 150] {
+            assert!(
+                gray > row_gray,
+                "{theme}: the overlay heading ({gray}) must outrank the row/footer grey ({row_gray})",
+            );
+        }
+        assert_ne!(
+            overlay,
+            window_heading_color(&visuals),
+            "{theme}: the overlay keeps its own light colour instead of the theme strong colour",
+        );
+    }
+}
+
+#[test]
+fn the_help_window_heading_colour_is_the_theme_strong_colour() {
+    // The Help window sits on the theme background, so its 16 pt title and
+    // 15 pt headings use the theme's strong text colour: light in dark mode,
+    // dark in light mode — and never the normal/row text colour.
+    for (theme, visuals) in [
+        ("dark", eframe::egui::Visuals::dark()),
+        ("light", eframe::egui::Visuals::light()),
+    ] {
+        let emphasis = window_heading_color(&visuals);
+        assert_eq!(
+            emphasis,
+            visuals.strong_text_color(),
+            "{theme}: the Help window heading must be the strong text colour",
+        );
+        assert_ne!(
+            emphasis,
+            visuals.text_color(),
+            "{theme}: the Help window heading must differ from normal/row text",
         );
     }
 }
