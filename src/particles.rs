@@ -21,11 +21,12 @@
 //! See `docs/superpowers/plans/` task 10 / ticket 05.
 
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
-use crate::renderer::{ArrowInstanceGPU, PARTICLE_KIND};
+use crate::renderer::{ArrowInstanceGPU, LineInstanceGPU, PARTICLE_KIND};
 
 /// Hard cap on the particle cloud, whatever the density slider asks for.
 pub const MAX_PARTICLES: usize = 4000;
@@ -45,6 +46,164 @@ pub const CLICK_BURST_PARTICLES: usize = 64;
 /// Radius of that burst, as a fraction of the domain's smallest positive
 /// extent, so a click reads as a local cluster at any domain size.
 pub const CLICK_SPAWN_REACH: f32 = 0.1;
+/// Most trail points one particle may keep. The requested trail length is
+/// clamped to this, and the total point budget below can shrink it further
+/// as the cloud grows.
+pub const MAX_TRAIL_LEN: u32 = 32;
+/// Total stored trail points across the cloud. 4000 particles therefore get
+/// at most 25 points each (24 segments), so a dense cloud cannot blow the
+/// line-instance budget up by 32x (ticket 48).
+pub const MAX_TRAIL_SEGMENTS: usize = 100_000;
+/// A step whose displacement is at or below this fraction of the domain's
+/// smallest positive extent counts as stagnation.
+pub const STAGNATION_EPSILON: f32 = 1e-4;
+
+/// Particle opacity bounds and default (ticket 48).
+pub const MIN_PARTICLE_OPACITY: f32 = 0.05;
+pub const MAX_PARTICLE_OPACITY: f32 = 1.0;
+pub const DEFAULT_PARTICLE_OPACITY: f32 = 1.0;
+/// Requested trail points: `0` turns trails off.
+pub const MIN_TRAIL_LEN: u32 = 0;
+pub const MAX_TRAIL_LEN_UI: u32 = MAX_TRAIL_LEN;
+pub const DEFAULT_TRAIL_LEN: u32 = 0;
+/// Per-segment alpha multiplier toward the tail; `1` means no fade.
+pub const MIN_TRAIL_FADE: f32 = 0.0;
+pub const MAX_TRAIL_FADE: f32 = 1.0;
+pub const DEFAULT_TRAIL_FADE: f32 = 0.65;
+/// Trail width multiplier on [`DOT_SPACING_FRACTION`].
+pub const MIN_TRAIL_WIDTH: f32 = 0.05;
+pub const MAX_TRAIL_WIDTH: f32 = 2.0;
+pub const DEFAULT_TRAIL_WIDTH: f32 = 1.0;
+/// Stagnation loop threshold, simulated seconds.
+pub const MIN_STAGNATION_SECONDS: f32 = 0.1;
+pub const MAX_STAGNATION_SECONDS: f32 = 5.0;
+pub const DEFAULT_STAGNATION_SECONDS: f32 = 0.5;
+/// Default fixed colour, the Material Teal accent used by the app chrome.
+pub const DEFAULT_PARTICLE_FIXED_COLOR: [u8; 4] = [0, 150, 136, 255];
+
+/// How a particle's dot and trail get their colour (ticket 48).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticleColorMode {
+    /// The field's magnitude, ramped over the shared magnitude range. The
+    /// default, matching the arrows and streamlines.
+    #[default]
+    Magnitude,
+    /// The particle's own numerical speed, auto-ranged to the current cloud.
+    Speed,
+    /// One fixed colour for every dot and trail segment.
+    Fixed,
+}
+
+impl ParticleColorMode {
+    /// Every mode, in selector order.
+    pub const ALL: [ParticleColorMode; 3] = [
+        ParticleColorMode::Magnitude,
+        ParticleColorMode::Speed,
+        ParticleColorMode::Fixed,
+    ];
+
+    /// Short label for the selector.
+    pub fn label(self) -> &'static str {
+        match self {
+            ParticleColorMode::Magnitude => "Magnitude",
+            ParticleColorMode::Speed => "Speed",
+            ParticleColorMode::Fixed => "Fixed",
+        }
+    }
+
+    /// One-line tooltip explanation.
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            ParticleColorMode::Magnitude => "Colour by the field magnitude, like the arrows",
+            ParticleColorMode::Speed => "Colour by each particle's speed, auto-ranged to the cloud",
+            ParticleColorMode::Fixed => "Paint every particle the chosen colour",
+        }
+    }
+}
+
+/// The per-particle appearance knobs (ticket 48): opacity, colouring, trail
+/// history and stagnation looping. Egui-free on purpose; the sidebar converts
+/// [`fixed_color`](ParticleAppearance::fixed_color) to `Color32` at the UI edge
+/// and persistence stores the same four bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ParticleAppearance {
+    /// Dot and trail alpha, `0.05..=1.0`.
+    pub opacity: f32,
+    /// How dots and trails choose their RGB.
+    pub color_mode: ParticleColorMode,
+    /// RGBA for [`ParticleColorMode::Fixed`].
+    pub fixed_color: [u8; 4],
+    /// Requested trail points, `0..=32`; `0` turns trails off.
+    pub trail_len: u32,
+    /// Per-segment alpha multiplier toward the tail, `0.0..=1.0`.
+    pub trail_fade: f32,
+    /// Trail width multiplier on [`DOT_SPACING_FRACTION`], `0.05..=2.0`.
+    pub trail_width: f32,
+    /// Re-spawn a particle that has stagnated for
+    /// [`stagnation_seconds`](ParticleAppearance::stagnation_seconds).
+    pub loop_on_stagnation: bool,
+    /// How long a particle may sit still before looping, `0.1..=5.0` s.
+    pub stagnation_seconds: f32,
+}
+
+impl Default for ParticleAppearance {
+    fn default() -> Self {
+        Self {
+            opacity: DEFAULT_PARTICLE_OPACITY,
+            color_mode: ParticleColorMode::Magnitude,
+            fixed_color: DEFAULT_PARTICLE_FIXED_COLOR,
+            trail_len: DEFAULT_TRAIL_LEN,
+            trail_fade: DEFAULT_TRAIL_FADE,
+            trail_width: DEFAULT_TRAIL_WIDTH,
+            loop_on_stagnation: true,
+            stagnation_seconds: DEFAULT_STAGNATION_SECONDS,
+        }
+    }
+}
+
+impl ParticleAppearance {
+    /// Clamp every field into its documented range; a non-finite float falls
+    /// back to its default. The sidebar and persistence share this one rule.
+    pub fn sanitized(self) -> Self {
+        let defaults = ParticleAppearance::default();
+        Self {
+            opacity: finite_clamped(
+                self.opacity,
+                MIN_PARTICLE_OPACITY,
+                MAX_PARTICLE_OPACITY,
+                defaults.opacity,
+            ),
+            color_mode: self.color_mode,
+            fixed_color: self.fixed_color,
+            trail_len: self.trail_len.min(MAX_TRAIL_LEN),
+            trail_fade: finite_clamped(
+                self.trail_fade,
+                MIN_TRAIL_FADE,
+                MAX_TRAIL_FADE,
+                defaults.trail_fade,
+            ),
+            trail_width: finite_clamped(
+                self.trail_width,
+                MIN_TRAIL_WIDTH,
+                MAX_TRAIL_WIDTH,
+                defaults.trail_width,
+            ),
+            loop_on_stagnation: self.loop_on_stagnation,
+            stagnation_seconds: finite_clamped(
+                self.stagnation_seconds,
+                MIN_STAGNATION_SECONDS,
+                MAX_STAGNATION_SECONDS,
+                defaults.stagnation_seconds,
+            ),
+        }
+    }
+}
+
+/// Clamp a finite value into `lo..=hi`; a non-finite value takes `fallback`.
+fn finite_clamped(value: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value.clamp(lo, hi) } else { fallback }
+}
 
 /// Park/Miller LCG constants: 64-bit multiplicative congruential, all u64
 /// arithmetic wraps (debug-build overflow panics otherwise).
@@ -69,6 +228,14 @@ const UNIT_SCALE: f32 = 2.0 / 2097152.0;
 #[derive(Clone)]
 pub struct Particles {
     pub pos: Vec<Vec3>,
+    /// Trail history per particle, oldest first and newest last (ticket 48).
+    /// Always aligned with [`pos`](Particles::pos); public like `pos` so the
+    /// integration tests can inspect the spatial history without a GPU.
+    pub trails: Vec<Vec<Vec3>>,
+    /// Simulated seconds each particle has been stagnant (ticket 48).
+    pub stuck: Vec<f32>,
+    /// Last step's numerical speed per particle, `|q - p| / dt` (ticket 48).
+    pub speeds: Vec<f32>,
     /// The cloud's whole pseudo-random state (see [`lcg_next`]).
     rng: u64,
 }
@@ -78,7 +245,13 @@ impl Default for Particles {
     /// reproducible across runs. This replaces the hand-written `new()`
     /// (clippy's `custom-constructor`): callers spell `Particles::default()`.
     fn default() -> Particles {
-        Particles { pos: Vec::new(), rng: SPAWN_SEED }
+        Particles {
+            pos: Vec::new(),
+            trails: Vec::new(),
+            stuck: Vec::new(),
+            speeds: Vec::new(),
+            rng: SPAWN_SEED,
+        }
     }
 }
 
@@ -91,7 +264,33 @@ impl Particles {
     /// `#[doc(hidden)]` because it is not part of the app's public contract.
     #[doc(hidden)]
     pub fn with_positions(pos: Vec<Vec3>) -> Particles {
-        Particles { pos, ..Particles::default() }
+        let trails = pos.iter().map(|point| vec![*point]).collect();
+        let len = pos.len();
+        Particles {
+            pos,
+            trails,
+            stuck: vec![0.0; len],
+            speeds: vec![0.0; len],
+            ..Particles::default()
+        }
+    }
+
+    /// Keep every parallel vector the same length as `pos`: older test-built
+    /// clouds (or a caller that assigns `pos` directly) may arrive without
+    /// trails/stuck/speeds. New points get a one-point trail and zero times.
+    fn align_parallel(&mut self) {
+        let len = self.pos.len();
+        self.trails.truncate(len);
+        self.stuck.truncate(len);
+        self.speeds.truncate(len);
+        self.trails.resize_with(len, Vec::new);
+        self.stuck.resize(len, 0.0);
+        self.speeds.resize(len, 0.0);
+        for (point, trail) in self.pos.iter().zip(self.trails.iter_mut()) {
+            if trail.is_empty() {
+                trail.push(*point);
+            }
+        }
     }
 }
 
@@ -117,12 +316,32 @@ pub fn count(particles: &Particles) -> usize {
     particles.pos.len()
 }
 
+/// How many trail points each particle may keep for a cloud of
+/// `particle_count` and a requested `trail_len` (ticket 48).
+///
+/// `trail_len` counts stored points, so segments are one fewer. The total is
+/// capped at [`MAX_TRAIL_SEGMENTS`] points across the cloud: 4000 particles
+/// with 32 requested get 25 points each (24 segments), not 128 000. Zero
+/// particles or zero requested points mean no trail history at all.
+pub fn effective_trail_len(particle_count: usize, requested: u32) -> usize {
+    let requested = requested.min(MAX_TRAIL_LEN) as usize;
+    if particle_count == 0 || requested == 0 {
+        0
+    } else {
+        requested.min(MAX_TRAIL_SEGMENTS / particle_count)
+    }
+}
+
 /// Empty the cloud *and* rewind its pseudo-random stream to [`SPAWN_SEED`]: the
 /// app calls this when the particle toggle turns off, so a later enable respawns
 /// from a clean state — the same jitter a fresh session draws — rather than
-/// continuing a stream the previous cloud already advanced.
+/// continuing a stream the previous cloud already advanced. Trail history,
+/// stagnation times and speeds reset with the positions.
 pub fn clear(particles: &mut Particles) {
     particles.pos.clear();
+    particles.trails.clear();
+    particles.stuck.clear();
+    particles.speeds.clear();
     particles.rng = SPAWN_SEED;
 }
 
@@ -220,7 +439,11 @@ pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize, dimension
             break;
         }
         state = lcg_next(state);
-        particles.pos.push(jittered_point(region.center, band, state));
+        let point = jittered_point(region.center, band, state);
+        particles.pos.push(point);
+        particles.trails.push(vec![point]);
+        particles.stuck.push(0.0);
+        particles.speeds.push(0.0);
     }
     particles.rng = state;
 }
@@ -237,6 +460,9 @@ pub fn resize(particles: &mut Particles, domain: &Domain, target: usize, dimensi
     let target = target.min(MAX_PARTICLES);
     if particles.pos.len() > target {
         particles.pos.truncate(target);
+        particles.trails.truncate(target);
+        particles.stuck.truncate(target);
+        particles.speeds.truncate(target);
     } else if particles.pos.len() < target {
         spawn(particles, domain, target - particles.pos.len(), dimension);
     }
@@ -295,53 +521,241 @@ pub fn spawn_at(
         }
         state = lcg_next(state);
         let p = jittered_point(center, band, state);
-        particles.pos.push(Vec3::new(
+        let point = Vec3::new(
             p.x.clamp(domain.min.x, domain.max.x),
             p.y.clamp(domain.min.y, domain.max.y),
             p.z.clamp(domain.min.z, domain.max.z),
-        ));
+        );
+        particles.pos.push(point);
+        particles.trails.push(vec![point]);
+        particles.stuck.push(0.0);
+        particles.speeds.push(0.0);
         added += 1;
     }
     particles.rng = state;
     added
 }
 
-/// Advect every particle by one RK4 step of `step` simulated seconds — the
-/// [`SimClock`](crate::sim_clock::SimClock)'s clamped, speed-scaled frame step
-/// — respawning the ones that leave the domain, hit zero velocity or turn
+/// The per-frame advection settings (ticket 48). `dt` is the
+/// [`SimClock`](crate::sim_clock::SimClock)'s clamped, speed-scaled frame step;
+/// there is deliberately no separate speed multiplier (ticket 26 ruling).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdvectSettings {
+    /// Simulated seconds to advance. Non-finite, zero or negative is a no-op.
+    pub dt: f32,
+    /// Requested trail points, `0..=32`; `0` keeps no history.
+    pub trail_len: u32,
+    /// Re-spawn a particle once it has stagnated for `stagnation_seconds`.
+    pub loop_on_stagnation: bool,
+    /// Stagnation threshold in simulated seconds.
+    pub stagnation_seconds: f32,
+}
+
+impl Default for AdvectSettings {
+    fn default() -> Self {
+        Self {
+            dt: 0.0,
+            trail_len: DEFAULT_TRAIL_LEN,
+            loop_on_stagnation: true,
+            stagnation_seconds: DEFAULT_STAGNATION_SECONDS,
+        }
+    }
+}
+
+/// Append `point` to `trail`, keeping at most `effective` points (newest last).
+/// With trails off the history collapses to the newest point only.
+fn push_trail_point(trail: &mut Vec<Vec3>, point: Vec3, effective: usize) {
+    trail.push(point);
+    if effective == 0 {
+        trail.clear();
+        trail.push(point);
+    } else if trail.len() > effective {
+        let drop = trail.len() - effective;
+        trail.drain(0..drop);
+    }
+}
+
+/// The smallest positive domain extent, or `None` for a degenerate box. The
+/// stagnation threshold scales with this so it reads the same at any size.
+fn smallest_extent(domain: &Domain) -> Option<f32> {
+    let size = domain.domain_size();
+    [size.x, size.y, size.z]
+        .into_iter()
+        .filter(|extent| *extent > 0.0 && extent.is_finite())
+        .fold(None, |smallest: Option<f32>, extent| {
+            Some(smallest.map_or(extent, |value| value.min(extent)))
+        })
+}
+
+/// Process one particle's advection outcome for the stagnation loop, returning
+/// `true` when the particle respawned. Shared by the moving and stuck paths.
+#[allow(clippy::too_many_arguments)]
+fn stagnated_respawn(
+    particles: &mut Particles,
+    index: usize,
+    displacement: f32,
+    dt: f32,
+    epsilon: f32,
+    settings: AdvectSettings,
+    region: &SpawnBox,
+    state: u64,
+) -> bool {
+    if displacement <= epsilon {
+        particles.stuck[index] += dt;
+    } else {
+        particles.stuck[index] = 0.0;
+    }
+    if !settings.loop_on_stagnation || particles.stuck[index] < settings.stagnation_seconds {
+        return false;
+    }
+    let point = jittered_point(region.center, region.band, state);
+    particles.pos[index] = point;
+    particles.trails[index].clear();
+    particles.trails[index].push(point);
+    particles.stuck[index] = 0.0;
+    particles.speeds[index] = 0.0;
+    true
+}
+
+/// Advect every particle by one RK4 step of `settings.dt` simulated seconds —
+/// the [`SimClock`](crate::sim_clock::SimClock)'s clamped, speed-scaled frame
+/// step — respawning the ones that leave the domain, hit zero velocity or turn
 /// non-finite. The cloud keeps its size; a zero or non-finite step is a no-op,
 /// so a paused clock leaves every particle exactly where it was.
-pub fn advect(particles: &mut Particles, field: &FieldExpr, domain: &Domain, step: f32) {
-    if !(step.is_finite() && step > 0.0) {
+///
+/// Each successful step appends the new position to that particle's trail and
+/// trims the oldest points to [`effective_trail_len`]; a stagnant particle
+/// (displacement at or below [`STAGNATION_EPSILON`] of the smallest extent)
+/// accumulates simulated `dt` and, when looping is on, respawns once it reaches
+/// the threshold. A respawn resets that particle's trail, stuck time and speed.
+pub fn advect(
+    particles: &mut Particles,
+    field: &FieldExpr,
+    domain: &Domain,
+    settings: AdvectSettings,
+) {
+    particles.align_parallel();
+    let dt = settings.dt;
+    if !(dt.is_finite() && dt > 0.0) {
         return;
     }
     let region = spawn_box(domain);
+    let effective = effective_trail_len(particles.pos.len(), settings.trail_len);
+    let epsilon = smallest_extent(domain).map_or(0.0, |extent| STAGNATION_EPSILON * extent);
+    let threshold = finite_clamped(
+        settings.stagnation_seconds,
+        MIN_STAGNATION_SECONDS,
+        MAX_STAGNATION_SECONDS,
+        DEFAULT_STAGNATION_SECONDS,
+    );
+    let settings = AdvectSettings { stagnation_seconds: threshold, ..settings };
     let mut state = particles.rng;
-    let mut next = Vec::with_capacity(particles.pos.len());
     for i in 0..particles.pos.len() {
         state = lcg_next(state);
         let p = particles.pos[i];
-        let q = if inside(domain, p) { rk4_step(field, p, step) } else { Vec3::splat(NAN_F32) };
-        next.push(if q.is_finite() && inside(domain, q) { q } else { jittered_point(region.center, region.band, state) });
+        let q = if inside(domain, p) { rk4_step(field, p, dt) } else { Vec3::splat(NAN_F32) };
+        if !q.is_finite() || !inside(domain, q) {
+            let point = jittered_point(region.center, region.band, state);
+            particles.pos[i] = point;
+            particles.trails[i].clear();
+            particles.trails[i].push(point);
+            particles.stuck[i] = 0.0;
+            particles.speeds[i] = 0.0;
+            continue;
+        }
+        let displacement = (q - p).length();
+        particles.pos[i] = q;
+        particles.speeds[i] = if dt > 0.0 { displacement / dt } else { 0.0 };
+        push_trail_point(&mut particles.trails[i], q, effective);
+        stagnated_respawn(
+            particles,
+            i,
+            displacement,
+            dt,
+            epsilon,
+            settings,
+            &region,
+            state,
+        );
     }
-    particles.pos = next;
     particles.rng = state;
 }
 
-/// Draw the cloud: one GPU dot instance per particle, coloured by the field's
-/// magnitude at that particle exactly like the arrows and streamline segments
-/// are (the [`color_range`] is the range those share), radius `radius` world
-/// units. Dots reuse the arrow instance layout — the dot shader reads
-/// `origin` as the center and `dir_len.w` as the radius.
+/// The observed speed range of the current cloud (ticket 48). `Speed`
+/// colouring auto-ranges to this each frame; an empty or all-equal cloud falls
+/// back to `0..1` so the ramp still has span.
+pub fn speed_range(particles: &Particles) -> (f32, f32) {
+    let mut lo = f32::INFINITY;
+    let mut hi = f32::NEG_INFINITY;
+    for speed in &particles.speeds {
+        if speed.is_finite() {
+            lo = lo.min(*speed);
+            hi = hi.max(*speed);
+        }
+    }
+    if lo.is_finite() && hi.is_finite() && hi > lo { (lo, hi) } else { (0.0, 1.0) }
+}
+
+/// The colour one dot or trail segment gets (ticket 48), in RGBA `0..1`.
+/// `alpha` is applied by the caller; the RGB rules are shared so dots and
+/// trails always agree for a given mode.
+#[allow(clippy::too_many_arguments)]
+fn particle_rgb(
+    mode: ParticleColorMode,
+    field: &FieldExpr,
+    point: Vec3,
+    speed: f32,
+    colormap: Colormap,
+    color_range: (f32, f32),
+    speed_range: (f32, f32),
+    appearance: &ParticleAppearance,
+) -> [f32; 3] {
+    match mode {
+        ParticleColorMode::Magnitude => {
+            let mag = match field.eval3(point) {
+                Some(v) if v.is_finite() => v.length(),
+                _ => 0.0,
+            };
+            let ramp = colormap.colormap(mag, color_range.0, color_range.1);
+            [
+                ramp[0] as f32 / 255.0,
+                ramp[1] as f32 / 255.0,
+                ramp[2] as f32 / 255.0,
+            ]
+        }
+        ParticleColorMode::Speed => {
+            let ramp = colormap.colormap(speed, speed_range.0, speed_range.1);
+            [
+                ramp[0] as f32 / 255.0,
+                ramp[1] as f32 / 255.0,
+                ramp[2] as f32 / 255.0,
+            ]
+        }
+        ParticleColorMode::Fixed => {
+            let [r, g, b, _] = appearance.fixed_color;
+            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
+        }
+    }
+}
+
+/// Draw the cloud: one GPU dot instance per particle. RGB follows
+/// [`ParticleAppearance::color_mode`] (magnitude, speed or fixed) and alpha is
+/// the particle opacity; radius is `radius` world units. Dots reuse the arrow
+/// instance layout — the dot shader reads `origin` as the center and
+/// `dir_len.w` as the radius.
+#[allow(clippy::too_many_arguments)]
 pub fn dot_instances(
     particles: &Particles,
     field: &FieldExpr,
     domain: &Domain,
     colormap: Colormap,
     color_range: (f32, f32),
+    appearance: &ParticleAppearance,
+    speed_range: (f32, f32),
     radius: f32,
 ) -> Vec<ArrowInstanceGPU> {
-    let (lo, hi) = color_range;
+    let appearance = appearance.sanitized();
+    let alpha = appearance.opacity;
     let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
     let mut dots = Vec::with_capacity(particles.pos.len().min(MAX_PARTICLES));
     for i in 0..particles.pos.len().min(MAX_PARTICLES) {
@@ -349,18 +763,90 @@ pub fn dot_instances(
         if !inside(domain, p) {
             continue;
         }
-        let mag = match field.eval3(p) {
-            Some(v) if v.is_finite() => v.length(),
-            _ => 0.0,
-        };
-        let ramp = colormap.colormap(mag, lo, hi);
+        let speed = particles.speeds.get(i).copied().unwrap_or(0.0);
+        let [r, g, b] = particle_rgb(
+            appearance.color_mode,
+            field,
+            p,
+            speed,
+            colormap,
+            color_range,
+            speed_range,
+            &appearance,
+        );
         dots.push(ArrowInstanceGPU {
             origin: [p.x, p.y, p.z, PARTICLE_KIND],
             dir_len: [0.0, 0.0, 1.0, radius],
-            color: [ramp[0] as f32 / 255.0, ramp[1] as f32 / 255.0, ramp[2] as f32 / 255.0, 1.0],
+            color: [r, g, b, alpha],
         });
     }
     dots
+}
+
+/// One line segment per consecutive trail point, newest segment first-faded
+/// (ticket 48). The newest segment has age 0 and alpha `opacity`; each older
+/// segment multiplies by `trail_fade`. Width is
+/// `trail_width * DOT_SPACING_FRACTION * spacing`, so a wider grid gives
+/// proportionally wider trails. Trails are skipped entirely when the requested
+/// length is below two points or the cloud is empty, and the whole result is
+/// hard-capped at [`MAX_TRAIL_SEGMENTS`].
+#[allow(clippy::too_many_arguments)]
+pub fn trail_instances(
+    particles: &Particles,
+    field: &FieldExpr,
+    _domain: &Domain,
+    colormap: Colormap,
+    color_range: (f32, f32),
+    appearance: &ParticleAppearance,
+    speed_range: (f32, f32),
+    spacing: f32,
+) -> Vec<LineInstanceGPU> {
+    let appearance = appearance.sanitized();
+    let effective = effective_trail_len(particles.pos.len(), appearance.trail_len);
+    if effective < 2 {
+        return Vec::new();
+    }
+    let spacing = if spacing.is_finite() { spacing.max(0.0) } else { 0.0 };
+    let width = appearance.trail_width * DOT_SPACING_FRACTION * spacing;
+    let alpha = appearance.opacity.clamp(0.0, 1.0);
+    let fade = appearance.trail_fade.clamp(0.0, 1.0);
+    let mut trails = Vec::new();
+    for i in 0..particles.pos.len().min(MAX_PARTICLES) {
+        let Some(trail) = particles.trails.get(i) else {
+            continue;
+        };
+        let start = trail.len().saturating_sub(effective);
+        let points = &trail[start..];
+        if points.len() < 2 {
+            continue;
+        }
+        let speed = particles.speeds.get(i).copied().unwrap_or(0.0);
+        let midpoint = points[points.len() - 2].lerp(points[points.len() - 1], 0.5);
+        let [r, g, b] = particle_rgb(
+            appearance.color_mode,
+            field,
+            midpoint,
+            speed,
+            colormap,
+            color_range,
+            speed_range,
+            &appearance,
+        );
+        let segments = points.len() - 1;
+        for j in 0..segments {
+            if trails.len() >= MAX_TRAIL_SEGMENTS {
+                return trails;
+            }
+            let age = (segments - 1 - j) as i32;
+            let segment_alpha = (alpha * fade.powi(age)).clamp(0.0, 1.0);
+            trails.push(LineInstanceGPU {
+                a: [points[j].x, points[j].y, points[j].z, 1.0],
+                b: [points[j + 1].x, points[j + 1].y, points[j + 1].z, width],
+                color: [r, g, b, segment_alpha],
+            });
+        }
+    }
+    trails
 }
 
 /// The billboard quad's six corners in dot-local space: a camera-facing square

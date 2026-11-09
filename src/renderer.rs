@@ -114,6 +114,10 @@ pub enum ArrowDrawPlan {
 pub enum DrawPass {
     /// Backdrop/streamline lines, six vertices per instance.
     Lines { instances: usize },
+    /// Fading particle trail segments, six vertices per instance. 3D only;
+    /// painted behind the arrows and particles so trails read as motion
+    /// history rather than as foreground geometry (ticket 48).
+    Trails { instances: usize },
     /// The single 3D combined arrow + particle draw.
     Scene3D { instances: usize, budget: u32 },
     /// The flat 2D arrow draw at its family's vertex count.
@@ -157,6 +161,9 @@ pub fn camera_basis_from_view_proj(view_proj: &Mat4) -> (Vec3, Vec3) {
 pub struct SceneGPU {
     pub arrows: Arc<Vec<ArrowInstanceGPU>>,
     pub lines: Arc<Vec<LineInstanceGPU>>,
+    /// Fading particle trail segments (ticket 48), painted between the
+    /// backdrop lines and the combined 3D arrow + particle draw.
+    pub trails: Arc<Vec<LineInstanceGPU>>,
     pub dots: Arc<Vec<ArrowInstanceGPU>>,
     pub combined: Arc<Vec<ArrowInstanceGPU>>,
     pub arrow_style: ArrowStyle,
@@ -170,6 +177,7 @@ impl Default for SceneGPU {
         Self {
             arrows: Arc::new(Vec::new()),
             lines: Arc::new(Vec::new()),
+            trails: Arc::new(Vec::new()),
             dots: Arc::new(Vec::new()),
             combined: Arc::new(Vec::new()),
             arrow_style: ArrowStyle::default(),
@@ -186,6 +194,7 @@ impl SceneGPU {
     pub fn is_empty(&self) -> bool {
         self.arrows.is_empty()
             && self.lines.is_empty()
+            && self.trails.is_empty()
             && self.dots.is_empty()
             && self.combined.is_empty()
     }
@@ -230,14 +239,18 @@ impl SceneGPU {
         matches!(self.arrow_draw_plan(), ArrowDrawPlan::Flat2D { .. })
     }
 
-    /// The draws `record` performs, in painter order. 3D is the backdrop lines
-    /// followed by exactly one combined arrow+particle draw (even when the
-    /// arrow list is empty: the dots live in `combined`). 2D keeps its
-    /// arrows-then-dots draws and ignores `combined`.
+    /// The draws `record` performs, in painter order. 3D is the backdrop lines,
+    /// then fading particle trails, then exactly one combined arrow+particle
+    /// draw (even when the arrow list is empty: the dots live in `combined`).
+    /// 2D keeps its arrows-then-dots draws, ignores `combined`, and never has
+    /// trails (particles are 3D-only).
     pub fn draw_passes(&self) -> Vec<DrawPass> {
-        let mut passes = Vec::with_capacity(4);
+        let mut passes = Vec::with_capacity(5);
         if !self.lines.is_empty() {
             passes.push(DrawPass::Lines { instances: self.lines.len() });
+        }
+        if self.mode_3d && !self.trails.is_empty() {
+            passes.push(DrawPass::Trails { instances: self.trails.len() });
         }
         if self.mode_3d {
             if !self.combined.is_empty() {
@@ -308,6 +321,15 @@ pub const ARROW_BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
 /// screenshots must behave identically in both views.
 pub const ARROW2D_BLEND: wgpu::BlendState = ARROW_BLEND;
 
+/// The line pipeline's blend state (ticket 48): straight alpha like the arrows,
+/// so trail segments can fade toward their tail. Streamlines, the grid and the
+/// axes all carry alpha 1.0, so their image is unchanged.
+pub const LINE_BLEND: wgpu::BlendState = ARROW_BLEND;
+
+/// The dot pipeline's blend state: straight alpha, so particle opacity works
+/// and the billboard rim keeps its antialiasing.
+pub const DOT_BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
+
 fn mat4_to_mats(m: Mat4) -> [[f32; 4]; 4] {
     m.to_cols_array_2d()
 }
@@ -323,9 +345,11 @@ pub struct DrawState {
     globals_buf: wgpu::Buffer,
     arrow_buf: wgpu::Buffer,
     line_buf: wgpu::Buffer,
+    trail_buf: wgpu::Buffer,
     dot_buf: wgpu::Buffer,
     arrow_bind: wgpu::BindGroup,
     line_bind: wgpu::BindGroup,
+    trail_bind: wgpu::BindGroup,
     dot_bind: wgpu::BindGroup,
     light_dir: [f32; 4],
     /// The surface format the pipelines were built for. An offscreen capture
@@ -461,7 +485,7 @@ impl DrawState {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(LINE_BLEND),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -494,8 +518,9 @@ impl DrawState {
                     // The rim is antialiased by fading the fragment's alpha
                     // over one pixel, so the dot pipeline blends; fully covered
                     // interior pixels (alpha 1) are indistinguishable from the
-                    // arrows' REPLACE blend.
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // arrows' REPLACE blend. Particle opacity (ticket 48) rides
+                    // the instance alpha through this same state.
+                    blend: Some(DOT_BLEND),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -541,6 +566,12 @@ impl DrawState {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let trail_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vfe trails"),
+            size: std::mem::size_of::<LineInstanceGPU>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let dot_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vfe dots"),
             size: std::mem::size_of::<ArrowInstanceGPU>() as u64,
@@ -576,6 +607,20 @@ impl DrawState {
                 },
             ],
         });
+        let trail_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vfe trail bind"),
+            layout: &bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: trail_buf.as_entire_binding(),
+                },
+            ],
+        });
         let dot_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vfe dot bind"),
             layout: &bind_layout,
@@ -600,9 +645,11 @@ impl DrawState {
             globals_buf,
             arrow_buf,
             line_buf,
+            trail_buf,
             dot_buf,
             arrow_bind,
             line_bind,
+            trail_bind,
             dot_bind,
             light_dir: LIGHT_DIR,
             format,
@@ -702,6 +749,31 @@ impl DrawState {
             });
         }
 
+        // Trails have their own buffer: streamlines upload only on rebuild,
+        // trails every frame, so sharing `line_buf` would re-upload the whole
+        // backdrop each frame.
+        if !scene.trails.is_empty() {
+            self.trail_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vfe trails (frame)"),
+                contents: bytemuck::cast_slice(scene.trails.as_slice()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            self.trail_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("vfe trail bind (frame)"),
+                layout: &self.bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.globals_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.trail_buf.as_entire_binding(),
+                    },
+                ],
+            });
+        }
+
         // The dot buffer feeds the 2D path only; 3D dots travel in `combined`.
         if !scene.mode_3d && !scene.dots.is_empty() {
             self.dot_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -736,6 +808,11 @@ impl DrawState {
                 DrawPass::Lines { instances } => {
                     pass.set_pipeline(&self.line_pipeline);
                     pass.set_bind_group(0, &self.line_bind, &[]);
+                    pass.draw(0..(instances as u32) * 6, 0..1);
+                }
+                DrawPass::Trails { instances } => {
+                    pass.set_pipeline(&self.line_pipeline);
+                    pass.set_bind_group(0, &self.trail_bind, &[]);
                     pass.draw(0..(instances as u32) * 6, 0..1);
                 }
                 DrawPass::Scene3D { instances, .. } => {
@@ -1022,6 +1099,38 @@ pub fn sort_scene_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4)
         };
         depth(a).partial_cmp(&depth(b)).unwrap_or(std::cmp::Ordering::Equal)
     });
+}
+
+/// Painter's-algorithm helper for trail segments (ticket 48): order lines
+/// far-to-near by the view depth of their midpoint, since alpha overlap is
+/// order-visible. Stable, so equal-depth segments keep chronological order. A
+/// non-finite midpoint depth joins the far group (`NEG_INFINITY`) instead of
+/// painting in front or panicking.
+pub fn sort_lines_back_to_front(instances: &mut [LineInstanceGPU], view: &Mat4) {
+    instances.sort_by(|a, b| {
+        let depth = |line: &LineInstanceGPU| {
+            let midpoint = Vec3::new(
+                (line.a[0] + line.b[0]) * 0.5,
+                (line.a[1] + line.b[1]) * 0.5,
+                (line.a[2] + line.b[2]) * 0.5,
+            );
+            let z = (*view * midpoint.extend(1.0)).z;
+            if z.is_finite() { z } else { f32::NEG_INFINITY }
+        };
+        depth(a).partial_cmp(&depth(b)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+/// A stable far-to-near copy of the trail list under the current view. The
+/// app uses this each frame without writing the order back into the per-frame
+/// trail history.
+pub fn sorted_lines_back_to_front(
+    lines: &[LineInstanceGPU],
+    view: &Mat4,
+) -> Vec<LineInstanceGPU> {
+    let mut sorted = lines.to_vec();
+    sort_lines_back_to_front(&mut sorted, view);
+    sorted
 }
 
 /// The 2D arrow draw order: a stable far-to-near copy of the frame-invariant

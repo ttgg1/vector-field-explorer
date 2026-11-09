@@ -218,8 +218,10 @@ impl VfApp {
         // stay out of the count, while the streamline portion gets its own
         // readout so toggling streamlines moves a visible number.
         self.status.parse_message = self.state.parse_error.clone();
-        self.status.instance_count =
-            self.scene.arrows.len() + self.streamline_count + self.scene.dots.len();
+        self.status.instance_count = self.scene.arrows.len()
+            + self.streamline_count
+            + self.scene.dots.len()
+            + self.scene.trails.len();
         self.status.streamline_count = self.streamline_count;
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             crate::ui::status_bar::show(ui, &self.status);

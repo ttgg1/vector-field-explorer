@@ -16,7 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
-use crate::particles::MAX_PARTICLES;
+use crate::particles::{
+    DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
+    DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance,
+    ParticleColorMode,
+};
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
@@ -110,6 +114,24 @@ pub struct ViewRecord {
     /// records; the serde default loads them as Auto.
     #[serde(default)]
     pub particle_count: u32,
+    /// Particle appearance (ticket 48), stored flat so an older record can add
+    /// each key independently. All eight default from the fresh-state record.
+    #[serde(default = "default_particle_opacity")]
+    pub particle_opacity: f32,
+    #[serde(default)]
+    pub particle_color_mode: ParticleColorMode,
+    #[serde(default = "default_particle_fixed_color")]
+    pub particle_fixed_color: [u8; 4],
+    #[serde(default)]
+    pub particle_trail_len: u32,
+    #[serde(default = "default_particle_trail_fade")]
+    pub particle_trail_fade: f32,
+    #[serde(default = "default_particle_trail_width")]
+    pub particle_trail_width: f32,
+    #[serde(default = "default_particle_loop_on_stagnation")]
+    pub particle_loop_on_stagnation: bool,
+    #[serde(default = "default_particle_stagnation_seconds")]
+    pub particle_stagnation_seconds: f32,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -151,6 +173,14 @@ impl ViewRecord {
             particles: state.particles,
             particle_size: state.particle_size,
             particle_count: state.particle_count,
+            particle_opacity: state.particle_appearance.opacity,
+            particle_color_mode: state.particle_appearance.color_mode,
+            particle_fixed_color: state.particle_appearance.fixed_color,
+            particle_trail_len: state.particle_appearance.trail_len,
+            particle_trail_fade: state.particle_appearance.trail_fade,
+            particle_trail_width: state.particle_appearance.trail_width,
+            particle_loop_on_stagnation: state.particle_appearance.loop_on_stagnation,
+            particle_stagnation_seconds: state.particle_appearance.stagnation_seconds,
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -191,6 +221,28 @@ impl ViewRecord {
         controls.particles = self.particles;
         controls.particle_size = finite_or(self.particle_size, defaults.particle_size);
         controls.particle_count = self.particle_count.min(MAX_PARTICLES as u32);
+        controls.particle_appearance = ParticleAppearance {
+            opacity: finite_or(
+                self.particle_opacity,
+                defaults.particle_appearance.opacity,
+            ),
+            color_mode: self.particle_color_mode,
+            fixed_color: self.particle_fixed_color,
+            trail_len: self.particle_trail_len,
+            trail_fade: finite_or(
+                self.particle_trail_fade,
+                defaults.particle_appearance.trail_fade,
+            ),
+            trail_width: finite_or(
+                self.particle_trail_width,
+                defaults.particle_appearance.trail_width,
+            ),
+            loop_on_stagnation: self.particle_loop_on_stagnation,
+            stagnation_seconds: finite_or(
+                self.particle_stagnation_seconds,
+                defaults.particle_appearance.stagnation_seconds,
+            ),
+        };
         // `self.speed` is read-only legacy data and deliberately ignored: the
         // transport clock owns speed and streamlines use a fixed budget.
         // Raw components: `sidebar::apply` is the one place that bounds the
@@ -222,6 +274,30 @@ fn default_proportional_exponent() -> f32 {
 /// size control used the base grid-spacing fraction.
 fn default_particle_size() -> f32 {
     crate::viewmodel::DEFAULT_PARTICLE_SIZE
+}
+
+fn default_particle_opacity() -> f32 {
+    DEFAULT_PARTICLE_OPACITY
+}
+
+fn default_particle_fixed_color() -> [u8; 4] {
+    DEFAULT_PARTICLE_FIXED_COLOR
+}
+
+fn default_particle_trail_fade() -> f32 {
+    DEFAULT_TRAIL_FADE
+}
+
+fn default_particle_trail_width() -> f32 {
+    DEFAULT_TRAIL_WIDTH
+}
+
+fn default_particle_loop_on_stagnation() -> bool {
+    true
+}
+
+fn default_particle_stagnation_seconds() -> f32 {
+    DEFAULT_STAGNATION_SECONDS
 }
 
 /// Decode the ticket-14 `normalize` boolean, which was stored as a bare

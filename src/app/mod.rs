@@ -14,7 +14,7 @@ use crate::reference::reference_lines;
 use crate::render::Camera;
 use crate::renderer::{
     DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
-    sort_scene_back_to_front, sorted_arrows_back_to_front,
+    sort_scene_back_to_front, sorted_arrows_back_to_front, sorted_lines_back_to_front,
 };
 use crate::screenshot::{self, Instant, Screenshot};
 use crate::sim_clock::SimClock;
@@ -48,6 +48,7 @@ use crate::viewmodel::{
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
 use crate::particles::{
+    AdvectSettings,
     CLICK_BURST_PARTICLES,
     Particles,
     advect,
@@ -56,6 +57,8 @@ use crate::particles::{
     retarget,
     spawn,
     spawn_at,
+    speed_range,
+    trail_instances,
     count as particle_count,
 };
 
@@ -234,6 +237,7 @@ impl VfApp {
             scene: SceneGPU {
                 arrows: Arc::new(Vec::new()),
                 lines: Arc::new(backdrop),
+                trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
                 arrow_style,

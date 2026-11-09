@@ -1113,3 +1113,67 @@ fn particle_target_is_none_while_off_or_in_2d() {
     assert!(s.set_particles(false));
     assert_eq!(s.particle_target(), None);
 }
+
+// --- Ticket 48: particle appearance and trails -------------------------
+
+#[test]
+fn snapshots_never_carry_trail_history() {
+    let mut state = State::new(true);
+    state.set_particles(true);
+    let scene = state.snapshot();
+    assert!(
+        scene.trails.is_empty(),
+        "trails are per-frame history, not part of the dirty-flag snapshot",
+    );
+    assert!(scene.dots.is_empty(), "dots are rebuilt from the live cloud too");
+}
+
+#[test]
+fn trails_only_exist_when_particles_run_in_three_d() {
+    let mut state = State::new(true);
+    assert!(state.particle_target().is_none(), "particles off have no cloud");
+    state.set_particles(true);
+    assert!(state.particle_target().is_some(), "3D particles have a target");
+    state.set_mode(false);
+    assert!(state.particle_target().is_none(), "2D has no particle cloud, so no trails");
+}
+
+#[test]
+fn particle_appearance_setter_sanitizes_without_dirtying_the_scene() {
+    use vector_field_explorer::particles::ParticleAppearance;
+
+    let mut state = State::new(true);
+    assert!(state.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    let appearance = ParticleAppearance {
+        opacity: 9.0,
+        trail_len: 99,
+        trail_fade: f32::NAN,
+        trail_width: -2.0,
+        stagnation_seconds: f32::INFINITY,
+        loop_on_stagnation: false,
+        ..ParticleAppearance::default()
+    };
+    assert!(state.set_particle_appearance(appearance), "a real change reports true");
+    assert_eq!(state.particle_appearance.opacity, 1.0, "opacity clamps");
+    assert_eq!(state.particle_appearance.trail_len, 32, "trail length clamps");
+    assert_eq!(
+        state.particle_appearance.trail_fade,
+        ParticleAppearance::default().trail_fade,
+        "a NaN fade falls back",
+    );
+    assert_eq!(state.particle_appearance.trail_width, 0.05, "width clamps");
+    assert_eq!(
+        state.particle_appearance.stagnation_seconds,
+        ParticleAppearance::default().stagnation_seconds,
+        "a non-finite threshold falls back",
+    );
+    assert!(!state.particle_appearance.loop_on_stagnation);
+    assert!(
+        state.snapshot_if_dirty().is_none(),
+        "appearance is painted from the live cloud, never the dirty flag",
+    );
+    assert!(
+        !state.set_particle_appearance(state.particle_appearance),
+        "an unchanged appearance reports false",
+    );
+}

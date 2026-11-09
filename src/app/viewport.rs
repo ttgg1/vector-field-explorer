@@ -203,11 +203,19 @@ impl VfApp {
             } else {
                 Arc::new(sorted_arrows_back_to_front(self.scene.arrows.as_slice(), &view))
             };
+            // Trails are 3D-only and painted behind the combined stream, so
+            // their own stable far-to-near order is enough (ticket 48).
+            let trails = if self.state.mode_3d {
+                Arc::new(sorted_lines_back_to_front(self.scene.trails.as_slice(), &view))
+            } else {
+                Arc::new(Vec::new())
+            };
             self.scene.combined = Arc::clone(&combined);
 
             let scene = SceneGPU {
                 arrows,
                 lines: Arc::clone(&self.scene.lines),
+                trails,
                 dots: Arc::clone(&self.scene.dots),
                 combined,
                 arrow_style: self.scene.arrow_style,

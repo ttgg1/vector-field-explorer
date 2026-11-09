@@ -30,7 +30,11 @@ use crate::arrow_style::{
 };
 use crate::colormap::Colormap;
 use crate::domain::Domain;
-use crate::particles::MAX_PARTICLES;
+use crate::particles::{
+    MAX_PARTICLES, MAX_TRAIL_LEN_UI, MIN_PARTICLE_OPACITY, MAX_PARTICLE_OPACITY,
+    MIN_TRAIL_FADE, MAX_TRAIL_FADE, MIN_TRAIL_WIDTH, MAX_TRAIL_WIDTH,
+    MIN_STAGNATION_SECONDS, MAX_STAGNATION_SECONDS, ParticleAppearance, ParticleColorMode,
+};
 use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
 use crate::viewmodel::{
     ArrowLengthMode,
@@ -262,6 +266,30 @@ pub fn particle_size_enabled(particles: bool) -> bool {
     particles
 }
 
+/// Whether the fixed-colour picker applies (ticket 48): only
+/// [`ParticleColorMode::Fixed`] reads it.
+pub fn particle_fixed_color_enabled(mode: ParticleColorMode) -> bool {
+    mode == ParticleColorMode::Fixed
+}
+
+/// Whether the trail fade control applies: trails need at least two stored
+/// points, so length 0 or 1 leaves the slider disabled (ticket 48).
+pub fn trail_fade_enabled(trail_len: u32) -> bool {
+    trail_len >= 2
+}
+
+/// Whether the trail width control applies: with no drawn trail it would be a
+/// dead knob, so it shares the fade's length gate (ticket 48).
+pub fn trail_width_enabled(trail_len: u32) -> bool {
+    trail_len >= 2
+}
+
+/// Whether the stagnation threshold applies: looping off leaves a stuck
+/// particle in place, so the seconds control is disabled (ticket 48).
+pub fn stagnation_seconds_enabled(loop_on_stagnation: bool) -> bool {
+    loop_on_stagnation
+}
+
 /// The particle-count drag value's text: `0` is the Auto sentinel, any other
 /// value shows its number so the widget can both display "Auto" and accept a
 /// typed count (ticket 30).
@@ -298,6 +326,9 @@ pub struct Controls {
     pub particle_size: f32,
     /// Explicit particle count; `0` means Auto (density x 16) (ticket 30).
     pub particle_count: u32,
+    /// Per-particle appearance: opacity, colour mode, trails and stagnation
+    /// looping (ticket 48).
+    pub particle_appearance: ParticleAppearance,
     pub domain_min: Vec3,
     pub domain_max: Vec3,
     /// Plane-by-plane mirror (ticket 23). The index is only handed to the
@@ -337,6 +368,7 @@ impl Controls {
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
             particle_count: 0,
+            particle_appearance: ParticleAppearance::default(),
             domain_min: domain.min,
             domain_max: domain.max,
             plane: PlaneView::default(),
@@ -373,6 +405,7 @@ impl Controls {
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
         self.particle_count = defaults.particle_count;
+        self.particle_appearance = defaults.particle_appearance;
     }
 
     /// Restore the Coloring section's defaults (viridis, auto-fit, 0..1).
@@ -603,24 +636,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         );
         ui.checkbox(&mut controls.particles, "Particles")
             .on_hover_text("Animate dots carried by the field (3D view)");
-        ui.add_enabled_ui(particle_size_enabled(controls.particles), |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Particle size");
-                ui.add(
-                    egui::Slider::new(
-                        &mut controls.particle_size,
-                        MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE,
-                    )
-                    .fixed_decimals(2),
-                )
-                .on_hover_text("Dot radius relative to the grid spacing");
-            });
-        })
-        .response
-        .on_disabled_hover_text("Turn Particles on to change the dot size");
         ui.horizontal(|ui| {
             ui.label("Particle count");
-            ui.add(
+            ui.add_enabled(
+                controls.particles,
                 egui::DragValue::new(&mut controls.particle_count)
                     .range(0..=MAX_PARTICLES as u32)
                     .speed(1.0)
@@ -630,6 +649,138 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             )
             .on_hover_text("0 = Auto (density × 16); a value overrides it.");
         });
+        // Ticket 48: appearance lives in its own nested subsection so the
+        // Features body stays a pair of feature toggles. Size (ticket 30) moves
+        // in here rather than staying as a second, duplicate control.
+        egui::CollapsingHeader::new("Particle appearance")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(controls.particles, |ui| {
+                    let appearance = &mut controls.particle_appearance;
+                    ui.add_enabled_ui(particle_size_enabled(controls.particles), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Size");
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut controls.particle_size,
+                                    MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE,
+                                )
+                                .fixed_decimals(2),
+                            )
+                            .on_hover_text(
+                                "Dot radius relative to the grid spacing (0.25–3.0, default 1.0)",
+                            );
+                        });
+                    })
+                    .response
+                    .on_disabled_hover_text("Turn Particles on to change the dot size");
+                    ui.add(
+                        egui::Slider::new(
+                            &mut appearance.opacity,
+                            MIN_PARTICLE_OPACITY..=MAX_PARTICLE_OPACITY,
+                        )
+                        .text("Opacity"),
+                    )
+                    .on_hover_text("Dot and trail alpha (0.05–1.0, default 1.0)");
+                    ui.horizontal(|ui| {
+                        ui.label("Colour");
+                        for mode in ParticleColorMode::ALL {
+                            ui.selectable_value(
+                                &mut appearance.color_mode,
+                                mode,
+                                mode.label(),
+                            )
+                            .on_hover_text(mode.tooltip());
+                        }
+                    });
+                    let mut fixed = egui::Color32::from_rgba_unmultiplied(
+                        appearance.fixed_color[0],
+                        appearance.fixed_color[1],
+                        appearance.fixed_color[2],
+                        appearance.fixed_color[3],
+                    );
+                    let picker = ui.add_enabled_ui(
+                        particle_fixed_color_enabled(appearance.color_mode),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Fixed colour");
+                                ui.color_edit_button_srgba(&mut fixed)
+                            })
+                            .inner
+                        },
+                    );
+                    if picker.inner.changed() {
+                        appearance.fixed_color = fixed.to_array();
+                    }
+                    picker.response.on_hover_text(
+                        "Colour used by the Fixed mode (default teal)",
+                    ).on_disabled_hover_text(
+                        "Choose Fixed mode to pick a colour",
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut appearance.trail_len,
+                            0..=MAX_TRAIL_LEN_UI,
+                        )
+                        .integer()
+                        .text("Trail length"),
+                    )
+                    .on_hover_text("Stored trail points per particle; 0 = off (0–32)");
+                    ui.add_enabled(
+                        trail_fade_enabled(appearance.trail_len),
+                        egui::Slider::new(
+                            &mut appearance.trail_fade,
+                            MIN_TRAIL_FADE..=MAX_TRAIL_FADE,
+                        )
+                        .text("Trail fade"),
+                    )
+                    .on_hover_text(
+                        "Alpha multiplier toward the tail (0–1, default 0.65); 1 = no fade",
+                    )
+                    .on_disabled_hover_text("Turn trails on (length 2 or more) to set the fade");
+                    ui.add_enabled(
+                        trail_width_enabled(appearance.trail_len),
+                        egui::Slider::new(
+                            &mut appearance.trail_width,
+                            MIN_TRAIL_WIDTH..=MAX_TRAIL_WIDTH,
+                        )
+                        .text("Trail width"),
+                    )
+                    .on_hover_text(
+                        "Trail width relative to the dot spacing (0.05–2.0, default 1.0)",
+                    )
+                    .on_disabled_hover_text("Turn trails on (length 2 or more) to set the width");
+                    egui::CollapsingHeader::new("Advanced")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.checkbox(
+                                &mut appearance.loop_on_stagnation,
+                                "Loop when stuck",
+                            )
+                            .on_hover_text(
+                                "Re-spawn a particle that stops moving (default on)",
+                            );
+                            ui.add_enabled(
+                                stagnation_seconds_enabled(
+                                    appearance.loop_on_stagnation,
+                                ),
+                                egui::Slider::new(
+                                    &mut appearance.stagnation_seconds,
+                                    MIN_STAGNATION_SECONDS..=MAX_STAGNATION_SECONDS,
+                                )
+                                .text("Stuck time (s)"),
+                            )
+                            .on_hover_text(
+                                "How long a particle may sit still before it loops (0.1–5.0 s, default 0.5)",
+                            )
+                            .on_disabled_hover_text(
+                                "Turn Loop when stuck on to set the stuck time",
+                            );
+                        });
+                })
+                .response
+                .on_disabled_hover_text("Turn Particles on to change their appearance");
+            });
     });
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
@@ -892,6 +1043,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_particles(controls.particles);
     state.set_particle_size(controls.particle_size);
     state.set_particle_count(controls.particle_count);
+    state.set_particle_appearance(controls.particle_appearance);
     // Domain extents are bounded here, before `set_domain`'s per-axis swap,
     // so the UI's `.range` and this handoff share one clamp.
     let domain_min = Vec3::new(
@@ -924,6 +1076,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.particles = state.particles;
     controls.particle_size = state.particle_size;
     controls.particle_count = state.particle_count;
+    controls.particle_appearance = state.particle_appearance;
     controls.domain_min = state.domain.min;
     controls.domain_max = state.domain.max;
 }

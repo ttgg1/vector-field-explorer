@@ -7,12 +7,14 @@
 use vector_field_explorer::ui::sidebar::{
     ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
     domain_summary, head_control_enabled, magnitude_scale_enabled, particle_count_label,
-    particle_size_enabled, proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
+    particle_fixed_color_enabled, particle_size_enabled, proportional_exponent_enabled,
+    seed_mode_enabled, sides_control_enabled, stagnation_seconds_enabled, trail_fade_enabled,
+    trail_width_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
-use vector_field_explorer::particles::MAX_PARTICLES;
+use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_PARTICLE_SIZE, State, StreamlineSeedMode, DEFAULT_DENSITY_2D,
@@ -695,4 +697,101 @@ fn features_reset_restores_particle_size_and_count() {
         (MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE).contains(&c.particle_size),
         "the restored size is inside the documented range",
     );
+}
+
+// --- Ticket 48: particle appearance controls ----------------------------
+
+#[test]
+fn particle_appearance_defaults_mirror_the_seam_and_the_ticket() {
+    let c = Controls::new();
+    let s = State::new(false);
+    assert_eq!(
+        c.particle_appearance, s.particle_appearance,
+        "the appearance mirror starts at the seam's defaults",
+    );
+    assert_eq!(c.particle_appearance, ParticleAppearance::default());
+    assert_eq!(c.particle_appearance.opacity, 1.0);
+    assert_eq!(c.particle_appearance.color_mode, ParticleColorMode::Magnitude);
+    assert_eq!(c.particle_appearance.trail_len, 0, "trails start off");
+    assert_eq!(c.particle_appearance.trail_fade, 0.65);
+    assert_eq!(c.particle_appearance.trail_width, 1.0);
+    assert!(c.particle_appearance.loop_on_stagnation);
+    assert_eq!(c.particle_appearance.stagnation_seconds, 0.5);
+}
+
+#[test]
+fn particle_appearance_flows_through_apply_and_the_mirror_stays_in_sync() {
+    let mut c = Controls::new();
+    let mut s = State::new(true);
+    assert!(s.set_particles(true));
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.density = s.density;
+    c.particles = s.particles;
+    c.particle_appearance = ParticleAppearance {
+        opacity: 0.4,
+        color_mode: ParticleColorMode::Fixed,
+        fixed_color: [7, 8, 9, 255],
+        trail_len: 12,
+        trail_fade: 0.5,
+        trail_width: 1.5,
+        loop_on_stagnation: false,
+        stagnation_seconds: 2.0,
+    };
+
+    apply(&mut s, &mut c);
+
+    assert_eq!(s.particle_appearance, c.particle_appearance, "the values land on the seam");
+    assert_eq!(c.particle_appearance, s.particle_appearance, "and the mirror follows");
+    assert!(s.snapshot_if_dirty().is_none(), "appearance never rebuilds the scene");
+
+    c.particle_appearance.opacity = -1.0;
+    c.particle_appearance.trail_len = 999;
+    c.particle_appearance.stagnation_seconds = f32::NAN;
+    apply(&mut s, &mut c);
+    assert_eq!(s.particle_appearance.opacity, 0.05, "opacity clamps to its floor");
+    assert_eq!(s.particle_appearance.trail_len, 32, "trail length clamps to the ring size");
+    assert_eq!(s.particle_appearance.stagnation_seconds, 0.5, "a NaN threshold falls back");
+    assert_eq!(c.particle_appearance.opacity, s.particle_appearance.opacity);
+}
+
+#[test]
+fn features_reset_restores_the_whole_particle_appearance() {
+    let mut c = Controls::new();
+    c.particles = true;
+    c.particle_size = 2.75;
+    c.particle_count = 320;
+    c.particle_appearance = ParticleAppearance {
+        opacity: 0.2,
+        color_mode: ParticleColorMode::Speed,
+        fixed_color: [1, 2, 3, 4],
+        trail_len: 20,
+        trail_fade: 0.1,
+        trail_width: 1.8,
+        loop_on_stagnation: false,
+        stagnation_seconds: 4.0,
+    };
+
+    c.reset_features();
+
+    assert_eq!(c.particle_appearance, ParticleAppearance::default());
+    assert_eq!(c.particle_size, DEFAULT_PARTICLE_SIZE, "ticket 30's size still resets");
+    assert_eq!(c.particle_count, 0, "ticket 30's count still resets");
+    assert!(!c.particles, "the Feature toggle still resets off");
+}
+
+#[test]
+fn appearance_controls_enable_only_when_they_can_do_something() {
+    assert!(!particle_fixed_color_enabled(ParticleColorMode::Magnitude));
+    assert!(!particle_fixed_color_enabled(ParticleColorMode::Speed));
+    assert!(particle_fixed_color_enabled(ParticleColorMode::Fixed));
+
+    assert!(!trail_fade_enabled(0));
+    assert!(!trail_fade_enabled(1));
+    assert!(trail_fade_enabled(2));
+    assert!(!trail_width_enabled(0));
+    assert!(!trail_width_enabled(1));
+    assert!(trail_width_enabled(2));
+
+    assert!(!stagnation_seconds_enabled(false));
+    assert!(stagnation_seconds_enabled(true));
 }

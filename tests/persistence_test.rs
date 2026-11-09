@@ -9,7 +9,7 @@ use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
-use vector_field_explorer::particles::MAX_PARTICLES;
+use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
@@ -916,4 +916,109 @@ fn particle_size_and_count_round_trip_and_default_when_absent() {
     assert_eq!(legacy_state.particle_count, 0);
     assert_eq!(legacy_controls.particle_size, 1.0);
     assert_eq!(legacy_controls.particle_count, 0);
+}
+
+// --- Ticket 48: particle appearance persistence -------------------------
+
+fn configured_appearance() -> ParticleAppearance {
+    ParticleAppearance {
+        opacity: 0.35,
+        color_mode: ParticleColorMode::Fixed,
+        fixed_color: [12, 34, 56, 255],
+        trail_len: 17,
+        trail_fade: 0.25,
+        trail_width: 1.75,
+        loop_on_stagnation: false,
+        stagnation_seconds: 3.5,
+    }
+}
+
+#[test]
+fn particle_appearance_round_trips_and_defaults_when_absent() {
+    let mut state = State::new(false);
+    let appearance = configured_appearance();
+    assert!(state.set_particle_appearance(appearance));
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(raw.contains("particle_opacity:0.35"), "opacity is written:\n{raw}");
+    assert!(
+        raw.contains("particle_color_mode:fixed"),
+        "the colour mode uses its snake_case spelling:\n{raw}",
+    );
+    assert!(raw.contains("particle_trail_len:17"), "trail length is written:\n{raw}");
+    assert!(raw.contains("particle_trail_fade:0.25"), "fade is written:\n{raw}");
+    assert!(raw.contains("particle_trail_width:1.75"), "width is written:\n{raw}");
+    assert!(
+        raw.contains("particle_loop_on_stagnation:false"),
+        "the loop toggle is written:\n{raw}",
+    );
+    assert!(
+        raw.contains("particle_stagnation_seconds:3.5"),
+        "the threshold is written:\n{raw}",
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.particle_opacity, 0.35);
+    assert_eq!(loaded.view.particle_color_mode, ParticleColorMode::Fixed);
+    assert_eq!(loaded.view.particle_fixed_color, [12, 34, 56, 255]);
+    assert_eq!(loaded.view.particle_trail_len, 17);
+    assert_eq!(loaded.view.particle_trail_fade, 0.25);
+    assert_eq!(loaded.view.particle_trail_width, 1.75);
+    assert!(!loaded.view.particle_loop_on_stagnation);
+    assert_eq!(loaded.view.particle_stagnation_seconds, 3.5);
+
+    let mut restored_state = State::new(false);
+    let mut restored_controls = Controls::new();
+    loaded.view.restore(&mut restored_state, &mut restored_controls);
+    assert_eq!(restored_state.particle_appearance, appearance);
+    assert_eq!(restored_controls.particle_appearance, appearance);
+
+    let legacy = load_legacy(false);
+    let defaults = ParticleAppearance::default();
+    assert_eq!(legacy.view.particle_opacity, defaults.opacity);
+    assert_eq!(legacy.view.particle_color_mode, defaults.color_mode);
+    assert_eq!(legacy.view.particle_fixed_color, defaults.fixed_color);
+    assert_eq!(legacy.view.particle_trail_len, defaults.trail_len);
+    assert_eq!(legacy.view.particle_trail_fade, defaults.trail_fade);
+    assert_eq!(legacy.view.particle_trail_width, defaults.trail_width);
+    assert_eq!(legacy.view.particle_loop_on_stagnation, defaults.loop_on_stagnation);
+    assert_eq!(legacy.view.particle_stagnation_seconds, defaults.stagnation_seconds);
+    let mut legacy_state = State::new(false);
+    let mut legacy_controls = Controls::new();
+    legacy.view.restore(&mut legacy_state, &mut legacy_controls);
+    assert_eq!(legacy_state.particle_appearance, defaults, "older records default trails off");
+    assert_eq!(legacy_controls.particle_appearance, defaults);
+}
+
+#[test]
+fn restore_clamps_and_sanitizes_hostile_particle_appearance() {
+    let record = ViewRecord {
+        particle_opacity: f32::NAN,
+        particle_trail_len: 99_999,
+        particle_trail_fade: f32::INFINITY,
+        particle_trail_width: -50.0,
+        particle_stagnation_seconds: f32::NEG_INFINITY,
+        particle_loop_on_stagnation: false,
+        ..Default::default()
+    };
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    record.restore(&mut state, &mut controls);
+    let appearance = state.particle_appearance;
+    assert_eq!(appearance.opacity, ParticleAppearance::default().opacity);
+    assert_eq!(appearance.trail_len, 32, "trail length clamps to the ring size");
+    assert_eq!(appearance.trail_fade, ParticleAppearance::default().trail_fade);
+    assert_eq!(appearance.trail_width, 0.05, "a negative width clamps to the min");
+    assert_eq!(
+        appearance.stagnation_seconds,
+        ParticleAppearance::default().stagnation_seconds,
+    );
+    assert!(!appearance.loop_on_stagnation, "the boolean passes through");
+    assert_eq!(controls.particle_appearance, appearance, "the mirror follows");
 }

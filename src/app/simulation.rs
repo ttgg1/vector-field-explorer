@@ -37,6 +37,7 @@ impl VfApp {
             self.scene.arrow_params = fresh.arrow_params;
             self.scene.mode_3d = fresh.mode_3d;
             self.scene.arrows = fresh.arrows;
+            self.scene.trails = fresh.trails;
             self.scene.dots = fresh.dots;
             self.scene.combined = fresh.combined;
             // A rebuild refreshes the magnitude range the per-frame dots ramp
@@ -88,32 +89,55 @@ impl VfApp {
             3,
         );
         if target.is_some() {
+            let appearance = self.state.particle_appearance.sanitized();
+            let spacing = self.state.spacing();
             advect(
                 &mut self.particles,
                 &self.state.field,
                 &self.state.domain,
-                self.clock.step_dt(),
+                AdvectSettings {
+                    dt: self.clock.step_dt(),
+                    trail_len: appearance.trail_len,
+                    loop_on_stagnation: appearance.loop_on_stagnation,
+                    stagnation_seconds: appearance.stagnation_seconds,
+                },
             );
-            self.scene.dots = Arc::new(
-                dot_instances(
-                    &self.particles,
-                    &self.state.field,
-                    &self.state.domain,
-                    self.state.colormap,
-                    self.dots_range,
-                    self.state.particle_radius(self.state.spacing()),
-                ),
-            );
+            // The speed range is observed once per frame and shared by the dots
+            // and trails, so both colour modes agree on the same cloud.
+            let speeds = speed_range(&self.particles);
+            self.scene.dots = Arc::new(dot_instances(
+                &self.particles,
+                &self.state.field,
+                &self.state.domain,
+                self.state.colormap,
+                self.dots_range,
+                &appearance,
+                speeds,
+                self.state.particle_radius(spacing),
+            ));
+            self.scene.trails = Arc::new(trail_instances(
+                &self.particles,
+                &self.state.field,
+                &self.state.domain,
+                self.state.colormap,
+                self.dots_range,
+                &appearance,
+                speeds,
+                spacing,
+            ));
             log::trace!(
-                "particles: {} advected, {} dot instances",
+                "particles: {} advected, {} dot instances, {} trail segments",
                 particle_count(&self.particles),
-                self.scene.dots.len()
+                self.scene.dots.len(),
+                self.scene.trails.len()
             );
         } else if particle_count(&self.particles) > 0 {
             // Toggle off (or the 2D view): drop the cloud so switching back
             // spawns fresh at the fixed seed; the dots were already emptied
-            // because the toggle marks the state dirty.
+            // because the toggle marks the state dirty, and the trails reset
+            // here because the snapshot never carries per-frame history.
             clear(&mut self.particles);
+            self.scene.trails = Arc::new(Vec::new());
         }
     }
 }

@@ -15,7 +15,9 @@ use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
-use crate::particles::{DOT_SPACING_FRACTION, MAX_PARTICLES, effective_particle_count};
+use crate::particles::{
+    DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
+};
 
 use std::sync::Arc;
 
@@ -203,6 +205,9 @@ pub struct State {
     /// Explicit particle count; `0` means Auto (density x 16) (ticket 30).
     /// Also consumed by the per-frame cloud, not the scene snapshot.
     pub particle_count: u32,
+    /// Per-particle appearance (ticket 48): opacity, colour mode, trails and
+    /// stagnation looping. Painted from the live cloud, never a scene rebuild.
+    pub particle_appearance: ParticleAppearance,
     /// Which sampled slice plane-by-plane mode highlights (ticket 23).
     pub plane: PlaneView,
     pub dirty: bool,
@@ -255,6 +260,7 @@ impl State {
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
             particle_count: 0,
+            particle_appearance: ParticleAppearance::default(),
             plane: PlaneView::middle(grid),
             dirty: true,
         }
@@ -516,6 +522,21 @@ impl State {
             return false;
         }
         self.particle_count = count;
+        true
+    }
+
+    /// The particle appearance knobs (ticket 48), sanitized through the one
+    /// clamp the sidebar and persistence share. Like size and count, these
+    /// paint from the live cloud and never dirty the scene.
+    pub fn set_particle_appearance(
+        self: &mut State,
+        appearance: ParticleAppearance,
+    ) -> bool {
+        let appearance = appearance.sanitized();
+        if self.particle_appearance == appearance {
+            return false;
+        }
+        self.particle_appearance = appearance;
         true
     }
 
@@ -825,6 +846,9 @@ impl State {
         SceneGPU {
             arrows: Arc::new(arrows),
             lines: Arc::new(self.streamlines_snapshot(&sampled)),
+            // Ticket 48: trails come from the live cloud in the app's particle
+            // block, never from this dirty-flag snapshot.
+            trails: Arc::new(Vec::new()),
             dots: Arc::new(Vec::new()),
             // Ticket 62: the app builds and sorts the per-frame combined
             // arrow + particle stream, because dots advect every frame. The

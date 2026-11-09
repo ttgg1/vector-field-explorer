@@ -71,3 +71,30 @@ fn each_reset_restores_only_its_own_section() {
     assert_eq!(controls.colormap, defaults.colormap, "the Camera reset leaves Coloring alone");
     assert_eq!(controls.domain_min, defaults.domain_min, "the Camera reset leaves Domain alone");
 }
+
+#[test]
+fn features_reset_restores_the_particle_appearance() {
+    use vector_field_explorer::particles::{ParticleAppearance, ParticleColorMode};
+
+    let defaults = Controls::new();
+    let mut controls = Controls::new();
+    controls.particles = true;
+    controls.particle_appearance = ParticleAppearance {
+        opacity: 0.2,
+        color_mode: ParticleColorMode::Speed,
+        fixed_color: [1, 2, 3, 4],
+        trail_len: 10,
+        trail_fade: 0.2,
+        trail_width: 0.5,
+        loop_on_stagnation: false,
+        stagnation_seconds: 4.0,
+    };
+
+    controls.reset_features();
+
+    assert_eq!(
+        controls.particle_appearance, defaults.particle_appearance,
+        "the Features reset restores the whole appearance subsection",
+    );
+    assert!(!controls.particles);
+}

@@ -12,7 +12,7 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::fly_camera::FlyCamera;
-use vector_field_explorer::particles::{Particles, advect, count, spawn};
+use vector_field_explorer::particles::{AdvectSettings, Particles, advect, count, spawn};
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::sim_clock::{
     MAX_SPEED, MAX_STEP, MIN_SPEED, SimClock, has_clock_consumer, should_animate,
@@ -266,21 +266,21 @@ fn pause_keeps_the_cloud_and_play_resumes_from_the_same_positions() {
     let mut clock = SimClock::default();
 
     clock.advance(0.05);
-    advect(&mut cloud, &field, &domain, clock.step_dt());
+    advect(&mut cloud, &field, &domain, AdvectSettings { dt: clock.step_dt(), ..AdvectSettings::default() });
     let paused_at = cloud.pos.clone();
     assert_eq!(count(&cloud), 32);
 
     clock.set_playing(false);
     for _ in 0..20 {
         clock.advance(0.05);
-        advect(&mut cloud, &field, &domain, clock.step_dt());
+        advect(&mut cloud, &field, &domain, AdvectSettings { dt: clock.step_dt(), ..AdvectSettings::default() });
     }
     assert_eq!(count(&cloud), 32, "paused frames never clear the cloud");
     assert_eq!(cloud.pos, paused_at, "paused frames never move the cloud");
 
     clock.set_playing(true);
     clock.advance(0.05);
-    advect(&mut cloud, &field, &domain, clock.step_dt());
+    advect(&mut cloud, &field, &domain, AdvectSettings { dt: clock.step_dt(), ..AdvectSettings::default() });
     assert_ne!(cloud.pos, paused_at, "play resumes from the paused positions");
     let step = cloud.pos[0].x - paused_at[0].x;
     assert!(
