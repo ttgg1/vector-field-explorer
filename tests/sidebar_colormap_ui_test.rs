@@ -9,7 +9,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord};

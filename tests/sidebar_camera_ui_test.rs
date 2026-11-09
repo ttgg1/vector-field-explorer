@@ -8,7 +8,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::viewmodel::State;

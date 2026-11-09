@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/ttgg1/vector-field-explorer"
+# Ticket 21: `tests/suite.rs` is the single integration-test harness; the
+# `tests/*_test.rs` files are modules of it, not separate crates. One process
+# runs all 704 tests (instead of 54 processes paying startup and getting no
+# cross-suite parallelism), and a lib change recompiles one test crate instead
+# of 54.
+autotests = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -24,6 +30,10 @@ log = "0.4"
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"
 
 # Ticket 20: standard sinks only. Native logs to stderr with `RUST_LOG`
 # (default `info`); wasm logs to the browser console via `console_log`.

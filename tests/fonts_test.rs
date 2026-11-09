@@ -8,7 +8,7 @@
 
 use eframe::egui::{FontDefinitions, FontFamily, FontId};
 
-mod support;
+use crate::support;
 
 /// Every non-ASCII glyph that appears in a shipped `src/ui` string. The pause
 /// icon is U+275A twice (ticket 67 replaced U+23F8, which DejaVu lacks).

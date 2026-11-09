@@ -72,13 +72,19 @@ Production code is under `src/`, tests under `tests/`.
 
 - **TDD:** no production code without a failing test first; watch RED fail for
   the right reason, then keep the full suite green.
-- **Tests live in `tests/`.** Every test is an integration test named
-  `tests/<module>_test.rs`; `src/` carries no `#[cfg(test)]` modules, and
-  `tests/test_layout_test.rs` fails the suite if one comes back. Integration
-  tests import `vector_field_explorer::{…}` — `crate::` and `use super::*` do
-  not resolve, and they see only `pub` items. A helper that a test genuinely
-  needs is promoted to a single `#[doc(hidden)] pub` seam with the reason in the
-  commit body and the SDD ledger; never widen the API further for tests.
+- **Tests live in `tests/`.** Every test lives in `tests/<module>_test.rs`;
+  `tests/suite.rs` includes every one as a module (`autotests = false` plus a
+  single `[[test]]`), so `cargo test --all-targets` runs the whole suite in one
+  process. Filter by module or test name (`cargo test particles_test::`,
+  `cargo test sidebar_defaults_mirror_the_seam_defaults`); there are no
+  per-file `--test <file>` targets. Shared helpers live in `tests/support/`
+  and are declared once in `tests/suite.rs`. `src/` carries no `#[cfg(test)]`
+  modules, and `tests/test_layout_test.rs` fails the suite if one comes back.
+  Integration tests import `vector_field_explorer::{…}` — `crate::` and
+  `use super::*` do not resolve, and they see only `pub` items. A helper that a
+  test genuinely needs is promoted to a single `#[doc(hidden)] pub` seam with
+  the reason in the commit body and the SDD ledger; never widen the API further
+  for tests.
 - **Commits:** `feat:` / `fix:` / `docs:`, one commit set per task. Never ledger
   a task without a `git rev-parse`-verifiable hash.
 - **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD

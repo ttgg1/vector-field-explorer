@@ -4,7 +4,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use vector_field_explorer::screenshot::Screenshot;
 use vector_field_explorer::ui::branding;

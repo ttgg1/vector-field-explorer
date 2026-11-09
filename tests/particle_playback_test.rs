@@ -8,7 +8,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::domain::Domain;

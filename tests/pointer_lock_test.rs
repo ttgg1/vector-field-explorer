@@ -7,7 +7,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use glam::Vec2;
 use std::fs;

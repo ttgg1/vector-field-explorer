@@ -9,7 +9,7 @@ use vector_field_explorer::ui::status_bar::{
     COMPACT_STATS_SIZE, FpsMeter, StatsMask, advance_hint, format_status, restart_hint, visible_stats,
 };
 
-mod support;
+use crate::support;
 
 fn all_stats() -> StatsMask {
     StatsMask {

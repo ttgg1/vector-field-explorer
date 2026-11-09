@@ -5,7 +5,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use vector_field_explorer::ui::layout::{
     DEFAULT_CONTROLS_WIDTH, DEFAULT_PRESETS_WIDTH, LayoutMode, LayoutState, MAX_PANEL_WIDTH,

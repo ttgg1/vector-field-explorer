@@ -4,7 +4,7 @@
 
 use eframe::egui;
 
-mod support;
+use crate::support;
 
 use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
