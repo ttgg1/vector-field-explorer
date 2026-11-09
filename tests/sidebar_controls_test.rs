@@ -713,7 +713,7 @@ fn left_click_action_defaults_and_flows_through_apply() {
 }
 
 #[test]
-fn left_click_action_stays_available_while_its_feature_is_off() {
+fn left_click_action_offers_both_choices_with_the_features_default_off() {
     // The row is never hidden or disabled by the feature toggles: it keeps both
     // choices visible and the click is a hinted no-op instead.
     assert_eq!(LeftClickAction::ALL.len(), 2, "both choices stay on the row");

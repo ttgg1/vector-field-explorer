@@ -5,7 +5,7 @@
 use eframe::egui;
 use vector_field_explorer::app::StatusBarState;
 use vector_field_explorer::ui::status_bar::{
-    FpsMeter, StatsMask, advance_hint, format_status, visible_stats,
+    FpsMeter, StatsMask, advance_hint, format_status, restart_hint, visible_stats,
 };
 
 fn all_stats() -> StatsMask {
@@ -245,6 +245,30 @@ fn advance_hint_expires_after_the_frame_time_lifetime() {
         advance_hint(&mut hint, elapsed);
     }
     assert!(hint.is_none());
+}
+
+#[test]
+fn restart_hint_gives_a_repeated_no_op_a_fresh_lifetime() {
+    // The bug: a second S two seconds later re-set the same hint text, so the
+    // status bar saw no text change and the old countdown expired it shortly
+    // after. `restart_hint` resets the accumulated frame time with the event.
+    let mut hint = None;
+    let mut elapsed = 0.0_f32;
+
+    restart_hint(&mut hint, &mut elapsed, "Streamlines are off");
+    advance_hint(&mut hint, elapsed);
+    assert!(hint.is_some());
+
+    elapsed = 2.0;
+    advance_hint(&mut hint, elapsed);
+    assert!(hint.is_some(), "the first hint is still live after 2 s");
+
+    restart_hint(&mut hint, &mut elapsed, "Streamlines are off");
+    assert_eq!(elapsed, 0.0, "the repeated event restarts the countdown");
+    advance_hint(&mut hint, 2.49);
+    assert!(hint.is_some(), "and the same text stays live for another 2.49 s");
+    advance_hint(&mut hint, 2.5);
+    assert!(hint.is_none(), "then expires on the fresh 2.5 s lifetime");
 }
 
 #[test]

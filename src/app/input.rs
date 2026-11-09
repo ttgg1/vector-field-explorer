@@ -317,9 +317,10 @@ impl VfApp {
             self.state.mode_3d,
         ) {
             view_command::ClickActionPlan::Ignore(hint) => {
-                // No seed, no burst. Set the hint only on this event; the status
-                // bar owns its lifetime.
-                self.status.hint = Some(hint.to_owned());
+                // No seed, no burst. Set the hint only on this event and restart
+                // its lifetime even when the same text is already live, so a
+                // repeated no-op does not inherit the old countdown.
+                restart_hint(&mut self.status.hint, &mut self.hint_elapsed, hint);
                 self.last_click_seed = None;
             }
             view_command::ClickActionPlan::SeedStreamline => {

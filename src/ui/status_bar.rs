@@ -110,6 +110,17 @@ pub fn advance_hint(hint: &mut Option<String>, elapsed: f32) {
     }
 }
 
+/// Start or restart a transient hint's frame-time lifetime.
+///
+/// The app calls this on every triggering event, even when the same text is
+/// already live, so a second no-op click/S does not inherit the old countdown.
+/// Pure like [`advance_hint`]: the caller owns both the text and the
+/// accumulated frame time.
+pub fn restart_hint(hint: &mut Option<String>, elapsed: &mut f32, text: &str) {
+    *hint = Some(text.to_owned());
+    *elapsed = 0.0;
+}
+
 /// Compact SI-style count: `999`, `1.2k`, `12.4k`, `1.2M`.
 pub fn compact_count(count: usize) -> String {
     if count >= 1_000_000 {

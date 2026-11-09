@@ -27,7 +27,7 @@ use crate::ui::presets::PresetPanel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::presets::default_preset_dir;
 use crate::ui::sidebar::Controls;
-use crate::ui::status_bar::{FpsMeter, advance_hint};
+use crate::ui::status_bar::{FpsMeter, advance_hint, restart_hint};
 use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
 use crate::view_command::{self, ViewCommand, ViewContext};

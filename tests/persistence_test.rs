@@ -784,9 +784,18 @@ fn a_record_without_a_left_click_action_loads_as_seed_streamline() {
 
 #[test]
 fn an_unknown_left_click_action_loads_as_seed_streamline() {
+    /// A bare unknown variant, as a hand-edited/future RON record would carry
+    /// it. (A quoted string is a different serde shape and is out of scope.)
+    #[derive(serde::Serialize)]
+    enum UnknownLeftClickAction {
+        Teleport,
+    }
+
     #[derive(serde::Serialize)]
     struct UnknownActionView {
-        left_click_action: &'static str,
+        left_click_action: UnknownLeftClickAction,
+        seed_mode: StreamlineSeedMode,
+        particle_count: u32,
     }
 
     #[derive(serde::Serialize)]
@@ -795,13 +804,27 @@ fn an_unknown_left_click_action_loads_as_seed_streamline() {
         view: UnknownActionView,
     }
 
+    // Non-default neighbours prove the unknown action did not trigger the
+    // whole-envelope fallback: an envelope-loss load would return defaults for
+    // these too.
+    let style = AppStyle {
+        theme_dark: false,
+        accent: eframe::egui::Color32::from_rgb(9, 8, 7),
+        rounding: 4.0,
+        spacing: 9.0,
+        font_size: 14.0,
+    };
     let mut storage = MemoryStorage::default();
     eframe::set_value(
         &mut storage,
         eframe::APP_KEY,
         &UnknownActionSettings {
-            style: AppStyle::default(),
-            view: UnknownActionView { left_click_action: "Teleport" },
+            style: style.clone(),
+            view: UnknownActionView {
+                left_click_action: UnknownLeftClickAction::Teleport,
+                seed_mode: StreamlineSeedMode::Click,
+                particle_count: 321,
+            },
         },
     );
 
@@ -812,9 +835,17 @@ fn an_unknown_left_click_action_loads_as_seed_streamline() {
         "an unknown spelling falls back instead of failing the envelope",
     );
     assert_eq!(
-        loaded.style,
-        AppStyle::default(),
-        "the rest of the envelope still loads",
+        loaded.style, style,
+        "the non-default style still loads instead of the whole-envelope default",
+    );
+    assert_eq!(
+        loaded.view.seed_mode,
+        StreamlineSeedMode::Click,
+        "a non-default sibling field still loads",
+    );
+    assert_eq!(
+        loaded.view.particle_count, 321,
+        "another non-default sibling still loads",
     );
 }
 
