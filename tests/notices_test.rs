@@ -56,6 +56,18 @@ fn committed_notice_bundle_matches_the_cargo_graph() {
         "the bundle must contain the canonical Apache-2.0 text section",
     );
     assert!(
+        text.contains("4 Apache-only: accesskit_winit"),
+        "the header must distinguish Apache-only packages from dual/triple elections",
+    );
+    assert!(
+        text.contains("metadata superset"),
+        "the header must say the 513-package list is a metadata superset",
+    );
+    assert!(
+        text.contains("not linked into any shipped target"),
+        "the BSL entry must state that no BSL notice is distributed",
+    );
+    assert!(
         text.contains("Elected licence: MIT"),
         "MIT-only packages must cite a checked-in upstream text",
     );

@@ -14,13 +14,17 @@
 #   * If the SPDX expression offers Apache-2.0 as an alternative, elect
 #     Apache-2.0 and point at the single canonical Apache-2.0 section.
 #     Apache-2.0 section 4(a) requires the licence copy, not a per-holder
-#     copyright line.
+#     copyright line; section 4(c) applies only when distributing Source form.
+#     No NOTICE file exists at the checked repository roots, so no NOTICE copy
+#     is required.
 #   * An MIT-only package must have a checked-in upstream MIT text in
 #     packaging/notice-sources/manifest.json; generation fails if it does
 #     not. Copyright lines come from the checked-in upstream file, never from
 #     this generator.
-#   * BSL-1.0 is the only expression allowed to stay textless: section 3
-#     excludes copies solely in machine-executable object-code form.
+#   * BSL-1.0 is the only expression allowed to stay textless. It is not
+#     linked into the shipped targets under current features; if it were, the
+#     final clause of the single BSL-1.0 grant excludes copies solely in
+#     machine-executable object-code form.
 #   * Any other expression without a crate licence file fails generation.
 #
 # Byte-identical texts are deduplicated by SHA-256 while every package still
@@ -104,6 +108,48 @@ def cargo_metadata():
         return json.loads(result.stdout)
     except json.JSONDecodeError as error:
         fail(f"cargo metadata returned invalid JSON: {error}")
+
+
+def target_graph_counts():
+    """Exact per-target cargo tree package counts for the bundle header."""
+    targets = (
+        ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"),
+        ("aarch64-apple-darwin", "aarch64-apple-darwin"),
+        ("x86_64-apple-darwin", "x86_64-apple-darwin"),
+    )
+    counts = {}
+    for label, target in targets:
+        for edges in ("normal", "normal,build"):
+            try:
+                result = subprocess.run(
+                    [
+                        "cargo",
+                        "tree",
+                        "--target",
+                        target,
+                        "--edges",
+                        edges,
+                        "--prefix",
+                        "none",
+                        "--format",
+                        "{p}",
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except FileNotFoundError:
+                fail("cargo is not installed")
+            except subprocess.CalledProcessError as error:
+                if error.stderr:
+                    sys.stderr.write(error.stderr)
+                fail(f"cargo tree failed for {target} ({edges})")
+            packages = {
+                line.strip() for line in result.stdout.splitlines() if line.strip()
+            }
+            counts[(label, edges)] = len(packages)
+    return counts
 
 
 def version_key(version):
@@ -231,6 +277,7 @@ for index, entry in enumerate(manifest.get("mit", [])):
         mit_by_package[key] = loaded
 
 metadata = cargo_metadata()
+graph_counts = target_graph_counts()
 workspace = set(metadata["workspace_members"])
 
 packages = []
@@ -253,7 +300,9 @@ def text_entry(digest, text, canonical=False):
 
 
 apache_elected = 0
+apache_only = []
 mit_manifest_used = 0
+used_mit_keys = set()
 bsl_exempt = 0
 
 for package in metadata["packages"]:
@@ -279,6 +328,8 @@ for package in metadata["packages"]:
         if "Apache-2.0" in options:
             election = {"kind": "apache", "license": "Apache-2.0"}
             apache_elected += 1
+            if options == ["Apache-2.0"]:
+                apache_only.append(f"{name} {version}")
             entry = text_entry(canonical["digest"], canonical["text"], canonical=True)
             entry["canonical"] = True
             entry["packages"].add((name, version))
@@ -298,6 +349,7 @@ for package in metadata["packages"]:
                 )
             election = {"kind": "mit", "license": "MIT", "source": source}
             mit_manifest_used += 1
+            used_mit_keys.add(key)
             entry = text_entry(source["digest"], source["text"])
             entry["packages"].add((name, version))
             entry["files"].add(source["file"])
@@ -321,6 +373,12 @@ for package in metadata["packages"]:
             "refs": refs,
             "election": election,
         }
+    )
+
+for key in sorted(set(mit_by_package) - used_mit_keys):
+    sys.stderr.write(
+        f"generate-notices: warning: {manifest_path} maps {key}, which has no "
+        "no-file MIT package in this graph\n"
     )
 
 packages.sort(
@@ -356,10 +414,24 @@ lines = [
     "hand. The hand-written summary is THIRD_PARTY_LICENSES.md beside this file.",
     "",
     f"{len(packages)} non-workspace packages: {with_file} ship a crate licence file.",
-    f"Of the {without_file} that do not, {apache_elected} elect Apache-2.0 from a dual",
-    f"or triple licence and point at the canonical Apache-2.0 text, {mit_manifest_used} use",
-    f"a checked-in upstream MIT text from packaging/notice-sources/, and {bsl_exempt} is",
-    "BSL-1.0 object code, which needs no bundled notice.",
+    f"Of the {without_file} that do not, {apache_elected} take Apache-2.0 from their SPDX",
+    f"expression ({apache_elected - len(apache_only)} dual/triple, {len(apache_only)} "
+    f"Apache-only: {', '.join(sorted(apache_only))}), {mit_manifest_used} use a checked-in",
+    "upstream MIT text from packaging/notice-sources/, and 1 is BSL-1.0",
+    "(`clipboard-win`), which is not linked into any shipped target under current",
+    "features.",
+    "",
+    "The 513-package list is a metadata superset of the shipped binaries: it covers",
+    f"every target and optional feature. cargo tree normal-edge counts are "
+    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal')]}/"
+    f"{graph_counts[('aarch64-apple-darwin', 'normal')]}/"
+    f"{graph_counts[('x86_64-apple-darwin', 'normal')]}",
+    f"and normal+build counts are "
+    f"{graph_counts[('x86_64-unknown-linux-gnu', 'normal,build')]}/"
+    f"{graph_counts[('aarch64-apple-darwin', 'normal,build')]}/"
+    f"{graph_counts[('x86_64-apple-darwin', 'normal,build')]} for Linux x86_64 /",
+    "macOS arm64 / macOS x86_64; host-only proc-macro and build units account for",
+    "part of the gap, and the remainder are optional or inactive target packages.",
     "",
     "Licence texts are normalised to LF line endings and have trailing whitespace",
     "stripped. Identical texts are deduplicated by SHA-256 content hash; each",
@@ -403,9 +475,12 @@ for package in packages:
     elif election and election["kind"] == "bsl":
         lines.append("Licence files: none")
         lines.append(
-            "NO LICENCE FILE: BSL-1.0 section 3 excludes copies solely in "
-            "machine-executable object-code form from the notice requirement; "
-            "this binary distribution therefore needs no separate licence text."
+            "NO LICENCE FILE: BSL-1.0 (`clipboard-win`) is not linked into any "
+            "shipped target under current features (Windows-only cfg plus the "
+            "optional egui clipboard feature), so no BSL notice is distributed. "
+            "If it were enabled, the final clause of the single BSL-1.0 grant "
+            "would exclude copies solely in machine-executable object-code form "
+            "from the notice requirement."
         )
     else:
         fail(f"internal error: {package['name']} has neither text nor a known election")

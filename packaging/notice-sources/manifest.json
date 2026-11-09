@@ -12,7 +12,7 @@
       "file": "mit-objc2.txt",
       "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
       "provenance": "https://github.com/madsmtm/objc2@4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
-      "note": "The objc2-family .crate packages omit a licence file. The repository's LICENSE.md at the 0.6.x release tags states these crates are MIT; this full MIT text is the repository's own LICENSE.txt and has been unchanged since commit 9961247 (2016).",
+      "note": "LICENSE.md at the 0.6.x release tags states that objc2, block2, objc2-foundation, and objc2-encode are MIT, but it does not reproduce the licence text. The checked-in text is LICENSE.txt at 4fc083f1, byte-identical to rust-objc's 9961247 (2016) file; upstream removed LICENSE.txt at cfb1992 (2025-01-22) and re-added LICENSE-MIT.txt at ee9a7ada (2026-03-18) with 'Copyright 2026 Mads Marquart'. The retained MIT line is the original 2016 notice, and the text is not changed here.",
       "packages": [
         "block2 0.5.1",
         "block2 0.6.2",
@@ -41,7 +41,7 @@
       "file": "mit-rust-objc.txt",
       "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
       "provenance": "https://github.com/SSheldon/rust-objc@9961247c1a82027d6edbe6c516011b1363b9354c/LICENSE.txt",
-      "note": "dispatch 0.2.0's own repository has no licence file at tag 0.2.0 (the Cargo.toml declares MIT). This is the same author's verbatim MIT text from his adjacent rust-objc project.",
+      "note": "dispatch 0.2.0's own repository never had a licence file; the copyright holder (Steven Sheldon) comes from its Cargo.toml authors field, and the text is that author's verbatim MIT licence from the adjacent rust-objc project.",
       "packages": [
         "dispatch 0.2.0"
       ]

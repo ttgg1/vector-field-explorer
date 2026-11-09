@@ -191,7 +191,8 @@ checked-in notice source changes. CI runs `scripts/generate-notices.sh --check`
 and fails on a stale bundle.
 
 Some published crates omit a licence file even though their manifest declares
-one. The generator resolves those packages without inventing text:
+a licence expression. The generator resolves those packages without inventing
+text:
 
 - If the SPDX expression offers Apache-2.0 (for example `MIT OR Apache-2.0`,
   `Zlib OR Apache-2.0 OR MIT`, or `MIT/Apache-2.0`), the project elects
@@ -201,9 +202,13 @@ one. The generator resolves those packages without inventing text:
   [`packaging/notice-sources/`](packaging/notice-sources/). The manifest records
   each source repository, pinned tag or commit, source path, and SHA-256;
   generation verifies the file hash and cites the pin in the bundle.
-- BSL-1.0 is the only licence marked `NO LICENCE FILE`: section 3 does not
-  require the notice for copies solely in machine-executable object-code form,
-  which is what the release archives contain.
+- BSL-1.0 (`clipboard-win`, reached only through arboard's Windows-only path)
+  is the only expression still marked `NO LICENCE FILE`. It is not linked into
+  any shipped target under current features (Windows-only cfg plus the optional
+  egui clipboard feature), so no BSL notice is distributed. If that feature is
+  enabled, the final clause of the single BSL-1.0 grant excludes copies solely
+  in machine-executable object-code form from the notice requirement; re-review
+  the archives at that point.
 
 Generation fails if a package needs a licence text and neither a crate file nor
 a checked-in manifest entry exists, so a graph change cannot silently drop
@@ -233,10 +238,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+Per-crate copyright lines for MIT-licensed crates are in the appendix.
+
 The Apache License 2.0 text is available at
-<https://www.apache.org/licenses/LICENSE-2.0>. Where a crate is dual licensed
-MIT OR Apache-2.0, this project uses the MIT option unless the crate's own
-notice says otherwise.
+<https://www.apache.org/licenses/LICENSE-2.0>. Crates that ship their own
+licence files keep them; crates that omit them are recorded in the appendix as
+electing Apache-2.0, with the canonical Apache-2.0 text.
 
 ## System libraries and the release archives
 
