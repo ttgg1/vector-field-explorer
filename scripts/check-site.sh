@@ -14,17 +14,15 @@
 # natural-language detection: it catches the recorded phrasings but cannot
 # prove the absence of every possible claim.
 #
-# HTML is normalized (`tr '\n' ' '`) and inspected tag by tag, not line by
-# line. The tag regex keeps a `>` inside a quoted value, so attributes split
-# across lines, quoted/unquoted values, uppercase names and protocol-relative
-# URLs are visible to the checks below. Inline `<script>`/`<style>` bodies are
-# extracted with Perl, which handles bodies containing `<`. Both inline and
-# stylesheet scans are conservative: a literal `https?:`, `@import`, `import(`
-# or `//host.tld` fails even inside a comment, because this is a release gate,
-# not a JavaScript/CSS parser. Perl is required (present on ubuntu-latest).
+# HTML/CSS inspection lives in `scripts/check_site.py`, which uses Python's
+# stdlib HTMLParser (entities decoded, quoted/unquoted/multiline attributes,
+# `/` separators) and a CSS escape decoder. This is a parser-based regression
+# gate for the recorded bypasses, not an adversarial sanitizer: inline
+# script/style matching is deliberately conservative about comments and exotic
+# CSS. Python 3 is required; a missing interpreter is a hard failure.
 #
-# Known low-impact gap: local CSS `url(../…)` is not resolved; no stylesheet
-# in this artifact uses a local `url()` today. External CSS URLs are rejected.
+# Same-origin local CSS `url(../x)` and `url(/x)` remain allowed (they are not
+# external fetches); no current stylesheet uses a local `url()`.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,14 +51,6 @@ reject_text() {
     fail "forbidden claim '$needle' in ${file#"$root"/}"
   fi
 }
-
-command -v perl >/dev/null 2>&1 ||
-  fail "perl is required to scan inline <script>/<style> bodies"
-
-# A quoted value may contain `>`, so the tag ends only at an unquoted `>`.
-tag_pattern="<[a-z]([^>\"']|\"[^\"]*\"|'[^']*')*>"
-css_external_pattern="url\([[:space:]]*[\"']?(https?:)?//|@import"
-inline_external_pattern='https?:|@import|import[[:space:]]*\(|//[a-z0-9.-]+\.[a-z]{2,}'
 
 index="$dist/index.html"
 download="$dist/download.html"
@@ -139,198 +129,15 @@ for file in "$index" "$download"; do
   done
 done
 
-# --- HTML tag and attribute parsing ---------------------------------------
-# A value is external when it is absolute or protocol-relative, whatever its
-# case. `//host` is external in HTML just like `https://host`.
-is_external() {
-  local value="${1,,}"
-  case "$value" in
-    https://* | http://* | //*) return 0 ;;
-  esac
-  return 1
-}
+# --- HTML/CSS parse and local links --------------------------------------
+# The Python helper owns the external-resource gate and local-file resolution.
+# A missing interpreter must fail the gate, never silently skip it.
+command -v python3 >/dev/null 2>&1 ||
+  fail "python3 is required for scripts/check_site.py"
 
-# Print every value of `attr` from one normalized tag. Quote-agnostic and
-# case-insensitive; an unquoted value ends only at whitespace or `>`, so URLs
-# keep their slashes. `:` is a valid boundary so `xlink:href` is checked too.
-attr_values() {
-  local tag="$1" attr="$2" value
-  while IFS= read -r value; do
-    value="${value#\"}"
-    value="${value%\"}"
-    value="${value#\'}"
-    value="${value%\'}"
-    printf '%s\n' "$value"
-  done < <(printf '%s\n' "$tag" |
-    grep -oiE "(^|[[:space:]:])${attr}[[:space:]]*=[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:]>]+)" |
-    sed -E 's/^[^=]*=[[:space:]]*//' || true)
-}
-
-# The lower-case element name of a normalized tag.
-tag_name() {
-  local name="${1#<}"
-  name="${name%%[[:space:]/>]*}"
-  printf '%s' "${name,,}"
-}
-
-# Print the URL candidates of a srcset value: comma-separated entries with an
-# optional density/width descriptor (`x.png 1x`), which is not a URL.
-srcset_urls() {
-  local value="$1" part
-  local -a parts
-  IFS=',' read -r -a parts <<< "$value"
-  for part in "${parts[@]}"; do
-    part="${part#"${part%%[![:space:]]*}"}"
-    part="${part%%[[:space:]]*}"
-    if [ -n "$part" ]; then
-      printf '%s\n' "$part"
-    fi
-  done
-}
-
-# Whether a `<link>` tag declares the canonical URL (the one external href we
-# allow: it names this site, it does not fetch anything).
-tag_has_canonical_rel() {
-  attr_values "$1" rel |
-    tr '[:upper:]' '[:lower:]' |
-    grep -qE '(^|[[:space:]])canonical([[:space:]]|$)' || return 1
-}
-
-# Reject external references inside inline <script>/<style> bodies. Perl
-# captures the body with dot-all, so a body containing `<` is still scanned.
-# This is conservative: a literal token in a comment also fails.
-scan_inline_blocks() {
-  local file="$1" normalized="$2"
-  if perl -0ne 'while(/<(script|style)\b[^>]*>(.*?)<\/\1\s*>/gis){print "$2\n"}' "$normalized" |
-    grep -Eqi "$inline_external_pattern"; then
-    fail "external reference in inline <script>/<style> in ${file#"$root"/}"
-  fi
-}
-
-# --- No external runtime dependencies -------------------------------------
-# Positive checks, not a CDN-host deny-list: every fetched asset must stay in
-# this artifact. Only `<a href>` may point off-site (release, repository,
-# issues), and only `<link rel="canonical">` may declare an external URL.
-normalized="$(mktemp)"
-trap 'rm -f "$normalized"' EXIT
-checked_links=0
-
-for file in "$index" "$download"; do
-  tr '\n' ' ' < "$file" > "$normalized"
-
-  # A base tag rewrites every relative URL on the page; there is no legitimate
-  # use in this two-page artifact.
-  if grep -qiE '<base([[:space:]][^>]*)?>' "$normalized"; then
-    fail "<base> tag in ${file#"$root"/}: it rewrites every relative URL"
-  fi
-
-  scan_inline_blocks "$file" "$normalized"
-
-  while IFS= read -r tag; do
-    [ -n "$tag" ] || continue
-    name="$(tag_name "$tag")"
-
-    # Fetched resources never leave the artifact, including srcset candidates.
-    for attr in src data srcset imagesrcset poster; do
-      while IFS= read -r value; do
-        [ -n "$value" ] || continue
-        if [[ "$attr" == srcset || "$attr" == imagesrcset ]]; then
-          for candidate in $(srcset_urls "$value"); do
-            if is_external "$candidate"; then
-              fail "external $attr on <$name> in ${file#"$root"/}: $candidate"
-            fi
-          done
-        elif is_external "$value"; then
-          fail "external $attr on <$name> in ${file#"$root"/}: $value"
-        fi
-      done < <(attr_values "$tag" "$attr")
-    done
-
-    # Anchors may link off-site; canonical links may name the site. Any other
-    # external href (stylesheet, icon, object, ...) must stay local.
-    while IFS= read -r value; do
-      [ -n "$value" ] || continue
-      if is_external "$value"; then
-        if [[ "$name" == a ]]; then
-          continue
-        fi
-        if [[ "$name" == link ]] && tag_has_canonical_rel "$tag"; then
-          continue
-        fi
-        fail "external href on <$name> in ${file#"$root"/}: $value"
-      fi
-    done < <(attr_values "$tag" href)
-
-    # Inline style attributes must not fetch or import anything either.
-    while IFS= read -r value; do
-      [ -n "$value" ] || continue
-      if printf '%s\n' "$value" | grep -Eqi "$css_external_pattern"; then
-        fail "external CSS dependency in style attribute on <$name> in ${file#"$root"/}: $value"
-      fi
-    done < <(attr_values "$tag" style)
-
-    # Local-file resolution for every attribute a browser may fetch or follow.
-    for attr in href src data poster srcset imagesrcset; do
-      while IFS= read -r value; do
-        [ -n "$value" ] || continue
-        candidates=("$value")
-        if [[ "$attr" == srcset || "$attr" == imagesrcset ]]; then
-          candidates=()
-          while IFS= read -r candidate; do
-            candidates+=("$candidate")
-          done < <(srcset_urls "$value")
-        fi
-        for ref in "${candidates[@]}"; do
-          [ -n "$ref" ] || continue
-          low="${ref,,}"
-          case "$low" in
-            http://* | https://* | //* | mailto:* | data:* | tel:* | javascript:* | \#*)
-              continue
-              ;;
-          esac
-          target="${ref%%#*}"
-          target="${target%%\?*}"
-          # Trunk rewrites the project-site base path to an absolute URL. The
-          # base itself (with or without a trailing slash, or `/./`) is
-          # index.html; anything else must name a file in the artifact.
-          case "$target" in
-            /vector-field-explorer | /vector-field-explorer/ | /vector-field-explorer/./)
-              target=""
-              ;;
-            /vector-field-explorer/*)
-              target="${target#/vector-field-explorer/}"
-              target="${target#./}"
-              ;;
-            /*)
-              fail "absolute local reference '$ref' in ${file#"$root"/}"
-              ;;
-            *)
-              target="${target#./}"
-              ;;
-          esac
-          if [[ "/$target/" == *"/../"* || "$target" == ".." ]]; then
-            fail "path traversal in local reference '$ref' in ${file#"$root"/}"
-          fi
-          if [[ -z "$target" || "$target" == "." ]]; then
-            require_file "$index"
-            checked_links=$((checked_links + 1))
-            continue
-          fi
-          require_file "$dist/$target"
-          checked_links=$((checked_links + 1))
-        done
-      done < <(attr_values "$tag" "$attr")
-    done
-  done < <(grep -oiE "$tag_pattern" "$normalized")
-done
-
-# CSS must not fetch anything at runtime or import another sheet.
-shopt -s nullglob
-for sheet in "$dist"/*.css; do
-  if grep -Eqi "$css_external_pattern" "$sheet"; then
-    fail "external CSS dependency in ${sheet#"$root"/}"
-  fi
-done
+if ! parse_summary="$(python3 "$root/scripts/check_site.py" "$dist")"; then
+  exit 1
+fi
 
 echo "check-site: PASS - ${#wasm[@]} wasm, ${#javascript[@]} js, index.html, style.css, download.html"
-echo "check-site: PASS - latest release, GPL-3.0-only, web-app link, screenshots and ${checked_links} local references"
+echo "check-site: PASS - $parse_summary"
