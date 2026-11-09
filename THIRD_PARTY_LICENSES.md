@@ -180,17 +180,34 @@ for `linux-raw-sys`, `rustix`, `wasi`, `wasip2`, and `wit-bindgen` (each also
 offers Apache-2.0 and/or MIT), and `Apache-2.0 OR GPL-2.0-only` for `self_cell`
 (this project uses the Apache-2.0 option).
 
-The complete per-crate appendix is
+The per-crate appendix is
 [`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt). It is
 generated from `cargo metadata --format-version 1 --locked` by
 `scripts/generate-notices.sh`, records each package's name, version, SPDX
 expression, repository, and licence file text, and deduplicates identical
-texts by content hash while still listing every package that uses them.
-Packages whose source distribution ships no licence file keep their SPDX
-expression and a clearly marked `NO LICENCE FILE` line instead of invented
-copyright text. The bundle is committed; regenerate and commit it whenever
-`Cargo.lock` changes. CI runs `scripts/generate-notices.sh --check` and fails
-on a stale bundle.
+texts by content hash while still listing every package that uses them. The
+bundle is committed; regenerate and commit it whenever `Cargo.lock` or a
+checked-in notice source changes. CI runs `scripts/generate-notices.sh --check`
+and fails on a stale bundle.
+
+Some published crates omit a licence file even though their manifest declares
+one. The generator resolves those packages without inventing text:
+
+- If the SPDX expression offers Apache-2.0 (for example `MIT OR Apache-2.0`,
+  `Zlib OR Apache-2.0 OR MIT`, or `MIT/Apache-2.0`), the project elects
+  Apache-2.0 and points at one canonical Apache-2.0 section. Apache-2.0 section
+  4(a) requires the licence copy, not a per-holder copyright line.
+- MIT-only packages use verbatim upstream MIT texts checked into
+  [`packaging/notice-sources/`](packaging/notice-sources/). The manifest records
+  each source repository, pinned tag or commit, source path, and SHA-256;
+  generation verifies the file hash and cites the pin in the bundle.
+- BSL-1.0 is the only licence marked `NO LICENCE FILE`: section 3 does not
+  require the notice for copies solely in machine-executable object-code form,
+  which is what the release archives contain.
+
+Generation fails if a package needs a licence text and neither a crate file nor
+a checked-in manifest entry exists, so a graph change cannot silently drop
+notice text.
 
 The standard MIT permission text follows.
 

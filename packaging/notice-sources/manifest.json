@@ -1,0 +1,67 @@
+{
+  "description": "Checked-in upstream licence texts for crates whose published .crate files omit a licence file. scripts/generate-notices.sh verifies each file against sha256 and cites the pinned upstream source in packaging/THIRD_PARTY_NOTICES.txt. Add a new entry only with a verbatim upstream file; never hand-write a copyright line.",
+  "canonical": {
+    "apache-2.0": {
+      "file": "apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "provenance": "https://www.apache.org/licenses/LICENSE-2.0.txt (canonical Apache-2.0 licence text)"
+    }
+  },
+  "mit": [
+    {
+      "file": "mit-objc2.txt",
+      "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+      "provenance": "https://github.com/madsmtm/objc2@4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+      "note": "The objc2-family .crate packages omit a licence file. The repository's LICENSE.md at the 0.6.x release tags states these crates are MIT; this full MIT text is the repository's own LICENSE.txt and has been unchanged since commit 9961247 (2016).",
+      "packages": [
+        "block2 0.5.1",
+        "block2 0.6.2",
+        "objc-sys 0.3.5",
+        "objc2 0.5.3",
+        "objc2 0.6.5",
+        "objc2-app-kit 0.2.2",
+        "objc2-cloud-kit 0.2.2",
+        "objc2-contacts 0.2.2",
+        "objc2-core-data 0.2.2",
+        "objc2-core-image 0.2.2",
+        "objc2-core-location 0.2.2",
+        "objc2-encode 4.1.0",
+        "objc2-foundation 0.2.2",
+        "objc2-foundation 0.3.2",
+        "objc2-link-presentation 0.2.2",
+        "objc2-metal 0.2.2",
+        "objc2-quartz-core 0.2.2",
+        "objc2-symbols 0.2.2",
+        "objc2-ui-kit 0.2.2",
+        "objc2-uniform-type-identifiers 0.2.2",
+        "objc2-user-notifications 0.2.2"
+      ]
+    },
+    {
+      "file": "mit-rust-objc.txt",
+      "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+      "provenance": "https://github.com/SSheldon/rust-objc@9961247c1a82027d6edbe6c516011b1363b9354c/LICENSE.txt",
+      "note": "dispatch 0.2.0's own repository has no licence file at tag 0.2.0 (the Cargo.toml declares MIT). This is the same author's verbatim MIT text from his adjacent rust-objc project.",
+      "packages": [
+        "dispatch 0.2.0"
+      ]
+    },
+    {
+      "file": "mit-pulp.txt",
+      "sha256": "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9",
+      "provenance": "https://github.com/sarah-quinones/pulp@5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE",
+      "packages": [
+        "pulp-wasm-simd-flag 0.1.1"
+      ]
+    },
+    {
+      "file": "mit-simd-helpers.txt",
+      "sha256": "d69f24ad84ec2ade64c0b68bdb31b41170e997b158370342056918329cc9af1e",
+      "provenance": "https://github.com/lu-zero/simd_helpers@82040194cd05affb060bf94d6f19f82a771d07fb/LICENSE",
+      "note": "The v0.1.0 tag predates the LICENSE file; this pin is the upstream commit that added the project's MIT text.",
+      "packages": [
+        "simd_helpers 0.1.0"
+      ]
+    }
+  ]
+}

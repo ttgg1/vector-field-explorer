@@ -6,10 +6,26 @@
 # Input: `cargo metadata --format-version 1 --locked`, so generation is
 # offline and uses no new Rust dependencies. For every non-workspace package
 # the bundle records the name, version, licence expression, repository, and
-# the licence text(s) shipped with the package source. Byte-identical texts
-# are deduplicated by SHA-256 while every package still names the text section
-# it uses. Packages with no licence file keep their SPDX expression and get a
-# `NO LICENCE FILE` marker; the generator never invents copyright text.
+# the licence text(s) shipped with the package source or checked into
+# packaging/notice-sources/.
+#
+# Packages whose crate source ships no licence file cannot be left without
+# text. The generator applies this policy:
+#   * If the SPDX expression offers Apache-2.0 as an alternative, elect
+#     Apache-2.0 and point at the single canonical Apache-2.0 section.
+#     Apache-2.0 section 4(a) requires the licence copy, not a per-holder
+#     copyright line.
+#   * An MIT-only package must have a checked-in upstream MIT text in
+#     packaging/notice-sources/manifest.json; generation fails if it does
+#     not. Copyright lines come from the checked-in upstream file, never from
+#     this generator.
+#   * BSL-1.0 is the only expression allowed to stay textless: section 3
+#     excludes copies solely in machine-executable object-code form.
+#   * Any other expression without a crate licence file fails generation.
+#
+# Byte-identical texts are deduplicated by SHA-256 while every package still
+# names the text section it uses. Text is normalised to LF line endings and
+# trailing whitespace is stripped so `git diff --check` stays clean.
 #
 # Usage:
 #   scripts/generate-notices.sh          regenerate the committed bundle
@@ -17,8 +33,8 @@
 #
 # The output is committed, so release builds and tests never need network
 # access. CI runs `--check` after the build has populated the registry cache
-# (CARGO_NET_OFFLINE=true); maintainers rerun the generator when Cargo.lock
-# changes and commit the result.
+# (CARGO_NET_OFFLINE=true); maintainers rerun the generator when Cargo.lock or
+# a checked-in notice source changes.
 #
 # Requirements: bash, cargo, python3 (standard library only).
 
@@ -56,7 +72,12 @@ import subprocess
 import sys
 
 target = sys.argv[1]
-license_prefixes = ("LICENSE", "COPYING", "NOTICE")
+manifest_path = os.path.join("packaging", "notice-sources", "manifest.json")
+license_file_re = re.compile(
+    r"^(?i:LICENSE|LICENCE|COPYING|NOTICE)"
+    r"(?:(?i:[-_][A-Za-z0-9._+-]+))*"
+    r"(?:\.(?i:txt|md|rst|html?|adoc|lesser)|\.(?:[A-Z][A-Za-z0-9._+-]*))?$"
+)
 
 
 def fail(message):
@@ -95,6 +116,29 @@ def version_key(version):
     return tuple(parts)
 
 
+def read_bytes(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    except OSError as error:
+        fail(f"cannot read {path}: {error}")
+
+
+def normalise(raw, path):
+    """Decode strict UTF-8, convert to LF, and strip trailing whitespace."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        fail(f"{path} is not valid UTF-8: {error}")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return text.lstrip("\n").rstrip("\n") + "\n"
+
+
+def text_hash(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def license_files(package):
     """License file paths for a package: metadata first, then a root scan."""
     package_root = os.path.dirname(package["manifest_path"])
@@ -115,7 +159,7 @@ def license_files(package):
         (
             name
             for name in entries
-            if name.upper().startswith(license_prefixes)
+            if license_file_re.fullmatch(name)
             and os.path.isfile(os.path.join(package_root, name))
         ),
         key=lambda name: (name.lower(), name),
@@ -123,50 +167,159 @@ def license_files(package):
     return [(name, os.path.join(package_root, name)) for name in names]
 
 
-def read_text(path):
-    """Read one licence file as UTF-8 with LF endings and no trailing spaces."""
-    with open(path, "rb") as handle:
-        raw = handle.read()
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8", "replace")
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    # Trailing spaces are insignificant in the licence text but would make
-    # `git diff --check` fail on the committed bundle.
-    text = "\n".join(line.rstrip() for line in text.split("\n"))
-    return text.rstrip("\n") + "\n"
+def license_options(expression):
+    # Cargo's legacy `MIT/Apache-2.0` spelling means an OR choice.
+    normalised = expression.replace("/", " OR ")
+    options = []
+    for option in re.split(r"\s+OR\s+", normalised, flags=re.IGNORECASE):
+        option = option.strip().strip("()").strip()
+        if option:
+            options.append(option)
+    return options
 
+
+def load_manifest():
+    raw = read_bytes(manifest_path)
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"{manifest_path} is not valid JSON: {error}")
+    return manifest
+
+
+def load_manifest_text(entry, label):
+    """Verify one checked-in source file and return text and provenance."""
+    file_name = entry.get("file")
+    expected = entry.get("sha256")
+    provenance = entry.get("provenance")
+    if not file_name or not expected or not provenance:
+        fail(f"{manifest_path}: {label} needs file, sha256, and provenance")
+    path = os.path.join("packaging", "notice-sources", file_name)
+    raw = read_bytes(path)
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != expected:
+        fail(f"{path}: sha256 mismatch (manifest {expected}, actual {actual})")
+    text = normalise(raw, path)
+    return {
+        "file": file_name,
+        "source_sha256": actual,
+        "text": text,
+        "digest": text_hash(text),
+        "provenance": provenance,
+        "note": entry.get("note"),
+    }
+
+
+manifest = load_manifest()
+canonical = load_manifest_text(
+    manifest.get("canonical", {}).get("apache-2.0", {}),
+    "canonical Apache-2.0",
+)
+
+mit_by_package = {}
+mit_entries = []
+for index, entry in enumerate(manifest.get("mit", [])):
+    loaded = load_manifest_text(entry, f"mit[{index}]")
+    packages = entry.get("packages") or []
+    if not packages:
+        fail(f"{manifest_path}: mit[{index}] lists no packages")
+    loaded["packages"] = packages
+    mit_entries.append(loaded)
+    for key in packages:
+        if key in mit_by_package:
+            fail(f"{manifest_path}: {key} appears in more than one MIT source")
+        mit_by_package[key] = loaded
 
 metadata = cargo_metadata()
 workspace = set(metadata["workspace_members"])
 
 packages = []
 texts = {}
+
+
+def text_entry(digest, text, canonical=False):
+    entry = texts.get(digest)
+    if entry is None:
+        entry = {
+            "text": text,
+            "packages": set(),
+            "files": set(),
+            "provenance": set(),
+            "notes": set(),
+            "canonical": canonical,
+        }
+        texts[digest] = entry
+    return entry
+
+
+apache_elected = 0
+mit_manifest_used = 0
+bsl_exempt = 0
+
 for package in metadata["packages"]:
     if package["id"] in workspace:
         continue
     name = package["name"]
     version = package["version"]
+    expression = package.get("license") or "UNKNOWN"
+    files = license_files(package)
     refs = []
-    for filename, path in license_files(package):
-        text = read_text(path)
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        entry = texts.setdefault(
-            digest,
-            {"text": text, "packages": set(), "files": set()},
-        )
-        entry["packages"].add((name, version))
-        entry["files"].add(filename)
-        refs.append((filename, digest))
+    election = None
+
+    if files:
+        for filename, path in files:
+            text = normalise(read_bytes(path), path)
+            digest = text_hash(text)
+            entry = text_entry(digest, text)
+            entry["packages"].add((name, version))
+            entry["files"].add(filename)
+            refs.append((filename, digest))
+    else:
+        options = license_options(expression)
+        if "Apache-2.0" in options:
+            election = {"kind": "apache", "license": "Apache-2.0"}
+            apache_elected += 1
+            entry = text_entry(canonical["digest"], canonical["text"], canonical=True)
+            entry["canonical"] = True
+            entry["packages"].add((name, version))
+            entry["files"].add(canonical["file"])
+            entry["provenance"].add(canonical["provenance"])
+        elif options == ["BSL-1.0"]:
+            election = {"kind": "bsl", "license": "BSL-1.0"}
+            bsl_exempt += 1
+        elif options == ["MIT"]:
+            key = f"{name} {version}"
+            source = mit_by_package.get(key)
+            if source is None:
+                fail(
+                    f"no licence text for {key} ({expression}): the crate ships no "
+                    f"licence file and {manifest_path} has no MIT text for it; "
+                    "add a checked-in upstream text and package mapping"
+                )
+            election = {"kind": "mit", "license": "MIT", "source": source}
+            mit_manifest_used += 1
+            entry = text_entry(source["digest"], source["text"])
+            entry["packages"].add((name, version))
+            entry["files"].add(source["file"])
+            entry["provenance"].add(source["provenance"])
+            if source["note"]:
+                entry["notes"].add(source["note"])
+        else:
+            fail(
+                f"no licence text for {name} {version} ({expression}): the crate "
+                "ships no licence file and the generator will not invent text; "
+                "add a checked-in upstream source or extend the election policy"
+            )
+
     packages.append(
         {
             "id": package["id"],
             "name": name,
             "version": version,
-            "license": package.get("license") or "UNKNOWN",
+            "license": expression,
             "repository": package.get("repository"),
             "refs": refs,
+            "election": election,
         }
     )
 
@@ -179,10 +332,16 @@ packages.sort(
 )
 
 # Text sections follow the sorted package order so the output is stable even
-# if cargo prints the graph in a different order.
-ordered_texts = []
+# if cargo prints the graph in a different order. The canonical Apache section
+# is always first.
+ordered_texts = [canonical["digest"]]
 for package in packages:
     for _, digest in package["refs"]:
+        if digest not in ordered_texts:
+            ordered_texts.append(digest)
+    election = package["election"]
+    if election and election["kind"] == "mit":
+        digest = election["source"]["digest"]
         if digest not in ordered_texts:
             ordered_texts.append(digest)
 
@@ -196,11 +355,16 @@ lines = [
     "by `cargo metadata --format-version 1 --locked`; do not edit this file by",
     "hand. The hand-written summary is THIRD_PARTY_LICENSES.md beside this file.",
     "",
-    f"{len(packages)} non-workspace packages: {with_file} ship a licence file and",
-    f"{without_file} do not. Licence texts are deduplicated by SHA-256 content hash;",
-    "each package names the text section(s) it uses. A package that ships no",
-    "licence file keeps its SPDX expression and a NO LICENCE FILE marker so a",
-    "maintainer can review it; no copyright text is invented here.",
+    f"{len(packages)} non-workspace packages: {with_file} ship a crate licence file.",
+    f"Of the {without_file} that do not, {apache_elected} elect Apache-2.0 from a dual",
+    f"or triple licence and point at the canonical Apache-2.0 text, {mit_manifest_used} use",
+    f"a checked-in upstream MIT text from packaging/notice-sources/, and {bsl_exempt} is",
+    "BSL-1.0 object code, which needs no bundled notice.",
+    "",
+    "Licence texts are normalised to LF line endings and have trailing whitespace",
+    "stripped. Identical texts are deduplicated by SHA-256 content hash; each",
+    "package names the text section it uses. Copyright lines come only from crate",
+    "or upstream files; the generator never invents copyright text.",
     "",
     "## Packages",
     "",
@@ -213,6 +377,7 @@ for package in packages:
     lines.append(f"Licence: {package['license']}")
     if package["repository"]:
         lines.append(f"Repository: {package['repository']}")
+    election = package["election"]
     if package["refs"]:
         rendered = ", ".join(
             f"{filename} (text {digest[:16]})"
@@ -221,13 +386,29 @@ for package in packages:
             )
         )
         lines.append(f"Licence files: {rendered}")
-    else:
+    elif election and election["kind"] == "apache":
         lines.append("Licence files: none")
         lines.append(
-            "NO LICENCE FILE: the package source ships no LICENSE*/COPYING*/NOTICE* "
-            "file at its root; use the SPDX expression above and review the "
-            "upstream package for the text."
+            "Elected licence: Apache-2.0; text: canonical Apache-2.0 section "
+            f"below (upstream {canonical['provenance']}, source sha256 "
+            f"{canonical['source_sha256']})"
         )
+    elif election and election["kind"] == "mit":
+        source = election["source"]
+        lines.append("Licence files: none")
+        lines.append(
+            f"Elected licence: MIT; text {source['digest'][:16]} (upstream "
+            f"{source['provenance']}, source sha256 {source['source_sha256']})"
+        )
+    elif election and election["kind"] == "bsl":
+        lines.append("Licence files: none")
+        lines.append(
+            "NO LICENCE FILE: BSL-1.0 section 3 excludes copies solely in "
+            "machine-executable object-code form from the notice requirement; "
+            "this binary distribution therefore needs no separate licence text."
+        )
+    else:
+        fail(f"internal error: {package['name']} has neither text nor a known election")
     lines.append("")
 
 lines.append("## Licence texts")
@@ -245,9 +426,16 @@ for digest in ordered_texts:
     filenames = ", ".join(
         sorted(entry["files"], key=lambda name: (name.lower(), name))
     )
-    lines.append(f"### Text {digest[:16]}")
+    if entry["canonical"]:
+        lines.append(f"### Canonical Apache-2.0 text ({digest[:16]})")
+    else:
+        lines.append(f"### Text {digest[:16]}")
     lines.append(f"Used by {len(entry['packages'])} packages: {used}")
     lines.append(f"File names: {filenames}")
+    for provenance in sorted(entry["provenance"]):
+        lines.append(f"Provenance: {provenance}")
+    for note in sorted(entry["notes"]):
+        lines.append(f"Note: {note}")
     lines.append(separator)
     lines.append(entry["text"].rstrip("\n"))
     lines.append(separator)

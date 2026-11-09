@@ -47,6 +47,23 @@ fn committed_notice_bundle_matches_the_cargo_graph() {
         text.contains("### eframe "),
         "the generated bundle must cover the Cargo dependency graph",
     );
+    assert!(
+        text.contains("Elected licence: Apache-2.0"),
+        "dual/triple-licensed packages without a crate licence file must elect Apache-2.0",
+    );
+    assert!(
+        text.contains("Canonical Apache-2.0"),
+        "the bundle must contain the canonical Apache-2.0 text section",
+    );
+    assert!(
+        text.contains("Elected licence: MIT"),
+        "MIT-only packages must cite a checked-in upstream text",
+    );
+    assert_eq!(
+        text.matches("NO LICENCE FILE:").count(),
+        1,
+        "only a licence that needs no binary notice (BSL-1.0) may stay textless",
+    );
     for machine_path in ["/home/", ".cargo/registry", "index.crates.io"] {
         assert!(
             !text.contains(machine_path),
