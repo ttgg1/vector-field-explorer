@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="packaging/linux/vector-field-explorer.svg" width="128" alt="Vector Field Explorer logo">
+</p>
+
 # Vector Field Explorer
 
 A formula-driven vector-field explorer for `f(x, y)` and `f(x, y, z)` fields,

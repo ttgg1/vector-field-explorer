@@ -23,11 +23,17 @@ fn nov_5_2026() -> SystemTime {
 
 #[test]
 fn default_filename_stamps_the_day_and_mode() {
-    assert_eq!(default_filename(nov_5_2026(), "2D"), "vf-2026-11-05-2d.png");
-    assert_eq!(default_filename(nov_5_2026(), "3D"), "vf-2026-11-05-3d.png");
+    assert_eq!(
+        default_filename(nov_5_2026(), "2D"),
+        "vector-field-explorer-2026-11-05-2d.png",
+    );
+    assert_eq!(
+        default_filename(nov_5_2026(), "3D"),
+        "vector-field-explorer-2026-11-05-3d.png",
+    );
     assert_eq!(
         default_filename(nov_5_2026(), "Orbit  View"),
-        "vf-2026-11-05-orbit-view.png",
+        "vector-field-explorer-2026-11-05-orbit-view.png",
         "the mode label is lowercased and separator-safe",
     );
 }

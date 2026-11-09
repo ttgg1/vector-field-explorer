@@ -11,6 +11,7 @@
 use eframe::egui;
 
 use crate::screenshot::Screenshot;
+use crate::ui::branding;
 use crate::ui::menu::{self, MenuAction, MENUS};
 use crate::ui::style_panel::{self, AppStyle};
 
@@ -186,17 +187,33 @@ pub fn show(
     (action, style_changed)
 }
 
-/// The About dialog: name, package version, license and the repository link.
-/// `open` is the visibility flag; the window's × clears it.
+/// The About dialog: the 128 px mark, name, build version, tagline, copyright,
+/// licence and both project links. `open` is the visibility flag; the window's
+/// × clears it. Ticket 68 replaced the text-only body with this identity card.
 pub fn about_window(ctx: &egui::Context, open: &mut bool) {
     egui::Window::new(format!("About {}", menu::ABOUT_NAME))
         .open(open)
         .collapsible(false)
         .resizable(false)
+        .default_width(420.0)
         .show(ctx, |ui| {
-            ui.label(egui::RichText::new(menu::ABOUT_NAME).strong());
-            ui.label(format!("Version {}", menu::ABOUT_VERSION));
+            ui.horizontal(|ui| {
+                ui.add(
+                    branding::logo_image(ui.ctx(), 128.0).alt_text("Vector Field Explorer logo"),
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(menu::ABOUT_NAME).size(22.0).strong());
+                    ui.label(format!("Version {}", menu::ABOUT_VERSION));
+                    ui.add_space(4.0);
+                    ui.label(menu::ABOUT_TAGLINE);
+                });
+            });
+            ui.separator();
+            ui.label(menu::ABOUT_COPYRIGHT);
             ui.label(format!("License: {}", menu::ABOUT_LICENSE));
+            ui.add_space(4.0);
             ui.hyperlink_to(menu::ABOUT_URL, menu::ABOUT_URL);
+            ui.hyperlink_to(menu::ABOUT_SITE_URL, menu::ABOUT_SITE_URL);
         });
 }

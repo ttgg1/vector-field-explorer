@@ -4,13 +4,104 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Vector Field Explorer</title>
+    <meta
+      name="description"
+      content="A formula-driven vector-field explorer for 2D and 3D fields, with arrows, streamlines, particles and colormaps — in the browser and on the desktop."
+    />
+    <link rel="canonical" href="https://ttgg1.github.io/vector-field-explorer/" />
+    <meta name="theme-color" content="#101a26" />
+
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vector Field Explorer" />
+    <meta property="og:title" content="Vector Field Explorer" />
+    <meta
+      property="og:description"
+      content="A formula-driven vector-field explorer for 2D and 3D fields."
+    />
+    <meta property="og:url" content="https://ttgg1.github.io/vector-field-explorer/" />
+    <meta
+      property="og:image"
+      content="https://ttgg1.github.io/vector-field-explorer/og-image.png"
+    />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Vector Field Explorer" />
+    <meta
+      name="twitter:description"
+      content="A formula-driven vector-field explorer for 2D and 3D fields."
+    />
+    <meta
+      name="twitter:image"
+      content="https://ttgg1.github.io/vector-field-explorer/og-image.png"
+    />
+
     <link data-trunk rel="css" href="web/style.css" />
+    <link
+      data-trunk
+      rel="copy-file"
+      href="web/icons/favicon-16.png"
+      data-target-path="icons"
+    />
+    <link
+      data-trunk
+      rel="copy-file"
+      href="web/icons/favicon-32.png"
+      data-target-path="icons"
+    />
+    <link
+      data-trunk
+      rel="copy-file"
+      href="web/icons/apple-touch-icon.png"
+      data-target-path="icons"
+    />
+    <link
+      data-trunk
+      rel="copy-file"
+      href="web/icons/icon-192.png"
+      data-target-path="icons"
+    />
+    <link
+      data-trunk
+      rel="copy-file"
+      href="web/icons/icon-512.png"
+      data-target-path="icons"
+    />
+    <link data-trunk rel="copy-file" href="web/manifest.webmanifest" />
+    <link data-trunk rel="copy-file" href="web/og-image.png" />
     <link data-trunk rel="copy-file" href="web/pointer_lock.js" />
     <link data-trunk rel="copy-file" href="web/webgpu.js" />
     <script src="pointer_lock.js"></script>
     <link data-trunk rel="rust" data-bin="vector-field-explorer" />
   </head>
   <body>
+    <header class="brand">
+      <img
+        class="brand-logo"
+        src="icons/favicon-32.png"
+        width="32"
+        height="32"
+        alt="Vector Field Explorer logo"
+      />
+      <div class="brand-copy">
+        <span class="brand-name">Vector Field Explorer</span>
+        <span class="brand-tagline"
+          >A formula-driven vector-field explorer for 2D and 3D fields.</span
+        >
+      </div>
+      <a
+        class="brand-link"
+        href="https://github.com/ttgg1/vector-field-explorer"
+        target="_blank"
+        rel="noopener noreferrer"
+        >GitHub</a
+      >
+    </header>
     <canvas id="vfe-canvas"></canvas>
     <div id="loading" role="status">Loading Vector Field Explorer…</div>
 

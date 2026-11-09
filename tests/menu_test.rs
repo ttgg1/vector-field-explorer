@@ -14,8 +14,8 @@ use vector_field_explorer::render::Camera;
 use vector_field_explorer::sim_clock::SimClock;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::menu::{
-    self, ABOUT_LICENSE, ABOUT_URL, ABOUT_VERSION, MenuAction, SHORTCUTS, SideEffect, UiState,
-    apply_action,
+    self, ABOUT_COPYRIGHT, ABOUT_LICENSE, ABOUT_SITE_URL, ABOUT_TAGLINE, ABOUT_URL, ABOUT_VERSION,
+    MenuAction, SHORTCUTS, SideEffect, UiState, apply_action,
 };
 use vector_field_explorer::ui::sidebar::Controls;
 use vector_field_explorer::viewmodel::{ArrowLengthMode, DEFAULT_DENSITY_2D, State};
@@ -478,6 +478,25 @@ fn about_reports_the_build_version_and_gpl_license() {
     assert_eq!(ABOUT_VERSION, vector_field_explorer::version::VERSION);
     assert_eq!(ABOUT_LICENSE, "GPL-3.0-only");
     assert_eq!(ABOUT_URL, "https://github.com/ttgg1/vector-field-explorer");
+}
+
+#[test]
+fn about_carries_the_brand_tagline_copyright_and_site() {
+    // Ticket 68: the About window is the in-app identity surface. The legal
+    // holder is deliberately "The Vector Field Explorer authors" until ticket
+    // 19 records a confirmed legal name.
+    assert_eq!(
+        ABOUT_TAGLINE,
+        "A formula-driven vector-field explorer for 2D and 3D fields.",
+    );
+    assert_eq!(
+        ABOUT_COPYRIGHT,
+        "Copyright © 2026 The Vector Field Explorer authors.",
+    );
+    assert_eq!(
+        ABOUT_SITE_URL,
+        "https://ttgg1.github.io/vector-field-explorer/"
+    );
 }
 
 #[test]

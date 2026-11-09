@@ -187,11 +187,12 @@ pub fn date_stamp(now: SystemTime) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// The save dialog's opening name: `vf-YYYY-MM-DD-<mode>.png`.
+/// The save dialog's opening name: `vector-field-explorer-YYYY-MM-DD-<mode>.png`.
 ///
 /// `now` is a parameter (not a hidden `SystemTime::now()`) so the stamp is
 /// testable, and the mode label is lowercased with any non-alphanumeric run
-/// folded to a single `-`, so "2D" gives the brief's `vf-2026-11-05-2d.png`.
+/// folded to a single `-`, so "2D" gives the brief's
+/// `vector-field-explorer-2026-11-05-2d.png`.
 pub fn default_filename(now: SystemTime, mode_label: &str) -> String {
     let mut mode = String::new();
     for ch in mode_label.chars() {
@@ -203,7 +204,7 @@ pub fn default_filename(now: SystemTime, mode_label: &str) -> String {
     }
     let mode = mode.trim_end_matches('-');
     let mode = if mode.is_empty() { "view" } else { mode };
-    format!("vf-{}-{}.png", date_stamp(now), mode)
+    format!("vector-field-explorer-{}-{}.png", date_stamp(now), mode)
 }
 
 /// Make sure the dialog's answer is written as what it is: a PNG. A missing or

@@ -105,8 +105,10 @@ impl Default for AppStyle {
     fn default() -> Self {
         Self {
             theme_dark: true,
-            // Material teal #009688.
-            accent: egui::Color32::from_rgb(0, 150, 136),
+            // Brand cyan #4cc9f0, taken from the mark's field gradient. It is
+            // deliberately not one of the eight Material presets: a new install
+            // starts on the brand colour, an old install keeps its saved accent.
+            accent: egui::Color32::from_rgb(0x4c, 0xc9, 0xf0),
             rounding: 6.0,
             spacing: 8.0,
             font_size: 13.0,

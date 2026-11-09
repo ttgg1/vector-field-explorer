@@ -152,6 +152,21 @@ fn apply_sets_the_selection_stroke_in_both_themes() {
 }
 
 #[test]
+fn default_accent_is_the_brand_cyan() {
+    // Ticket 68: a new install starts on the mark's cyan, #4cc9f0. The fixed
+    // eight presets stay Material shades and a persisted accent is untouched.
+    assert_eq!(
+        AppStyle::default().accent,
+        egui::Color32::from_rgb(0x4c, 0xc9, 0xf0),
+    );
+    assert_eq!(
+        selected_preset(AppStyle::default().accent),
+        None,
+        "the brand default is not one of the eight preset swatches",
+    );
+}
+
+#[test]
 fn accent_presets_are_eight_unique_named_fully_opaque_colours() {
     assert_eq!(ACCENT_PRESETS.len(), 8);
     let mut names = std::collections::HashSet::new();
@@ -315,11 +330,15 @@ fn clicking_a_preset_swatch_changes_the_accent() {
     panel.idle();
     let out = panel.idle();
 
-    // The default accent is the first preset (Teal).
-    assert!(
-        preset_node(&out, "Teal").toggled,
-        "the default teal accent marks the Teal preset"
-    );
+    // Ticket 68: the brand default (#4cc9f0) is not a preset, so no swatch is
+    // marked until the user picks one.
+    for preset in ACCENT_PRESETS {
+        assert!(
+            !preset_node(&out, preset.name).toggled,
+            "the brand default must not mark `{}` selected",
+            preset.name,
+        );
+    }
 
     let blue = preset_node(&out, "Blue");
     assert!(

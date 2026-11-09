@@ -1,3 +1,4 @@
+pub mod branding;
 pub mod formula_bar;
 pub mod help_overlay;
 pub mod layout;

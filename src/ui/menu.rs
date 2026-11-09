@@ -35,6 +35,13 @@ pub const ABOUT_NAME: &str = "Vector Field Explorer";
 pub const ABOUT_VERSION: &str = crate::version::VERSION;
 pub const ABOUT_LICENSE: &str = "GPL-3.0-only";
 pub const ABOUT_URL: &str = "https://github.com/ttgg1/vector-field-explorer";
+/// The one-line pitch shown in About and on the browser page.
+pub const ABOUT_TAGLINE: &str = "A formula-driven vector-field explorer for 2D and 3D fields.";
+/// Legal holder while the project has no separate legal entity (ticket 19 may
+/// replace it once the owner confirms a name).
+pub const ABOUT_COPYRIGHT: &str = "Copyright © 2026 The Vector Field Explorer authors.";
+/// The deployed browser build, linked from About.
+pub const ABOUT_SITE_URL: &str = "https://ttgg1.github.io/vector-field-explorer/";
 
 /// Every command a menu item (or a shortcut) can dispatch. Adding a variant
 /// requires adding it to a menu: `tests/menu_test.rs` pins reachability.

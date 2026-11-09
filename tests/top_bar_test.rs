@@ -7,6 +7,11 @@ use eframe::egui;
 mod support;
 
 use vector_field_explorer::screenshot::Screenshot;
+use vector_field_explorer::ui::branding;
+use vector_field_explorer::ui::menu::{
+    ABOUT_COPYRIGHT, ABOUT_LICENSE, ABOUT_NAME, ABOUT_SITE_URL, ABOUT_TAGLINE, ABOUT_URL,
+    ABOUT_VERSION,
+};
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
     self, APPEARANCE_BUTTON_LABEL, dismisses_appearance_popover, wheel_zoom_factor,
@@ -293,4 +298,115 @@ fn clicking_outside_closes_the_appearance_popover() {
     h.idle();
     h.click(egui::pos2(900.0, 400.0));
     assert!(!h.open, "an outside click still dismisses the popover");
+}
+
+/// The About window on its own headless context: the same widget the Help menu
+/// opens, without a top bar or a window shell around it.
+struct AboutHarness {
+    ctx: egui::Context,
+    open: bool,
+}
+
+impl AboutHarness {
+    fn new() -> Self {
+        let ctx = support::context();
+        ctx.enable_accesskit();
+        Self { ctx, open: true }
+    }
+
+    fn frame(&mut self) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let (mut output, open) = {
+            let open = &mut self.open;
+            let output = self
+                .ctx
+                .run_ui(input, |ui| top_bar::about_window(ui.ctx(), open));
+            (output, *open)
+        };
+        output.textures_delta.clear();
+        self.open = open;
+        output
+    }
+}
+
+fn all_text(nodes: &[Node]) -> Vec<String> {
+    nodes
+        .iter()
+        .flat_map(|node| [node.label.clone(), node.value.clone()])
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn about_renders_the_full_brand_identity() {
+    let mut h = AboutHarness::new();
+    h.frame();
+    let out = h.frame();
+    let nodes = nodes(&out);
+    let text = all_text(&nodes);
+
+    for expected in [
+        ABOUT_NAME,
+        ABOUT_TAGLINE,
+        ABOUT_COPYRIGHT,
+        ABOUT_SITE_URL,
+        ABOUT_URL,
+    ] {
+        assert!(
+            text.iter().any(|line| line == expected),
+            "About must show `{expected}`; got {text:#?}",
+        );
+    }
+    let version = format!("Version {ABOUT_VERSION}");
+    assert!(
+        text.iter().any(|line| line == &version),
+        "About must show `{version}`; got {text:#?}",
+    );
+    let license = format!("License: {ABOUT_LICENSE}");
+    assert!(
+        text.iter().any(|line| line == &license),
+        "About must show `{license}`; got {text:#?}",
+    );
+}
+
+#[test]
+fn about_draws_the_mark_at_128_points() {
+    let mut h = AboutHarness::new();
+    h.frame();
+    let out = h.frame();
+    let nodes = nodes(&out);
+
+    let logo = nodes
+        .iter()
+        .find(|node| {
+            node.role == egui::Role::Image
+                && node.label.as_deref() == Some("Vector Field Explorer logo")
+        })
+        .expect("About exposes the logo with readable alt text");
+
+    assert!(
+        (logo.rect.width() - 128.0).abs() < 0.5 && (logo.rect.height() - 128.0).abs() < 0.5,
+        "the About logo is 128x128 pt, got {:?}",
+        logo.rect.size(),
+    );
+}
+
+#[test]
+fn the_logo_texture_is_the_cached_256px_mark() {
+    let ctx = support::context();
+    let first = branding::logo_texture(&ctx);
+    assert_eq!(first.size(), [256, 256], "the helper decodes the committed 256 px mark");
+
+    let second = branding::logo_texture(&ctx);
+    assert_eq!(
+        first.id(),
+        second.id(),
+        "the texture handle is cached in context data, not decoded again",
+    );
 }
