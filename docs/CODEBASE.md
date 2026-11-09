@@ -91,7 +91,7 @@ per-frame simulation state beside it.
         │ VfApp::rebuild_scene (app/simulation.rs)
         │  - compose_lines(reference_lines(domain) + flow lines + click lines)
         │  - cache dots_range from the freshly sampled magnitudes
-        │  - retrace click bursts if the field/domain changed
+        │  - retrace click bursts on every dirty rebuild
         ▼
  VfApp::frame_viewport (app/viewport.rs)
         │
@@ -290,8 +290,8 @@ persistence write.
 
 **Pinned by.** `tests/persistence_test.rs::settings_round_trip_through_eframe_storage`,
 `tests/fly_camera_test.rs::the_fly_camera_is_not_persisted`,
-`tests/responsive_test.rs` (layout mode behavior), and the module's own
-`compact_mode_and_sheet_are_never_written_to_storage`.
+`tests/responsive_test.rs` (layout mode behavior), and
+`tests/persistence_test.rs::compact_mode_and_sheet_are_never_written_to_storage`.
 
 **Limitation.** eframe calls `save` on its own schedule; the code does not force
 a save on every edit.
