@@ -39,10 +39,12 @@ TEXT_ATTRS = {
 # `<link/rel=stylesheet/href="https://…">` arrives as one `rel` value.
 EMBEDDED_URL_RE = re.compile(r"(?i)https?://")
 SCRIPT_EXTERNAL_RE = re.compile(r"(?i)https?://")
-SCRIPT_IMPORT_PROTOCOL_RELATIVE_RE = re.compile(
-    r"""(?i)\b(?:import|fetch)\s*\(\s*['"]\s*//"""
-)
+# Any quoted protocol-relative URL in an inline script, not just import/fetch:
+# `s.src = '//evil.example/x.js'` is the same external fetch.
+SCRIPT_PROTOCOL_RELATIVE_RE = re.compile(r"""(?i)['"`]//[a-z0-9]""")
 CSS_HEX_ESCAPE_RE = re.compile(r"[0-9a-fA-F]{1,6}")
+CSS_EXTERNAL_IN_ARGS_RE = re.compile(r"(?i)(?:https?:)?//|https?:")
+WHITESPACE_RE = re.compile(r"[\t\r\n]")
 
 
 def fail(message: str) -> "None":
@@ -51,8 +53,10 @@ def fail(message: str) -> "None":
 
 
 def decode_value(value: str) -> str:
-    """Decode entities and normalize URL backslashes."""
-    return html.unescape(value or "").replace("\\", "/").strip()
+    """Decode entities, drop WHATWG-stripped whitespace, normalize `\\`."""
+    return WHITESPACE_RE.sub(
+        "", html.unescape(value or "").replace("\\", "/")
+    ).strip()
 
 
 def is_external(value: str) -> bool:
@@ -62,15 +66,38 @@ def is_external(value: str) -> bool:
 
 
 def srcset_urls(value: str) -> list[str]:
-    """URL candidates of a srcset value, without density/width descriptors."""
+    """URL candidates of a srcset value, without descriptors.
+
+    A `data:` candidate is skipped before comma splitting: its payload may
+    contain commas that are not candidate separators.
+    """
+    text = decode_value(value)
     urls: list[str] = []
-    for part in decode_value(value).split(","):
-        part = part.strip()
-        if not part:
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index] in " \t\r\n,":
+            index += 1
+        if index >= len(text):
+            break
+        start = index
+        if text[index : index + 5].lower() == "data:":
+            # A data URI may contain commas; it ends at whitespace or the
+            # candidate separator, whichever comes first after the payload.
+            while index < len(text) and text[index] not in " \t\r\n":
+                index += 1
+            while index < len(text) and text[index] != ",":
+                index += 1
+            if index < len(text):
+                index += 1
             continue
-        url = part.split(None, 1)[0]
-        if url.lower().startswith("data:"):
-            continue
+        while index < len(text) and text[index] not in " \t\r\n,":
+            index += 1
+        url = text[start:index]
+        # Skip the optional descriptor to the next candidate.
+        while index < len(text) and text[index] != ",":
+            index += 1
+        if index < len(text):
+            index += 1
         urls.append(url)
     return urls
 
@@ -103,11 +130,14 @@ def css_decode(text: str) -> str:
     return "".join(out)
 
 
-def css_function_args(text: str, name: str) -> list[str]:
-    """Arguments of every `name(…)` call, balanced and quote-aware."""
-    pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"\s*\(", re.I)
-    found: list[str] = []
-    for match in pattern.finditer(text):
+CSS_FUNCTION_RE = re.compile(r"(?<![A-Za-z0-9_])(-?[A-Za-z][A-Za-z0-9-]*)\s*\(")
+
+
+def css_functions(text: str) -> list[tuple[str, str]]:
+    """Every `name(…)` call as (name, arguments), balanced and quote-aware."""
+    found: list[tuple[str, str]] = []
+    for match in CSS_FUNCTION_RE.finditer(text):
+        name = match.group(1).lower()
         start = match.end()
         depth = 1
         quote: str | None = None
@@ -124,7 +154,7 @@ def css_function_args(text: str, name: str) -> list[str]:
             elif char == ")":
                 depth -= 1
                 if depth == 0:
-                    found.append(text[start:index])
+                    found.append((name, text[start:index]))
                     break
             index += 1
     return found
@@ -132,20 +162,15 @@ def css_function_args(text: str, name: str) -> list[str]:
 
 def check_css(css: str, where: str) -> None:
     """Reject external CSS fetches after entity/escape decoding."""
-    decoded = css_decode(css)
+    decoded = WHITESPACE_RE.sub("", css_decode(css))
     if re.search(r"(?i)@import", decoded):
         fail(f"@import in {where}")
-    for arg in css_function_args(decoded, "url"):
-        value = arg.strip()
-        if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
-            value = value[1:-1].strip()
-        if is_external(value):
-            fail(f"external url() in {where}: {value}")
-    # image-set() takes quoted/bare image candidates; any external URL inside
-    # the argument list is a fetch (including a nested url()).
-    for arg in css_function_args(decoded, "image-set"):
-        if re.search(r"(?i)(?:https?:)?//", arg):
-            fail(f"external image-set() in {where}")
+    # Any external URL in any CSS function argument (url, image, image-set,
+    # cross-fade, -webkit-cross-fade, …). Local url(../x)/url(/x) has no
+    # scheme or double slash, so it stays allowed.
+    for name, arguments in css_functions(decoded):
+        if CSS_EXTERNAL_IN_ARGS_RE.search(arguments):
+            fail(f"external URL in CSS {name}() in {where}")
 
 
 class ArtifactParser(HTMLParser):
@@ -238,30 +263,37 @@ def resolve_local(ref: str, dist: Path, page: str) -> Path | None:
     return candidate
 
 
-def check_page(path: Path, dist: Path) -> tuple[int, int]:
-    """Check one HTML page and return (tag count, local reference count)."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"cannot read {path}: {error}")
+def check_html(text: str, page: str, dist: Path, depth: int = 0) -> tuple[int, int]:
+    """Check one HTML document/fragment and return (tags, local references)."""
+    if depth > 8:
+        fail(f"srcdoc nesting too deep in {page}")
 
     parser = ArtifactParser()
     try:
         parser.feed(text)
         parser.close()
     except Exception as error:  # HTMLParser is lenient; this is defensive.
-        fail(f"cannot parse {path.name}: {error}")
+        fail(f"cannot parse {page}: {error}")
 
-    page = path.name
     local_refs = 0
+    nested_tags = 0
     for tag, attrs, position in parser.tags:
         line = position[0]
         if tag == "base":
             fail(f"<base> tag in {page}:{line}: it rewrites every relative URL")
 
+        seen: set[str] = set()
+        for name, _value in attrs:
+            key = name.lower()
+            if key in seen:
+                fail(f"duplicate attribute '{key}' on <{tag}> in {page}:{line}")
+            seen.add(key)
+
         attr_map = {name.lower(): value for name, value in attrs}
-        canonical = tag == "link" and "canonical" in (
-            (attr_map.get("rel") or "").lower().split()
+        # Only an exact `rel="canonical"` exempts the link: a combined
+        # `rel="canonical stylesheet"` is still a stylesheet fetch.
+        canonical = tag == "link" and (
+            (attr_map.get("rel") or "").lower().split() == ["canonical"]
         )
         meta_refresh = (attr_map.get("http-equiv") or "").lower() == "refresh"
 
@@ -269,6 +301,11 @@ def check_page(path: Path, dist: Path) -> tuple[int, int]:
             if value is None:
                 continue
             name = name.lower()
+            if name == "srcdoc":
+                tags, refs = check_html(value, f"{page}:{line} srcdoc", dist, depth + 1)
+                nested_tags += tags
+                local_refs += refs
+                continue
             if name == "style":
                 check_css(value, f"inline style attribute in {page}:{line}")
                 continue
@@ -298,7 +335,7 @@ def check_page(path: Path, dist: Path) -> tuple[int, int]:
                     f"embedded external URL in {name} on <{tag}> in {page}:{line}: {value}"
                 )
 
-        for attr in ("href", "src", "data", "poster", "xlink:href"):
+        for attr in FETCH_ATTRS | {"href"}:
             value = attr_map.get(attr)
             if value is None:
                 continue
@@ -316,12 +353,21 @@ def check_page(path: Path, dist: Path) -> tuple[int, int]:
         check_css(body, f"inline <style> in {page}")
     for body in parser.script_bodies:
         script = html.unescape(body)
-        if SCRIPT_EXTERNAL_RE.search(script) or SCRIPT_IMPORT_PROTOCOL_RELATIVE_RE.search(
+        if SCRIPT_EXTERNAL_RE.search(script) or SCRIPT_PROTOCOL_RELATIVE_RE.search(
             script
         ):
             fail(f"external reference in inline <script> in {page}")
 
-    return len(parser.tags), local_refs
+    return len(parser.tags) + nested_tags, local_refs
+
+
+def check_page(path: Path, dist: Path) -> tuple[int, int]:
+    """Read and check one HTML page."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        fail(f"cannot read {path}: {error}")
+    return check_html(text, path.name, dist)
 
 
 def main(argv: list[str]) -> int:
