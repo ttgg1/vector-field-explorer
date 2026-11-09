@@ -12,7 +12,7 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::presets::{PresetCategory, presets, presets_in};
 
-const REQUIRED: [&str; 18] = [
+const REQUIRED: [&str; 20] = [
     // Classic (pre-existing)
     "Pump",
     "Vortex",
@@ -35,6 +35,9 @@ const REQUIRED: [&str; 18] = [
     // Electrodynamics (ticket 31)
     "Plane wave",
     "Circular wave",
+    // Ticket 31 follow-up
+    "Magnetic bottle",
+    "Damped oscillator",
 ];
 
 #[test]
@@ -144,6 +147,8 @@ fn new_physics_presets_have_the_declared_category_and_dimension() {
         ("Solenoid", PresetCategory::Magnetostatics, 3),
         ("Plane wave", PresetCategory::Electrodynamics, 3),
         ("Circular wave", PresetCategory::Electrodynamics, 3),
+        ("Magnetic bottle", PresetCategory::Magnetostatics, 3),
+        ("Damped oscillator", PresetCategory::Classic, 2),
     ];
     for (name, category, dimension) in expected {
         let preset = presets()

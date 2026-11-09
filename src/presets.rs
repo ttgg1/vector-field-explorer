@@ -142,6 +142,13 @@ pub fn presets() -> &'static [Preset] {
             dimension: 3,
             category: PresetCategory::Classic,
         },
+        // Inward spiral with linear damping: a spiral sink with eigenvalues -0.3 ± i.
+        Preset {
+            name: "Damped oscillator",
+            formula: "(-0.3*x - y, x - 0.3*y)",
+            dimension: 2,
+            category: PresetCategory::Classic,
+        },
         // Electrostatics: softened Coulomb fields from static charges.
         Preset {
             name: "Dipole",
@@ -198,6 +205,13 @@ pub fn presets() -> &'static [Preset] {
         Preset {
             name: "Solenoid",
             formula: "(-y/(x^2+y^2+0.05), x/(x^2+y^2+0.05), 0.5)",
+            dimension: 3,
+            category: PresetCategory::Magnetostatics,
+        },
+        // Axisymmetric converging field with zero divergence (paraxial magnetic mirror).
+        Preset {
+            name: "Magnetic bottle",
+            formula: "(-x, -y, 2*z)",
             dimension: 3,
             category: PresetCategory::Magnetostatics,
         },
