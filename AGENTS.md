@@ -46,8 +46,9 @@ presets, screenshots. Ships native and as a WebAssembly browser build.
   tracker through v0.1.0; GitHub Issues/PRs accepted; no CLA.
 - **No localization in v0.1.0.** Delete `src/i18n.rs` and `data/locales/` in
   ticket 19 (release docs + final review).
-- **Post-v1 order:** Windows → time-dependent fields → div/curl overlays →
-  shareable presets → CSV import.
+- **Post-v1 order:** Windows → 55 Phase 1 (sources) → time-dependent fields
+  (39/38) → 55 Phase 3 (induction) → 55 Phase 5 (ODE) → 55 Phase 2 (matter) →
+  55 Phase 4 (Maxwell) → div/curl overlays → shareable presets → CSV import.
 
 ## Repo map
 

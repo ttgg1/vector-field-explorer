@@ -1,7 +1,8 @@
 # Vector Field Explorer
 
-A native and browser app for exploring vector fields typed as formulas. This
-glossary names the app's view, controls, camera, and motion concepts.
+A native and browser app for exploring vector fields typed as formulas or built
+from placed sources. This glossary names the app's view, controls, camera,
+motion, and physics concepts.
 
 ## View and chrome
 
@@ -9,8 +10,9 @@ glossary names the app's view, controls, camera, and motion concepts.
 The GPU-rendered scene area where arrows, streamlines, and particles appear.
 
 **View state**:
-The persisted inputs that determine what the viewport shows: formula, 2D/3D
-mode, domain, and the control values in the Controls panel. Restored on launch.
+The persisted inputs that determine what the viewport shows: formula or source
+configuration, 2D/3D mode, domain, and the control values in the Controls panel.
+Restored on launch.
 _Avoid_: session state, app state (that also covers style and layout)
 
 **Plane-by-plane mode**:
@@ -29,8 +31,8 @@ A named, saved viewpoint that can be applied later.
 _Avoid_: view preset, camera state
 
 **Field preset**:
-A named formula example listed in the grouped Presets panel; clicking one
-loads its formula and 2D/3D dimension into the scene.
+A named formula or source configuration listed in the grouped Presets panel;
+clicking one loads its definition and 2D/3D dimension into the scene.
 _Avoid_: preset (unqualified)
 
 **Controls panel**:
@@ -89,13 +91,14 @@ _Avoid_: theme preset
 ## Field and motion
 
 **Field**:
-The vector function `f(x,y,z)` typed in the formula bar and sampled over the
-domain.
+The vector function sampled over the domain, defined either by a typed formula
+or by placed sources.
 _Avoid_: vector field function, field expression
 
 **Domain**:
 The axis-aligned box `[x_min,x_max] × [y_min,y_max] × [z_min,z_max]` over which
-the field is sampled; 2D uses the x/y extents and the z midpoint.
+the field is sampled; 2D uses the x/y extents and the selected z slice (the z
+midpoint by default).
 _Avoid_: bounds, range (that is a control)
 
 **Grid density**:
@@ -164,3 +167,95 @@ _Avoid_: seed source, seeding toggle
 What a single left click in the viewport does: seed a streamline or add a
 particle burst. The two are exclusive.
 _Avoid_: click mode, click behavior
+
+## Physics
+
+**Formula mode**:
+The field is defined by a formula typed in the formula bar and evaluated per
+sample. Exclusive with source mode.
+_Avoid_: expression mode
+
+**Source mode**:
+The field is defined by placed sources and their superposition. Exclusive with
+formula mode.
+_Avoid_: object mode
+
+**Field source**:
+A placed charge or current distribution (point, line, ring, disc, sphere, wire,
+loop, or solenoid) that contributes to the field.
+_Avoid_: emitter, object
+
+**Source configuration**:
+A named, persisted set of field sources that can be loaded into source mode.
+_Avoid_: source preset, scene
+
+**Superposition**:
+The field at a point is the vector sum of the contributions of every visible
+source.
+_Avoid_: blending, additive mode
+
+**Source glyph**:
+The marker drawn at a source's position and orientation in the viewport.
+_Avoid_: icon, marker
+
+**2D slice**:
+The z coordinate sampled in 2D mode; v1 exposes the z slice only, and x/y slice
+selection comes later.
+_Avoid_: plane, cross-section
+
+**2D approximation**:
+A field preset whose 2D form is a simplified formula rather than the z slice of
+a 3D source model; labelled in the preset UI.
+_Avoid_: 2D slice
+
+**Softening**:
+The global length scale that keeps analytic source fields finite at their
+singularities; display-only, not a physical regularization.
+_Avoid_: epsilon, clamp
+
+**CAS**:
+The optional symbolic tool that differentiates formulas and derives gradient,
+divergence, and curl without solving equations.
+_Avoid_: solver, evaluator
+
+**Material region**:
+A region with relative permittivity and permeability that modifies the field.
+_Avoid_: medium, dielectric
+
+**Bound field**:
+The field contribution from polarised or magnetised matter in a material
+region, shown separately from the applied field.
+_Avoid_: induced field (that is the Faraday field)
+
+**Induced field**:
+The electric field produced by a time-varying magnetic field, shown separately
+from the applied field and from bound matter.
+_Avoid_: EMF field
+
+**Maxwell mode**:
+A conductor-focused field mode offering canonical geometries and free 2D
+conductor outlines, with validity notes.
+_Avoid_: electrostatics mode
+
+**Canonical geometry**:
+A named, closed-form Maxwell configuration (parallel plates, coaxial cylinder,
+hollow sphere, infinite wire, or solenoid) with editable parameters.
+_Avoid_: preset geometry
+
+**Conductor outline**:
+A free-form 2D conductor boundary treated as an infinite cylinder; v1 solves it
+approximately and labels the approximation.
+_Avoid_: shape, polygon
+
+**ODE system**:
+A user-defined first-order system `dx/dt = f(x,t)` integrated from seeds into
+trajectories.
+_Avoid_: flow, field
+
+**Trajectory**:
+A solution curve of an ODE system from one initial condition.
+_Avoid_: streamline (that is a field-tangent curve)
+
+**Phase portrait**:
+A plot of trajectory state components against each other.
+_Avoid_: phase plot
