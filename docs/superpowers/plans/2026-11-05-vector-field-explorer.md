@@ -18,7 +18,7 @@
 - Other deps: `meval = "0.2"`, `glam = "0.30"`, `colorous = "1"`, `image = "0.25"`, `rfd = "0.15"`.
 - Domain default extent `[-1, 1]` per axis; 2D grid cap 200×200; 3D grid cap 40³; particle cap 5000.
 - NaN/∞ at a sample point: skip the arrow (clamp magnitude first); planes with all-degenerate points render an empty-but-valid scene.
-- Project root: `/home/paul/projects/vector-field-explorer`; git repo initialized in Task 1, commit after every task.
+- Project root: repository root; git repo initialized in Task 1, commit after every task.
 
 ## Review Focus
 

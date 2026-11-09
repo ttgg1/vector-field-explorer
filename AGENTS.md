@@ -154,8 +154,9 @@ Scripts and prompt templates:
 **Models — always pass explicitly; never inherit silently.**
 
 - Coding seats: `opencode-go/deepseek-v4.1-flash`, variant `#high` for complex
-  work, `#max` when stuck (BLOCKED/NEEDS_CONTEXT twice). Heavier work may
-  escalate to `opencode-go/kimi-k3.1-pro`.
+  work, `#max` when stuck (BLOCKED/NEEDS_CONTEXT twice). No kimi k3.x seats:
+  they are usage-limit prone; re-scope or split the task instead of escalating
+  to them.
 - Review seats: `opencode-go/claude-haiku-5-5#high` (cheap, avoids usage
   limits); `#max` for the final whole-branch review; free fallback
   `opencode-go/beam-free`.
