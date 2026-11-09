@@ -199,15 +199,53 @@ jobs:
               find "${appdir}/usr/lib" -maxdepth 2 \( -type f -o -type l \) \
                 -name '*.so*' -printf '%f\n' | sort -u
             )
+            # AppDir-relative paths, for an actionable failure message.
+            bundled_paths() {
+              find "${appdir}/usr/lib" -maxdepth 2 \( -type f -o -type l \) \
+                -name "$1" -print \
+                | sed "s#^${appdir}/##" | sort | tr '\n' ' '
+            }
             missing_notice=0
             for lib in "${bundled_libs[@]}"; do
-              owner="$(dpkg -S "*/${lib}" 2>/dev/null | awk '/^[^ ]+: / { sub(/: .*$/, ""); print; exit }' || true)"
-              if [ -z "$owner" ]; then
-                echo "::warning::no package owner for bundled library ${lib}"
-                missing_notice=1
-                continue
+              # A path can be owned by more than one package (for example the
+              # runtime package and a -dev or -dbg package), and dpkg reports
+              # architecture-qualified names. Collect every distinct owner and
+              # prefer a runtime package instead of silently taking the first
+              # line.
+              ownership="$(dpkg -S "*/${lib}" 2>/dev/null || true)"
+              mapfile -t owners < <(
+                printf '%s\n' "$ownership" \
+                  | awk -F': ' 'NF >= 2 { sub(/:[^:]*$/, "", $1); print $1 }' \
+                  | sed '/^$/d' | sort -u
+              )
+              runtime_owners=()
+              for candidate in "${owners[@]}"; do
+                case "$candidate" in
+                  *-dev | *-dbg | *-dbgsym) ;;
+                  *) runtime_owners+=("$candidate") ;;
+                esac
+              done
+              if [ "${#owners[@]}" -eq 0 ]; then
+                echo "::error::no dpkg package owns bundled library ${lib}: $(bundled_paths "$lib")"
+                exit 1
               fi
-              package="${owner%%:*}"
+              if [ "${#runtime_owners[@]}" -gt 1 ]; then
+                echo "::error::ambiguous package owner for bundled library ${lib}: $(bundled_paths "$lib")"
+                echo "::error::candidate packages: ${owners[*]}"
+                exit 1
+              fi
+              if [ "${#runtime_owners[@]}" -eq 1 ]; then
+                package="${runtime_owners[0]}"
+              elif [ "${#owners[@]}" -eq 1 ]; then
+                # Only a -dev/-dbg package owns the path. Keep its notice: the
+                # single candidate is unambiguous even though it is not the
+                # preferred runtime package.
+                package="${owners[0]}"
+              else
+                echo "::error::ambiguous package owner for bundled library ${lib}: $(bundled_paths "$lib")"
+                echo "::error::candidate packages: ${owners[*]}"
+                exit 1
+              fi
               copyright="/usr/share/doc/${package}/copyright"
               if [ ! -f "$copyright" ]; then
                 echo "::warning::no copyright notice for ${package} (${lib})"
