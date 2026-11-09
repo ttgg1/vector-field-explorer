@@ -1,3 +1,6 @@
 target/
 dist/
 Cargo.lock
+
+# Local-only working notes: SDD ledger, tickets, review packages
+.scratch/
