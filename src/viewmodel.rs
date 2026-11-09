@@ -14,6 +14,7 @@ use super::plane::{DIM_ALPHA, PlaneAxis, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
+use crate::arrow_style::{ArrowParams, ArrowStyle};
 
 use std::sync::Arc;
 
@@ -133,6 +134,10 @@ pub struct State {
     pub color_min: f32,
     pub color_max: f32,
     pub arrows: bool,
+    /// The 3D arrow family (ticket 45); 2D always draws the flat arrow.
+    pub arrow_style: ArrowStyle,
+    /// The head/shaft proportions shared by every 3D family.
+    pub arrow_params: ArrowParams,
     pub streamlines: bool,
     pub particles: bool,
     pub speed: f32,
@@ -179,6 +184,8 @@ impl State {
             color_min: 0.0,
             color_max: 1.0,
             arrows: true,
+            arrow_style: ArrowStyle::Cone,
+            arrow_params: ArrowParams::default(),
             streamlines: false,
             particles: false,
             speed: 1.0,
@@ -329,6 +336,26 @@ impl State {
             return false;
         }
         self.arrows = arrows;
+        self.mark_dirty()
+    }
+
+    /// Choose the arrow shape family (3D only; 2D always draws flat arrows).
+    pub fn set_arrow_style(self: &mut State, style: ArrowStyle) -> bool {
+        if self.arrow_style == style {
+            return false;
+        }
+        self.arrow_style = style;
+        self.mark_dirty()
+    }
+
+    /// Set the head/shaft proportions, sanitized through the one clamp the
+    /// persistence restore and the sidebar share.
+    pub fn set_arrow_params(self: &mut State, params: ArrowParams) -> bool {
+        let params = params.sanitized();
+        if self.arrow_params == params {
+            return false;
+        }
+        self.arrow_params = params;
         self.mark_dirty()
     }
 
@@ -633,6 +660,9 @@ impl State {
             arrows: Arc::new(arrows),
             lines: Arc::new(self.streamlines_snapshot(&sampled)),
             dots: Arc::new(Vec::new()),
+            arrow_style: self.arrow_style,
+            arrow_params: self.arrow_params,
+            mode_3d: self.mode_3d,
         }
     }
 

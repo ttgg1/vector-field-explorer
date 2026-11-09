@@ -22,6 +22,10 @@
 
 use eframe::egui;
 
+use crate::arrow_style::{
+    ArrowParams, ArrowStyle, MAX_HEAD_LENGTH, MAX_HEAD_WIDTH, MAX_SHAFT_RADIUS, MAX_SIDES,
+    MIN_HEAD_LENGTH, MIN_HEAD_WIDTH, MIN_SHAFT_RADIUS, MIN_SIDES,
+};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
@@ -151,6 +155,10 @@ pub struct Controls {
     pub arrow_scale: f32,
     pub arrow_length_mode: ArrowLengthMode,
     pub magnitude_scale: f32,
+    /// Show arrows (ticket 45); unchecking hides only the arrow instances.
+    pub arrows: bool,
+    pub arrow_style: ArrowStyle,
+    pub arrow_params: ArrowParams,
     pub colormap: Colormap,
     pub auto_fit: bool,
     pub color_min: f32,
@@ -179,6 +187,9 @@ impl Controls {
             arrow_scale: 1.0,
             arrow_length_mode: ArrowLengthMode::Proportional,
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
+            arrows: true,
+            arrow_style: ArrowStyle::Cone,
+            arrow_params: ArrowParams::default(),
             colormap: Colormap::Viridis,
             auto_fit: true,
             color_min: 0.0,
@@ -194,13 +205,16 @@ impl Controls {
     }
 
     /// Restore the Display section's defaults (density, arrow length mode and
-    /// both scales, plane-by-plane).
+    /// both scales, arrow visibility/style/appearance, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
         self.arrow_scale = defaults.arrow_scale;
         self.arrow_length_mode = defaults.arrow_length_mode;
         self.magnitude_scale = defaults.magnitude_scale;
+        self.arrows = defaults.arrows;
+        self.arrow_style = defaults.arrow_style;
+        self.arrow_params = defaults.arrow_params;
         self.plane = defaults.plane;
         self.plane_drag = false;
     }
@@ -241,6 +255,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     // The density ceiling keys to the dimension being sampled (the ledger
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
+    let view_3d = state.mode_3d;
     let max_density = if sampling_3d { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
     let grid = state.grid();
     let domain = state.domain;
@@ -260,6 +275,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             ui.add(egui::DragValue::new(&mut controls.density).range(MIN_DENSITY..=max_density))
                 .on_hover_text("Samples per axis; 3D sampling makes it the cube of this count");
         });
+        ui.checkbox(&mut controls.arrows, "Show arrows")
+            .on_hover_text("Hide the arrow field without hiding streamlines or particles");
         let arrow_scale_on = arrow_scale_enabled(controls.arrow_length_mode);
         let arrow_scale_text = if arrow_scale_on {
             "Arrow length (grid cells)"
@@ -309,6 +326,59 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         })
         .response
         .on_hover_text("World length per unit of field magnitude");
+        ui.horizontal(|ui| {
+            ui.label("Arrow style");
+            for style in ArrowStyle::ALL {
+                ui.selectable_value(&mut controls.arrow_style, style, style.label())
+                    .on_hover_text(style.tooltip());
+            }
+        });
+        if !view_3d {
+            ui.label(egui::RichText::new("2D uses the flat arrow").small())
+                .on_hover_text("2D always draws the flat Line silhouette; the 3D style applies in 3D");
+        }
+        egui::CollapsingHeader::new("Arrow appearance")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Slider::new(
+                        &mut controls.arrow_params.head_length,
+                        MIN_HEAD_LENGTH..=MAX_HEAD_LENGTH,
+                    )
+                    .text("Head length"),
+                )
+                .on_hover_text("Arrow head length as a fraction of the total arrow length");
+                ui.add(
+                    egui::Slider::new(
+                        &mut controls.arrow_params.head_width,
+                        MIN_HEAD_WIDTH..=MAX_HEAD_WIDTH,
+                    )
+                    .text("Head width"),
+                )
+                .on_hover_text("Arrow head width as a fraction of the total arrow length");
+                ui.add(
+                    egui::Slider::new(
+                        &mut controls.arrow_params.shaft_radius,
+                        MIN_SHAFT_RADIUS..=MAX_SHAFT_RADIUS,
+                    )
+                    .text("Shaft radius"),
+                )
+                .on_hover_text("Shaft radius as a fraction of the total arrow length");
+                ui.add_enabled(
+                    controls.arrow_style.uses_sides(),
+                    egui::Slider::new(&mut controls.arrow_params.sides, MIN_SIDES..=MAX_SIDES)
+                        .text("Sides"),
+                )
+                .on_hover_text("Radial side count for Cone and Cylinder")
+                .on_disabled_hover_text("Pyramid and Line have a fixed silhouette");
+                if ui
+                    .button("Reset arrow appearance")
+                    .on_hover_text("Restore the default head and shaft geometry")
+                    .clicked()
+                {
+                    controls.arrow_params = ArrowParams::default();
+                }
+            });
         if sampling_3d {
             commit_plane |= plane_controls(ui, controls, &domain, grid);
         }
@@ -565,6 +635,9 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_colormap(controls.colormap);
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
+    state.set_arrows(controls.arrows);
+    state.set_arrow_style(controls.arrow_style);
+    state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
     state.set_particles(controls.particles);
     state.set_speed(controls.speed);
@@ -590,6 +663,9 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.auto_fit = state.auto_fit;
     controls.color_min = state.color_min;
     controls.color_max = state.color_max;
+    controls.arrows = state.arrows;
+    controls.arrow_style = state.arrow_style;
+    controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
     controls.particles = state.particles;
     controls.speed = state.speed;

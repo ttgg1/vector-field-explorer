@@ -7,6 +7,7 @@
 use vector_field_explorer::ui::sidebar::{
     Controls, apply, arrow_scale_enabled, domain_summary, magnitude_scale_enabled,
 };
+use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
@@ -25,6 +26,9 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.arrow_scale, s.arrow_scale, "arrow scale agrees");
     assert_eq!(c.arrow_length_mode, s.arrow_length_mode, "arrow length mode agrees");
     assert_eq!(c.magnitude_scale, s.magnitude_scale, "magnitude scale agrees");
+    assert_eq!(c.arrows, s.arrows, "arrows start visible");
+    assert_eq!(c.arrow_style, s.arrow_style, "arrow style agrees");
+    assert_eq!(c.arrow_params, s.arrow_params, "arrow appearance agrees");
     assert_eq!(c.colormap, s.colormap, "colormap agrees");
     assert_eq!(c.auto_fit, s.auto_fit, "auto-fit agrees");
     assert_eq!(c.color_min, s.color_min, "color min agrees");
@@ -63,6 +67,9 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_arrow_scale(c.arrow_scale));
     assert!(!s.set_arrow_length_mode(c.arrow_length_mode));
     assert!(!s.set_magnitude_scale(c.magnitude_scale));
+    assert!(!s.set_arrows(c.arrows));
+    assert!(!s.set_arrow_style(c.arrow_style));
+    assert!(!s.set_arrow_params(c.arrow_params));
     assert!(!s.set_colormap(c.colormap));
     assert!(!s.set_auto_fit(c.auto_fit));
     assert!(!s.set_color_range(c.color_min, c.color_max));
@@ -166,6 +173,15 @@ fn every_control_dirties_the_scene_through_apply() {
     c.magnitude_scale = 2.0;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "magnitude scale dirties the scene");
+    c.arrows = false;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "the Show arrows toggle dirties the scene");
+    c.arrow_style = ArrowStyle::Cylinder;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "the arrow style dirties the scene");
+    c.arrow_params.head_length = 0.45;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "arrow appearance dirties the scene");
     c.colormap = Colormap::Mono;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "colormap dirties the scene");
@@ -256,6 +272,20 @@ fn display_reset_restores_proportional_and_both_scales() {
     assert_eq!(c.arrow_length_mode, ArrowLengthMode::Proportional, "the default mode returns");
     assert_eq!(c.arrow_scale, 1.0, "the default arrow scale returns");
     assert_eq!(c.magnitude_scale, 1.0, "the default magnitude scale returns");
+}
+
+#[test]
+fn display_reset_restores_arrow_visibility_style_and_appearance() {
+    let mut c = Controls::new();
+    c.arrows = false;
+    c.arrow_style = ArrowStyle::Line;
+    c.arrow_params = ArrowParams { head_length: 0.5, head_width: 0.3, shaft_radius: 0.12, sides: 4 };
+
+    c.reset_display();
+
+    assert!(c.arrows, "arrows return");
+    assert_eq!(c.arrow_style, ArrowStyle::Cone, "the default style returns");
+    assert_eq!(c.arrow_params, ArrowParams::default(), "the default appearance returns");
 }
 
 // --- Domain summary, bounds and reset (ticket 32) ---------------------------

@@ -243,12 +243,16 @@ fn camera_basis_ignores_zoom_and_distance() {
 }
 
 #[test]
-fn globals_uniform_layout_carries_the_camera_basis() {
+fn globals_uniform_layout_carries_the_camera_basis_and_arrow_uniforms() {
     // The WGSL `Globals` struct must stay in step with this Rust struct: the
-    // two vec4 camera axes follow the two mat4s and the two existing vec4s.
-    assert_eq!(std::mem::size_of::<Globals>(), 192, "6 x 32-byte members");
+    // two vec4 camera axes follow the two mat4s and the two existing vec4s,
+    // then the arrow style/params vec4s (ticket 45).
+    assert_eq!(std::mem::size_of::<Globals>(), 224, "7 x 32-byte members");
+    assert_eq!(std::mem::size_of::<Globals>() % 16, 0, "the uniform size stays 16-byte aligned");
     assert_eq!(std::mem::offset_of!(Globals, camera_right), 160, "camera_right offset");
     assert_eq!(std::mem::offset_of!(Globals, camera_up), 176, "camera_up offset");
+    assert_eq!(std::mem::offset_of!(Globals, arrow_style), 192, "arrow_style offset");
+    assert_eq!(std::mem::offset_of!(Globals, arrow_params), 208, "arrow_params offset");
     let globals = Globals {
         view_proj: Mat4::IDENTITY.to_cols_array_2d(),
         inv_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
@@ -256,9 +260,11 @@ fn globals_uniform_layout_carries_the_camera_basis() {
         light_dir: [0.0, 1.0, 0.0, 0.0],
         camera_right: [1.0, 0.0, 0.0, 0.0],
         camera_up: [0.0, 1.0, 0.0, 0.0],
+        arrow_style: [0, 12, 0, 0],
+        arrow_params: [0.3, 0.12, 0.055, 0.0],
     };
     let bytes = bytemuck::bytes_of(&globals);
-    assert_eq!(bytes.len(), 192, "the uniform upload is the full struct");
+    assert_eq!(bytes.len(), 224, "the uniform upload is the full struct");
 }
 
 #[test]

@@ -1,9 +1,10 @@
 //! Instanced wgpu renderer for arrows and lines (main plan Task 7).
 //!
-//! Three pipelines (arrow + line + dot) share one bind-group layout holding the
-//! `Globals` uniform and the per-mode instance storage array. The `DrawState`
-//! lives in the egui_wgpu callback_resources TypeMap (installed once by the
-//! app); each frame a `DrawCallback` uploads the current `SceneGPU` and draws.
+//! Four pipelines (3D arrow + flat 2D arrow + line + dot) share one bind-group
+//! layout holding the `Globals` uniform and the per-mode instance storage
+//! array. The `DrawState` lives in the egui_wgpu callback_resources TypeMap
+//! (installed once by the app); each frame a `DrawCallback` uploads the current
+//! `SceneGPU` and draws.
 //!
 //! Depth note: egui_wgpu paint callbacks have no depth attachment, so arrows
 //! are CPU-sorted far-to-near (painter's algorithm) by the caller. The arrow
@@ -17,6 +18,8 @@ use eframe::egui_wgpu;
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3};
+
+use crate::arrow_style::{ArrowParams, ArrowStyle};
 
 /// Per-arrow GPU instance: base position, unit direction + length, color.
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -48,12 +51,35 @@ pub struct Globals {
     pub camera_right: [f32; 4],
     /// World-space camera up axis, w = 0.
     pub camera_up: [f32; 4],
+    /// Arrow style id, radial side count, then two unused slots.
+    pub arrow_style: [u32; 4],
+    /// Head length, head width, shaft radius, then one unused slot.
+    pub arrow_params: [f32; 4],
 }
 
-/// Vertices the arrow shader emits per instance: 24 shaft + 12 cone head + 6
+/// Vertices the Pyramid shader emits per instance: 24 shaft + 12 cone head + 6
 /// base plate. Kept in step with the `ARROW_VERTS` constant in
 /// `src/shaders.arrow.wgsl`; [`crate::arrow_geometry`] mirrors the geometry.
 pub const ARROW_VERTS: u32 = 42;
+
+/// Vertices the 3D `Line` style emits per instance: a shaft quad (6) and a head
+/// triangle (3). Kept in step with `ARROW_VERTS_LINE` in the arrow shader.
+pub const ARROW_VERTS_LINE: u32 = 9;
+
+/// Vertices the flat 2D arrow emits per instance. Kept in step with
+/// `ARROW2D_VERTS` in `src/shaders.arrow2d.wgsl`.
+pub const ARROW2D_VERTS: u32 = 9;
+
+/// Which arrow pipeline `record` uses and how many vertices per instance it
+/// draws. Pure so the 2D/3D selection is testable without a GPU; `record`
+/// matches on it directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowDrawPlan {
+    /// The flat nine-vertex arrow through `arrow2d_pipeline`.
+    Flat2D,
+    /// The selected 3D family through `arrow_pipeline`.
+    Mesh3D { vertices: u32 },
+}
 
 /// Vertices the dot shader emits per instance: the two triangles of a
 /// camera-facing billboard quad. Kept in step with
@@ -77,16 +103,65 @@ pub fn camera_basis_from_view_proj(view_proj: &Mat4) -> (Vec3, Vec3) {
 /// The GPU scene uploaded each frame. `Arc` lets the app skip re-uploads when
 /// a collection is unchanged (dots reuse the arrow instance layout with a
 /// negligible head).
-#[derive(Clone, Default)]
+///
+/// The arrow fields select the geometry family and the 2D/3D draw path. They
+/// travel with the instance collections so screenshots and the viewport paint
+/// exactly the same scene.
+#[derive(Clone)]
 pub struct SceneGPU {
     pub arrows: Arc<Vec<ArrowInstanceGPU>>,
     pub lines: Arc<Vec<LineInstanceGPU>>,
     pub dots: Arc<Vec<ArrowInstanceGPU>>,
+    pub arrow_style: ArrowStyle,
+    pub arrow_params: ArrowParams,
+    pub mode_3d: bool,
+}
+
+impl Default for SceneGPU {
+    fn default() -> Self {
+        Self {
+            arrows: Arc::new(Vec::new()),
+            lines: Arc::new(Vec::new()),
+            dots: Arc::new(Vec::new()),
+            arrow_style: ArrowStyle::default(),
+            arrow_params: ArrowParams::default(),
+            // The old renderer always drew the perspective mesh; keep that as
+            // the default until the viewmodel's snapshot fills in the mode.
+            mode_3d: true,
+        }
+    }
 }
 
 impl SceneGPU {
     pub fn is_empty(&self) -> bool {
         self.arrows.is_empty() && self.lines.is_empty() && self.dots.is_empty()
+    }
+
+    /// The pipeline and per-instance vertex count the next `record` call uses.
+    /// 2D always uses the flat nine-vertex arrow; 3D uses the selected
+    /// family's budget.
+    pub fn arrow_draw_plan(&self) -> ArrowDrawPlan {
+        if self.mode_3d {
+            ArrowDrawPlan::Mesh3D {
+                vertices: self.arrow_style.vertex_count(self.arrow_params.sides),
+            }
+        } else {
+            ArrowDrawPlan::Flat2D
+        }
+    }
+
+    /// The per-instance vertex count the next `record` call draws.
+    pub fn arrow_vertex_count(&self) -> u32 {
+        match self.arrow_draw_plan() {
+            ArrowDrawPlan::Flat2D => ARROW2D_VERTS,
+            ArrowDrawPlan::Mesh3D { vertices } => vertices,
+        }
+    }
+
+    /// Whether arrows paint through the flat 2D pipeline rather than the 3D
+    /// family pipeline.
+    pub fn uses_flat_arrow(&self) -> bool {
+        matches!(self.arrow_draw_plan(), ArrowDrawPlan::Flat2D)
     }
 }
 
@@ -103,6 +178,10 @@ const LIGHT_DIR: [f32; 4] = [0.4211, 0.8521, 0.3108, 0.0]; // normalize(0.42, 0.
 /// still paint opaquely inside the one sorted draw.
 pub const ARROW_BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
 
+/// The flat 2D arrow pipeline shares the arrow blend: off-plane dimming and
+/// screenshots must behave identically in both views.
+pub const ARROW2D_BLEND: wgpu::BlendState = ARROW_BLEND;
+
 fn mat4_to_mats(m: Mat4) -> [[f32; 4]; 4] {
     m.to_cols_array_2d()
 }
@@ -112,6 +191,7 @@ fn mat4_to_mats(m: Mat4) -> [[f32; 4]; 4] {
 pub struct DrawState {
     bind_layout: wgpu::BindGroupLayout,
     arrow_pipeline: wgpu::RenderPipeline,
+    arrow2d_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     dot_pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
@@ -133,6 +213,10 @@ impl DrawState {
         let shader_arrow = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vfe arrow shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders.arrow.wgsl").into()),
+        });
+        let shader_arrow2d = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vfe 2d arrow shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders.arrow2d.wgsl").into()),
         });
         let shader_line = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vfe line shader"),
@@ -192,6 +276,36 @@ impl DrawState {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(ARROW_BLEND),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let arrow2d_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vfe 2d arrow pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_arrow2d,
+                entry_point: Some("vs_arrow2d"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_arrow2d,
+                entry_point: Some("fs_arrow2d"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(ARROW2D_BLEND),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -283,6 +397,8 @@ impl DrawState {
                     light_dir: LIGHT_DIR,
                     camera_right: [1.0, 0.0, 0.0, 0.0],
                     camera_up: [0.0, 1.0, 0.0, 0.0],
+                    arrow_style: [ArrowStyle::Cone.id(), ArrowParams::default().sides, 0, 0],
+                    arrow_params: [0.3, 0.12, 0.055, 0.0],
                 }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
@@ -352,6 +468,7 @@ impl DrawState {
         Self {
             bind_layout,
             arrow_pipeline,
+            arrow2d_pipeline,
             line_pipeline,
             dot_pipeline,
             globals_buf,
@@ -378,6 +495,7 @@ impl DrawState {
         scene: &SceneGPU,
     ) {
         let (camera_right, camera_up) = camera_basis_from_view_proj(&view_proj);
+        let params = scene.arrow_params.sanitized();
         let globals = Globals {
             view_proj: mat4_to_mats(view_proj),
             inv_view_proj: mat4_to_mats(view_proj.inverse()),
@@ -385,6 +503,8 @@ impl DrawState {
             light_dir: self.light_dir,
             camera_right: camera_right.extend(0.0).to_array(),
             camera_up: camera_up.extend(0.0).to_array(),
+            arrow_style: [scene.arrow_style.id(), params.sides, 0, 0],
+            arrow_params: [params.head_length, params.head_width, params.shaft_radius, 0.0],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
@@ -470,9 +590,18 @@ impl DrawState {
         }
 
         if !scene.arrows.is_empty() {
-            pass.set_pipeline(&self.arrow_pipeline);
+            let vertices = match scene.arrow_draw_plan() {
+                ArrowDrawPlan::Flat2D => {
+                    pass.set_pipeline(&self.arrow2d_pipeline);
+                    ARROW2D_VERTS
+                }
+                ArrowDrawPlan::Mesh3D { vertices } => {
+                    pass.set_pipeline(&self.arrow_pipeline);
+                    vertices
+                }
+            };
             pass.set_bind_group(0, &self.arrow_bind, &[]);
-            pass.draw(0..(scene.arrows.len() as u32) * ARROW_VERTS, 0..1);
+            pass.draw(0..(scene.arrows.len() as u32) * vertices, 0..1);
         }
 
         if !scene.dots.is_empty() {

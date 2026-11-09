@@ -158,6 +158,9 @@ impl VfApp {
         // saved field; a corrupt record cannot poison the grid.
         settings.view.restore(&mut state, &mut sidebar);
         let backdrop = reference_lines(&state.domain, state.is_3d());
+        let arrow_style = state.arrow_style;
+        let arrow_params = state.arrow_params;
+        let mode_3d = state.mode_3d;
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -181,6 +184,9 @@ impl VfApp {
                 arrows: Arc::new(Vec::new()),
                 lines: Arc::new(backdrop),
                 dots: Arc::new(Vec::new()),
+                arrow_style,
+                arrow_params,
+                mode_3d,
             },
             renderer_ready: false,
             streamline_count: 0,
@@ -549,6 +555,9 @@ impl eframe::App for VfApp {
         // of a rebuilt grid + axes, and the streamline segments the viewmodel
         // seam emitted join them.
         if let Some(fresh) = self.state.snapshot_if_dirty() {
+            self.scene.arrow_style = fresh.arrow_style;
+            self.scene.arrow_params = fresh.arrow_params;
+            self.scene.mode_3d = fresh.mode_3d;
             self.scene.arrows = fresh.arrows;
             self.scene.dots = fresh.dots;
             // A rebuild refreshes the magnitude range the per-frame dots ramp
@@ -720,6 +729,9 @@ impl eframe::App for VfApp {
                 arrows: Arc::clone(&self.scene.arrows),
                 lines: Arc::clone(&self.scene.lines),
                 dots: Arc::clone(&self.scene.dots),
+                arrow_style: self.scene.arrow_style,
+                arrow_params: self.scene.arrow_params,
+                mode_3d: self.state.mode_3d,
             };
 
             // 2D mode covers the domain's plane orthographically; 3D mode is

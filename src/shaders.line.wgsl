@@ -14,6 +14,8 @@ struct Globals {
     light_dir: vec4<f32>,    // xyz: direction *toward* the light (normalized)
     camera_right: vec4<f32>, // xyz: world-space camera right axis (dot billboards)
     camera_up: vec4<f32>,    // xyz: world-space camera up axis (dot billboards)
+    arrow_style: vec4<u32>,  // x: style id, y: sides, z/w: unused
+    arrow_params: vec4<f32>, // x: head length, y: head width, z: shaft radius, w: unused
 };
 
 @group(0) @binding(0)

@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::arrow_style::{ArrowParams, ArrowStyle};
 use crate::colormap::Colormap;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
@@ -75,6 +76,16 @@ pub struct ViewRecord {
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
+    /// Show arrows (ticket 45). Older records did not carry it, so the
+    /// container default (true) keeps them showing arrows.
+    #[serde(default = "default_arrows")]
+    pub arrows: bool,
+    /// The 3D arrow family (ticket 45).
+    #[serde(default)]
+    pub arrow_style: ArrowStyle,
+    /// The 3D arrow head/shaft proportions (ticket 45).
+    #[serde(default)]
+    pub arrow_params: ArrowParams,
     pub streamlines: bool,
     pub particles: bool,
     pub speed: f32,
@@ -104,6 +115,9 @@ impl ViewRecord {
             auto_fit: state.auto_fit,
             color_min: state.color_min,
             color_max: state.color_max,
+            arrows: state.arrows,
+            arrow_style: state.arrow_style,
+            arrow_params: state.arrow_params,
             streamlines: state.streamlines,
             particles: state.particles,
             speed: state.speed,
@@ -133,6 +147,9 @@ impl ViewRecord {
         controls.auto_fit = self.auto_fit;
         controls.color_min = finite_or(self.color_min, defaults.color_min);
         controls.color_max = finite_or(self.color_max, defaults.color_max);
+        controls.arrows = self.arrows;
+        controls.arrow_style = self.arrow_style;
+        controls.arrow_params = self.arrow_params.sanitized();
         controls.streamlines = self.streamlines;
         controls.particles = self.particles;
         controls.speed = finite_or(self.speed, defaults.speed);
@@ -147,6 +164,12 @@ impl ViewRecord {
 /// `value` when finite, `fallback` otherwise.
 pub fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
+}
+
+/// The `arrows` field's serde default: older records predate the Show arrows
+/// toggle, and arrows were always drawn then.
+fn default_arrows() -> bool {
+    true
 }
 
 /// Decode the ticket-14 `normalize` boolean, which was stored as a bare

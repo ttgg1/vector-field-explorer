@@ -8,9 +8,11 @@
 
 use glam::Vec3;
 use vector_field_explorer::arrow_geometry::{
-    arrow_triangles, cone_base_plate_triangles, cone_head_triangles,
+    arrow_triangles, cone_base_plate_triangles, cone_head_triangles, cylinder_triangles,
+    flat_arrow_triangles,
 };
-use vector_field_explorer::renderer::ARROW_VERTS;
+use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
+use vector_field_explorer::renderer::{ARROW2D_VERTS, ARROW_VERTS};
 
 /// The ticket's unit-arrow measurements.
 const SHAFT_LEN: f32 = 0.7;
@@ -98,6 +100,98 @@ fn base_plate_has_two_upward_facing_triangles() {
 #[test]
 fn arrow_vertex_count_is_42() {
     assert_eq!(ARROW_VERTS, 42, "24 shaft + 12 head + 6 plate vertices");
+}
+
+#[test]
+fn the_flat_2d_arrow_is_nine_non_degenerate_vertices() {
+    let triangles = flat_arrow_triangles(1.0, ArrowParams::default());
+    assert_eq!(
+        triangles.len() * 3,
+        ARROW2D_VERTS as usize,
+        "the flat arrow is a shaft quad plus a head triangle",
+    );
+    for (index, tri) in triangles.iter().enumerate() {
+        let area = area(tri);
+        assert!(area > MIN_AREA, "flat arrow triangle {index} has area {area}");
+        assert_eq!(tri[0].z, 0.0, "triangle {index} lies in the flat plane");
+        assert_eq!(tri[1].z, 0.0);
+        assert_eq!(tri[2].z, 0.0);
+    }
+    assert_eq!(triangles[2][2].y, 1.0, "the head tip reaches the arrow length");
+}
+
+#[test]
+fn pyramid_42_vertices_remain_non_degenerate() {
+    let params = ArrowParams::default();
+    let triangles = arrow_triangles(1.0);
+    assert_eq!(triangles.len() * 3, ArrowStyle::Pyramid.vertex_count(params.sides) as usize);
+    for (index, tri) in triangles.iter().enumerate() {
+        assert!(area(tri) > MIN_AREA, "pyramid triangle {index} is non-degenerate");
+    }
+}
+
+#[test]
+fn every_cylinder_side_is_non_degenerate() {
+    for sides in [4, 5, 8, 12, 16] {
+        let params = ArrowParams { sides, ..ArrowParams::default() };
+        let triangles = cylinder_triangles(1.0, params);
+        assert_eq!(
+            triangles.len() * 3,
+            ArrowStyle::Cylinder.vertex_count(sides) as usize,
+            "{sides} sides spell the cylinder budget",
+        );
+        for (index, tri) in triangles.iter().enumerate() {
+            let area = area(tri);
+            assert!(
+                area > MIN_AREA,
+                "cylinder with {sides} sides, triangle {index} has area {area}",
+            );
+        }
+    }
+}
+
+#[test]
+fn cylinder_plate_fan_covers_the_whole_ring_and_faces_down() {
+    for sides in [4, 5, 8, 12, 16] {
+        let params = ArrowParams { sides, ..ArrowParams::default() };
+        let triangles = cylinder_triangles(1.0, params);
+        let plate_start = (2 * sides + sides) as usize;
+        let plate = &triangles[plate_start..];
+        assert_eq!(plate.len(), sides as usize - 2, "the full fan has sides - 2 triangles");
+
+        let step = std::f32::consts::TAU / sides as f32;
+        let mut covered = vec![false; sides as usize];
+        for (index, tri) in plate.iter().enumerate() {
+            let area = area(tri);
+            assert!(area > MIN_AREA, "plate triangle {index} has area {area}");
+            let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
+            assert!((normal - Vec3::NEG_Y).length() < EPS, "plate triangle {index} faces -Y");
+            for point in tri {
+                assert_eq!(point.y, SHAFT_LEN, "plate triangle {index} caps the junction");
+                let angle = point.z.atan2(point.x).rem_euclid(std::f32::consts::TAU);
+                let corner = (angle / step).round() as usize % sides as usize;
+                covered[corner] = true;
+            }
+        }
+        assert!(covered.iter().all(|&seen| seen), "the fan touches every ring corner");
+    }
+}
+
+#[test]
+fn every_cylinder_ring_vertex_is_at_the_configured_radius() {
+    let params = ArrowParams { sides: 12, shaft_radius: 0.08, ..ArrowParams::default() };
+    let triangles = cylinder_triangles(1.0, params);
+    let shaft_end = params.sides as usize * 2;
+    for tri in &triangles[..shaft_end] {
+        for point in tri {
+            // The two shaft rings share the constant cylinder radius.
+            let radius = radial(*point).length();
+            assert!(
+                (radius - params.shaft_radius).abs() < EPS,
+                "cylinder shaft vertex radius {radius} is constant",
+            );
+        }
+    }
 }
 
 #[test]

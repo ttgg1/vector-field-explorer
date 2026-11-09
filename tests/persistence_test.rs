@@ -5,6 +5,7 @@
 use eframe::Storage as _;
 use glam::Vec3;
 
+use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::ui::layout::LayoutState;
@@ -113,6 +114,14 @@ fn configured() -> (State, Controls) {
     controls.streamlines = true;
     controls.particles = true;
     controls.speed = 2.2;
+    controls.arrows = false;
+    controls.arrow_style = ArrowStyle::Cylinder;
+    controls.arrow_params = ArrowParams {
+        head_length: 0.4,
+        head_width: 0.2,
+        shaft_radius: 0.08,
+        sides: 8,
+    };
     controls.domain_min = Vec3::new(-2.0, -1.0, -0.5);
     controls.domain_max = Vec3::new(2.0, 1.0, 0.5);
     sidebar::apply(&mut state, &mut controls);
@@ -178,6 +187,19 @@ fn a_legacy_normalize_false_migrates_to_proportional() {
     );
     assert_eq!(state.magnitude_scale, 1.0);
     assert_eq!(controls.arrow_length_mode, ArrowLengthMode::Proportional);
+}
+
+#[test]
+fn a_legacy_record_without_arrow_style_fields_gets_the_defaults() {
+    let settings = load_legacy(false);
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    settings.view.restore(&mut state, &mut controls);
+    assert!(state.arrows, "older records show arrows");
+    assert_eq!(state.arrow_style, ArrowStyle::Cone, "older records use the cone");
+    assert_eq!(state.arrow_params, ArrowParams::default(), "older records use default geometry");
+    assert_eq!(controls.arrow_style, ArrowStyle::Cone, "the mirror follows");
+    assert_eq!(controls.arrow_params, ArrowParams::default());
 }
 
 #[test]
@@ -300,6 +322,21 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.streamlines, state.streamlines, "streamlines");
     assert_eq!(restored_state.particles, state.particles, "particles");
     assert_eq!(restored_state.speed, state.speed, "speed");
+    assert!(!restored_state.arrows, "the Show arrows toggle");
+    assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
+    assert_eq!(restored_state.arrow_params.sides, 8, "arrow sides");
+    assert_eq!(restored_state.arrow_params.head_length, 0.4, "arrow head length");
+    assert_eq!(restored_controls.arrows, restored_state.arrows, "the mirror follows the toggle");
+    assert_eq!(
+        restored_controls.arrow_style,
+        restored_state.arrow_style,
+        "the mirror follows the style",
+    );
+    assert_eq!(
+        restored_controls.arrow_params,
+        restored_state.arrow_params,
+        "the mirror follows the params",
+    );
     // The widget mirror is refreshed so the first sidebar frame agrees.
     assert_eq!(restored_controls.density, state.density);
     assert_eq!(restored_controls.arrow_length_mode, state.arrow_length_mode);
@@ -324,6 +361,12 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
         density: 99_999,
         arrow_scale: f32::NAN,
         magnitude_scale: f32::NAN,
+        arrow_params: ArrowParams {
+            head_length: f32::NAN,
+            head_width: f32::INFINITY,
+            shaft_radius: -4.0,
+            sides: 999,
+        },
         speed: f32::INFINITY,
         color_min: f32::NAN,
         color_max: f32::NEG_INFINITY,
@@ -345,6 +388,10 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
     assert!(state.color_min.is_finite() && state.color_max.is_finite());
     assert!(state.domain.min.is_finite() && state.domain.max.is_finite());
     assert!(state.domain.min.x < state.domain.max.x, "the domain stays a real box");
+    assert_eq!(state.arrow_params.head_length, 0.3, "a NaN head length falls back");
+    assert_eq!(state.arrow_params.head_width, 0.12, "an infinite head width falls back");
+    assert_eq!(state.arrow_params.shaft_radius, 0.01, "a negative radius clamps to the min");
+    assert_eq!(state.arrow_params.sides, 16, "an absurd side count clamps to the max");
 }
 
 #[test]
