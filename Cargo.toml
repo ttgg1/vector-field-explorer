@@ -35,6 +35,14 @@ tempfile = "3.10"
 name = "suite"
 path = "tests/suite.rs"
 
+# Ticket 21: the math-heavy integration tests (particles, streamlines, sampling)
+# are dominated by unoptimized arithmetic. `profile.test` inherits dev's
+# `debug = 1` / `strip = "debuginfo"` from `.cargo/config.toml`; raising only
+# the optimization level keeps backtraces and the compile cost of debug info
+# unchanged.
+[profile.test]
+opt-level = 2
+
 # Ticket 20: standard sinks only. Native logs to stderr with `RUST_LOG`
 # (default `info`); wasm logs to the browser console via `console_log`.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -85,6 +85,12 @@ Production code is under `src/`, tests under `tests/`.
   test genuinely needs is promoted to a single `#[doc(hidden)] pub` seam with
   the reason in the commit body and the SDD ledger; never widen the API further
   for tests.
+- **Test profile:** `Cargo.toml` sets `[profile.test] opt-level = 2` on top of
+  the dev profile's `debug = 1` / `strip = "debuginfo"` (`.cargo/config.toml`).
+  The math-heavy particle, streamline, and sampling tests dominate run time at
+  opt-level 0; ticket 21 cut the warm suite from ~3.98 s to ~0.72 s median for
+  a longer cold test build. Keep the gates (and `scripts/test.sh`) on
+  `cargo test --all-targets`; there is no separate runner requirement.
 - **Commits:** `feat:` / `fix:` / `docs:`, one commit set per task. Never ledger
   a task without a `git rev-parse`-verifiable hash.
 - **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD
