@@ -16,7 +16,7 @@ use vector_field_explorer::ui::style_panel::{
 };
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DOMAIN_EXTENT,
-    MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State,
+    MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
 };
 use vector_field_explorer::VfApp;
 
@@ -249,6 +249,7 @@ fn configured() -> (State, Controls) {
     controls.color_min = -2.0;
     controls.color_max = 3.0;
     controls.streamlines = true;
+    controls.seed_mode = StreamlineSeedMode::Click;
     controls.particles = true;
     controls.arrows = false;
     controls.arrow_style = ArrowStyle::Cylinder;
@@ -531,6 +532,7 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.color_min, state.color_min, "color min");
     assert_eq!(restored_state.color_max, state.color_max, "color max");
     assert_eq!(restored_state.streamlines, state.streamlines, "streamlines");
+    assert_eq!(restored_state.seed_mode, state.seed_mode, "streamline seed mode");
     assert_eq!(restored_state.particles, state.particles, "particles");
     assert!(!restored_state.arrows, "the Show arrows toggle");
     assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
@@ -553,6 +555,7 @@ fn every_view_value_round_trips() {
         restored_state.arrow_params,
         "the mirror follows the params",
     );
+    assert_eq!(restored_controls.seed_mode, state.seed_mode, "the mirror follows the seed mode");
     // The widget mirror is refreshed so the first sidebar frame agrees.
     assert_eq!(restored_controls.density, state.density);
     assert_eq!(restored_controls.arrow_length_mode, state.arrow_length_mode);
@@ -569,6 +572,54 @@ fn default_record_matches_a_fresh_two_d_state() {
     assert_eq!(ViewRecord::capture(&state), ViewRecord::default());
     assert_eq!(ViewRecord::default().formula, "(x, y)");
     assert!(!ViewRecord::default().mode_3d);
+    assert_eq!(
+        ViewRecord::default().seed_mode,
+        StreamlineSeedMode::Auto,
+        "the default view record resets the seed mode to Auto",
+    );
+}
+
+#[test]
+fn a_record_without_a_seed_mode_loads_as_auto() {
+    // `load_legacy` writes the pre-ticket-50 shape: no `seed_mode` key at all.
+    let loaded = load_legacy(false);
+    assert_eq!(
+        loaded.view.seed_mode,
+        StreamlineSeedMode::Auto,
+        "an older record defaults the seed mode instead of failing",
+    );
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+    assert_eq!(state.seed_mode, StreamlineSeedMode::Auto);
+    assert_eq!(controls.seed_mode, StreamlineSeedMode::Auto, "the mirror follows");
+}
+
+#[test]
+fn seed_mode_round_trips_through_storage() {
+    let mut state = State::new(false);
+    assert!(state.set_seed_mode(StreamlineSeedMode::Click));
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(
+        raw.contains("seed_mode:Click"),
+        "the seed mode is written with its stable spelling:\n{raw}",
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.seed_mode, StreamlineSeedMode::Click);
+    let mut restored_state = State::new(false);
+    let mut restored_controls = Controls::new();
+    loaded.view.restore(&mut restored_state, &mut restored_controls);
+    assert_eq!(restored_state.seed_mode, StreamlineSeedMode::Click);
+    assert_eq!(restored_controls.seed_mode, StreamlineSeedMode::Click);
 }
 
 #[test]

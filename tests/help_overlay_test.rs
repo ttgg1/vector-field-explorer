@@ -5,8 +5,9 @@
 
 use vector_field_explorer::ui::help_overlay::{
     FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTIONS, HELP_SECTION_TITLE_SIZE,
-    HELP_WINDOW_TITLE_SIZE, OVERLAY_HEADING_COLOR, HelpRow, all_rows, rows_for,
-    section_heading_style, sections_for, window_heading_color,
+    HELP_WINDOW_TITLE_SIZE, OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT,
+    SEED_HELP_TOOLTIP, HelpRow, all_rows, rows_for, section_heading_style, sections_for,
+    window_heading_color,
 };
 
 const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
@@ -22,6 +23,7 @@ const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
     ("R", "Reset view"),
     ("F", "Fit domain"),
     ("Click", "Seed streamlines"),
+    ("Seed:", "auto | click"),
     (
         "C",
         "fly · WASD move · Q/E down/up · Shift boost · mouse look · Esc exit · Camera toggles it",
@@ -39,6 +41,7 @@ const VIEW_2D_BINDINGS: &[(&str, &str)] = &[
     ("R", "Reset view"),
     ("F", "Fit domain"),
     ("Click", "Seed streamlines"),
+    ("Seed:", "auto | click"),
 ];
 
 const GLOBAL_BINDINGS: &[(&str, &str)] = &[
@@ -94,6 +97,27 @@ fn every_binding_is_listed_exactly_once_in_its_group() {
     assert_lists_once(section("3D view"), VIEW_3D_BINDINGS, "3D view");
     assert_lists_once(section("2D view"), VIEW_2D_BINDINGS, "2D view");
     assert_lists_once(section("Global"), GLOBAL_BINDINGS, "Global");
+}
+
+#[test]
+fn the_seed_mode_line_documents_both_modes_and_the_off_state() {
+    assert_eq!(
+        format!("{SEED_HELP_INPUT} {SEED_HELP_ACTION}"),
+        "Seed: auto | click",
+        "the overlay shows the short seed-mode line",
+    );
+    assert!(
+        SEED_HELP_TOOLTIP.contains("Off") && SEED_HELP_TOOLTIP.contains("click seeding"),
+        "the tooltip carries the off-state explanation: {SEED_HELP_TOOLTIP}",
+    );
+    for mode_3d in [false, true] {
+        assert!(
+            rows_for(mode_3d)
+                .iter()
+                .any(|row| row.input == SEED_HELP_INPUT && row.action == SEED_HELP_ACTION),
+            "both view overlays carry the seed-mode line",
+        );
+    }
 }
 
 #[test]

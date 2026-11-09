@@ -82,6 +82,14 @@ pub const FLY_HELP_INPUT: &str = "C";
 pub const FLY_HELP_ACTION: &str =
     "fly · WASD move · Q/E down/up · Shift boost · mouse look · Esc exit · Camera toggles it";
 
+/// The streamline seed-mode line (ticket 50 ruling): a short row under the
+/// click entry, with the off-state explanation living in the tooltip so the
+/// compact overlay does not grow a paragraph.
+pub const SEED_HELP_INPUT: &str = "Seed:";
+pub const SEED_HELP_ACTION: &str = "auto | click";
+pub const SEED_HELP_TOOLTIP: &str =
+    "Off hides both seed sources and disables click seeding";
+
 const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "Left-drag", action: "Orbit" },
     HelpRow { input: "Right-drag", action: "Orbit" },
@@ -95,6 +103,7 @@ const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "R", action: "Reset view" },
     HelpRow { input: "F", action: "Fit domain" },
     HelpRow { input: "Click", action: "Seed streamlines" },
+    HelpRow { input: SEED_HELP_INPUT, action: SEED_HELP_ACTION },
     HelpRow { input: FLY_HELP_INPUT, action: FLY_HELP_ACTION },
 ];
 
@@ -109,6 +118,7 @@ const ROWS_2D: &[HelpRow] = &[
     HelpRow { input: "R", action: "Reset view" },
     HelpRow { input: "F", action: "Fit domain" },
     HelpRow { input: "Click", action: "Seed streamlines" },
+    HelpRow { input: SEED_HELP_INPUT, action: SEED_HELP_ACTION },
 ];
 
 const ROWS_GLOBAL: &[HelpRow] = &[
@@ -199,11 +209,14 @@ fn table(
                             .size(HELP_ROW_SIZE)
                             .color(egui::Color32::from_gray(185)),
                     );
-                    ui.label(
+                    let action = ui.label(
                         egui::RichText::new(row.action)
                             .size(HELP_ROW_SIZE)
                             .color(egui::Color32::from_gray(155)),
                     );
+                    if row.input == SEED_HELP_INPUT {
+                        action.on_hover_text(SEED_HELP_TOOLTIP);
+                    }
                     ui.end_row();
                 }
             });

@@ -14,8 +14,8 @@ use vector_field_explorer::sampling::ArrowData;
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D,
     MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DENSITY,
-    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, clamp_domain_extent,
-    domain_between,
+    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
+    clamp_domain_extent, domain_between,
 };
 
 #[test]
@@ -782,12 +782,14 @@ fn segments(lines: &[LineInstanceGPU]) -> Vec<([f32; 4], [f32; 4], [f32; 4])> {
 }
 
 #[test]
-fn click_streamlines_seed_a_burst_without_the_grid_toggle() {
-    // A click is an explicit request: it plants a burst even with the
-    // streamline grid toggle off, and the burst stays on the 2D plane.
+fn click_streamlines_seed_a_burst_while_the_grid_is_hidden() {
+    // Click mode hides the automatic grid but a click is still an explicit
+    // request: it plants a burst, and the burst stays on the 2D plane.
     let mut s = State::new(false);
     assert!(s.set_formula("(1, 0)".to_string()), "a field that flows at the origin");
-    assert!(!s.streamlines, "the grid seeds are off at the defaults");
+    assert!(s.set_streamlines(true), "the Feature is on; Click mode only hides the grid");
+    assert!(s.set_seed_mode(StreamlineSeedMode::Click));
+    assert!(s.snapshot().lines.is_empty(), "Click hides the grid seeds");
     let lines = s.click_streamlines_snapshot((0.0, 1.0), &[Vec3::ZERO]);
     assert!(!lines.is_empty(), "the click seeds a burst anyway");
     assert!(
@@ -810,6 +812,7 @@ fn click_streamlines_are_deterministic_and_bounded_by_the_clicks() {
     // geometry; and a click off the field contributes nothing.
     let mut s = State::new(true);
     assert!(s.set_formula("(-y, x, 0.5)".to_string()), "a depth-carrying field");
+    assert!(s.set_streamlines(true), "click bursts are part of the Streamlines feature");
     let clicks = [Vec3::new(0.1, 0.1, 0.0), Vec3::new(-0.2, 0.3, 0.1)];
     let first = s.click_streamlines_snapshot((0.0, 1.5), &clicks);
     let second = s.click_streamlines_snapshot((0.0, 1.5), &clicks);
@@ -820,6 +823,72 @@ fn click_streamlines_are_deterministic_and_bounded_by_the_clicks() {
     assert!(
         s.click_streamlines_snapshot((0.0, 1.5), &[Vec3::new(9.0, 9.0, 9.0)]).is_empty(),
         "a click off the field draws nothing",
+    );
+}
+
+// --- Streamline seed modes (ticket 50) -------------------------------------
+
+#[test]
+fn streamline_seed_mode_defaults_to_auto_and_accepts_clicks() {
+    let mut s = State::new(false);
+    assert_eq!(s.seed_mode, StreamlineSeedMode::Auto, "a fresh state starts on Auto");
+    assert_eq!(StreamlineSeedMode::default(), StreamlineSeedMode::Auto);
+    assert_eq!(StreamlineSeedMode::ALL, [StreamlineSeedMode::Auto, StreamlineSeedMode::Click]);
+    assert_eq!(StreamlineSeedMode::ALL.map(StreamlineSeedMode::label), ["Auto", "Click"]);
+    assert!(!s.accepts_click_seed(), "the Feature still starts off");
+    assert!(s.set_streamlines(true));
+    assert!(s.accepts_click_seed(), "Auto keeps the default click live");
+}
+
+#[test]
+fn auto_seed_mode_shows_grid_seeds_and_accepts_clicks() {
+    let mut s = State::new(false);
+    assert!(s.set_streamlines(true));
+    assert_eq!(s.seed_mode, StreamlineSeedMode::Auto);
+    assert!(!s.snapshot().lines.is_empty(), "Auto draws the automatic grid seeds");
+    assert!(
+        !s.click_streamlines_snapshot((0.0, 1.0), &[Vec3::ZERO]).is_empty(),
+        "Auto still accepts a click seed",
+    );
+}
+
+#[test]
+fn click_seed_mode_hides_the_grid_but_shows_click_seeds() {
+    let mut s = State::new(false);
+    assert!(s.set_streamlines(true));
+    assert!(!s.snapshot().lines.is_empty(), "Auto starts with grid seeds");
+    assert!(s.set_seed_mode(StreamlineSeedMode::Click));
+    assert_eq!(s.seed_mode, StreamlineSeedMode::Click);
+    assert!(s.snapshot().lines.is_empty(), "Click hides the grid seeds");
+    assert!(s.accepts_click_seed(), "Click still accepts clicks");
+    assert!(
+        !s.click_streamlines_snapshot((0.0, 1.0), &[Vec3::ZERO]).is_empty(),
+        "Click shows the click seeds",
+    );
+}
+
+#[test]
+fn streamlines_off_hides_both_sources_and_keeps_the_previous_clicks() {
+    let mut s = State::new(false);
+    assert!(s.set_formula("(1, 0)".to_string()), "a field that flows at the origin");
+    assert!(s.set_streamlines(true));
+    let clicks = [Vec3::ZERO];
+    let before = s.click_streamlines_snapshot((0.0, 1.0), &clicks);
+    assert!(!before.is_empty(), "the click lines exist while Streamlines is on");
+
+    assert!(s.set_streamlines(false));
+    assert!(s.snapshot().lines.is_empty(), "off hides the grid seeds");
+    assert!(
+        s.click_streamlines_snapshot((0.0, 1.0), &clicks).is_empty(),
+        "off hides the click seeds too",
+    );
+    assert!(!s.accepts_click_seed(), "off refuses to store a new click seed");
+
+    assert!(s.set_streamlines(true));
+    assert_eq!(
+        segments(&s.click_streamlines_snapshot((0.0, 1.0), &clicks)),
+        segments(&before),
+        "turning Streamlines back on reproduces the retained click lines",
     );
 }
 

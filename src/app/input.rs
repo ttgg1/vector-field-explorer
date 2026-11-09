@@ -253,24 +253,33 @@ impl VfApp {
             self.last_click_seed = None;
             return;
         };
-        if self.click_seeds.len() >= MAX_CLICK_SEEDS {
-            self.click_seeds.remove(0);
+        // Streamlines off hides both seed sources and refuses new seeds, but
+        // the click's particle burst is out of scope (ticket 60 owns the
+        // left-click action): it still happens below. An off-state click is
+        // recorded as unstored so a following double-click cannot delete a
+        // retained seed that a deterministic click at the same point matches.
+        let stored = self.state.accepts_click_seed();
+        if stored {
+            if self.click_seeds.len() >= MAX_CLICK_SEEDS {
+                self.click_seeds.remove(0);
+            }
+            self.click_seeds.push(seed);
+            self.click_lines =
+                self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+            self.streamline_count = self.flow_lines.len() + self.click_lines.len();
+            self.scene.lines = Arc::new(compose_lines(
+                &self.flow_lines,
+                &self.click_lines,
+                &self.state.domain,
+                self.state.is_3d(),
+            ));
+            log::trace!(
+                "click seed {} of {} at {seed:?}: {} click streamline segments",
+                self.click_seeds.len(),
+                MAX_CLICK_SEEDS,
+                self.click_lines.len()
+            );
         }
-        self.click_seeds.push(seed);
-        self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
-        self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-        self.scene.lines = Arc::new(compose_lines(
-            &self.flow_lines,
-            &self.click_lines,
-            &self.state.domain,
-            self.state.is_3d(),
-        ));
-        log::trace!(
-            "click seed {} of {} at {seed:?}: {} click streamline segments",
-            self.click_seeds.len(),
-            MAX_CLICK_SEEDS,
-            self.click_lines.len()
-        );
         // Particles only exist in the 3D view; a click adds a capped burst
         // around the pick (the per-frame dot rebuild picks it up next frame).
         // If the cloud has not spawned yet, fill it first so the click does not
@@ -295,7 +304,7 @@ impl VfApp {
                 3,
             );
         }
-        self.last_click_seed = Some(LastClickSeed { seed, particles_before, time });
+        self.last_click_seed = Some(LastClickSeed { seed, particles_before, time, stored });
     }
 
     /// Take back the burst the previous single click planted when it turns out
@@ -310,16 +319,19 @@ impl VfApp {
             now,
             particle_count(&self.particles),
         );
-        if !undo.removed {
-            return;
-        }
-        self.click_seeds = undo.seeds;
+        // The particle rollback is independent of the seed edit: an unstored
+        // click still burst particles and must still truncate them, even
+        // though it removed no list entry.
         if self.state.particles
             && self.state.mode_3d
             && let Some(before) = undo.particles
         {
             self.particles.pos.truncate(before);
         }
+        if !undo.removed {
+            return;
+        }
+        self.click_seeds = undo.seeds;
         self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
         self.scene.lines = Arc::new(compose_lines(

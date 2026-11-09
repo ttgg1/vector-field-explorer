@@ -118,6 +118,40 @@ impl ArrowLengthMode {
     }
 }
 
+/// How streamlines get their seeds (ticket 50). The Feature toggle still gates
+/// both sources; this mode only picks which seeds the on state paints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum StreamlineSeedMode {
+    /// The automatic jittered grid seeds plus any click seeds. The default, so
+    /// a left click is never dead.
+    #[default]
+    Auto,
+    /// Click seeds only; the automatic grid seeds are hidden.
+    Click,
+}
+
+impl StreamlineSeedMode {
+    /// Every mode, in the order the sidebar selector shows them.
+    pub const ALL: [StreamlineSeedMode; 2] =
+        [StreamlineSeedMode::Auto, StreamlineSeedMode::Click];
+
+    /// Short label for the selector.
+    pub fn label(self) -> &'static str {
+        match self {
+            StreamlineSeedMode::Auto => "Auto",
+            StreamlineSeedMode::Click => "Click",
+        }
+    }
+
+    /// One-line explanation, short enough for a tooltip.
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            StreamlineSeedMode::Auto => "Show the automatic grid seeds and accept clicks",
+            StreamlineSeedMode::Click => "Show only the seeds planted by clicks",
+        }
+    }
+}
+
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
 pub struct State {
@@ -142,6 +176,9 @@ pub struct State {
     /// The head/shaft proportions shared by every 3D family.
     pub arrow_params: ArrowParams,
     pub streamlines: bool,
+    /// Which seeds the on state paints (ticket 50): the automatic grid, the
+    /// click bursts, or both.
+    pub seed_mode: StreamlineSeedMode,
     pub particles: bool,
     /// Which sampled slice plane-by-plane mode highlights (ticket 23).
     pub plane: PlaneView,
@@ -190,6 +227,7 @@ impl State {
             arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
             streamlines: false,
+            seed_mode: StreamlineSeedMode::Auto,
             particles: false,
             plane: PlaneView::middle(grid),
             dirty: true,
@@ -379,6 +417,24 @@ impl State {
         self.mark_dirty()
     }
 
+    /// Choose which seeds the on state paints (ticket 50). The mode only swaps
+    /// what is drawn or stored; the Feature toggle still hides both.
+    pub fn set_seed_mode(self: &mut State, mode: StreamlineSeedMode) -> bool {
+        if self.seed_mode == mode {
+            return false;
+        }
+        self.seed_mode = mode;
+        self.mark_dirty()
+    }
+
+    /// Whether a viewport click may add to the app's click-seed list. The list
+    /// itself is app-owned, but the gate belongs to the same Feature toggle
+    /// that hides the click lines: off hides both and refuses new seeds, so
+    /// re-enabling reproduces the previous clicks. Both modes accept clicks.
+    pub fn accepts_click_seed(self: &State) -> bool {
+        self.streamlines
+    }
+
     /// Particle tracing, not yet drawn.
     pub fn set_particles(self: &mut State, on: bool) -> bool {
         if self.particles == on {
@@ -563,7 +619,8 @@ impl State {
     /// so its lines run with the depth they cross. [`streamlines::ray_seed`]
     /// turns a click into a seed inside the domain for the orbit view's click-to-seed.
     pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
-        if !self.streamlines {
+        // Off hides both seed sources; Click hides only the automatic grid.
+        if !self.streamlines || self.seed_mode == StreamlineSeedMode::Click {
             return Vec::new();
         }
         // Half the grid density seeds the plane: enough lines to read the flow
@@ -630,14 +687,17 @@ impl State {
     /// Line instances for the click-seeded streamlines: every click expands to
     /// a deterministic [`burst_seeds`] cluster (3D depth in the orbit view, on
     /// the clicked plane in 2D), each seed traced exactly like a grid seed.
-    /// Unlike [`streamlines_snapshot`] this ignores the streamline toggle — a
-    /// click is an explicit request to see the flow there. Pure; the app owns
-    /// the (bounded) list of clicks.
+    /// Both seed modes accept clicks, but the Feature toggle gates them like
+    /// the grid: off hides every click line and the app stores no new seeds.
+    /// Pure; the app owns the (bounded) list of clicks.
     pub fn click_streamlines_snapshot(
         self: &State,
         color_range: (f32, f32),
         clicks: &[Vec3],
     ) -> Vec<LineInstanceGPU> {
+        if !self.streamlines {
+            return Vec::new();
+        }
         let opts = self.streamline_opts();
         let dimension = if self.mode_3d { 3 } else { 2 };
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
@@ -911,6 +971,10 @@ pub struct LastClickSeed {
     pub particles_before: usize,
     /// egui's frame time when the click happened.
     pub time: f64,
+    /// Whether [`State::accepts_click_seed`] let this click into the seed list.
+    /// An off-state click still bursts particles, but a double-click must not
+    /// delete a retained seed that happens to sit at the same point.
+    pub stored: bool,
 }
 
 /// What [`undo_click_seed`] did: the seed list after the undo, whether the
@@ -928,9 +992,14 @@ pub struct ClickSeedUndo {
 /// particle cloud and the recompose step.
 ///
 /// A click older than [`DOUBLE_CLICK_WINDOW`] is not a double-click and is left
-/// alone. Inside the window, exactly the last occurrence of the click's seed is
-/// removed and `particles` reports the pre-click count (when the cloud still
-/// has at least that many points, so a truncation is safe).
+/// alone. Inside the window, for a stored click exactly the last occurrence of
+/// its seed is removed and `particles` reports the pre-click count (when the
+/// cloud still has at least that many points, so a truncation is safe).
+///
+/// An unstored click (`LastClickSeed::stored == false`, e.g. a click made while
+/// Streamlines was off) removes nothing: the deterministic pick can coincide
+/// with a retained seed, and the off-state promise is that retained clicks stay
+/// recoverable. Its particle burst is still rolled back when safe.
 pub fn undo_click_seed(
     seeds: &[Vec3],
     last: Option<LastClickSeed>,
@@ -948,6 +1017,18 @@ pub fn undo_click_seed(
     if !now.is_finite() || !last.time.is_finite() || now - last.time > DOUBLE_CLICK_WINDOW {
         return unchanged(seeds);
     }
+    let rollback = if particle_count >= last.particles_before {
+        Some(last.particles_before)
+    } else {
+        None
+    };
+    if !last.stored {
+        return ClickSeedUndo {
+            seeds: seeds.to_vec(),
+            removed: false,
+            particles: rollback,
+        };
+    }
     let mut seeds = seeds.to_vec();
     let Some(index) = seeds.iter().rposition(|seed| *seed == last.seed) else {
         return unchanged(&seeds);
@@ -956,11 +1037,7 @@ pub fn undo_click_seed(
     ClickSeedUndo {
         seeds,
         removed: true,
-        particles: if particle_count >= last.particles_before {
-            Some(last.particles_before)
-        } else {
-            None
-        },
+        particles: rollback,
     }
 }
 

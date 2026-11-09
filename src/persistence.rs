@@ -19,7 +19,7 @@ use crate::colormap::Colormap;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
-use crate::viewmodel::{ArrowLengthMode, State};
+use crate::viewmodel::{ArrowLengthMode, State, StreamlineSeedMode};
 use glam::Vec3;
 
 /// Everything the app remembers across restarts. `style` is a required field
@@ -92,6 +92,10 @@ pub struct ViewRecord {
     #[serde(default)]
     pub arrow_params: ArrowParams,
     pub streamlines: bool,
+    /// Which seeds the streamline Feature paints (ticket 50). Older records
+    /// did not carry it; the container default loads them as Auto.
+    #[serde(default)]
+    pub seed_mode: StreamlineSeedMode,
     pub particles: bool,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
@@ -129,6 +133,7 @@ impl ViewRecord {
             arrow_style_2d: state.arrow_style_2d,
             arrow_params: state.arrow_params,
             streamlines: state.streamlines,
+            seed_mode: state.seed_mode,
             particles: state.particles,
             // Never written; kept at the serde default for old-record
             // compatibility only.
@@ -164,6 +169,7 @@ impl ViewRecord {
         controls.arrow_style_2d = self.arrow_style_2d;
         controls.arrow_params = self.arrow_params.sanitized();
         controls.streamlines = self.streamlines;
+        controls.seed_mode = self.seed_mode;
         controls.particles = self.particles;
         // `self.speed` is read-only legacy data and deliberately ignored: the
         // transport clock owns speed and streamlines use a fixed budget.

@@ -5,16 +5,17 @@
 // bar would count a scene the user never asked for).
 
 use vector_field_explorer::ui::sidebar::{
-    ArrowStyleSet, Controls, apply, arrow_scale_enabled, arrow_style_set, domain_summary,
-    head_control_enabled, magnitude_scale_enabled, sides_control_enabled,
+    ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
+    domain_summary, head_control_enabled, magnitude_scale_enabled, seed_mode_enabled,
+    sides_control_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, State, DEFAULT_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT,
-    MIN_DOMAIN_EXTENT, domain_between,
+    ArrowLengthMode, State, StreamlineSeedMode, DEFAULT_DENSITY_2D, MAX_DENSITY_3D,
+    MAX_DOMAIN_EXTENT, MIN_DOMAIN_EXTENT, domain_between,
 };
 use glam::Vec3;
 
@@ -36,6 +37,7 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.color_min, s.color_min, "color min agrees");
     assert_eq!(c.color_max, s.color_max, "color max agrees");
     assert_eq!(c.streamlines, s.streamlines, "streamlines start off");
+    assert_eq!(c.seed_mode, s.seed_mode, "the seed mode starts with the seam's");
     assert_eq!(c.particles, s.particles, "particles start off");
     assert_eq!(c.domain_min, s.domain.min, "domain min agrees");
     assert_eq!(c.domain_max, s.domain.max, "domain max agrees");
@@ -77,6 +79,7 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_auto_fit(c.auto_fit));
     assert!(!s.set_color_range(c.color_min, c.color_max));
     assert!(!s.set_streamlines(c.streamlines));
+    assert!(!s.set_seed_mode(c.seed_mode), "synced seed mode does not re-dirty");
     assert!(!s.set_particles(c.particles));
     assert!(!s.set_domain(c.domain_min, c.domain_max), "synced extrema are a no-op");
     assert!(s.snapshot_if_dirty().is_none(), "an untouched frame rebuilds nothing");
@@ -197,6 +200,9 @@ fn every_control_dirties_the_scene_through_apply() {
     c.streamlines = true;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "streamlines stub still flows state");
+    c.seed_mode = StreamlineSeedMode::Click;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "the seed mode dirties the scene");
     c.particles = true;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "particles stub still flows state");
@@ -483,4 +489,94 @@ fn domain_reset_clears_a_partial_unapplied_mirror_edit() {
 
     assert_eq!(controls.domain_min, Vec3::splat(-1.0), "all three minima reset before apply");
     assert_eq!(controls.domain_max, Vec3::splat(1.0), "all three maxima reset before apply");
+}
+
+// --- 2D domain rows and streamline seed modes (ticket 50) -------------------
+
+#[test]
+fn domain_axes_render_x_and_y_in_2d_and_add_z_in_3d() {
+    assert_eq!(
+        domain_axes(false),
+        &[DomainAxis::X, DomainAxis::Y],
+        "2D shows no z row at all, not a greyed one",
+    );
+    assert_eq!(
+        domain_axes(true),
+        &[DomainAxis::X, DomainAxis::Y, DomainAxis::Z],
+        "3D restores the z row",
+    );
+    assert_eq!(
+        [DomainAxis::X, DomainAxis::Y, DomainAxis::Z].map(DomainAxis::label),
+        ["x", "y", "z"],
+    );
+}
+
+#[test]
+fn domain_summary_hides_a_changed_z_in_2d_and_shows_it_in_3d() {
+    let domain = domain_between(Vec3::new(-2.0, -3.0, 4.0), Vec3::new(2.0, 3.0, 9.0));
+    assert_eq!(
+        domain_summary(&domain, false),
+        "x -2…2 · y -3…3",
+        "the 2D summary never advertises the stored z extent",
+    );
+    assert_eq!(
+        domain_summary(&domain, true),
+        "x -2…2 · y -3…3 · z 4…9",
+        "3D brings the stored z extent back",
+    );
+}
+
+#[test]
+fn stored_z_survives_the_2d_to_3d_switch() {
+    let mut s = State::new(true);
+    assert!(
+        s.set_domain(Vec3::new(-1.0, -1.0, -4.0), Vec3::new(1.0, 1.0, 4.0)),
+        "a non-default z extent is stored",
+    );
+    assert!(s.set_mode(false), "switch to 2D");
+    assert_eq!((s.domain.min.z, s.domain.max.z), (-4.0, 4.0), "2D keeps the stored z");
+    assert_eq!(
+        domain_axes(s.is_3d()),
+        &[DomainAxis::X, DomainAxis::Y],
+        "the 2D editor cannot touch z",
+    );
+    assert!(s.set_mode(true), "switch back to 3D");
+    assert_eq!((s.domain.min.z, s.domain.max.z), (-4.0, 4.0), "the same z returns in 3D");
+    assert_eq!(
+        domain_axes(s.is_3d()),
+        &[DomainAxis::X, DomainAxis::Y, DomainAxis::Z],
+        "and so does its row",
+    );
+}
+
+#[test]
+fn seed_selector_is_enabled_only_while_streamlines_are_on() {
+    assert!(!seed_mode_enabled(false), "Streamlines off disables the Auto/Click selector");
+    assert!(seed_mode_enabled(true), "Streamlines on enables it");
+}
+
+#[test]
+fn seed_mode_defaults_to_auto_and_flows_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert_eq!(c.seed_mode, StreamlineSeedMode::Auto, "the selector starts on Auto");
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+
+    c.seed_mode = StreamlineSeedMode::Click;
+    apply(&mut s, &mut c);
+    assert_eq!(s.seed_mode, StreamlineSeedMode::Click, "Click lands on the seam");
+    assert_eq!(c.seed_mode, s.seed_mode, "the mirror follows the seam");
+    assert!(s.snapshot_if_dirty().is_some(), "a seed-mode change re-instances the scene");
+}
+
+#[test]
+fn features_reset_returns_the_seed_mode_to_auto() {
+    let mut c = Controls::new();
+    c.streamlines = true;
+    c.seed_mode = StreamlineSeedMode::Click;
+
+    c.reset_features();
+
+    assert!(!c.streamlines, "the Features reset keeps hiding streamlines");
+    assert_eq!(c.seed_mode, StreamlineSeedMode::Auto, "and returns the seed mode to Auto");
 }

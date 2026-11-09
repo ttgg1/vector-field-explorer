@@ -475,7 +475,7 @@ fn click_seeds_only_when_the_gesture_never_became_a_drag() {
 // ---------------------------------------------------------------- seed undo
 
 fn last_click(seed: Vec3, particles_before: usize, time: f64) -> LastClickSeed {
-    LastClickSeed { seed, particles_before, time }
+    LastClickSeed { seed, particles_before, time, stored: true }
 }
 
 #[test]
@@ -524,6 +524,24 @@ fn a_second_click_inside_the_window_removes_exactly_the_last_seed() {
         Some(5),
         "the particle count returns to the pre-click value",
     );
+}
+
+#[test]
+fn an_unstored_click_never_deletes_a_retained_seed_but_still_rolls_particles_back() {
+    // Ticket 50: with Streamlines off a click stores no seed, but its particle
+    // burst still happens. A double-click must not match-and-delete a retained
+    // click seed that happens to sit at the same deterministic pixel point.
+    let seed = Vec3::new(0.2, -0.1, 0.0);
+    let seeds = [seed];
+    let undo = undo_click_seed(
+        &seeds,
+        Some(LastClickSeed { seed, particles_before: 4, time: 1.0, stored: false }),
+        1.0 + DOUBLE_CLICK_WINDOW * 0.5,
+        9,
+    );
+    assert!(!undo.removed, "an unstored click has no list entry to remove");
+    assert_eq!(undo.seeds, seeds.to_vec(), "the retained click seed survives");
+    assert_eq!(undo.particles, Some(4), "the off-state burst still rolls back");
 }
 
 #[test]

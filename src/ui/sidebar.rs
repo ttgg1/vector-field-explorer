@@ -1,6 +1,6 @@
 //! Left sidebar: every scene knob the widgets expose — sampling density,
 //! arrow length modes and magnitude scale, colormap and color range, streamlines
-//! and particles, and the six domain extrema. Transport speed lives in the
+//! and particles, and the domain extrema. Transport speed lives in the
 //! strip under the formula bar (ticket 26), not here.
 //!
 //! Sections follow the agreed order (tickets 14 and 65): **Display → Camera →
@@ -34,6 +34,7 @@ use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
 use crate::viewmodel::{
     ArrowLengthMode,
     State,
+    StreamlineSeedMode,
     DEFAULT_DENSITY_2D,
     DEFAULT_MAGNITUDE_SCALE,
     MIN_DENSITY,
@@ -94,8 +95,8 @@ impl Section {
 
 /// The effective domain box as the Domain header's summary line, e.g.
 /// `x -1…1 · y -1…1 · z -1…1`. `include_z` is false when the view is 2D, so
-/// the header never advertises an extent the user cannot see or sample
-/// (ticket 50 passes the same flag to the row list). Numbers are rounded to at
+/// the header never advertises an extent the user cannot see or sample (the
+/// row list uses the same gate). Numbers are rounded to at
 /// most two decimals and integers lose their trailing `.00`, which keeps the
 /// line short enough for the panel's 180 pt minimum.
 pub fn domain_summary(domain: &Domain, include_z: bool) -> String {
@@ -136,6 +137,38 @@ fn extent_text(value: f32) -> String {
             text.pop();
         }
         text
+    }
+}
+
+/// One axis of the sampled domain box, in editor row order. The z row exists
+/// only while sampling runs three-dimensionally (ticket 50): the value stays
+/// stored for the next 3D switch, but the 2D editor does not advertise it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainAxis {
+    X,
+    Y,
+    Z,
+}
+
+impl DomainAxis {
+    /// The lowercase label the row and its tooltips use.
+    pub fn label(self) -> &'static str {
+        match self {
+            DomainAxis::X => "x",
+            DomainAxis::Y => "y",
+            DomainAxis::Z => "z",
+        }
+    }
+}
+
+/// The rows the Domain editor renders. Pure so the 2D/3D gating is testable
+/// without a window; `is_3d` is the sampling dimension, not raw `mode_3d`, so a
+/// flat formula in 3D mode still hides z.
+pub fn domain_axes(is_3d: bool) -> &'static [DomainAxis] {
+    if is_3d {
+        &[DomainAxis::X, DomainAxis::Y, DomainAxis::Z]
+    } else {
+        &[DomainAxis::X, DomainAxis::Y]
     }
 }
 
@@ -202,6 +235,13 @@ pub fn head_control_enabled(
     if view_3d { style_3d.uses_head() } else { style_2d.uses_head() }
 }
 
+/// Whether the seed-mode selector applies. With Streamlines off both seed
+/// sources are hidden and clicks are not stored, so the selector would be a
+/// dead control; it is disabled rather than silently ignored.
+pub fn seed_mode_enabled(streamlines: bool) -> bool {
+    streamlines
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -221,6 +261,8 @@ pub struct Controls {
     pub color_min: f32,
     pub color_max: f32,
     pub streamlines: bool,
+    /// Which streamline seed sources are shown while the Feature is on.
+    pub seed_mode: StreamlineSeedMode,
     pub particles: bool,
     pub domain_min: Vec3,
     pub domain_max: Vec3,
@@ -256,6 +298,7 @@ impl Controls {
             color_min: 0.0,
             color_max: 1.0,
             streamlines: false,
+            seed_mode: StreamlineSeedMode::Auto,
             particles: false,
             domain_min: domain.min,
             domain_max: domain.max,
@@ -281,12 +324,13 @@ impl Controls {
         self.plane_drag = false;
     }
 
-    /// Restore the Features section's defaults (traces off). Speed is not a
-    /// Features control since ticket 26: it belongs to the transport's clock,
-    /// so this reset leaves it alone.
+    /// Restore the Features section's defaults (traces off, Auto seed mode).
+    /// Speed is not a Features control since ticket 26: it belongs to the
+    /// transport's clock, so this reset leaves it alone.
     pub fn reset_features(&mut self) {
         let defaults = Controls::new();
         self.streamlines = defaults.streamlines;
+        self.seed_mode = defaults.seed_mode;
         self.particles = defaults.particles;
     }
 
@@ -488,8 +532,22 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     });
 
     section(ui, Section::Features, controls, None, |ui, controls| {
-        ui.checkbox(&mut controls.streamlines, "Streamlines")
-            .on_hover_text("Trace field lines from a grid of seeds");
+        ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
+            "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
+        );
+        ui.add_enabled_ui(seed_mode_enabled(controls.streamlines), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Seed");
+                for mode in StreamlineSeedMode::ALL {
+                    ui.selectable_value(&mut controls.seed_mode, mode, mode.label())
+                        .on_hover_text(mode.tooltip());
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(
+            "Turn Streamlines on to choose Auto or Click seeding",
+        );
         ui.checkbox(&mut controls.particles, "Particles")
             .on_hover_text("Animate dots carried by the field (3D view)");
     });
@@ -516,19 +574,29 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         }
     });
 
-    // Six extrema; reversed drags are handed over as-is and the seam's
-    // per-axis swap normalizes them (mirrored back below so the widgets show
-    // the effective box). The header summary shows the box while collapsed;
-    // z is omitted in 2D (ticket 50 hides the row itself later).
+    // The Domain editor renders only the axes the current sampling dimension
+    // can use; reversed drags are handed over as-is and the seam's per-axis
+    // swap normalizes them (mirrored back below so the widgets show the
+    // effective box). The header summary shows the box while collapsed and
+    // omits z in 2D like the row list.
     section(
         ui,
         Section::Domain,
         controls,
         Some(domain_summary(&state.domain, sampling_3d)),
         |ui, controls| {
-            domain_axis_row(ui, "x", &mut controls.domain_min.x, &mut controls.domain_max.x);
-            domain_axis_row(ui, "y", &mut controls.domain_min.y, &mut controls.domain_max.y);
-            domain_axis_row(ui, "z", &mut controls.domain_min.z, &mut controls.domain_max.z);
+            // Only the axes the current sampling dimension can use: the z row
+            // vanishes in 2D rather than sitting greyed out (ticket 50). The
+            // stored z survives for the next 3D switch; the reset below still
+            // resets all three axes.
+            for axis in domain_axes(sampling_3d) {
+                let (min, max) = match axis {
+                    DomainAxis::X => (&mut controls.domain_min.x, &mut controls.domain_max.x),
+                    DomainAxis::Y => (&mut controls.domain_min.y, &mut controls.domain_max.y),
+                    DomainAxis::Z => (&mut controls.domain_min.z, &mut controls.domain_max.z),
+                };
+                domain_axis_row(ui, axis.label(), min, max);
+            }
             ui.add_space(ui.spacing().item_spacing.y);
             if ui
                 .button("Reset domain")
@@ -623,8 +691,7 @@ fn plane_controls(
 
 /// One axis's min/max row: the axis label names the component, both drag
 /// values are bounded by the seam's single extent range, and the tooltips name
-/// the world-unit meaning. The row is the same in 2D and 3D for now; ticket 50
-/// will decide which rows to render.
+/// the world-unit meaning. [`domain_axes`] decides which rows exist.
 fn domain_axis_row(ui: &mut egui::Ui, axis: &str, min: &mut f32, max: &mut f32) {
     ui.horizontal(|ui| {
         ui.label(format!("{axis}:"));
@@ -740,6 +807,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_style_2d(controls.arrow_style_2d);
     state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
+    state.set_seed_mode(controls.seed_mode);
     state.set_particles(controls.particles);
     // Domain extents are bounded here, before `set_domain`'s per-axis swap,
     // so the UI's `.range` and this handoff share one clamp.
@@ -768,6 +836,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.arrow_style_2d = state.arrow_style_2d;
     controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
+    controls.seed_mode = state.seed_mode;
     controls.particles = state.particles;
     controls.domain_min = state.domain.min;
     controls.domain_max = state.domain.max;
