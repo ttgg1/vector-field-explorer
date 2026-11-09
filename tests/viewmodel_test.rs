@@ -12,10 +12,11 @@ use vector_field_explorer::renderer::{
 };
 use vector_field_explorer::sampling::ArrowData;
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D,
-    MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DENSITY,
-    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
-    clamp_domain_extent, domain_between,
+    ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, DEFAULT_PROPORTIONAL_EXPONENT,
+    FORMULA_2D, FORMULA_3D, MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT,
+    MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT, MIN_DENSITY, MIN_DOMAIN_EXTENT,
+    MIN_MAGNITUDE_SCALE, MIN_PROPORTIONAL_EXPONENT, STREAMLINE_MAX_LEN, State,
+    StreamlineSeedMode, clamp_domain_extent, domain_between,
 };
 
 #[test]
@@ -371,6 +372,7 @@ fn unchanged_setters_report_false_and_stay_clean() {
     assert!(!s.set_arrow_scale(s.arrow_scale));
     assert!(!s.set_arrow_length_mode(s.arrow_length_mode));
     assert!(!s.set_magnitude_scale(s.magnitude_scale));
+    assert!(!s.set_proportional_exponent(s.proportional_exponent));
     assert!(!s.set_mode(s.mode_3d));
     assert!(!s.dirty, "a failed setter must not re-dirty the state");
     assert!(s.snapshot_if_dirty().is_none(), "no rebuild when nothing changed");
@@ -618,6 +620,119 @@ fn extreme_magnitudes_are_not_clamped_because_the_user_owns_the_scale() {
         (inst[0].dir_len[3] - 1.0e7).abs() < 1.0,
         "length = magnitude x scale in world units, deliberately not clamped",
     );
+}
+
+// --- Proportional contrast (ticket 57) -------------------------------------
+
+#[test]
+fn proportional_exponent_raises_the_normalized_magnitude_to_its_power() {
+    let mut s = State::new(false);
+    assert_eq!(s.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT, "linear by default");
+    let unit = s.arrow_scale * s.spacing();
+    // Two arrows at 4x and 1x the max, so the normalized magnitudes are 1 and
+    // 0.25 and every expected length is exact.
+    let arrows = [
+        raw_arrow(Vec3::ZERO, Vec3::X, 4.0),
+        raw_arrow(Vec3::ZERO, Vec3::Y, 1.0),
+    ];
+
+    assert!(s.set_proportional_exponent(2.0), "a new exponent dirties the scene");
+    let squared = s.arrow_instances(&arrows);
+    assert!((squared[0].dir_len[3] - unit).abs() < 1e-5, "the longest arrow stays unit long");
+    assert!((squared[1].dir_len[3] - unit * 0.25 * 0.25).abs() < 1e-6, "0.25 squared");
+
+    assert!(s.set_proportional_exponent(0.5));
+    let rooted = s.arrow_instances(&arrows);
+    assert!((rooted[0].dir_len[3] - unit).abs() < 1e-5, "the longest arrow is still unit long");
+    assert!((rooted[1].dir_len[3] - unit * 0.5).abs() < 1e-6, "sqrt(0.25) = 0.5");
+}
+
+#[test]
+fn exponent_one_is_exactly_the_old_linear_formula() {
+    let mut s = State::new(false);
+    assert_eq!(s.proportional_exponent, 1.0, "the default is the pre-ticket-57 formula");
+    assert!(s.set_formula("(x, y * 3.0)".to_string()), "a field whose magnitude varies");
+    let arrows = s.sample();
+    let unit = s.arrow_scale * s.spacing();
+    let max_mag = arrows.iter().fold(0.0_f32, |m, a| m.max(a.mag));
+    let inst = s.arrow_instances(&arrows);
+    for (arrow, instance) in arrows.iter().zip(&inst) {
+        let expected = unit * (arrow.mag / max_mag);
+        assert_eq!(
+            instance.dir_len[3].to_bits(),
+            expected.to_bits(),
+            "exponent 1.0 must reproduce the old formula bit for bit",
+        );
+    }
+    assert!(!s.set_proportional_exponent(1.0), "1.0 is still a no-op");
+}
+
+#[test]
+fn proportional_exponent_leaves_uniform_and_magnitude_lengths_untouched() {
+    let mut s = State::new(false);
+    let arrows = [
+        raw_arrow(Vec3::ZERO, Vec3::X, 4.0),
+        raw_arrow(Vec3::ZERO, Vec3::Y, 1.0),
+    ];
+    for mode in [ArrowLengthMode::Uniform, ArrowLengthMode::Magnitude] {
+        s.set_arrow_length_mode(mode);
+        s.set_proportional_exponent(1.0);
+        let base = s.arrow_instances(&arrows);
+        assert!(s.set_proportional_exponent(3.0), "a strong contrast exponent");
+        let contrasted = s.arrow_instances(&arrows);
+        for (before, after) in base.iter().zip(&contrasted) {
+            assert_eq!(
+                before.dir_len[3].to_bits(),
+                after.dir_len[3].to_bits(),
+                "{mode:?} ignores the Proportional exponent",
+            );
+        }
+    }
+}
+
+#[test]
+fn arrow_scale_still_scales_proportional_and_uniform_with_a_custom_exponent() {
+    let mut s = State::new(false);
+    let arrows = [
+        raw_arrow(Vec3::ZERO, Vec3::X, 4.0),
+        raw_arrow(Vec3::ZERO, Vec3::Y, 1.0),
+    ];
+    for mode in [ArrowLengthMode::Proportional, ArrowLengthMode::Uniform] {
+        s.set_arrow_length_mode(mode);
+        s.set_proportional_exponent(2.5);
+        s.set_arrow_scale(1.0);
+        let base = s.arrow_instances(&arrows);
+        assert!(s.set_arrow_scale(2.0), "the shared length scale moves");
+        let wider = s.arrow_instances(&arrows);
+        for (before, after) in base.iter().zip(&wider) {
+            assert!(
+                (after.dir_len[3] - 2.0 * before.dir_len[3]).abs() < 1e-6,
+                "{mode:?}: arrow_scale keeps scaling linearly alongside the exponent",
+            );
+        }
+    }
+}
+
+#[test]
+fn proportional_exponent_clamps_and_maps_non_finite_to_linear() {
+    let mut s = State::new(false);
+    assert_eq!(s.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT);
+
+    assert!(s.set_proportional_exponent(0.001), "below the floor clamps up");
+    assert_eq!(s.proportional_exponent, MIN_PROPORTIONAL_EXPONENT);
+    assert!(s.set_proportional_exponent(1_000.0), "above the ceiling clamps down");
+    assert_eq!(s.proportional_exponent, MAX_PROPORTIONAL_EXPONENT);
+
+    assert!(s.set_proportional_exponent(f32::NAN), "a NaN resets the contrast");
+    assert_eq!(s.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT, "NaN maps to linear");
+
+    assert!(s.set_proportional_exponent(2.0));
+    assert!(s.set_proportional_exponent(f32::INFINITY), "+inf resets the contrast");
+    assert_eq!(s.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT, "+inf maps to linear");
+
+    assert!(s.set_proportional_exponent(2.0));
+    assert!(s.set_proportional_exponent(f32::NEG_INFINITY), "-inf resets the contrast");
+    assert_eq!(s.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT, "-inf maps to linear");
 }
 
 #[test]

@@ -37,6 +37,7 @@ use crate::viewmodel::{
     StreamlineSeedMode,
     DEFAULT_DENSITY_2D,
     DEFAULT_MAGNITUDE_SCALE,
+    DEFAULT_PROPORTIONAL_EXPONENT,
     MIN_DENSITY,
     MAX_DENSITY_2D,
     MAX_DENSITY_3D,
@@ -44,6 +45,8 @@ use crate::viewmodel::{
     MAX_ARROW_SCALE,
     MIN_MAGNITUDE_SCALE,
     MAX_MAGNITUDE_SCALE,
+    MIN_PROPORTIONAL_EXPONENT,
+    MAX_PROPORTIONAL_EXPONENT,
     MIN_DOMAIN_EXTENT,
     MAX_DOMAIN_EXTENT,
     clamp_domain_extent,
@@ -187,6 +190,13 @@ pub fn arrow_scale_enabled(mode: ArrowLengthMode) -> bool {
     mode != ArrowLengthMode::Magnitude
 }
 
+/// Whether the Proportional contrast slider applies. Only Proportional length
+/// follows magnitude, so the other modes disable the control rather than
+/// offering an exponent that changes nothing (ticket 57).
+pub fn proportional_exponent_enabled(mode: ArrowLengthMode) -> bool {
+    mode == ArrowLengthMode::Proportional
+}
+
 /// Which arrow-style family set the sidebar offers for the active view
 /// (ticket 61). The sets are independent: switching views only swaps which
 /// selector is shown, never which family the other view uses.
@@ -251,6 +261,9 @@ pub struct Controls {
     pub arrow_scale: f32,
     pub arrow_length_mode: ArrowLengthMode,
     pub magnitude_scale: f32,
+    /// The Proportional contrast exponent (ticket 57); disabled outside
+    /// Proportional.
+    pub proportional_exponent: f32,
     /// Show arrows (ticket 45); unchecking hides only the arrow instances.
     pub arrows: bool,
     pub arrow_style: ArrowStyle,
@@ -289,6 +302,7 @@ impl Controls {
             arrow_scale: 1.0,
             arrow_length_mode: ArrowLengthMode::Proportional,
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
+            proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
             arrows: true,
             arrow_style: ArrowStyle::Cone,
             arrow_style_2d: ArrowStyle2D::Flat,
@@ -308,14 +322,16 @@ impl Controls {
         }
     }
 
-    /// Restore the Display section's defaults (density, arrow length mode and
-    /// both scales, arrow visibility/style/appearance, plane-by-plane).
+    /// Restore the Display section's defaults (density, arrow length mode,
+    /// both scales, the proportional contrast, arrow visibility/style/
+    /// appearance, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
         self.arrow_scale = defaults.arrow_scale;
         self.arrow_length_mode = defaults.arrow_length_mode;
         self.magnitude_scale = defaults.magnitude_scale;
+        self.proportional_exponent = defaults.proportional_exponent;
         self.arrows = defaults.arrows;
         self.arrow_style = defaults.arrow_style;
         self.arrow_style_2d = defaults.arrow_style_2d;
@@ -440,6 +456,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         })
         .response
         .on_hover_text("World length per unit of field magnitude");
+        ui.add_enabled_ui(proportional_exponent_enabled(controls.arrow_length_mode), |ui| {
+            ui.add(
+                egui::Slider::new(
+                    &mut controls.proportional_exponent,
+                    MIN_PROPORTIONAL_EXPONENT..=MAX_PROPORTIONAL_EXPONENT,
+                )
+                .text("Proportional contrast"),
+            );
+        })
+        .response
+        .on_hover_text("How strongly arrow length follows magnitude; 1 = linear")
+        .on_disabled_hover_text("Only Proportional arrow length follows magnitude");
         ui.horizontal(|ui| {
             let set = arrow_style_set(view_3d);
             ui.label(set.label());
@@ -799,6 +827,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_scale(controls.arrow_scale);
     state.set_arrow_length_mode(controls.arrow_length_mode);
     state.set_magnitude_scale(controls.magnitude_scale);
+    state.set_proportional_exponent(controls.proportional_exponent);
     state.set_colormap(controls.colormap);
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
@@ -827,6 +856,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.arrow_scale = state.arrow_scale;
     controls.arrow_length_mode = state.arrow_length_mode;
     controls.magnitude_scale = state.magnitude_scale;
+    controls.proportional_exponent = state.proportional_exponent;
     controls.colormap = state.colormap;
     controls.auto_fit = state.auto_fit;
     controls.color_min = state.color_min;

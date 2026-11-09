@@ -72,6 +72,10 @@ pub struct ViewRecord {
     /// World units per unit of magnitude, used only in Magnitude mode.
     /// Missing on a legacy record; the container-level default supplies 1.0.
     pub magnitude_scale: f32,
+    /// The Proportional contrast exponent (ticket 57). Missing on records
+    /// written before ticket 57; the serde default loads them as linear.
+    #[serde(default = "default_proportional_exponent")]
+    pub proportional_exponent: f32,
     pub colormap: Colormap,
     pub auto_fit: bool,
     pub color_min: f32,
@@ -124,6 +128,7 @@ impl ViewRecord {
             normalize: None,
             arrow_length_mode: state.arrow_length_mode,
             magnitude_scale: state.magnitude_scale,
+            proportional_exponent: state.proportional_exponent,
             colormap: state.colormap,
             auto_fit: state.auto_fit,
             color_min: state.color_min,
@@ -160,6 +165,8 @@ impl ViewRecord {
         controls.arrow_length_mode =
             self.normalize.map(ArrowLengthMode::from_normalize).unwrap_or(self.arrow_length_mode);
         controls.magnitude_scale = finite_or(self.magnitude_scale, defaults.magnitude_scale);
+        controls.proportional_exponent =
+            finite_or(self.proportional_exponent, defaults.proportional_exponent);
         controls.colormap = self.colormap;
         controls.auto_fit = self.auto_fit;
         controls.color_min = finite_or(self.color_min, defaults.color_min);
@@ -190,6 +197,12 @@ pub fn finite_or(value: f32, fallback: f32) -> f32 {
 /// toggle, and arrows were always drawn then.
 fn default_arrows() -> bool {
     true
+}
+
+/// The `proportional_exponent` serde default (ticket 57): records written
+/// before the contrast existed used the linear mapping.
+fn default_proportional_exponent() -> f32 {
+    crate::viewmodel::DEFAULT_PROPORTIONAL_EXPONENT
 }
 
 /// Decode the ticket-14 `normalize` boolean, which was stored as a bare

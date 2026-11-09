@@ -15,8 +15,9 @@ use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DOMAIN_EXTENT,
-    MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
+    ArrowLengthMode, DEFAULT_PROPORTIONAL_EXPONENT, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE,
+    MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State,
+    StreamlineSeedMode,
 };
 use vector_field_explorer::VfApp;
 
@@ -244,6 +245,7 @@ fn configured() -> (State, Controls) {
     controls.arrow_scale = 2.5;
     controls.arrow_length_mode = ArrowLengthMode::Magnitude;
     controls.magnitude_scale = 2.5;
+    controls.proportional_exponent = 2.5;
     controls.colormap = Colormap::Mono;
     controls.auto_fit = false;
     controls.color_min = -2.0;
@@ -439,6 +441,44 @@ fn new_records_round_trip_mode_and_scales_and_stop_writing_the_legacy_bool() {
 }
 
 #[test]
+fn proportional_exponent_round_trips_and_defaults_when_absent() {
+    let mut state = State::new(false);
+    assert!(state.set_proportional_exponent(2.5));
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(
+        raw.contains("proportional_exponent:2.5"),
+        "the contrast is written:\n{raw}",
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.proportional_exponent, 2.5);
+    let mut restored_state = State::new(false);
+    let mut restored_controls = Controls::new();
+    loaded.view.restore(&mut restored_state, &mut restored_controls);
+    assert_eq!(restored_state.proportional_exponent, 2.5);
+    assert_eq!(restored_controls.proportional_exponent, 2.5, "the mirror follows");
+
+    // The pre-ticket-57 shape has no `proportional_exponent` key at all.
+    let legacy = load_legacy(false);
+    assert_eq!(
+        legacy.view.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT,
+        "an older record defaults to linear",
+    );
+    let mut legacy_state = State::new(false);
+    let mut legacy_controls = Controls::new();
+    legacy.view.restore(&mut legacy_state, &mut legacy_controls);
+    assert_eq!(legacy_state.proportional_exponent, 1.0);
+    assert_eq!(legacy_controls.proportional_exponent, 1.0);
+}
+
+#[test]
 fn absent_storage_falls_back_to_defaults() {
     assert_eq!(load(None), AppSettings::default());
     let empty = MemoryStorage::default();
@@ -527,6 +567,10 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.arrow_scale, state.arrow_scale, "arrow scale");
     assert_eq!(restored_state.arrow_length_mode, state.arrow_length_mode, "arrow length mode");
     assert_eq!(restored_state.magnitude_scale, state.magnitude_scale, "magnitude scale");
+    assert_eq!(
+        restored_state.proportional_exponent, state.proportional_exponent,
+        "proportional contrast",
+    );
     assert_eq!(restored_state.colormap, state.colormap, "colormap");
     assert_eq!(restored_state.auto_fit, state.auto_fit, "auto-fit");
     assert_eq!(restored_state.color_min, state.color_min, "color min");
@@ -560,6 +604,10 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_controls.density, state.density);
     assert_eq!(restored_controls.arrow_length_mode, state.arrow_length_mode);
     assert_eq!(restored_controls.magnitude_scale, state.magnitude_scale);
+    assert_eq!(
+        restored_controls.proportional_exponent, state.proportional_exponent,
+        "the mirror follows the proportional contrast",
+    );
     assert_eq!(restored_controls.domain_min, state.domain.min);
     assert_eq!(restored_controls.domain_max, state.domain.max);
     assert_eq!(controls.density, state.density, "the captured mirror stays in sync");
@@ -628,6 +676,7 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
         density: 99_999,
         arrow_scale: f32::NAN,
         magnitude_scale: f32::NAN,
+        proportional_exponent: f32::NAN,
         arrow_params: ArrowParams {
             head_length: f32::NAN,
             head_width: f32::INFINITY,
@@ -646,6 +695,10 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
     assert!(state.density <= 200, "density is clamped");
     assert!(state.arrow_scale.is_finite(), "a NaN arrow scale falls back");
     assert!(state.magnitude_scale.is_finite(), "a NaN magnitude scale falls back");
+    assert_eq!(
+        state.proportional_exponent, DEFAULT_PROPORTIONAL_EXPONENT,
+        "a NaN contrast resets to linear",
+    );
     assert!(
         (MIN_MAGNITUDE_SCALE..=MAX_MAGNITUDE_SCALE).contains(&state.magnitude_scale),
         "the magnitude scale stays inside its documented bounds",
@@ -667,6 +720,24 @@ fn restore_clamps_a_huge_magnitude_scale() {
     record.restore(&mut state, &mut controls);
     assert_eq!(state.magnitude_scale, MAX_MAGNITUDE_SCALE, "the seam bounds the stored value");
     assert_eq!(controls.magnitude_scale, MAX_MAGNITUDE_SCALE, "the mirror follows the clamp");
+}
+
+#[test]
+fn restore_clamps_a_huge_proportional_exponent() {
+    let record = ViewRecord { proportional_exponent: 1.0e6, ..Default::default() };
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    record.restore(&mut state, &mut controls);
+    assert_eq!(
+        state.proportional_exponent,
+        MAX_PROPORTIONAL_EXPONENT,
+        "the seam bounds the stored contrast",
+    );
+    assert_eq!(
+        controls.proportional_exponent,
+        MAX_PROPORTIONAL_EXPONENT,
+        "the mirror follows the clamp",
+    );
 }
 
 #[test]

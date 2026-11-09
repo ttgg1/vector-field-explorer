@@ -36,6 +36,12 @@ pub const PLANE_MARGIN: f32 = 1.35;
 /// Bounds of the arrow-length slider.
 pub const MIN_ARROW_SCALE: f32 = 0.1;
 pub const MAX_ARROW_SCALE: f32 = 4.0;
+/// Bounds and default of the Proportional contrast exponent: the power applied
+/// to `mag / max_mag` before the arrow length is scaled. `1.0` is the plain
+/// linear mapping; below it lifts short arrows, above it pushes them down.
+pub const MIN_PROPORTIONAL_EXPONENT: f32 = 0.25;
+pub const MAX_PROPORTIONAL_EXPONENT: f32 = 4.0;
+pub const DEFAULT_PROPORTIONAL_EXPONENT: f32 = 1.0;
 /// Bounds and default of the magnitude scale: world units per unit of field
 /// magnitude in [`ArrowLengthMode::Magnitude`]. Bounded here so the widget and
 /// the seam share one range; the resulting arrow length itself is not clamped.
@@ -164,6 +170,9 @@ pub struct State {
     pub arrow_scale: f32,
     pub arrow_length_mode: ArrowLengthMode,
     pub magnitude_scale: f32,
+    /// Power applied to `mag / max_mag` in [`ArrowLengthMode::Proportional`]
+    /// (ticket 57). Independent of the two scales; `1.0` is linear.
+    pub proportional_exponent: f32,
     pub colormap: Colormap,
     pub auto_fit: bool,
     pub color_min: f32,
@@ -218,6 +227,7 @@ impl State {
             arrow_scale: 1.0,
             arrow_length_mode: ArrowLengthMode::Proportional,
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
+            proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
             colormap: Colormap::Viridis,
             auto_fit: true,
             color_min: 0.0,
@@ -335,6 +345,25 @@ impl State {
             return false;
         }
         self.magnitude_scale = scale;
+        self.mark_dirty()
+    }
+
+    /// How strongly arrow length follows magnitude in
+    /// [`ArrowLengthMode::Proportional`] (ticket 57): the power applied to the
+    /// normalised magnitude. Clamped into
+    /// [`MIN_PROPORTIONAL_EXPONENT`]..=[`MAX_PROPORTIONAL_EXPONENT`]; a
+    /// non-finite value resets to the linear default instead of poisoning the
+    /// scene.
+    pub fn set_proportional_exponent(self: &mut State, exponent: f32) -> bool {
+        let exponent = if exponent.is_finite() {
+            exponent.clamp(MIN_PROPORTIONAL_EXPONENT, MAX_PROPORTIONAL_EXPONENT)
+        } else {
+            DEFAULT_PROPORTIONAL_EXPONENT
+        };
+        if self.proportional_exponent == exponent {
+            return false;
+        }
+        self.proportional_exponent = exponent;
         self.mark_dirty()
     }
 
@@ -561,10 +590,14 @@ impl State {
     /// [`ArrowLengthMode::Proportional`] (longest arrow exactly `arrow_scale`
     /// grid cells, shorter ones following their magnitude) and
     /// [`ArrowLengthMode::Uniform`] (every arrow exactly `arrow_scale` cells).
-    /// With [`ArrowLengthMode::Magnitude`] the length is instead
-    /// `magnitude_scale * mag` in world units — `arrow_scale` does not apply,
-    /// and the result is deliberately not clamped, so a field with a huge
-    /// magnitude produces a huge arrow and the camera does the fitting.
+    /// In Proportional mode `proportional_exponent` is the power applied to the
+    /// normalised magnitude first, so the contrast between short and long
+    /// arrows can change without touching the overall scale; at `1.0` the
+    /// mapping is the plain linear one. With [`ArrowLengthMode::Magnitude`] the
+    /// length is instead `magnitude_scale * mag` in world units — `arrow_scale`
+    /// does not apply, and the result is deliberately not clamped, so a field
+    /// with a huge magnitude produces a huge arrow and the camera does the
+    /// fitting.
     ///
     /// Plane-by-plane mode (ticket 23) keeps the selected slice's colormap
     /// colour at full alpha and lerps every other arrow toward grey at
@@ -582,7 +615,20 @@ impl State {
                 let len = match self.arrow_length_mode {
                     ArrowLengthMode::Uniform => unit,
                     ArrowLengthMode::Proportional => {
-                        if max_mag <= 0.0 { unit } else { unit * (a.mag / max_mag) }
+                        if max_mag <= 0.0 {
+                            unit
+                        } else {
+                            let normalized = a.mag / max_mag;
+                            // `powf(1.0)` is not guaranteed to return the base
+                            // bit for bit, so the linear default takes the
+                            // pre-ticket-57 expression unchanged.
+                            let factor = if self.proportional_exponent == 1.0 {
+                                normalized
+                            } else {
+                                normalized.powf(self.proportional_exponent)
+                            };
+                            unit * factor
+                        }
                     }
                     ArrowLengthMode::Magnitude => a.mag * self.magnitude_scale,
                 };

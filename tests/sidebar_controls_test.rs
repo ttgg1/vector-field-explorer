@@ -6,8 +6,8 @@
 
 use vector_field_explorer::ui::sidebar::{
     ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
-    domain_summary, head_control_enabled, magnitude_scale_enabled, seed_mode_enabled,
-    sides_control_enabled,
+    domain_summary, head_control_enabled, magnitude_scale_enabled, proportional_exponent_enabled,
+    seed_mode_enabled, sides_control_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
@@ -15,7 +15,7 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, State, StreamlineSeedMode, DEFAULT_DENSITY_2D, MAX_DENSITY_3D,
-    MAX_DOMAIN_EXTENT, MIN_DOMAIN_EXTENT, domain_between,
+    MAX_DOMAIN_EXTENT, MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, domain_between,
 };
 use glam::Vec3;
 
@@ -28,6 +28,10 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.arrow_scale, s.arrow_scale, "arrow scale agrees");
     assert_eq!(c.arrow_length_mode, s.arrow_length_mode, "arrow length mode agrees");
     assert_eq!(c.magnitude_scale, s.magnitude_scale, "magnitude scale agrees");
+    assert_eq!(
+        c.proportional_exponent, s.proportional_exponent,
+        "the proportional contrast agrees",
+    );
     assert_eq!(c.arrows, s.arrows, "arrows start visible");
     assert_eq!(c.arrow_style, s.arrow_style, "arrow style agrees");
     assert_eq!(c.arrow_style_2d, s.arrow_style_2d, "2D arrow style agrees");
@@ -71,6 +75,7 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_arrow_scale(c.arrow_scale));
     assert!(!s.set_arrow_length_mode(c.arrow_length_mode));
     assert!(!s.set_magnitude_scale(c.magnitude_scale));
+    assert!(!s.set_proportional_exponent(c.proportional_exponent));
     assert!(!s.set_arrows(c.arrows));
     assert!(!s.set_arrow_style(c.arrow_style));
     assert!(!s.set_arrow_style_2d(c.arrow_style_2d));
@@ -178,6 +183,9 @@ fn every_control_dirties_the_scene_through_apply() {
     c.magnitude_scale = 2.0;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "magnitude scale dirties the scene");
+    c.proportional_exponent = 2.0;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "the proportional contrast dirties the scene");
     c.arrows = false;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "the Show arrows toggle dirties the scene");
@@ -266,17 +274,52 @@ fn length_mode_and_both_scales_flow_through_apply_and_the_mirror_stays_in_sync()
 }
 
 #[test]
+fn proportional_exponent_is_enabled_only_in_proportional_mode() {
+    assert!(
+        proportional_exponent_enabled(ArrowLengthMode::Proportional),
+        "Proportional is the one mode the contrast applies to",
+    );
+    assert!(
+        !proportional_exponent_enabled(ArrowLengthMode::Uniform),
+        "Uniform arrows do not follow magnitude",
+    );
+    assert!(
+        !proportional_exponent_enabled(ArrowLengthMode::Magnitude),
+        "Magnitude length is linear in the raw magnitude",
+    );
+}
+
+#[test]
+fn proportional_exponent_flows_through_apply_and_the_mirror_stays_in_sync() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+
+    c.proportional_exponent = 2.0;
+    apply(&mut s, &mut c);
+    assert_eq!(s.proportional_exponent, 2.0, "the contrast lands on the seam");
+    assert_eq!(c.proportional_exponent, 2.0, "the mirror follows");
+
+    c.proportional_exponent = 1_000.0;
+    apply(&mut s, &mut c);
+    assert_eq!(s.proportional_exponent, MAX_PROPORTIONAL_EXPONENT, "the seam clamps");
+    assert_eq!(c.proportional_exponent, MAX_PROPORTIONAL_EXPONENT, "the mirror shows the clamp");
+}
+
+#[test]
 fn display_reset_restores_proportional_and_both_scales() {
     let mut c = Controls::new();
     c.arrow_length_mode = ArrowLengthMode::Magnitude;
     c.arrow_scale = 3.5;
     c.magnitude_scale = 4.0;
+    c.proportional_exponent = 3.0;
 
     c.reset_display();
 
     assert_eq!(c.arrow_length_mode, ArrowLengthMode::Proportional, "the default mode returns");
     assert_eq!(c.arrow_scale, 1.0, "the default arrow scale returns");
     assert_eq!(c.magnitude_scale, 1.0, "the default magnitude scale returns");
+    assert_eq!(c.proportional_exponent, 1.0, "the default proportional contrast returns");
 }
 
 #[test]
