@@ -193,7 +193,8 @@ jobs:
             # those notices at /usr/share/doc/<package>/copyright; `dpkg -S`
             # resolves the library name to its owning package.
             notice_dir="${appdir}/usr/share/doc/vector-field-explorer/system-libraries"
-            install -d "$notice_dir"
+            common_license_dir="${notice_dir}/common-licenses"
+            install -d "$notice_dir" "$common_license_dir"
             printf 'Bundled library\tDebian/Ubuntu package\n' > "${notice_dir}/SOURCES.txt"
             mapfile -t bundled_libs < <(
               find "${appdir}/usr/lib" -maxdepth 2 \( -type f -o -type l \) \
@@ -253,6 +254,21 @@ jobs:
                 continue
               fi
               install -Dm644 "$copyright" "${notice_dir}/${package}.copyright"
+              # Debian/Ubuntu copyright files often point at
+              # /usr/share/common-licenses/... instead of inlining GPL/LGPL
+              # text. Copy every referenced file into the AppImage; a dangling
+              # reference would ship an incomplete notice.
+              while IFS= read -r reference; do
+                [ -n "$reference" ] || continue
+                if [ ! -f "$reference" ]; then
+                  echo "::error::${package}.copyright (${lib}) references missing ${reference}"
+                  exit 1
+                fi
+                install -Dm644 "$reference" "${common_license_dir}/${reference##*/}"
+              done < <(
+                grep -oE '/usr/share/common-licenses/[A-Za-z0-9._+-]+' "$copyright" \
+                  | sort -u || true
+              )
               printf '%s\t%s\n' "$lib" "$package" >> "${notice_dir}/SOURCES.txt"
             done
             if [ "$missing_notice" -ne 0 ]; then
@@ -297,7 +313,8 @@ jobs:
               usr/share/doc/vector-field-explorer/LICENSE \
               usr/share/doc/vector-field-explorer/THIRD_PARTY_LICENSES.md \
               usr/share/doc/vector-field-explorer/system-libraries \
-              usr/share/doc/vector-field-explorer/system-libraries/SOURCES.txt; do
+              usr/share/doc/vector-field-explorer/system-libraries/SOURCES.txt \
+              usr/share/doc/vector-field-explorer/system-libraries/common-licenses; do
               if [ ! -e "${root}/${required}" ]; then
                 echo "::error::AppImage is missing ${required}"
                 exit 1
@@ -309,6 +326,31 @@ jobs:
               -maxdepth 1 -type f -name '*.copyright' -print -quit)"
             if [ -z "$notice" ]; then
               echo "::error::AppImage has no bundled system-library copyright notices"
+              exit 1
+            fi
+            # Every /usr/share/common-licenses/... reference in a copied
+            # copyright file must resolve inside the AppImage, not just on the
+            # runner. Scan what actually shipped.
+            common_license_missing=0
+            while IFS= read -r copyright; do
+              while IFS= read -r reference; do
+                [ -n "$reference" ] || continue
+                relative="${reference#/usr/share/common-licenses/}"
+                shipped="${root}/usr/share/doc/vector-field-explorer/system-libraries/common-licenses/${relative}"
+                if [ ! -f "$shipped" ]; then
+                  echo "::error::AppImage is missing ${reference} referenced by ${copyright##*/}"
+                  common_license_missing=1
+                fi
+              done < <(
+                grep -oE '/usr/share/common-licenses/[A-Za-z0-9._+-]+' "$copyright" \
+                  | sort -u || true
+              )
+            done < <(
+              find "${root}/usr/share/doc/vector-field-explorer/system-libraries" \
+                -maxdepth 1 -type f -name '*.copyright' -print
+            )
+            if [ "$common_license_missing" -ne 0 ]; then
+              echo "::error::AppImage has unresolved /usr/share/common-licenses references"
               exit 1
             fi
             # Ticket 68: every hicolor size must survive linuxdeploy and the
