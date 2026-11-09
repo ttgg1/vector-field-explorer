@@ -45,7 +45,7 @@ presets, screenshots. Ships native and as a WebAssembly browser build.
   on-demand patch/minor releases; no fixed cadence, no backports. Local ticket
   tracker through v0.1.0; GitHub Issues/PRs accepted; no CLA.
 - **No localization in v0.1.0.** Delete `src/i18n.rs` and `data/locales/` in
-  ticket 09.
+  ticket 19 (release docs + final review).
 - **Post-v1 order:** Windows → time-dependent fields → div/curl overlays →
   shareable presets → CSV import.
 
@@ -65,7 +65,7 @@ Production code is under `src/`, tests under `tests/`.
   window options
 - `ui/` sidebar, presets, formula bar, style panel, menu, top bar, layout rails,
   help overlay, status bar
-- `i18n.rs` placeholder, scheduled for deletion in ticket 09
+- `i18n.rs` placeholder, scheduled for deletion in ticket 19
 
 ## Conventions (mandatory)
 
