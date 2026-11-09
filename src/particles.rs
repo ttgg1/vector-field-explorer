@@ -18,7 +18,6 @@
 //!
 //! Spawn jitter is deterministic: an inline Park/Miller LCG (no `rand`
 //! dependency), so a fresh session puts the dots in the same places.
-//! See `docs/superpowers/plans/` task 10 / ticket 05.
 
 use glam::Vec3;
 use serde::{Deserialize, Serialize};

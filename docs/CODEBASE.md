@@ -2,17 +2,15 @@
 
 This is the whole-codebase map for the merged v0.1.0 tree. It is written for an
 engineer (or agent) who needs to make a first safe change in any module without
-re-reading the plans. Every API, constant, and test name below was checked
-against the source at commit `83ef2bc`; the authoritative inventory is
-`rg --files src` and `cargo test -- --list`.
+re-reading history. Every API, constant, and test name below was checked
+against the source in this tree; the authoritative inventory is `rg --files src`
+and `cargo test --all-targets -- --list`.
 
 Pointers, not duplicates:
 
 - Domain vocabulary: [GLOSSARY.md](../GLOSSARY.md)
 - Decisions and their rationale: [docs/adr/](adr/)
 - User quickstart: [README.md](../README.md)
-- Original vision and plans: [docs/superpowers/specs/](superpowers/specs/) and
-  [docs/superpowers/plans/](superpowers/plans/)
 - Working conventions and gates: [AGENTS.md](../AGENTS.md)
 - Licence: [GPL-3.0-only](../LICENSE)
 
@@ -175,9 +173,10 @@ the ordering of the Rust gate.
 
 ## 3. Module reference
 
-Every file under `src/` is covered: 48 Rust files plus four WGSL shaders (52
+Every file under `src/` is covered: 47 Rust files plus four WGSL shaders (51
 files total). Test names are the function names printed by
-`cargo test -- --list`; a module's test file is named in the heading.
+`cargo test --all-targets -- --list`; a module's test file is named in the
+heading.
 
 The tree evolved after the original ticket list. In particular, what the ticket
 called `src/app.rs` is now `src/app/mod.rs` plus `frame.rs`, `input.rs`,
@@ -1772,7 +1771,7 @@ handling.
 
 **Limitation.** No scrubber or frame stepping; speed is time multiplier only.
 
-### 3.9 Version, window, fonts, i18n
+### 3.9 Version, window, fonts
 
 #### `src/version.rs` — compile-time build version
 
@@ -1840,19 +1839,6 @@ mark as the window icon.
 
 **Limitation.** DejaVu's glyph coverage is broad but not complete (no CJK); the
 app does not load system fallback faces.
-
-#### `src/i18n.rs` — locale placeholder (scheduled for deletion)
-
-**Purpose.** Loads `data/locales/en.json` and `fr.json` into `LOCALES`, with a
-`t!` macro and `CURRENT_LOCALE = "en"`.
-
-**Public API.** `LOCALES`, `CURRENT_LOCALE`, `t!`.
-
-**Status.** Nothing in the UI uses it; only `tests/i18n_test.rs` reads the two
-maps. Ticket 19 deletes this module and `data/locales/` because v0.1.0 has no
-localization. Do not add new strings here.
-
-**Limitation.** Placeholder only; `t!` falls back to `{key}`.
 
 ---
 
@@ -2159,8 +2145,8 @@ Hazards worth knowing before editing:
 
 ## 9. Module ↔ test inventory
 
-`cargo test -- --list` at this commit reports **704 tests** across the
-integration files. The high-value map:
+`cargo test --all-targets -- --list` at this commit reports **704 tests**: 703
+in the suite plus the isolated `config_test` target. The high-value map:
 
 | Area | Test file(s) | Count |
 | --- | --- | --- |
@@ -2213,8 +2199,7 @@ integration files. The high-value map:
 | Cleanup script | `clean_test_artifacts_test.rs` | 18 |
 | Nightly version script | `nightly_version_test.rs` | 11 |
 | Config/XDG | `config_test.rs` | 1 |
-| i18n placeholder | `i18n_test.rs` | 1 |
-| Test layout guard | `test_layout_test.rs` | 1 |
+| Test layout guard | `test_layout_test.rs` | 2 |
 
 The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 `sidebar_colormap_ui_test.rs`) add the small legacy/2D-specific checks.
@@ -2241,7 +2226,6 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
   leaves fly.
 - **Compact layout is width-only.** No landscape-phone height breakpoint; the
   help overlay is hidden below 520 pt of viewport width.
-- **i18n is a placeholder** and is scheduled for deletion in ticket 19.
 - **Two orphan files.** `src/render/instancer.rs` and `src/ui/arrows.rs` are on
   disk but not declared in a module, so they are not compiled.
 - **GPU behavior is not unit-tested.** `cargo test` never creates a device; the
@@ -2260,6 +2244,3 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
   [ADR 0002](adr/0002-single-simulation-clock.md).
 - Why physics is analytic-first, why `meval` is the only evaluator, and the
   post-v1 order: [ADR 0003](adr/0003-physics-foundations.md).
-- Original architecture and task history: [docs/superpowers/specs/2026-11-05-vector-field-explorer-design.md](superpowers/specs/2026-11-05-vector-field-explorer-design.md),
-  [docs/superpowers/plans/2026-11-05-vector-field-explorer.md](superpowers/plans/2026-11-05-vector-field-explorer.md),
-  [docs/superpowers/plans/2026-11-05-preset-persistence.md](superpowers/plans/2026-11-05-preset-persistence.md).

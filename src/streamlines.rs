@@ -4,8 +4,7 @@
 //! RK4 steps (`h = step_scale / |f|`, so fast regions cover more distance per
 //! point). It abandons where the field is zero or non-finite or where it exits
 //! the domain. In the 2D view the field is a `Vec3` with `z == 0`; RK4 uses
-//! the full `Vec3` (harmless for a planar field). See `docs/superpowers/plans/`
-//! task 9.
+//! the full `Vec3` (harmless for a planar field).
 //!
 //! Seeds are a jittered grid (ticket ruling): a regular lattice over the view
 //! with a seeded, deterministic per-point jitter so streamlines are spread
