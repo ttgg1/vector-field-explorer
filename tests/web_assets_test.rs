@@ -228,11 +228,32 @@ fn style_css_uses_the_brand_chrome_and_collapses_the_header() {
             "`{hidden}` is withdrawn at <=600 px, keeping only the logo",
         );
     }
+    // The mark must stay visible: no rule inside the narrow-screen block may
+    // hide `.brand-logo`. Split the block into `selector { body }` chunks so a
+    // future `display: none` on the logo is caught, not just the current text.
+    let hides_logo = narrow.split('}').any(|chunk| {
+        let Some((selector, body)) = chunk.rsplit_once('{') else {
+            return false;
+        };
+        selector.contains(".brand-logo") && body.contains("display: none")
+    });
     assert!(
-        !narrow.contains(".brand-logo")
-            || !narrow[..narrow.find(".brand-logo").unwrap() + 80].contains("display: none"),
-        "the logo stays visible at <=600 px",
+        !hides_logo,
+        "the logo stays visible at <=600 px; no narrow-screen rule may hide `.brand-logo`",
     );
+}
+
+#[test]
+fn apple_touch_icon_is_opaque_on_the_brand_chrome() {
+    // iOS rounds/masks the touch icon; a transparent corner would become an
+    // unpredictable colour, so the generator renders it on #101a26.
+    let path = repo_root().join("web/icons/apple-touch-icon.png");
+    let bytes = fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let image = image::load_from_memory(&bytes).expect("apple-touch-icon is a decodable PNG");
+    let rgba = image.to_rgba8();
+
+    assert_eq!(rgba.get_pixel(0, 0).0, [0x10, 0x1a, 0x26, 255]);
+    assert_eq!(rgba.get_pixel(179, 179).0, [0x10, 0x1a, 0x26, 255]);
 }
 
 #[test]

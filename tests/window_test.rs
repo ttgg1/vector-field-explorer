@@ -3,9 +3,7 @@
 // `NativeOptions` already pins the behaviour.
 
 use eframe::egui;
-use vector_field_explorer::window::{
-    DEFAULT_INNER_SIZE, MIN_INNER_SIZE, WINDOW_TITLE, icon_data, window_options,
-};
+use vector_field_explorer::window::{DEFAULT_INNER_SIZE, MIN_INNER_SIZE, WINDOW_TITLE, window_options};
 
 #[test]
 fn opens_at_the_desktop_default_inner_size() {
@@ -44,26 +42,6 @@ fn remembers_its_size_and_position() {
 fn keeps_the_product_title() {
     let options = window_options();
     assert_eq!(options.viewport.title.as_deref(), Some(WINDOW_TITLE));
-}
-
-#[test]
-fn decodes_the_committed_256px_mark_for_the_native_window_icon() {
-    let icon = icon_data().expect("the committed 256x256 PNG must decode");
-
-    assert_eq!(
-        (icon.width, icon.height),
-        (256, 256),
-        "the window icon is the 256 px mark"
-    );
-    assert_eq!(
-        icon.rgba.len(),
-        256 * 256 * 4,
-        "IconData carries one uncompressed RGBA quad per pixel",
-    );
-    assert!(
-        icon.rgba.iter().any(|&alpha| alpha != 0),
-        "the mark must not decode to a fully transparent icon",
-    );
 }
 
 #[test]

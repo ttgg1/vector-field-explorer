@@ -37,4 +37,16 @@ javascript=(dist/*.js)
 ((${#wasm[@]} > 0)) || { echo "web: missing dist/*.wasm" >&2; exit 1; }
 ((${#javascript[@]} > 0)) || { echo "web: missing dist/*.js" >&2; exit 1; }
 
-echo "web: PASS - dist/index.html, ${wasm[0]}, and ${javascript[0]}"
+# Ticket 68: the deployed page references these committed identity assets.
+for asset in \
+  dist/manifest.webmanifest \
+  dist/og-image.png \
+  dist/icons/favicon-16.png \
+  dist/icons/favicon-32.png \
+  dist/icons/apple-touch-icon.png \
+  dist/icons/icon-192.png \
+  dist/icons/icon-512.png; do
+  test -f "$asset" || { echo "web: missing $asset" >&2; exit 1; }
+done
+
+echo "web: PASS - dist/index.html, ${wasm[0]}, ${javascript[0]}, manifest, OG image and icons"

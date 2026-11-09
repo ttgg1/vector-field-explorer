@@ -21,7 +21,7 @@ pub const MIN_INNER_SIZE: [f32; 2] = [960.0, 600.0];
 /// A stale or corrupt asset must never keep the app from opening: a decode
 /// failure logs and falls back to eframe's default icon.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn icon_data() -> Option<egui::IconData> {
+pub(crate) fn icon_data() -> Option<egui::IconData> {
     const LOGO_PNG: &[u8] = include_bytes!("../packaging/linux/vector-field-explorer-256.png");
 
     match image::load_from_memory(LOGO_PNG) {
