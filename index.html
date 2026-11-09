@@ -6,11 +6,100 @@
     <title>Vector Field Explorer</title>
     <link data-trunk rel="css" href="web/style.css" />
     <link data-trunk rel="copy-file" href="web/pointer_lock.js" />
+    <link data-trunk rel="copy-file" href="web/webgpu.js" />
     <script src="pointer_lock.js"></script>
     <link data-trunk rel="rust" data-bin="vector-field-explorer" />
   </head>
   <body>
     <canvas id="vfe-canvas"></canvas>
     <div id="loading" role="status">Loading Vector Field Explorer…</div>
+
+    <!-- Ticket 54: the Rust wasm gate reveals this panel when WebGPU is
+         missing or no adapter is available. It is hidden by default so a
+         supported browser never sees it; web/webgpu.js owns the toggle, the
+         browser-specific support link, and the Retry click handler, while
+         src/main.rs decides whether to show it. -->
+    <main id="webgpu-unsupported" role="alert" hidden>
+      <div class="webgpu-panel">
+        <h1>This browser can't run WebGPU yet</h1>
+        <p>
+          Vector Field Explorer renders with WebGPU and has no WebGL2 fallback,
+          so it cannot draw the field in this browser.
+        </p>
+        <p id="webgpu-reason" hidden>
+          Detected problem: <code id="webgpu-reason-code"></code>
+        </p>
+
+        <h2>What to try</h2>
+        <ul>
+          <li>
+            <strong>Firefox:</strong> WebGPU is available in Firefox 141+ on
+            Windows, Firefox 145+ on macOS Tahoe ARM, and Firefox Nightly on
+            Linux. Check <code>about:config</code> →
+            <code>dom.webgpu.enabled</code> if that setting is present, and
+            update Firefox to a supported version.
+          </li>
+          <li>
+            <strong>Chrome or Edge:</strong> WebGPU is available in Chrome and
+            Edge 113+. If it is disabled, open
+            <code>chrome://flags/#enable-unsafe-webgpu</code> or
+            <code>edge://flags/#enable-unsafe-webgpu</code> and enable it.
+          </li>
+          <li>
+            <strong>Linux Chromium:</strong> WebGPU may need
+            <code>--enable-features=Vulkan</code> and a working Vulkan driver.
+            See the
+            <a
+              href="https://developer.chrome.com/docs/web-platform/webgpu"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Chrome WebGPU documentation</a
+            >.
+          </li>
+        </ul>
+
+        <p>
+          Learn more:
+          <a
+            href="https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API"
+            target="_blank"
+            rel="noopener noreferrer"
+            >MDN WebGPU API</a
+          >,
+          <a
+            href="https://caniuse.com/webgpu"
+            target="_blank"
+            rel="noopener noreferrer"
+            >caniuse: WebGPU</a
+          >, and
+          <a
+            id="webgpu-browser-help"
+            href="https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API#browser_compatibility"
+            target="_blank"
+            rel="noopener noreferrer"
+            >your browser's WebGPU support</a
+          >.
+        </p>
+
+        <p>
+          <button id="webgpu-retry" type="button">Retry</button>
+        </p>
+        <p>
+          If WebGPU is unavailable, use the
+          <a href="download.html">native desktop build</a>.
+        </p>
+      </div>
+    </main>
+
+    <noscript>
+      <main class="webgpu-noscript" role="alert">
+        <p>
+          Enable JavaScript and use a browser with WebGPU to run Vector Field
+          Explorer.
+        </p>
+      </main>
+    </noscript>
+
+    <script src="webgpu.js"></script>
   </body>
 </html>

@@ -18,3 +18,14 @@ debug = 1
 # For debugger-grade DWARF, override both the level and the strip:
 #   CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_DEV_STRIP=none cargo build
 strip = "debuginfo"
+
+# Ticket 54: the WebGPU JS bindings (`Navigator::gpu`, `GPUAdapter`,
+# `GPURequestAdapterOptions`) are part of web-sys's unstable-API surface. The
+# wasm gate in src/main.rs needs that cfg across the dependency graph; native
+# builds and tests are unaffected.
+#
+# An exported `RUSTFLAGS` replaces these target rustflags (Cargo does not append
+# them), which would drop `web_sys_unstable_apis` and break the wasm gate; no
+# CI step exports RUSTFLAGS today. If one ever does, append this cfg there too.
+[target.'cfg(target_arch = "wasm32")']
+rustflags = ["--cfg=web_sys_unstable_apis"]

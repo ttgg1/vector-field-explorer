@@ -58,5 +58,7 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.22.1
+      - name: Check the WebGPU bootstrap gate
+        run: scripts/check-web-bootstrap.sh
       - name: Check and build the browser target
         run: scripts/test-web.sh

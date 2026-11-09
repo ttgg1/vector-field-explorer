@@ -12,7 +12,7 @@ impl VfApp {
             let rect = ui.max_rect().shrink(2.0);
             self.last_viewport_rect = Some(rect);
             let Some(render_state) = frame.wgpu_render_state() else {
-                ui.painter().rect_filled(rect, 8.0, egui::Color32::from_rgb(30, 33, 41));
+                draw_webgpu_fallback(ui, rect);
                 return;
             };
 
@@ -347,5 +347,60 @@ impl VfApp {
                 }
             }
         });
+    }
+}
+
+/// Ticket 54 last resort: eframe only reaches this path when it has no wgpu
+/// render state at paint time. Show readable text over the dark viewport
+/// instead of a blank rectangle, with a Reload button on wasm. The failure is
+/// logged once (not once per frame), and there is deliberately no WebGL2 or
+/// CPU renderer behind it.
+fn draw_webgpu_fallback(ui: &mut egui::Ui, rect: egui::Rect) {
+    #[cfg(target_arch = "wasm32")]
+    const HINT: &str = "Reload, or see the browser help for enabling it.";
+    #[cfg(not(target_arch = "wasm32"))]
+    const HINT: &str = "This build needs a working WebGPU adapter.";
+
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    LOGGED.call_once(|| {
+        log::error!("WebGPU is unavailable at paint time: eframe has no wgpu render state");
+    });
+
+    {
+        let painter = ui.painter();
+        painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(30, 33, 41));
+        let center = rect.center();
+        painter.text(
+            center - egui::vec2(0.0, 24.0),
+            egui::Align2::CENTER_CENTER,
+            "WebGPU is unavailable.",
+            egui::FontId::proportional(20.0),
+            egui::Color32::from_rgb(232, 236, 243),
+        );
+        painter.text(
+            center - egui::vec2(0.0, 2.0),
+            egui::Align2::CENTER_CENTER,
+            HINT,
+            egui::FontId::proportional(14.0),
+            egui::Color32::from_rgb(200, 208, 220),
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let button_rect = egui::Rect::from_center_size(
+            rect.center() + egui::vec2(0.0, 40.0),
+            egui::vec2(104.0, 32.0),
+        );
+        if ui.put(button_rect, egui::Button::new("Reload")).clicked() {
+            reload_page();
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn reload_page() {
+    if let Some(window) = web_sys::window() {
+        let _ = window.location().reload();
     }
 }

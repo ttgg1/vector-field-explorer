@@ -24,3 +24,125 @@ body {
   background: #1e2129;
   font: 16px system-ui, sans-serif;
 }
+
+/* Ticket 54: the WebGPU-unavailable help panel. The Rust wasm gate (or the
+   web/webgpu.js toggle it calls) adds the body class; neither the canvas nor
+   the loading overlay may show behind the panel. */
+#webgpu-unsupported {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow-y: auto;
+  padding: 2rem 1.25rem 3rem;
+  background: #1e2129;
+  color: #e7ecf3;
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#webgpu-unsupported[hidden] {
+  display: none;
+}
+
+body.webgpu-unsupported #vfe-canvas,
+body.webgpu-unsupported #loading {
+  display: none;
+}
+
+.webgpu-panel {
+  width: 100%;
+  max-width: 42rem;
+  margin: 0 auto;
+}
+
+#webgpu-unsupported h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.55rem;
+  line-height: 1.25;
+  color: #ffffff;
+}
+
+#webgpu-unsupported h2 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.1rem;
+  color: #ffffff;
+}
+
+#webgpu-unsupported p {
+  margin: 0 0 0.85rem;
+}
+
+#webgpu-unsupported ul {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+#webgpu-unsupported li {
+  margin: 0 0 0.7rem;
+}
+
+#webgpu-unsupported a {
+  color: #9cc4ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+#webgpu-unsupported a:focus-visible,
+#webgpu-retry:focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 2px;
+}
+
+#webgpu-unsupported code {
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+  background: #2b303c;
+  color: #f2f5fa;
+  font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+#webgpu-reason {
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid #ffd166;
+  background: #262b35;
+}
+
+#webgpu-retry {
+  min-width: 7rem;
+  min-height: 2.75rem;
+  padding: 0.55rem 1.1rem;
+  border: 1px solid #6d7f99;
+  border-radius: 0.4rem;
+  background: #34405a;
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+#webgpu-retry:hover {
+  background: #405072;
+}
+
+#webgpu-retry:active {
+  background: #2b354a;
+}
+
+/* No-JavaScript fallback: the hidden panel cannot be revealed, so show a
+   static alert on its own. */
+.webgpu-noscript {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: #1e2129;
+  color: #e7ecf3;
+  font: 16px/1.55 system-ui, sans-serif;
+  text-align: center;
+}
+
+.webgpu-noscript p {
+  max-width: 32rem;
+  margin: 0;
+}

@@ -40,7 +40,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
   "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement",
   "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Navigator",
-  "Storage",
+  "Gpu", "GpuAdapter", "GpuRequestAdapterOptions", "Location", "Storage",
 ] }
 web-time = "1"
 console_log = "1"
