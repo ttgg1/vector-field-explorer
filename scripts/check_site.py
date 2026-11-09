@@ -42,8 +42,11 @@ SCRIPT_EXTERNAL_RE = re.compile(r"(?i)https?://")
 # Any quoted protocol-relative URL in an inline script, not just import/fetch:
 # `s.src = '//evil.example/x.js'` is the same external fetch.
 SCRIPT_PROTOCOL_RELATIVE_RE = re.compile(r"""(?i)['"`]//[a-z0-9]""")
+JS_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\(.)", re.S)
 CSS_HEX_ESCAPE_RE = re.compile(r"[0-9a-fA-F]{1,6}")
-CSS_EXTERNAL_IN_ARGS_RE = re.compile(r"(?i)(?:https?:)?//|https?:")
+# A `//` only counts at an argument boundary, so local `icons//x.png` passes;
+# `https?:` still catches scheme URLs without slashes.
+CSS_EXTERNAL_IN_ARGS_RE = re.compile(r"(?i)(?:^|[\s\"',(])(?:https?:)?//|https?:")
 WHITESPACE_RE = re.compile(r"[\t\r\n]")
 
 
@@ -65,6 +68,18 @@ def is_external(value: str) -> bool:
     return bool(re.match(r"(?i)^(?:https?:|//)", value))
 
 
+def js_decode(text: str) -> str:
+    """Decode JS string escapes (`\\uXXXX`, `\\xXX`, `\\/`) for scanning."""
+    def replace(match: re.Match[str]) -> str:
+        if match.group(1):
+            return chr(int(match.group(1), 16))
+        if match.group(2):
+            return chr(int(match.group(2), 16))
+        return match.group(3) or ""
+
+    return JS_ESCAPE_RE.sub(replace, text)
+
+
 def srcset_urls(value: str) -> list[str]:
     """URL candidates of a srcset value, without descriptors.
 
@@ -81,10 +96,15 @@ def srcset_urls(value: str) -> list[str]:
             break
         start = index
         if text[index : index + 5].lower() == "data:":
-            # A data URI may contain commas; it ends at whitespace or the
-            # candidate separator, whichever comes first after the payload.
+            # A data URI may contain commas; it ends at whitespace. If that
+            # token ends with a comma, the comma separator belongs to the
+            # list, so the next candidate starts after the whitespace. The
+            # no-space `…,payload,https://…` form stays one data URI.
             while index < len(text) and text[index] not in " \t\r\n":
                 index += 1
+            token = text[start:index]
+            if token.endswith(","):
+                continue
             while index < len(text) and text[index] != ",":
                 index += 1
             if index < len(text):
@@ -160,16 +180,46 @@ def css_functions(text: str) -> list[tuple[str, str]]:
     return found
 
 
+def mask_data_uris(text: str) -> str:
+    """Replace data: URI payloads so their `/` characters are not fetches."""
+    masked: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char in "\"'":
+            start = index + 1
+            if text[start : start + 5].lower() == "data:":
+                end = text.find(char, start)
+                if end == -1:
+                    end = len(text) - 1
+                masked.append("DATA")
+                index = end + 1
+                continue
+            masked.append(char)
+            index += 1
+            continue
+        if text[index : index + 5].lower() == "data:":
+            end = index + 5
+            while end < len(text) and text[end] not in " \t\r\n)":
+                end += 1
+            masked.append("DATA")
+            index = end
+            continue
+        masked.append(char)
+        index += 1
+    return "".join(masked)
+
+
 def check_css(css: str, where: str) -> None:
     """Reject external CSS fetches after entity/escape decoding."""
     decoded = WHITESPACE_RE.sub("", css_decode(css))
     if re.search(r"(?i)@import", decoded):
         fail(f"@import in {where}")
     # Any external URL in any CSS function argument (url, image, image-set,
-    # cross-fade, -webkit-cross-fade, …). Local url(../x)/url(/x) has no
-    # scheme or double slash, so it stays allowed.
+    # cross-fade, -webkit-cross-fade, …). Local url(../x)/url(/x) and data:
+    # payloads have no boundary-anchored scheme, so they stay allowed.
     for name, arguments in css_functions(decoded):
-        if CSS_EXTERNAL_IN_ARGS_RE.search(arguments):
+        if CSS_EXTERNAL_IN_ARGS_RE.search(mask_data_uris(arguments)):
             fail(f"external URL in CSS {name}() in {where}")
 
 
@@ -330,7 +380,10 @@ def check_html(text: str, page: str, dist: Path, depth: int = 0) -> tuple[int, i
                 fail(f"external {name} on <{tag}> in {page}:{line}: {value}")
             if name == "href" and (tag == "a" or canonical):
                 continue
-            if EMBEDDED_URL_RE.search(decode_value(value)):
+            decoded_value = decode_value(value)
+            if not decoded_value.lower().startswith("data:") and EMBEDDED_URL_RE.search(
+                decoded_value
+            ):
                 fail(
                     f"embedded external URL in {name} on <{tag}> in {page}:{line}: {value}"
                 )
@@ -352,7 +405,7 @@ def check_html(text: str, page: str, dist: Path, depth: int = 0) -> tuple[int, i
     for body in parser.style_bodies:
         check_css(body, f"inline <style> in {page}")
     for body in parser.script_bodies:
-        script = html.unescape(body)
+        script = js_decode(html.unescape(body))
         if SCRIPT_EXTERNAL_RE.search(script) or SCRIPT_PROTOCOL_RELATIVE_RE.search(
             script
         ):
