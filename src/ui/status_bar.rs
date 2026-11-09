@@ -110,12 +110,8 @@ pub fn advance_hint(hint: &mut Option<String>, elapsed: f32) {
     }
 }
 
-/// Start or restart a transient hint's frame-time lifetime.
-///
-/// The app calls this on every triggering event, even when the same text is
-/// already live, so a second no-op click/S does not inherit the old countdown.
-/// Pure like [`advance_hint`]: the caller owns both the text and the
-/// accumulated frame time.
+/// Integration-test seam for the 2.5 s hint restart; production also calls it from `ClickActionPlan::Ignore`.
+#[doc(hidden)]
 pub fn restart_hint(hint: &mut Option<String>, elapsed: &mut f32, text: &str) {
     *hint = Some(text.to_owned());
     *elapsed = 0.0;
