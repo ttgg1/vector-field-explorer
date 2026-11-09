@@ -50,15 +50,46 @@ fn src_carries_no_inline_test_modules() {
     );
 }
 
-/// The single suite harness (`tests/suite.rs`) lists every test file as a
-/// module (ticket 21). A new `tests/*_test.rs` that nobody registers would
-/// silently never run, so this guard fails on an unregistered file and pins the
-/// test inventory: deleting a real test drops the count below the baseline.
+/// The `name` of every `[[test]]` target declared in `Cargo.toml`.
+fn declared_test_targets(manifest: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_test = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_test = line == "[[test]]";
+            continue;
+        }
+        if !in_test {
+            continue;
+        }
+        let Some(value) = line.strip_prefix("name") else {
+            continue;
+        };
+        let Some(value) = value.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        names.push(value.trim().trim_matches('"').to_string());
+    }
+    names
+}
+
+/// Every test file must be registered for the single suite harness, either as
+/// a `mod` in `tests/suite.rs` (ticket 21) or as its own `[[test]]` target when
+/// it needs process isolation (for example `config_test` and its `set_var`).
+/// An unregistered `tests/*_test.rs` would silently never run, so this guard
+/// fails on one and pins the test inventory: deleting a real test drops the
+/// count below the baseline. It also rejects `#[ignore]`, because ticket 21
+/// requires every test to run.
 #[test]
 fn every_top_level_test_file_is_registered_in_the_suite() {
-    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tests = manifest_dir.join("tests");
     let suite = fs::read_to_string(tests.join("suite.rs")).expect("read tests/suite.rs");
+    let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read Cargo.toml");
+    let test_targets = declared_test_targets(&manifest);
     let mut missing = Vec::new();
+    let mut ignored = Vec::new();
     let mut test_attributes = 0usize;
     let mut files = 0usize;
 
@@ -72,11 +103,16 @@ fn every_top_level_test_file_is_registered_in_the_suite() {
             continue;
         }
         files += 1;
-        if !suite.lines().any(|line| line.trim() == format!("mod {stem};")) {
+        let in_suite = suite.lines().any(|line| line.trim() == format!("mod {stem};"));
+        let own_target = test_targets.iter().any(|name| name == stem);
+        if !in_suite && !own_target {
             missing.push(stem.to_string());
         }
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         test_attributes += text.lines().filter(|line| line.trim() == "#[test]").count();
+        if text.lines().any(|line| line.trim().starts_with("#[ignore")) {
+            ignored.push(stem.to_string());
+        }
     }
 
     assert!(
@@ -86,8 +122,14 @@ fn every_top_level_test_file_is_registered_in_the_suite() {
     );
     assert!(
         missing.is_empty(),
-        "tests/suite.rs must include every tests/*_test.rs as a module; missing: {}",
+        "every tests/*_test.rs must be registered as a `mod` in tests/suite.rs \
+         or as its own `[[test]]` target in Cargo.toml; missing: {}",
         missing.join(", "),
+    );
+    assert!(
+        ignored.is_empty(),
+        "ticket 21 requires every test to run; remove #[ignore] from: {}",
+        ignored.join(", "),
     );
     // 704 tests at the ticket-21 baseline, plus this guard (and one `#[test]`
     // line whose sibling platform gate excludes it from the harness).

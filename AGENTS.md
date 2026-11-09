@@ -73,24 +73,31 @@ Production code is under `src/`, tests under `tests/`.
 - **TDD:** no production code without a failing test first; watch RED fail for
   the right reason, then keep the full suite green.
 - **Tests live in `tests/`.** Every test lives in `tests/<module>_test.rs`;
-  `tests/suite.rs` includes every one as a module (`autotests = false` plus a
-  single `[[test]]`), so `cargo test --all-targets` runs the whole suite in one
-  process. Filter by module or test name (`cargo test particles_test::`,
-  `cargo test sidebar_defaults_mirror_the_seam_defaults`); there are no
-  per-file `--test <file>` targets. Shared helpers live in `tests/support/`
-  and are declared once in `tests/suite.rs`. `src/` carries no `#[cfg(test)]`
-  modules, and `tests/test_layout_test.rs` fails the suite if one comes back.
-  Integration tests import `vector_field_explorer::{…}` — `crate::` and
-  `use super::*` do not resolve, and they see only `pub` items. A helper that a
-  test genuinely needs is promoted to a single `#[doc(hidden)] pub` seam with
-  the reason in the commit body and the SDD ledger; never widen the API further
-  for tests.
+  `tests/suite.rs` includes each one as a module (`autotests = false` plus one
+  main `[[test]]`), so `cargo test --all-targets` runs the suite in one process.
+  A test that mutates process-global environment must be its own `[[test]]`
+  target so it runs alone in its process — `tests/config_test.rs` (which sets
+  `XDG_CONFIG_HOME`) is the example, and the layout guard accepts either
+  registration. Filter by module or test name (`cargo test particles_test::`);
+  run an isolated target with `cargo test --test config_test`. Most files are
+  not per-file `--test <file>` targets. Shared helpers live in `tests/support/`
+  and are declared once in
+  `tests/suite.rs`. `src/` carries no `#[cfg(test)]` modules, and
+  `tests/test_layout_test.rs` fails the suite if one comes back, if a test file
+  is unregistered, or if a test is `#[ignore]`d. Integration tests import
+  `vector_field_explorer::{…}` — `crate::` and `use super::*` do not resolve,
+  and they see only `pub` items. A helper that a test genuinely needs is
+  promoted to a single `#[doc(hidden)] pub` seam with the reason in the commit
+  body and the SDD ledger; never widen the API further for tests.
 - **Test profile:** `Cargo.toml` sets `[profile.test] opt-level = 2` on top of
   the dev profile's `debug = 1` / `strip = "debuginfo"` (`.cargo/config.toml`).
   The math-heavy particle, streamline, and sampling tests dominate run time at
-  opt-level 0; ticket 21 cut the warm suite from ~3.98 s to ~0.72 s median for
-  a longer cold test build. Keep the gates (and `scripts/test.sh`) on
-  `cargo test --all-targets`; there is no separate runner requirement.
+  opt-level 0; ticket 21 cut the warm suite from ~3.98 s to ~0.72 s median.
+  Accepted margin: the cold `cargo test --all-targets --no-run` build is
+  65.0 s versus 26.5 s at opt-level 0 (2.45×, +38.5 s), paid once per
+  dependency/profile change; the incremental edit loop improved from 5.6 s to
+  ~1.3 s. Keep the gates (and `scripts/test.sh`) on `cargo test --all-targets`;
+  there is no separate runner requirement.
 - **Commits:** `feat:` / `fix:` / `docs:`, one commit set per task. Never ledger
   a task without a `git rev-parse`-verifiable hash.
 - **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD

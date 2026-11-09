@@ -8,7 +8,8 @@ repository = "https://github.com/ttgg1/vector-field-explorer"
 # `tests/*_test.rs` files are modules of it, not separate crates. One process
 # runs the whole suite (instead of 54 processes paying startup and getting no
 # cross-suite parallelism), and a lib change recompiles one test crate instead
-# of 54.
+# of 54. A test that mutates process-global environment must stay its own
+# `[[test]]` target so it runs in an isolated process; see `config_test`.
 autotests = false
 
 [lib]
@@ -34,6 +35,12 @@ tempfile = "3.10"
 [[test]]
 name = "suite"
 path = "tests/suite.rs"
+
+# `unsafe { std::env::set_var }` requires that no other thread can observe the
+# mutation, so this test runs in its own process instead of the shared suite.
+[[test]]
+name = "config_test"
+path = "tests/config_test.rs"
 
 # Ticket 21: the math-heavy integration tests (particles, streamlines, sampling)
 # are dominated by unoptimized arithmetic. `profile.test` inherits dev's

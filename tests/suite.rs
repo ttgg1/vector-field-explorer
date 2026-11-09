@@ -22,7 +22,6 @@ mod camera_zoom_pan_test;
 mod clean_test_artifacts_test;
 mod click_seed_zoom_test;
 mod colormap_test;
-mod config_test;
 mod domain_test;
 mod dot_billboard_test;
 mod export_test;
