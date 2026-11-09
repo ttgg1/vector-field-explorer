@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use eframe::egui;
 use glam::{Vec2, Vec3};
@@ -9,13 +8,15 @@ use crate::domain::Domain;
 use crate::reference::reference_lines;
 use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
-use crate::screenshot::{self, Screenshot};
+use crate::screenshot::{self, Instant, Screenshot};
 use crate::streamlines::click_seed;
 use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::layout::{self, LayoutState};
 use crate::ui::menu::{self, MenuAction};
-use crate::ui::presets::{PresetPanel, default_preset_dir};
+use crate::ui::presets::PresetPanel;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ui::presets::default_preset_dir;
 use crate::ui::sidebar::Controls;
 use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
@@ -50,6 +51,7 @@ use crate::particles::{
 
 /// Directory where the app persists camera presets. Kept in one place so the
 /// panel and any export helper always agree (preset-persistence plan Task 3).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn presets_data_dir() -> std::path::PathBuf {
     default_preset_dir()
 }
@@ -166,8 +168,7 @@ impl VfApp {
             },
             camera: Camera::default(),
             orbit: OrbitCamera::default(),
-            presets: PresetPanel::new_with_dir(presets_data_dir())
-                .unwrap_or_else(|_| PresetPanel::new()),
+            presets: PresetPanel::new(),
             style: settings.style,
             layout: settings.layout,
             panel_generation: 0,
@@ -746,41 +747,91 @@ impl eframe::App for VfApp {
                 // egui paints this behind the field; clearing to the same
                 // (linear-space) fill keeps the capture's background identical.
                 let clear = egui::Rgba::from(ui.visuals().panel_fill).to_array();
-                let capture = {
-                    let mut renderer = render_state.renderer.write();
-                    renderer
-                        .callback_resources
-                        .get_mut::<DrawState>()
-                        .expect("DrawState must be installed before capturing")
-                        .render_offscreen(
-                            &render_state.device,
-                            &render_state.queue,
-                            &scene,
-                            view_proj,
-                            self.orbit.eye_position(!self.state.mode_3d),
+                let filename = screenshot::default_filename(
+                    screenshot::SystemTime::now(),
+                    if self.state.mode_3d { "3D" } else { "2D" },
+                );
+
+                // Native readback is synchronous, then a worker thread owns
+                // the save dialog. The wasm readback maps through the browser
+                // event loop, so the frame returns immediately and the
+                // completion closure encodes/downloads and wakes the UI.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let capture = {
+                        let mut renderer = render_state.renderer.write();
+                        renderer
+                            .callback_resources
+                            .get_mut::<DrawState>()
+                            .expect("DrawState must be installed before capturing")
+                            .render_offscreen(
+                                &render_state.device,
+                                &render_state.queue,
+                                &scene,
+                                view_proj,
+                                self.orbit.eye_position(!self.state.mode_3d),
+                                capture_width,
+                                capture_height,
+                                [
+                                    f64::from(clear[0]),
+                                    f64::from(clear[1]),
+                                    f64::from(clear[2]),
+                                    f64::from(clear[3]),
+                                ],
+                            )
+                    };
+                    match capture {
+                        Ok(rgba) => screenshot::spawn_save(
+                            self.screenshot.sender(),
+                            ui.ctx().clone(),
+                            rgba,
                             capture_width,
                             capture_height,
-                            [
-                                f64::from(clear[0]),
-                                f64::from(clear[1]),
-                                f64::from(clear[2]),
-                                f64::from(clear[3]),
-                            ],
-                        )
-                };
-                match capture {
-                    Ok(rgba) => screenshot::spawn_save(
-                        self.screenshot.sender(),
-                        ui.ctx().clone(),
-                        rgba,
-                        capture_width,
-                        capture_height,
-                        screenshot::default_filename(
-                            std::time::SystemTime::now(),
-                            if self.state.mode_3d { "3D" } else { "2D" },
+                            filename,
                         ),
-                    ),
-                    Err(error) => self.screenshot.fail(error),
+                        Err(error) => self.screenshot.fail(error),
+                    }
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let tx = self.screenshot.sender();
+                    let ctx = ui.ctx().clone();
+                    let started = {
+                        let mut renderer = render_state.renderer.write();
+                        renderer
+                            .callback_resources
+                            .get_mut::<DrawState>()
+                            .expect("DrawState must be installed before capturing")
+                            .render_offscreen_async(
+                                &render_state.device,
+                                &render_state.queue,
+                                &scene,
+                                view_proj,
+                                self.orbit.eye_position(!self.state.mode_3d),
+                                capture_width,
+                                capture_height,
+                                [
+                                    f64::from(clear[0]),
+                                    f64::from(clear[1]),
+                                    f64::from(clear[2]),
+                                    f64::from(clear[3]),
+                                ],
+                                move |result| {
+                                    screenshot::finish_download(
+                                        result,
+                                        capture_width,
+                                        capture_height,
+                                        filename,
+                                        tx,
+                                        ctx,
+                                    );
+                                },
+                            )
+                    };
+                    if let Err(error) = started {
+                        self.screenshot.fail(error);
+                    }
                 }
             }
 

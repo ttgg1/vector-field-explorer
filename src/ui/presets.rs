@@ -1,10 +1,15 @@
 use eframe::egui;
 use log::{debug, warn};
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use crate::export::{delete_preset, load_presets, save_preset, Preset};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::export::{delete_preset, load_presets, save_preset};
+#[cfg(target_arch = "wasm32")]
+use crate::export::{load_wasm_presets, save_wasm_presets};
+use crate::export::Preset;
 use crate::presets::{PresetCategory, presets, presets_in};
 use crate::render::Camera;
 use crate::view_command::ViewCommand;
@@ -12,6 +17,7 @@ use crate::viewmodel::State;
 
 /// Directory where presets.json lives by default: XDG_CONFIG_HOME if set,
 /// otherwise ~/.config/vector-field-explorer.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn default_preset_dir() -> PathBuf {
     match std::env::var("XDG_CONFIG_HOME") {
         Ok(p) => PathBuf::from(p).join("vector-field-explorer"),
@@ -56,6 +62,8 @@ pub struct PresetPanel {
     /// A camera loaded this frame, for the app to hand to the live view. Taken
     /// once so one click applies one camera.
     applied: Option<Camera>,
+    /// One non-blocking note when browser storage cannot hold the list.
+    storage_note: Option<String>,
 }
 
 impl Default for PresetPanel {
@@ -65,19 +73,33 @@ impl Default for PresetPanel {
 }
 
 impl PresetPanel {
-    /// Panel pointed at the default data directory.
+    /// Panel pointed at the default data directory on native, or at the
+    /// browser's localStorage-backed list on wasm. Built-in field presets stay
+    /// available on both.
     pub fn new() -> Self {
-        let dir = default_preset_dir();
-        if let Err(error) = fs::create_dir_all(&dir) {
-            warn!("could not create preset directory {}: {error}", dir.display());
-        }
-        let presets = match load_presets(&dir) {
-            Ok(presets) => presets,
-            Err(error) => {
-                warn!("preset load failed from {}: {error}", dir.display());
-                Vec::new()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dir = default_preset_dir();
+            if let Err(error) = fs::create_dir_all(&dir) {
+                warn!("could not create preset directory {}: {error}", dir.display());
             }
-        };
+            let presets = match load_presets(&dir) {
+                Ok(presets) => presets,
+                Err(error) => {
+                    warn!("preset load failed from {}: {error}", dir.display());
+                    Vec::new()
+                }
+            };
+            Self::from_parts(dir, presets, None)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (presets, storage_note) = load_wasm_presets();
+            Self::from_parts(PathBuf::new(), presets, storage_note)
+        }
+    }
+
+    fn from_parts(dir: PathBuf, presets: Vec<Preset>, storage_note: Option<String>) -> Self {
         Self {
             dir,
             presets,
@@ -86,11 +108,12 @@ impl PresetPanel {
             active_field: None,
             pending_delete: None,
             applied: None,
+            storage_note,
         }
     }
 
-    /// Panel pointed at an explicit directory (used by tests and by the app
-    /// once it owns the data-directory configuration).
+    /// Panel pointed at an explicit native directory (used by tests).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_dir(dir: PathBuf) -> io::Result<Self> {
         if let Err(error) = fs::create_dir_all(&dir) {
             warn!("could not create preset directory {}: {error}", dir.display());
@@ -102,15 +125,20 @@ impl PresetPanel {
                 Vec::new()
             }
         };
-        Ok(Self {
-            dir,
-            presets,
-            new_name: String::new(),
-            active: None,
-            active_field: None,
-            pending_delete: None,
-            applied: None,
-        })
+        Ok(Self::from_parts(dir, presets, None))
+    }
+
+    /// Write the browser list through to localStorage; a storage failure
+    /// leaves the in-memory list usable and raises the one panel note.
+    #[cfg(target_arch = "wasm32")]
+    fn persist_wasm(&mut self) {
+        match save_wasm_presets(&self.presets) {
+            Ok(()) => self.storage_note = None,
+            Err(error) => {
+                warn!("preset save failed: {error}");
+                self.storage_note = Some(crate::export::storage_note());
+            }
+        }
     }
 
     /// Directory this panel persists to.
@@ -153,6 +181,7 @@ impl PresetPanel {
     /// Saving with an existing name replaces that entry (existing ruling);
     /// the saved preset becomes the highlighted row.
     pub fn save_current(&mut self, name: &str, camera: &Camera) -> io::Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
         save_preset(&self.dir, name, camera)?;
         self.presets.retain(|p| p.name != name);
         self.presets.push(Preset {
@@ -160,6 +189,8 @@ impl PresetPanel {
             position: camera.position,
             scale: camera.scale,
         });
+        #[cfg(target_arch = "wasm32")]
+        self.persist_wasm();
         self.active = Some(name.to_owned());
         debug!("preset saved: {name}");
         Ok(())
@@ -198,6 +229,7 @@ impl PresetPanel {
     /// Remove the named preset from the panel list and from disk. Clears both
     /// the pending request and the highlight when they name this preset.
     pub fn delete(&mut self, name: &str) -> io::Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
         delete_preset(&self.dir, name)?;
         self.presets.retain(|p| p.name != name);
         if self.active.as_deref() == Some(name) {
@@ -206,6 +238,8 @@ impl PresetPanel {
         if self.pending_delete.as_deref() == Some(name) {
             self.pending_delete = None;
         }
+        #[cfg(target_arch = "wasm32")]
+        self.persist_wasm();
         debug!("preset deleted: {name}");
         Ok(())
     }
@@ -289,6 +323,11 @@ impl PresetPanel {
 
         ui.separator();
         ui.weak("Saved views");
+        if let Some(note) = &self.storage_note {
+            ui.weak(note).on_hover_text(
+                "Saving still works for this session; the browser refused persistent storage.",
+            );
+        }
         if self.presets.is_empty() {
             ui.weak("No saved views yet.");
         }

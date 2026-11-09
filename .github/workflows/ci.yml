@@ -46,3 +46,17 @@ jobs:
           sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0
       - name: Runtime smoke test
         run: xvfb-run -a env WGPU_BACKEND=vulkan scripts/smoke-run.sh 20
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Trunk 0.22.1
+        uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.22.1
+      - name: Check and build the browser target
+        run: scripts/test-web.sh

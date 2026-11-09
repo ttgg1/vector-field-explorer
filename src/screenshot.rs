@@ -1,5 +1,5 @@
-//! Screenshot export (plan task 13, ticket 08): render the viewport exactly as
-//! it looks now and write it to a PNG through a native save dialog.
+//! Screenshot export: render the viewport exactly as it looks now, encode a
+//! PNG, then save through a native dialog or start a browser download.
 //!
 //! Layering, so the headless gates can test everything that is not a GPU:
 //! - this module owns the pure contract — the default file name, the capture
@@ -8,21 +8,35 @@
 //! - the GPU pass itself is one thin method,
 //!   [`crate::renderer::DrawState::render_offscreen`], verified by the runtime
 //!   smoke gate because `cargo test` never creates a device;
-//! - the save dialog and the file write run on a spawned thread so the egui
-//!   frame never blocks on native UI; completion arrives over a channel and
-//!   shows as a toast in the top menu bar (ticket 14 moved it out of the
-//!   sidebar).
+//! - native dialog/file work stays on a worker thread; the browser path uses
+//!   DOM downloads. Completion arrives over a channel and shows as a toast.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::UNIX_EPOCH;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use std::time::{Instant, SystemTime};
+#[cfg(target_arch = "wasm32")]
+use web_time::UNIX_EPOCH;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use web_time::{Instant, SystemTime};
 
 use eframe::egui;
 use eframe::wgpu::TextureFormat;
 
 /// Largest edge of a capture, pixels. A bigger viewport is scaled down on both
 /// axes so the framing (and the camera aspect) stays what the user sees.
+///
+/// Native keeps 4096. The browser path encodes in the async readback completion
+/// on the main thread, so it caps at 2048²: a 4096² PNG encode is a material
+/// main-thread stall and no browser was available to measure a safe threshold.
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_CAPTURE_EDGE: u32 = 4096;
+#[cfg(target_arch = "wasm32")]
+pub const MAX_CAPTURE_EDGE: u32 = 2048;
 
 /// How long a completion toast stays up.
 pub const TOAST_TTL: Duration = Duration::from_secs(6);
@@ -35,6 +49,8 @@ const COPY_ROW_ALIGNMENT: u32 = 256;
 pub enum SaveOutcome {
     /// The PNG was written to this path.
     Saved(PathBuf),
+    /// The browser accepted the generated PNG download.
+    DownloadStarted,
     /// The user closed the dialog without choosing a path.
     Cancelled,
     /// The capture could not be written (encoder or filesystem error).
@@ -202,6 +218,7 @@ pub fn ensure_png_extension(path: PathBuf) -> PathBuf {
 
 /// Write a captured frame, reporting success/failure back to the UI. The path
 /// goes to the encoder as a `Path`, exactly as the dialog returned it.
+#[cfg(not(target_arch = "wasm32"))]
 fn save_capture(rgba: &[u8], width: u32, height: u32, path: PathBuf) -> SaveOutcome {
     let path = ensure_png_extension(path);
     match crate::export::save_png(rgba, width, height, &path) {
@@ -215,6 +232,7 @@ fn save_capture(rgba: &[u8], width: u32, height: u32, path: PathBuf) -> SaveOutc
 /// The dialog and the file write both block, so neither may run on the egui
 /// frame: the thread owns the capture bytes and reports its [`SaveOutcome`]
 /// over `tx`. `ctx` is only used to wake the UI so the toast appears at once.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_save(
     tx: Sender<SaveOutcome>,
     ctx: egui::Context,
@@ -238,6 +256,102 @@ pub fn spawn_save(
     });
 }
 
+#[cfg(target_arch = "wasm32")]
+fn js_error(error: impl Into<wasm_bindgen::JsValue>) -> String {
+    let error = error.into();
+    error.as_string().unwrap_or_else(|| format!("{error:?}"))
+}
+
+/// Start a browser download for an already encoded PNG. The temporary anchor
+/// is removed immediately; the object URL stays alive for one second so the
+/// browser has time to consume it.
+#[cfg(target_arch = "wasm32")]
+fn download_png(png: &[u8], filename: &str) -> Result<(), String> {
+    use wasm_bindgen::JsCast as _;
+
+    let window = web_sys::window().ok_or_else(|| "browser window unavailable".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "browser document unavailable".to_string())?;
+    let anchor = document
+        .create_element("a")
+        .map_err(js_error)?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(js_error)?;
+
+    let bytes = js_sys::Uint8Array::from(png);
+    let parts = js_sys::Array::of1(bytes.as_ref());
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("image/png");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(parts.as_ref(), &options)
+        .map_err(js_error)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js_error)?;
+
+    anchor.set_href(&url);
+    anchor.set_download(filename);
+    // Firefox only activates a download for a connected anchor, so append it
+    // to the body; it is removed again right after the click.
+    let Some(body) = document.body() else {
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err("browser document body unavailable".to_string());
+    };
+    if let Err(error) = body.append_child(&anchor) {
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err(js_error(error));
+    }
+
+    let revoke_url = url.clone();
+    let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+        if let Err(error) = web_sys::Url::revoke_object_url(&revoke_url) {
+            log::warn!("could not revoke screenshot object URL: {}", js_error(error));
+        }
+    });
+    if let Err(error) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        callback.unchecked_ref(),
+        1_000,
+    ) {
+        anchor.remove();
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err(js_error(error));
+    }
+
+    anchor.click();
+    anchor.remove();
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_capture(rgba: &[u8], width: u32, height: u32, filename: &str) -> SaveOutcome {
+    match crate::export::encode_png(rgba, width, height) {
+        Ok(png) => match download_png(&png, filename) {
+            Ok(()) => SaveOutcome::DownloadStarted,
+            Err(error) => SaveOutcome::Failed(error),
+        },
+        Err(error) => SaveOutcome::Failed(error.to_string()),
+    }
+}
+
+/// Complete a browser capture after the GPU readback has mapped. This runs on
+/// the browser event loop from the wgpu map callback, never on the egui frame:
+/// encode the PNG, start the download, report through the screenshot channel,
+/// and wake the UI for the toast.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn finish_download(
+    result: Result<Vec<u8>, String>,
+    width: u32,
+    height: u32,
+    filename: String,
+    tx: Sender<SaveOutcome>,
+    ctx: egui::Context,
+) {
+    let outcome = match result {
+        Ok(rgba) => save_capture(&rgba, width, height, &filename),
+        Err(error) => SaveOutcome::Failed(error),
+    };
+    let _ = tx.send(outcome);
+    ctx.request_repaint();
+}
+
 /// A short-lived completion message.
 struct Toast {
     text: String,
@@ -245,10 +359,16 @@ struct Toast {
     until: Instant,
 }
 
-/// The screenshot action's UI state: a pending request, the channel the saver
-/// thread reports on, and the current toast.
+/// The screenshot action's UI state: a pending request, the one-capture-in-
+/// flight flag, the channel the capture reports on, and the current toast.
+///
+/// The in-flight flag is the pollable result state machine: `take_request`
+/// moves idle → pending, and `tick`/`fail` move pending → success/failure and
+/// reopen the slot. On wasm a second click while a capture is in flight is
+/// ignored; native keeps its previous allow-a-second-request behavior.
 pub struct Screenshot {
     pending: bool,
+    capturing: bool,
     tx: Sender<SaveOutcome>,
     rx: Receiver<SaveOutcome>,
     toast: Option<Toast>,
@@ -265,6 +385,7 @@ impl Screenshot {
     pub fn with_channel(tx: Sender<SaveOutcome>, rx: Receiver<SaveOutcome>) -> Self {
         Self {
             pending: false,
+            capturing: false,
             tx,
             rx,
             toast: None,
@@ -278,8 +399,18 @@ impl Screenshot {
     }
 
     /// Consume the click; true means "capture this frame".
+    ///
+    /// Wasm only: while an async capture is in flight the slot stays closed, so
+    /// a second click cannot start an overlapping GPU readback. Native keeps
+    /// its old behavior and allows another request while the save dialog owns
+    /// the first capture.
     pub fn take_request(&mut self) -> bool {
-        std::mem::take(&mut self.pending)
+        let requested = std::mem::take(&mut self.pending);
+        if !requested || (cfg!(target_arch = "wasm32") && self.capturing) {
+            return false;
+        }
+        self.capturing = true;
+        true
     }
 
     /// A sender for the saver thread spawned by this capture.
@@ -287,11 +418,15 @@ impl Screenshot {
         self.tx.clone()
     }
 
-    /// Drain the saver thread's report and expire the toast.
+    /// Drain the capture's report, clear the in-flight slot on success or
+    /// failure, and expire the toast.
     pub fn tick(&mut self, now: Instant) {
         loop {
             match self.rx.try_recv() {
-                Ok(outcome) => self.set_outcome(outcome, now),
+                Ok(outcome) => {
+                    self.capturing = false;
+                    self.set_outcome(outcome, now);
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => break,
             }
@@ -303,9 +438,11 @@ impl Screenshot {
         }
     }
 
-    /// Report a capture that failed before the thread ever started (for
-    /// example a surface format the PNG path cannot describe).
+    /// Report a capture that failed before the async completion ran (for
+    /// example a surface format the PNG path cannot describe). Clears the
+    /// in-flight slot so the next click can try again.
     pub fn fail(&mut self, message: String) {
+        self.capturing = false;
         self.set_outcome(SaveOutcome::Failed(message), Instant::now());
     }
 
@@ -315,6 +452,10 @@ impl Screenshot {
             SaveOutcome::Saved(path) => {
                 log::info!("screenshot saved to {}", path.display());
                 (format!("saved {}", path.display()), false)
+            }
+            SaveOutcome::DownloadStarted => {
+                log::info!("screenshot download started");
+                ("screenshot download started".to_string(), false)
             }
             SaveOutcome::Cancelled => {
                 log::debug!("screenshot cancelled");

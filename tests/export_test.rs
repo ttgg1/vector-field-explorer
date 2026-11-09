@@ -1,6 +1,21 @@
 use std::fs;
 use tempfile::NamedTempFile;
-use vector_field_explorer::export::{delete_preset, save_preset, save_png};
+use vector_field_explorer::export::{delete_preset, encode_png, save_preset, save_png};
+
+#[test]
+fn encode_png_returns_a_decodable_rgba_image_without_a_file() {
+    let encoded = encode_png(&[255, 0, 0, 255], 1, 1).expect("RGBA bytes must encode");
+    let decoded = image::load_from_memory(&encoded).expect("encoded bytes must be a PNG").to_rgba8();
+
+    assert_eq!(decoded.dimensions(), (1, 1));
+    assert_eq!(decoded.get_pixel(0, 0), &image::Rgba([255, 0, 0, 255]));
+}
+
+#[test]
+fn encode_png_rejects_a_frame_with_the_wrong_byte_count() {
+    let error = encode_png(&[255, 0, 0], 1, 1).expect_err("an incomplete pixel must fail");
+    assert_eq!(error.to_string(), "invalid frame size");
+}
 
 #[test]
 fn test_save_png_creates_file() {

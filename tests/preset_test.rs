@@ -14,4 +14,31 @@ mod tests {
         assert_eq!(presets[0].position, [1.0,2.0]);
         assert_eq!(presets[0].scale, 3.0);
     }
+
+    #[test]
+    fn preset_json_round_trips_the_shared_shape() {
+        let presets = vec![
+            export::Preset { name: "front".into(), position: [1.0, -2.5], scale: 3.0 },
+            export::Preset { name: "side".into(), position: [0.0, 4.0], scale: 1.5 },
+        ];
+        let json = export::presets_to_json(&presets).expect("encode");
+        assert_eq!(export::presets_from_json(&json), Some(presets));
+    }
+
+    #[test]
+    fn an_empty_preset_json_list_round_trips() {
+        let json = export::presets_to_json(&[]).expect("encode empty");
+        assert_eq!(export::presets_from_json(&json), Some(Vec::new()));
+    }
+
+    #[test]
+    fn corrupt_preset_json_falls_back_to_none() {
+        assert_eq!(export::presets_from_json("not json"), None);
+        assert_eq!(export::presets_from_json("{}"), None);
+        assert_eq!(
+            export::presets_from_json(r#"[{"name":"broken"}]"#),
+            None,
+            "a missing field must not panic the browser load",
+        );
+    }
 }

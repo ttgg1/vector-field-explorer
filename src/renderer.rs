@@ -482,22 +482,18 @@ impl DrawState {
         }
     }
 
-    /// Render `scene` into a fresh offscreen texture at `width`×`height` and
-    /// read it back as row-packed RGBA8 (screenshot export, plan task 13).
+    /// Submit `scene` into a fresh offscreen texture at `width`×`height` and
+    /// return the readback buffer. The caller maps it: native waits, wasm
+    /// resolves the map promise on the browser event loop.
     ///
     /// The caller passes the same `view_proj`/`camera_pos` the viewport is
     /// painting with, so the capture is the current view rather than a
     /// re-derived one. The texture borrows the surface format (the pipelines
-    /// were created for it) and lives only for this call: the live surface
-    /// textures are never touched. `clear` is the viewport background in
-    /// linear space, matching what egui paints behind the field.
-    ///
-    /// Readback is synchronous by design: the app wants the pixels before it
-    /// spawns the save dialog, and one 4k frame is a short stall. `map_async`
-    /// is followed by a submit + `poll(Wait)` so the mapping cannot race the
-    /// copy (the brief's ordering).
+    /// were created for it) and lives only for this submission: the live
+    /// surface textures are never touched. `clear` is the viewport background
+    /// in linear space, matching what egui paints behind the field.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_offscreen(
+    fn submit_offscreen(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -507,7 +503,7 @@ impl DrawState {
         width: u32,
         height: u32,
         clear: [f64; 4],
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<wgpu::Buffer, String> {
         // Reject formats the PNG path cannot describe up front: a readback
         // stride/buffer sized for RGBA8 is wrong for, say, a 16-float band and
         // would surface as a wgpu validation panic instead of this error.
@@ -591,6 +587,30 @@ impl DrawState {
             },
         );
         queue.submit(Some(encoder.finish()));
+        Ok(readback)
+    }
+
+    /// Render `scene` offscreen and read it back synchronously (native).
+    ///
+    /// `map_async` is followed by `poll(Wait)` so the mapping cannot race the
+    /// copy; one 4k frame is a short stall on native, where the save dialog
+    /// runs on a worker thread afterwards.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_offscreen(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &SceneGPU,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        width: u32,
+        height: u32,
+        clear: [f64; 4],
+    ) -> Result<Vec<u8>, String> {
+        let readback = self.submit_offscreen(
+            device, queue, scene, view_proj, camera_pos, width, height, clear,
+        )?;
 
         let slice = readback.slice(..);
         let (mapped_tx, mapped_rx) = std::sync::mpsc::channel();
@@ -615,6 +635,59 @@ impl DrawState {
 
         crate::screenshot::to_rgba(self.format, pixels)
     }
+
+    /// Submit an offscreen capture and complete without blocking the browser
+    /// main thread. `map_async` resolves through the WebGPU promise on the
+    /// event loop (`Device::poll` is a no-op on wasm); `completion` receives
+    /// the RGBA bytes — or the mapping error — with no `VfApp` borrow.
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_offscreen_async(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &SceneGPU,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        width: u32,
+        height: u32,
+        clear: [f64; 4],
+        completion: impl FnOnce(Result<Vec<u8>, String>) + Send + 'static,
+    ) -> Result<(), String> {
+        let readback = self.submit_offscreen(
+            device, queue, scene, view_proj, camera_pos, width, height, clear,
+        )?;
+        let buffer = readback.clone();
+        let format = self.format;
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            completion(readback_result(result, &buffer, format, width, height));
+        });
+        Ok(())
+    }
+}
+
+/// Turn a wasm map callback into RGBA bytes, unmapping the buffer on every
+/// path. Kept outside the callback so the failure paths stay readable.
+#[cfg(target_arch = "wasm32")]
+fn readback_result(
+    result: Result<(), wgpu::BufferAsyncError>,
+    buffer: &wgpu::Buffer,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    result.map_err(|error| format!("readback mapping failed: {error:?}"))?;
+    let mapped = match buffer.get_mapped_range(..) {
+        Ok(mapped) => mapped,
+        Err(error) => {
+            buffer.unmap();
+            return Err(format!("readback range unavailable: {error}"));
+        }
+    };
+    let pixels = crate::screenshot::strip_row_padding(&mapped, width, height);
+    drop(mapped);
+    buffer.unmap();
+    crate::screenshot::to_rgba(format, pixels)
 }
 
 /// Per-frame draw: carries the scene to upload and the camera matrices.

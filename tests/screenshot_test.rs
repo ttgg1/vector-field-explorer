@@ -210,6 +210,92 @@ fn a_click_asks_for_exactly_one_capture() {
 }
 
 #[test]
+fn a_successful_capture_reopens_the_slot() {
+    let (tx, rx) = channel();
+    let mut shot = Screenshot::with_channel(tx, rx);
+    let t0 = Instant::now();
+
+    shot.request();
+    assert!(shot.take_request(), "the first capture starts");
+
+    shot.sender().send(SaveOutcome::DownloadStarted).unwrap();
+    shot.tick(t0);
+    assert_eq!(shot.toast_text(), Some("screenshot download started"));
+
+    shot.request();
+    assert!(
+        shot.take_request(),
+        "success clears the in-flight slot for the next capture"
+    );
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn native_allows_a_second_capture_while_one_is_in_flight() {
+    let (tx, rx) = channel();
+    let mut shot = Screenshot::with_channel(tx, rx);
+
+    shot.request();
+    assert!(shot.take_request(), "the first capture starts");
+    shot.request();
+    assert!(
+        shot.take_request(),
+        "native keeps the old behavior: a new click is not blocked by the save dialog"
+    );
+}
+
+#[test]
+#[cfg(target_arch = "wasm32")]
+fn wasm_ignores_a_second_capture_while_one_is_in_flight() {
+    let (tx, rx) = channel();
+    let mut shot = Screenshot::with_channel(tx, rx);
+
+    shot.request();
+    assert!(shot.take_request(), "the first capture starts");
+    shot.request();
+    assert!(
+        !shot.take_request(),
+        "wasm blocks a second overlapping GPU readback"
+    );
+}
+
+#[test]
+fn a_failed_capture_clears_the_slot_and_reports() {
+    let (tx, rx) = channel();
+    let mut shot = Screenshot::with_channel(tx, rx);
+    let t0 = Instant::now();
+
+    shot.request();
+    assert!(shot.take_request(), "the first capture starts");
+    shot.sender().send(SaveOutcome::Failed("mapping failed".into())).unwrap();
+    shot.tick(t0);
+    assert_eq!(shot.toast_text(), Some("screenshot failed: mapping failed"));
+
+    shot.request();
+    assert!(
+        shot.take_request(),
+        "failure clears the in-flight slot for a retry"
+    );
+}
+
+#[test]
+fn a_failure_before_the_async_completion_clears_the_slot() {
+    let (tx, rx) = channel();
+    let mut shot = Screenshot::with_channel(tx, rx);
+
+    shot.request();
+    assert!(shot.take_request(), "the capture starts");
+    shot.fail("unsupported surface format".into());
+    assert_eq!(
+        shot.toast_text(),
+        Some("screenshot failed: unsupported surface format")
+    );
+
+    shot.request();
+    assert!(shot.take_request(), "an immediate failure does not wedge the slot");
+}
+
+#[test]
 fn completion_lands_as_a_toast_and_expires() {
     let (tx, rx) = channel();
     let mut shot = Screenshot::with_channel(tx, rx);
@@ -221,6 +307,18 @@ fn completion_lands_as_a_toast_and_expires() {
     assert_eq!(shot.toast_text(), Some("screenshot cancelled"), "still up");
     shot.tick(t0 + TOAST_TTL + Duration::from_millis(1));
     assert_eq!(shot.toast_text(), None, "the toast clears after its TTL");
+}
+
+#[test]
+fn a_browser_download_reports_its_start_without_a_file_path() {
+    let (tx, rx) = channel();
+    let mut shot = Screenshot::with_channel(tx, rx);
+    let t0 = Instant::now();
+
+    shot.sender().send(SaveOutcome::DownloadStarted).unwrap();
+    shot.tick(t0);
+
+    assert_eq!(shot.toast_text(), Some("screenshot download started"));
 }
 
 #[test]

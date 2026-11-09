@@ -1,0 +1,11 @@
+[build]
+target = "index.html"
+
+[serve]
+port = 8080
+
+[watch]
+ignore = ["target", ".scratch", "docs"]
+
+[tools]
+wasm_bindgen = "0.2.130"
