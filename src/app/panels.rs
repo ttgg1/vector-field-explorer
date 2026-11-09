@@ -418,7 +418,9 @@ impl VfApp {
                 });
 
                 // A visible drag handle that is also a 44 pt-wide close target:
-                // tapping it (or a swipe that ends on it) dismisses the sheet.
+                // tapping it, or dragging it down past 24 pt, dismisses the
+                // sheet. While dragging, `total_drag_delta` is the cumulative
+                // distance; on the release frame `dragged()` is already false.
                 let (rect, handle) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 20.0),
                     egui::Sense::click_and_drag(),
@@ -426,7 +428,7 @@ impl VfApp {
                 let weak = ui.visuals().weak_text_color();
                 let bar = egui::Rect::from_center_size(rect.center(), egui::vec2(36.0, 4.0));
                 ui.painter().rect_filled(bar, 2.0, weak);
-                let swiped_down = handle.drag_stopped()
+                let swiped_down = handle.dragged()
                     && handle
                         .total_drag_delta()
                         .is_some_and(|delta| delta.y > 24.0);
