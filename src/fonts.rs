@@ -19,17 +19,22 @@ use std::sync::Arc;
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontTweak};
 
 /// Key for the primary proportional face.
-pub const DEJAVU_SANS: &str = "DejaVu Sans";
+const DEJAVU_SANS: &str = "DejaVu Sans";
 /// Key for the primary monospace face.
-pub const DEJAVU_SANS_MONO: &str = "DejaVu Sans Mono";
+const DEJAVU_SANS_MONO: &str = "DejaVu Sans Mono";
 /// Key for the MIT icon subset used by `egui::special_emojis`.
-pub const EGUI_ICONS: &str = "egui-icons";
+const EGUI_ICONS: &str = "egui-icons";
 
 static SANS: &[u8] = include_bytes!("../assets/fonts/DejaVuSans.ttf");
 static MONO: &[u8] = include_bytes!("../assets/fonts/DejaVuSansMono.ttf");
 static ICONS: &[u8] = include_bytes!("../assets/fonts/egui-icons.ttf");
 
 /// The complete shipped face set and family order.
+///
+/// Integration-test seam: production installs the faces through [`install`].
+/// `tests/fonts_test.rs` inspects the definitions directly because it must pin
+/// the key set, family order, and vendored bytes without a renderer.
+#[doc(hidden)]
 pub fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::empty();
 

@@ -6,12 +6,15 @@
 //! key set, family order, real font bytes, and glyph coverage through the
 //! production `fonts::install` seam.
 
-use eframe::egui::{self, FontDefinitions, FontFamily, FontId};
+use eframe::egui::{FontDefinitions, FontFamily, FontId};
 
 mod support;
 
 /// Every non-ASCII glyph that appears in a shipped `src/ui` string. The pause
 /// icon is U+275A twice (ticket 67 replaced U+23F8, which DejaVu lacks).
+///
+/// Hand-maintained: add new UI literals here in the same change that introduces
+/// them. A source scan for non-ASCII literals is deferred.
 const UI_GLYPHS: &str = "×…·–²³›‹❚▶↺⚙—";
 
 #[test]
@@ -26,17 +29,7 @@ fn epaint_bundles_no_builtin_faces() {
 #[test]
 fn the_shared_context_has_real_text_faces() {
     let ctx = support::context();
-    let mut output = ctx.run_pass(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(320.0, 200.0),
-            )),
-            ..Default::default()
-        },
-        |_| {},
-    );
-    output.textures_delta.clear();
+    support::run_empty_pass(&ctx);
 
     assert!(
         ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::proportional(14.0), 'A')),
@@ -88,17 +81,7 @@ fn families_are_in_the_ruled_order() {
 #[test]
 fn every_shipped_ui_glyph_has_a_face_in_both_families() {
     let ctx = support::context();
-    let mut output = ctx.run_pass(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(320.0, 200.0),
-            )),
-            ..Default::default()
-        },
-        |_| {},
-    );
-    output.textures_delta.clear();
+    support::run_empty_pass(&ctx);
 
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         for ch in UI_GLYPHS.chars() {
@@ -121,10 +104,15 @@ fn vendored_bytes_are_real_truetype_fonts() {
             .unwrap_or_else(|| panic!("`{name}` is missing from font_data"))
             .bytes();
         assert!(!bytes.is_empty(), "`{name}` has no bytes");
+        let signature = bytes.get(..4).unwrap_or_else(|| {
+            panic!(
+                "`{name}` has only {} bytes, shorter than a font signature",
+                bytes.len(),
+            )
+        });
         assert!(
-            matches!(&bytes[..4], [0x00, 0x01, 0x00, 0x00] | b"OTTO" | b"true" | b"ttcf"),
-            "`{name}` does not start with a TrueType/OpenType signature: {:02x?}",
-            &bytes[..4],
+            matches!(signature, [0x00, 0x01, 0x00, 0x00] | b"OTTO" | b"true" | b"ttcf"),
+            "`{name}` does not start with a TrueType/OpenType signature: {signature:02x?}",
         );
     }
 }
