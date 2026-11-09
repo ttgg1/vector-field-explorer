@@ -1,7 +1,7 @@
 # Web build
 
 The browser build is the same Rust app compiled to `wasm32-unknown-unknown`
-and bundled by [Trunk](https://trunkrs.dev/).
+and bundled by [Trunk](https://trunk-rs.github.io/trunk/).
 
 ## Tools
 
