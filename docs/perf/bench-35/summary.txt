@@ -1,0 +1,34 @@
+default_2d_pump                          n= 4138 win= 23.0s iv p50=  5.55 p95=  5.74 p99=  5.87 ms -> 180.0 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.02/0.03 combined=0.00/0.00 trailsort=0.02/0.03  upload=0.03  counts=P0 D0 T0 A576
+default_2d_pump_streamlines              n= 4130 win= 22.9s iv p50=  5.55 p95=  5.75 p99=  5.89 ms -> 180.1 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.02/0.03 combined=0.00/0.00 trailsort=0.02/0.03  upload=0.07  counts=P0 D0 T0 A576
+dense_3d_magnetic_dipole_16              n= 4135 win= 23.0s iv p50=  5.56 p95=  5.64 p99=  5.73 ms -> 179.9 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.15/0.17 combined=0.15/0.16 trailsort=0.00/0.00  upload=0.03  counts=P0 D0 T0 A4096
+dense_3d_radial_16                       n= 4136 win= 23.0s iv p50=  5.56 p95=  5.68 p99=  5.90 ms -> 179.9 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.15/0.22 combined=0.15/0.21 trailsort=0.00/0.00  upload=0.03  counts=P0 D0 T0 A4096
+dense_3d_radial_40                       n= 4107 win= 22.3s iv p50=  5.42 p95=  6.40 p99=  6.52 ms -> 184.4 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=3.20/3.45 combined=3.20/3.45 trailsort=0.09/0.10  upload=0.28  counts=P0 D0 T0 A64000
+gpu_default_2d                           n= 1261 win=  7.0s iv p50=  5.56 p95=  5.63 p99=  5.67 ms -> 179.9 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.02/0.02 combined=0.00/0.00 trailsort=0.02/0.02  upload=0.01  counts=P0 D0 T0 A576
+gpu_dense_radial_16                      n= 1258 win=  7.0s iv p50=  5.56 p95=  5.63 p99=  5.68 ms -> 179.9 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.15/0.16 combined=0.15/0.16 trailsort=0.00/0.00  upload=0.03  counts=P0 D0 T0 A4096
+gpu_dense_radial_40                      n= 1227 win=  6.6s iv p50=  5.38 p95=  6.40 p99=  6.48 ms -> 186.0 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=3.06/3.44 combined=2.75/3.43 trailsort=0.09/0.10  upload=0.28  counts=P0 D0 T0 A64000
+gpu_worst_4000_t32                       n=  186 win=  6.9s iv p50= 37.38 p95= 39.23 p99= 40.92 ms ->  26.8 fps
+    phases p50/p95 ms: sim=33.85/34.88 advect=22.63/23.42 dot=5.63/5.80 trail=5.57/5.93 viewport=2.12/2.70 combined=0.30/0.31 trailsort=1.82/2.37  upload=0.18  counts=P4000 D4000 T30291 A4096
+gpusmoke                                 n=  158 win=  6.0s iv p50= 38.06 p95= 39.81 p99= 42.04 ms ->  26.3 fps
+    phases p50/p95 ms: sim=34.29/34.99 advect=22.93/23.36 dot=5.82/5.98 trail=5.51/5.97 viewport=2.19/2.76 combined=0.32/0.41 trailsort=1.87/2.35  upload=0.18  counts=P4000 D4000 T31914 A4096
+test-web NO ROWS
+test NO ROWS
+worst_3d_4000_trail0                     n=  814 win= 22.6s iv p50= 27.80 p95= 32.56 p99= 33.63 ms ->  36.0 fps
+    phases p50/p95 ms: sim=26.30/27.37 advect=20.95/21.84 dot=5.33/5.61 trail=0.00/0.00 viewport=0.31/0.36 combined=0.31/0.36 trailsort=0.00/0.00  upload=0.04  counts=P4000 D4000 T0 A4096
+worst_3d_4000_trail32                    n=  619 win= 22.9s iv p50= 37.07 p95= 39.29 p99= 40.87 ms ->  27.0 fps
+    phases p50/p95 ms: sim=33.42/34.26 advect=22.39/22.95 dot=5.68/5.90 trail=5.32/5.63 viewport=2.20/2.49 combined=0.31/0.34 trailsort=1.89/2.16  upload=0.18  counts=P4000 D4000 T33255 A4096
+worst_3d_4000_trail32_arrows_off         n=  608 win= 22.8s iv p50= 37.53 p95= 40.06 p99= 42.71 ms ->  26.6 fps
+    phases p50/p95 ms: sim=33.38/35.27 advect=22.08/23.39 dot=5.55/5.89 trail=5.63/6.17 viewport=2.09/2.52 combined=0.16/0.17 trailsort=1.93/2.36  upload=0.18  counts=P4000 D4000 T31857 A0
+worst_3d_4000_trail32_both_off           n= 4136 win= 23.0s iv p50=  5.56 p95=  5.63 p99=  5.68 ms -> 179.9 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.00/0.00 combined=0.00/0.00 trailsort=0.00/0.00  upload=0.01  counts=P0 D0 T0 A0
+worst_3d_4000_trail32_particles_off      n= 4136 win= 23.0s iv p50=  5.56 p95=  5.75 p99=  5.90 ms -> 180.0 fps
+    phases p50/p95 ms: sim=0.00/0.00 advect=0.00/0.00 dot=0.00/0.00 trail=0.00/0.00 viewport=0.16/0.23 combined=0.16/0.23 trailsort=0.00/0.00  upload=0.04  counts=P0 D0 T0 A4096
+worst_3d_4000_trail8                     n=  659 win= 22.8s iv p50= 34.71 p95= 38.27 p99= 39.84 ms ->  28.8 fps
+    phases p50/p95 ms: sim=31.25/32.76 advect=20.82/21.85 dot=5.32/5.59 trail=5.08/5.36 viewport=1.73/1.98 combined=0.41/0.49 trailsort=1.31/1.48  upload=0.14  counts=P4000 D4000 T18836 A4096

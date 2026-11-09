@@ -7,14 +7,16 @@ the release-binary measurements describe the same code.
 
 **Provenance.** The full report is
 `.superpowers/sdd/2026-11-05-vector-field-explorer/task-35-report.md`. The
-std-only CPU harness is saved as `bench-35.rs`. The app frame/upload probes and
-the GPU microbench were temporary and were reverted from production; the exact
-instrumentation patch, the runner/analyzer, and every raw per-scene log were
-retained under `.superpowers/sdd/2026-11-05-vector-field-explorer/bench-35-artifacts/`.
-App-level and GPU numbers can be re-run from those saved artifacts on the same
-hardware by applying the patch to base `a7d295a` and using the saved runner; they
-are **not** reproducible from the shipped code. Exact values depend on the same
-hardware/driver. Nothing in the tables was reconstructed from memory.
+tracked reproduction set is `docs/perf/bench-35/`: the std-only CPU harness is
+`docs/perf/bench-35/bench-35.rs`, and the instrumentation patch, runner,
+analyzer, derived summary, and CPU microbenchmark log are tracked alongside it.
+The app frame/upload probes and the GPU microbench were temporary and were
+reverted from production; app-level and GPU numbers can be re-run from the
+tracked patch plus the runner on the same hardware, but they are **not**
+reproducible from the shipped code. Exact values depend on the same
+hardware/driver. The raw per-scene logs are **local/untracked** (about 10 MB in
+the SDD workspace); only `summary.txt` is tracked. Nothing in the tables was
+reconstructed from memory.
 
 ## Hardware and caveats
 
@@ -29,13 +31,16 @@ hardware/driver. Nothing in the tables was reconstructed from memory.
   result means “at the refresh cap with headroom”, not “GPU limit”. The
   64 000-arrow row's 184.4 fps is **not** explained by that cap (see below).
 - Real-browser WebGPU timing is out of scope until ticket 16 deploys. The wasm
-  release build is 12 211 828 bytes (11.6 MiB); `scripts/test-web.sh` passed in
-  50.0 s wall (17.1 s check + 27.4 s Trunk release).
+  release build is 12 211 828 bytes (11.6 MiB). The local/untracked test-web
+  log records 17.14 s for `cargo check` and 27.38 s for Trunk release; the
+  50.0 s shell-time total was not retained.
 
 ## Scenes
 
-All 3D presets use `DEFAULT_DENSITY_3D = 16`; “densest shipped preset” here
-means that default 3D grid (4096 arrows), not a special preset.
+All 3D presets use `DEFAULT_DENSITY_3D = 16` (defined at
+`src/viewmodel.rs:30`, applied at `:290`); “densest shipped preset” here means
+that default 3D grid (4096 arrows), not a special preset. `src/presets.rs` only
+lists the formula set.
 
 | Scene | Settings |
 | --- | --- |
@@ -68,14 +73,15 @@ costs (3.20 ms CPU viewport + 0.28 ms upload + 0.45 ms GPU) are still far below
 the frame budget.
 
 Worst-case 37.07 ms splits as: advect 22.39, dot build/colour 5.68, trail
-build 5.32, trail clone+sort 1.89, combined build+sort 0.31, buffer upload
-0.18, GPU draw 0.12, residual egui/submit ~1.15 ms after subtracting the GPU
-(~1.27 ms before it). The trail-build figure is a synthetic steady-state
-measurement (54 450 segments at 4000×32); the live GPU sample reached 30 855
-segments because of fill/respawn dynamics, and its cost is quoted below. The GPU
-microbenchmark (offscreen, no vsync) costs 0.012 ms for the default 2D scene,
-0.065 ms for 4096 arrows, 0.445 ms for 64 000 arrows, and 0.122 ms for the full
-worst-case scene at 1196×682.
+build 5.32 (live app probe, median 33 255 segments), trail clone+sort 1.89,
+combined build+sort 0.31, buffer upload 0.18, GPU draw 0.12, residual
+egui/submit ~1.15 ms after subtracting the GPU (~1.27 ms before it). The
+synthetic CPU harness reports 5.86 ms for the same 4000×32 setting at 54 450
+segments; the live GPU sample reached 30 855 segments because of fill/respawn
+dynamics, and its cost is quoted below. The GPU microbenchmark (offscreen, no
+vsync) costs 0.012 ms for the default 2D scene, 0.065 ms for 4096 arrows,
+0.445 ms for 64 000 arrows, and 0.122 ms for the full worst-case scene at
+1196×682.
 
 ## Bottleneck ranking
 
@@ -98,16 +104,17 @@ parsed `meval::Expr` and re-binds it on every component evaluation, and
 `meval` allocates a fresh RPN stack `Vec` per call. Microbenchmark (release,
 median of 21):
 
-| Evaluator | ns per `eval3` | Heap allocations (explicit basis) |
+| Evaluator / basis | ns per `eval3` | Heap allocations per 4000 `eval3` calls |
 | --- | ---: | --- |
-| current `eval3`, 3D radial | 1416 | ~1 584 000 per 4000-particle advect = 16 000 `eval3` calls (~99 per call); derived per-4000-`eval3` figure is ~396 000 |
-| bound-once `meval` closures | 31 | 12 000 per 4000 `eval3` calls (3 per call, one stack `Vec` per component) |
+| current `eval3`, 3D radial | 1416 | ~396 000 |
+| bound-once `meval` closures | 31 | 12 000 (3 per call, one stack `Vec` per component; ~33× fewer than current) |
 | hand-written closure (ideal) | 0.6 | 0 by construction |
+| 4000-particle advect total (16 000 `eval3` calls) | — | 1 584 000 (83.6 MB) |
 
 At 4000 particles the full CPU frame path performs ~2.36 M heap allocations
 and allocates ~137 MB per frame. That total is from a separate full-frame run,
-not the sum of the per-call rows above (the −381 difference is repaint/respawn
-state variance between runs). `sample_field` costs 1.38 µs/sample: 5.6 ms at
+not the sum of the per-call rows above (the −381 difference is unexplained
+run-to-run variance). `sample_field` costs 1.38 µs/sample: 5.6 ms at
 16³, 88 ms at 40³, and 55 ms at 200² — a 55–88 ms edit stall at the maximum
 density.
 
@@ -117,17 +124,18 @@ density.
 and 3D default-grid scenes hold the 180 Hz cap (5.55/5.56 ms p50) with ≤0.15 ms
 CPU and ≤0.065 ms GPU. That is not a floor-compliance claim: the stated floor is
 an integrated GPU, which this machine cannot expose, so integrated compliance is
-unverified. The only measured below-floor setting on this hardware is the
-optional 4000-particle + 32-trail configuration (27 fps p50, 24.5 fps p99); it
-is CPU-bound in evaluator re-binding.
+unverified. The 4000-particle configurations are below 30 fps at p50 for trail
+8 (28.8 fps) and trail 32 (27.0 fps); trail 0 is 36.0 fps p50 but 29.7 fps p99.
+None is a shipped preset, and the 30 fps floor is defined on the densest preset.
+These configurations are CPU-bound in evaluator re-binding.
 
-The smallest change that fixes it is to **cache bound field evaluators in
+The smallest change that fixes them is to **cache bound field evaluators in
 `FieldExpr`** (bind each component once at parse time; internal only, no API
 change, same `meval` semantics). The microbenchmark shows a 45.7× evaluator
 speedup. Component arithmetic from the measured parts gives ~0.5 ms advect +
-~0.2 ms dot + ~0.1 ms trail eval + ~1.9 ms trail clone/sort + ~0.2 ms trail
-segment emission + 0.3 ms combined + 0.2 ms upload + ~1.2 ms residual + 0.1 ms
-GPU ≈ 4.7 ms. Allowing ~2 ms for unmeasured segment emission and
+~0.12 ms dot + ~0.12 ms trail eval + ~0.2 ms trail build (segment emission) +
+~1.9 ms trail clone/sort + 0.3 ms combined + 0.2 ms upload + ~1.2 ms residual
++ 0.1 ms GPU ≈ 4.6 ms. Allowing ~2 ms for unmeasured segment emission and
 allocator/scheduler variance, the conservative bound is **≤7 ms (≥140 fps)**,
 well above the 30 fps floor. On this display it would likely sit at the refresh
 cap, but that is a projection, not a measurement. The earlier 8–11 ms

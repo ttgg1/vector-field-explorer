@@ -1,0 +1,606 @@
+diff --git a/src/app/frame.rs b/src/app/frame.rs
+index 5bce8a9..013d192 100644
+--- a/src/app/frame.rs
++++ b/src/app/frame.rs
+@@ -5,6 +5,8 @@ use super::*;
+ 
+ impl eframe::App for VfApp {
+     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        bench35::begin();
+         // Restyle the whole frame from the persisted record before any widget
+         // runs. `apply` is idempotent, so doing this every frame is cheap and
+         // keeps the UI in sync even if a theme/visual was changed elsewhere.
+@@ -33,6 +35,8 @@ impl eframe::App for VfApp {
+         self.frame_status_bar(ui);
+         self.frame_viewport(ui, frame);
+         self.frame_overlays(ui);
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        bench35::end(&ctx);
+     }
+ 
+     /// Persist the settings envelope (style + layout + view state) under
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 8ad7989..73d2293 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -71,6 +71,242 @@ mod panels;
+ mod simulation;
+ mod viewport;
+ 
++/// Temporary ticket-35 frame instrumentation. Deleted before the final commit.
++pub(super) mod bench35 {
++    use std::sync::Mutex;
++    use std::time::Instant;
++
++    use crate::viewmodel::State;
++
++    pub struct BenchState {
++        pub label: String,
++        pub seconds: f32,
++        pub start: Instant,
++        pub last_start: Option<Instant>,
++        pub frames: u64,
++        pub sim_us: f64,
++        pub advect_us: f64,
++        pub dot_us: f64,
++        pub trail_us: f64,
++        pub viewport_us: f64,
++        pub combined_us: f64,
++        pub trailsort_us: f64,
++        pub particles: usize,
++        pub dots: usize,
++        pub trails: usize,
++        pub arrow_count: usize,
++    }
++
++    static BENCH: Mutex<Option<BenchState>> = Mutex::new(None);
++
++    pub fn enabled() -> bool {
++        std::env::var_os("VFE_BENCH_SECONDS").is_some()
++    }
++
++    pub fn label() -> String {
++        std::env::var("VFE_BENCH_LABEL").unwrap_or_else(|_| "unlabelled".to_string())
++    }
++
++    /// Frames completed so far; used to run the GPU bench once trails fill.
++    pub fn frame_index() -> u64 {
++        BENCH.lock().ok().and_then(|guard| guard.as_ref().map(|state| state.frames)).unwrap_or(0)
++    }
++
++    pub fn begin() {
++        if !enabled() {
++            return;
++        }
++        let mut guard = BENCH.lock().unwrap();
++        if guard.is_none() {
++            let seconds = std::env::var("VFE_BENCH_SECONDS")
++                .ok()
++                .and_then(|value| value.parse().ok())
++                .unwrap_or(25.0);
++            *guard = Some(BenchState {
++                label: label(),
++                seconds,
++                start: Instant::now(),
++                last_start: None,
++                frames: 0,
++                sim_us: 0.0,
++                advect_us: 0.0,
++                dot_us: 0.0,
++                trail_us: 0.0,
++                viewport_us: 0.0,
++                combined_us: 0.0,
++                trailsort_us: 0.0,
++                particles: 0,
++                dots: 0,
++                trails: 0,
++                arrow_count: 0,
++            });
++        }
++        if let Some(state) = guard.as_mut() {
++            state.sim_us = 0.0;
++            state.advect_us = 0.0;
++            state.dot_us = 0.0;
++            state.trail_us = 0.0;
++            state.viewport_us = 0.0;
++            state.combined_us = 0.0;
++            state.trailsort_us = 0.0;
++        }
++    }
++
++    pub fn add_sim(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.sim_us += us;
++        }
++    }
++    pub fn add_advect(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.advect_us += us;
++        }
++    }
++    pub fn add_dot(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.dot_us += us;
++        }
++    }
++    pub fn add_trail(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.trail_us += us;
++        }
++    }
++    pub fn add_viewport(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.viewport_us += us;
++        }
++    }
++    pub fn add_combined(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.combined_us += us;
++        }
++    }
++    pub fn add_trailsort(us: f64) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.trailsort_us += us;
++        }
++    }
++    pub fn set_counts(particles: usize, dots: usize, trails: usize, arrows: usize) {
++        if let Ok(mut guard) = BENCH.lock()
++            && let Some(state) = guard.as_mut()
++        {
++            state.particles = particles;
++            state.dots = dots;
++            state.trails = trails;
++            state.arrow_count = arrows;
++        }
++    }
++
++    /// Log one CSV frame line and close the window once the run is over.
++    pub fn end(ctx: &eframe::egui::Context) {
++        if !enabled() {
++            return;
++        }
++        let now = Instant::now();
++        let mut guard = BENCH.lock().unwrap();
++        let Some(state) = guard.as_mut() else { return };
++        let interval_us = state
++            .last_start
++            .map_or(0.0, |last| now.duration_since(last).as_secs_f64() * 1e6);
++        state.last_start = Some(now);
++        state.frames += 1;
++        // Discard the first 120 frames (~2 s) from the analysis; still log them
++        // so the report can show startup separately.
++        let line = format!(
++            "BENCH,{},{},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{},{},{},{}",
++            state.label,
++            state.frames,
++            interval_us,
++            state.sim_us,
++            state.advect_us,
++            state.dot_us,
++            state.trail_us,
++            state.viewport_us,
++            state.combined_us,
++            state.trailsort_us,
++            state.particles,
++            state.dots,
++            state.trails,
++            state.arrow_count,
++        );
++        log::info!("{line}");
++        // Benchmarks must run continuously even when nothing consumes a clock.
++        ctx.request_repaint();
++        if state.frames == 1 {
++            let rect = ctx.content_rect();
++            log::info!(
++                "BENCHMETA,{},{:.2},{:.0},{:.0}",
++                state.label,
++                ctx.pixels_per_point(),
++                rect.width(),
++                rect.height(),
++            );
++        }
++        if now.duration_since(state.start).as_secs_f32() > state.seconds {
++            log::info!("BENCH_END,{},{}", state.label, state.frames);
++            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Close);
++        }
++    }
++
++    /// Apply the benchmark scene from env vars after persistence restore.
++    pub fn configure(state: &mut State, layout: &mut crate::ui::layout::LayoutState) {
++        if !enabled() {
++            return;
++        }
++        layout.controls_expanded = false;
++        layout.presets_expanded = false;
++        layout.help_visible = false;
++        let env = |key: &str| std::env::var(key).ok();
++        // Start from known defaults rather than whatever the real app last
++        // persisted, then apply the env overrides.
++        state.set_domain(glam::Vec3::splat(-1.0), glam::Vec3::splat(1.0));
++        let mode_3d = env("VFE_BENCH_MODE").map(|mode| mode == "3d").unwrap_or(false);
++        state.set_mode(mode_3d);
++        let formula =
++            env("VFE_BENCH_FORMULA").unwrap_or_else(|| {
++                if mode_3d { "(x, y, z)".to_string() } else { "(x, y)".to_string() }
++            });
++        state.set_formula(formula);
++        let density = env("VFE_BENCH_DENSITY")
++            .and_then(|v| v.parse().ok())
++            .unwrap_or(if mode_3d { 16 } else { 24 });
++        state.set_density(density);
++        state.set_arrow_scale(1.0);
++        state.set_arrow_style(crate::arrow_style::ArrowStyle::Cone);
++        state.set_arrow_style_2d(crate::arrow_style::ArrowStyle2D::Flat);
++        state.set_colormap(crate::colormap::Colormap::Viridis);
++        state.set_auto_fit(true);
++        state.set_plane_enabled(false);
++        state.set_arrows(env("VFE_BENCH_ARROWS").is_none_or(|on| on == "1"));
++        state.set_streamlines(env("VFE_BENCH_STREAMLINES").is_some_and(|on| on == "1"));
++        state.set_particles(env("VFE_BENCH_PARTICLES").is_some_and(|on| on == "1"));
++        state.set_particle_size(1.0);
++        state.set_particle_count(
++            env("VFE_BENCH_COUNT").and_then(|v| v.parse().ok()).unwrap_or(0),
++        );
++        let mut appearance = crate::particles::ParticleAppearance::default();
++        if let Some(trail) = env("VFE_BENCH_TRAIL").and_then(|v| v.parse().ok()) {
++            appearance.trail_len = trail;
++        }
++        state.set_particle_appearance(appearance);
++    }
++}
++
+ /// Directory where the app persists camera presets. Kept in one place so the
+ /// panel and any export helper always agree (preset-persistence plan Task 3).
+ #[cfg(not(target_arch = "wasm32"))]
+@@ -229,12 +465,14 @@ impl VfApp {
+     /// (style + layout + view state) is restored from it — absent, corrupt or
+     /// older records fall back to sensible defaults — and written back on save.
+     pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
+-        let settings = persistence::load(storage);
++        let mut settings = persistence::load(storage);
+         let mut state = State::new(false);
+         let mut sidebar = Controls::new();
+         // Restore through the viewmodel setters so the first frame samples the
+         // saved field; a corrupt record cannot poison the grid.
+         settings.view.restore(&mut state, &mut sidebar);
++        // Temporary ticket-35 benchmark configuration (deleted before commit).
++        bench35::configure(&mut state, &mut settings.layout);
+         // Ticket 47: a restored non-default domain must already be framed on
+         // the first frame, not only after the first edit. This is the same
+         // tested recentre helper the live domain editor uses; the default
+diff --git a/src/app/simulation.rs b/src/app/simulation.rs
+index 8b4ba1c..e6c3cae 100644
+--- a/src/app/simulation.rs
++++ b/src/app/simulation.rs
+@@ -17,6 +17,8 @@ impl VfApp {
+     /// Frame phase: scene rebuild on a dirty state, particle advection and dot
+     /// rebuild, then the repaint request that keeps particles animating.
+     pub(super) fn frame_simulation(&mut self, ctx: &egui::Context) {
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        let bench_start = std::time::Instant::now();
+         self.rebuild_scene();
+         self.advance_particles();
+ 
+@@ -24,6 +26,14 @@ impl VfApp {
+         // on in 3D and playing). Paused or consumer-free frames request
+         // nothing, so the app goes idle instead of busy-looping.
+         crate::ui::transport::request_particle_repaint(ctx, &self.state, &self.clock);
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        super::bench35::add_sim(bench_start.elapsed().as_secs_f64() * 1e6);
++        super::bench35::set_counts(
++            particle_count(&self.particles),
++            self.scene.dots.len(),
++            self.scene.trails.len(),
++            self.scene.arrows.len(),
++        );
+     }
+ 
+     fn rebuild_scene(&mut self) {
+@@ -91,6 +101,8 @@ impl VfApp {
+         if target.is_some() {
+             let appearance = self.state.particle_appearance.sanitized();
+             let spacing = self.state.spacing();
++            // Temporary ticket-35 instrumentation (deleted before commit).
++            let bench_advect = std::time::Instant::now();
+             advect(
+                 &mut self.particles,
+                 &self.state.field,
+@@ -102,9 +114,12 @@ impl VfApp {
+                     stagnation_seconds: appearance.stagnation_seconds,
+                 },
+             );
++            super::bench35::add_advect(bench_advect.elapsed().as_secs_f64() * 1e6);
+             // The speed range is observed once per frame and shared by the dots
+             // and trails, so both colour modes agree on the same cloud.
+             let speeds = speed_range(&self.particles);
++            // Temporary ticket-35 instrumentation (deleted before commit).
++            let bench_dot = std::time::Instant::now();
+             self.scene.dots = Arc::new(dot_instances(
+                 &self.particles,
+                 &self.state.field,
+@@ -115,6 +130,8 @@ impl VfApp {
+                 speeds,
+                 self.state.particle_radius(spacing),
+             ));
++            super::bench35::add_dot(bench_dot.elapsed().as_secs_f64() * 1e6);
++            let bench_trail = std::time::Instant::now();
+             self.scene.trails = Arc::new(trail_instances(
+                 &self.particles,
+                 &self.state.field,
+@@ -124,6 +141,7 @@ impl VfApp {
+                 speeds,
+                 spacing,
+             ));
++            super::bench35::add_trail(bench_trail.elapsed().as_secs_f64() * 1e6);
+             log::trace!(
+                 "particles: {} advected, {} dot instances, {} trail segments",
+                 particle_count(&self.particles),
+diff --git a/src/app/viewport.rs b/src/app/viewport.rs
+index e9ea679..57c0d04 100644
+--- a/src/app/viewport.rs
++++ b/src/app/viewport.rs
+@@ -7,6 +7,8 @@ impl VfApp {
+     /// Frame phase: the wgpu field viewport, its camera input, click-to-seed,
+     /// screenshot capture and the captured-pointer crosshair.
+     pub(super) fn frame_viewport(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        let bench_viewport = std::time::Instant::now();
+         // Central viewport: the wgpu field renderer, driven by the same state.
+         egui::CentralPanel::default_margins().show(ui, |ui| {
+             let rect = ui.max_rect().shrink(2.0);
+@@ -226,6 +228,8 @@ impl VfApp {
+             // capture and the viewport. 2D keeps its arrows-then-dots path and
+             // never reads the combined stream, but it still paints a stable
+             // far-to-near copy of the arrows (the pre-ticket-62 order).
++            // Temporary ticket-35 instrumentation (deleted before commit).
++            let bench_combined = std::time::Instant::now();
+             let combined = if self.state.mode_3d {
+                 let mut instances = combined_instances(
+                     self.scene.arrows.as_slice(),
+@@ -236,6 +240,9 @@ impl VfApp {
+             } else {
+                 Arc::new(Vec::new())
+             };
++            // Temporary ticket-35 instrumentation (deleted before commit).
++            super::bench35::add_combined(bench_combined.elapsed().as_secs_f64() * 1e6);
++            let bench_trailsort = std::time::Instant::now();
+             let arrows = if self.state.mode_3d {
+                 Arc::clone(&self.scene.arrows)
+             } else {
+@@ -249,6 +256,8 @@ impl VfApp {
+                 Arc::new(Vec::new())
+             };
+             self.scene.combined = Arc::clone(&combined);
++            // Temporary ticket-35 instrumentation (deleted before commit).
++            super::bench35::add_trailsort(bench_trailsort.elapsed().as_secs_f64() * 1e6);
+ 
+             let scene = SceneGPU {
+                 arrows,
+@@ -262,6 +271,23 @@ impl VfApp {
+                 mode_3d: self.state.mode_3d,
+             };
+ 
++            // Temporary ticket-35 GPU microbenchmark (deleted before commit).
++            #[cfg(not(target_arch = "wasm32"))]
++            if std::env::var_os("VFE_BENCH_GPU").is_some() && super::bench35::frame_index() >= 60 {
++                let mut renderer = render_state.renderer.write();
++                if let Some(ds) = renderer.callback_resources.get_mut::<DrawState>() {
++                    ds.bench_variants(
++                        &render_state.device,
++                        &render_state.queue,
++                        &scene,
++                        view_proj,
++                        eye_position,
++                        (rect.width() * ui.ctx().pixels_per_point()) as u32,
++                        (rect.height() * ui.ctx().pixels_per_point()) as u32,
++                    );
++                }
++            }
++
+             // Screenshot export (ticket 08): re-render this frame's scene
+             // offscreen at the viewport's pixel size (capped at 4096 on the
+             // long edge, both axes scaled so the framing is unchanged) and
+@@ -393,6 +419,8 @@ impl VfApp {
+                 }
+             }
+         });
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        super::bench35::add_viewport(bench_viewport.elapsed().as_secs_f64() * 1e6);
+     }
+ }
+ 
+diff --git a/src/renderer.rs b/src/renderer.rs
+index 022b470..2b046da 100644
+--- a/src/renderer.rs
++++ b/src/renderer.rs
+@@ -798,6 +798,116 @@ impl DrawState {
+         }
+     }
+ 
++    /// Temporary ticket-35 GPU microbenchmark (deleted before commit): record
++    /// the same scene into an offscreen pass `iterations` times, poll until the
++    /// GPU is idle, and return the mean wall-clock milliseconds per pass. This
++    /// measures the actual pipelines without the 180 Hz presentation cap.
++    #[cfg(not(target_arch = "wasm32"))]
++    pub fn bench_variants(
++        &mut self,
++        device: &wgpu::Device,
++        queue: &wgpu::Queue,
++        scene: &SceneGPU,
++        view_proj: Mat4,
++        camera_pos: Vec3,
++        width: u32,
++        height: u32,
++    ) {
++        use std::sync::atomic::{AtomicBool, Ordering};
++        static DONE: AtomicBool = AtomicBool::new(false);
++        if DONE.swap(true, Ordering::Relaxed) {
++            return;
++        }
++        let label = std::env::var("VFE_BENCH_LABEL").unwrap_or_else(|_| "unlabelled".to_string());
++        let empty_arrows: Arc<Vec<ArrowInstanceGPU>> = Arc::new(Vec::new());
++        let empty_lines: Arc<Vec<LineInstanceGPU>> = Arc::new(Vec::new());
++        let base = SceneGPU {
++            arrows: Arc::clone(&empty_arrows),
++            lines: Arc::clone(&empty_lines),
++            trails: Arc::clone(&empty_lines),
++            dots: Arc::clone(&empty_arrows),
++            combined: Arc::clone(&empty_arrows),
++            arrow_style: scene.arrow_style,
++            arrow_style_2d: scene.arrow_style_2d,
++            arrow_params: scene.arrow_params,
++            mode_3d: scene.mode_3d,
++        };
++        let variants: Vec<(&str, SceneGPU)> = vec![
++            ("clear", base.clone()),
++            ("lines", SceneGPU { lines: Arc::clone(&scene.lines), ..base.clone() }),
++            ("trails", SceneGPU { trails: Arc::clone(&scene.trails), ..base.clone() }),
++            (
++                "arrows",
++                SceneGPU {
++                    arrows: Arc::clone(&scene.arrows),
++                    combined: Arc::clone(&scene.arrows),
++                    ..base.clone()
++                },
++            ),
++            (
++                "dots",
++                SceneGPU {
++                    dots: Arc::clone(&scene.dots),
++                    combined: Arc::clone(&scene.dots),
++                    ..base.clone()
++                },
++            ),
++            ("scene", scene.clone()),
++        ];
++        for (name, variant) in variants {
++            self.upload(device, queue, view_proj, camera_pos, &variant);
++            let texture = device.create_texture(&wgpu::TextureDescriptor {
++                label: Some("vfe bench target"),
++                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
++                mip_level_count: 1,
++                sample_count: 1,
++                dimension: wgpu::TextureDimension::D2,
++                format: self.format,
++                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
++                view_formats: &[],
++            });
++            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
++            let encode = |iterations: u32, ds: &DrawState| {
++                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
++                    label: Some("vfe bench encoder"),
++                });
++                for _ in 0..iterations {
++                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                        label: Some("vfe bench pass"),
++                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                            view: &view,
++                            depth_slice: None,
++                            resolve_target: None,
++                            ops: wgpu::Operations {
++                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
++                                store: wgpu::StoreOp::Store,
++                            },
++                        })],
++                        depth_stencil_attachment: None,
++                        timestamp_writes: None,
++                        occlusion_query_set: None,
++                        multiview_mask: None,
++                    });
++                    ds.record(&mut pass, &variant);
++                }
++                queue.submit(Some(encoder.finish()));
++            };
++            encode(5, self);
++            device.poll(wgpu::PollType::wait_indefinitely()).ok();
++            let iterations = 50u32;
++            let start = std::time::Instant::now();
++            encode(iterations, self);
++            device.poll(wgpu::PollType::wait_indefinitely()).ok();
++            let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(iterations);
++            log::info!(
++                "BENCHGPU,{label},{name},{ms:.3},instances={},lines={},trails={},w={width},h={height}",
++                variant.combined.len(),
++                variant.lines.len(),
++                variant.trails.len(),
++            );
++        }
++    }
++
+     /// Record this frame's scene into a render pass: backdrop lines, then the
+     /// single combined 3D arrow+particle draw (or, in 2D, the arrows-then-dots
+     /// draws). The same plan runs for the on-screen and offscreen passes, so a
+@@ -1061,7 +1171,30 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
+         let ds = callback_resources
+             .get_mut::<DrawState>()
+             .expect("DrawState must be installed before the first paint callback");
++        // Temporary ticket-35 instrumentation (deleted before commit).
++        let bench_upload = std::time::Instant::now();
+         ds.upload(device, queue, self.view_proj, self.camera_pos, &self.scene);
++        if std::env::var_os("VFE_BENCH_SECONDS").is_some() {
++            use std::sync::OnceLock;
++            static LABEL: OnceLock<String> = OnceLock::new();
++            let label = LABEL.get_or_init(|| {
++                std::env::var("VFE_BENCH_LABEL").unwrap_or_else(|_| "unlabelled".to_string())
++            });
++            let instances = if self.scene.mode_3d {
++                self.scene.combined.len()
++            } else {
++                self.scene.arrows.len()
++            };
++            let bytes = (instances + self.scene.lines.len() + self.scene.trails.len()
++                + if self.scene.mode_3d { 0 } else { self.scene.dots.len() })
++                * std::mem::size_of::<ArrowInstanceGPU>();
++            log::info!(
++                "BENCHUPLOAD,{label},{:.0},{instances},{},{},{bytes}",
++                bench_upload.elapsed().as_secs_f64() * 1e6,
++                self.scene.lines.len(),
++                self.scene.trails.len(),
++            );
++        }
+         Vec::new()
+     }
+ 
+diff --git a/src/window.rs b/src/window.rs
+index fdb1b59..d07d53d 100644
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -45,9 +45,13 @@ pub(crate) fn icon_data() -> Option<egui::IconData> {
+ /// persistence enabled so the last size/position survives a restart.
+ #[cfg(not(target_arch = "wasm32"))]
+ pub fn window_options() -> eframe::NativeOptions {
++    // Temporary ticket-35 benchmark override (deleted before commit): pin the
++    // 1280x800 floor size and do not let the user's saved window leak in.
++    let bench = std::env::var_os("VFE_BENCH_SECONDS").is_some();
++    let size = if bench { [1280.0, 800.0] } else { DEFAULT_INNER_SIZE };
+     let mut viewport = egui::ViewportBuilder::default()
+         .with_title(WINDOW_TITLE)
+-        .with_inner_size(DEFAULT_INNER_SIZE)
++        .with_inner_size(size)
+         .with_min_inner_size(MIN_INNER_SIZE)
+         .with_resizable(true);
+     if let Some(icon) = icon_data() {
+@@ -57,7 +61,7 @@ pub fn window_options() -> eframe::NativeOptions {
+     eframe::NativeOptions {
+         viewport,
+         centered: true,
+-        persist_window: true,
++        persist_window: !bench,
+         ..Default::default()
+     }
+ }
