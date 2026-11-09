@@ -178,9 +178,19 @@ Notable transitive licence families are NCSA for `libfuzzer-sys` (whose
 expression is `(MIT OR Apache-2.0) AND NCSA`), Apache-2.0 WITH LLVM-exception
 for `linux-raw-sys`, `rustix`, `wasi`, `wasip2`, and `wit-bindgen` (each also
 offers Apache-2.0 and/or MIT), and `Apache-2.0 OR GPL-2.0-only` for `self_cell`
-(this project uses the Apache-2.0 option). Each crate's exact copyright line
-and licence text are in its source distribution named by `Cargo.lock`; this
-file does not reproduce those copyright lines.
+(this project uses the Apache-2.0 option).
+
+The complete per-crate appendix is
+[`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt). It is
+generated from `cargo metadata --format-version 1 --locked` by
+`scripts/generate-notices.sh`, records each package's name, version, SPDX
+expression, repository, and licence file text, and deduplicates identical
+texts by content hash while still listing every package that uses them.
+Packages whose source distribution ships no licence file keep their SPDX
+expression and a clearly marked `NO LICENCE FILE` line instead of invented
+copyright text. The bundle is committed; regenerate and commit it whenever
+`Cargo.lock` changes. CI runs `scripts/generate-notices.sh --check` and fails
+on a stale bundle.
 
 The standard MIT permission text follows.
 

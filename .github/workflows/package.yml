@@ -101,6 +101,15 @@ jobs:
           VFE_BUILD_VERSION: ${{ inputs.build-version }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # The committed per-crate notice bundle must match Cargo.lock. Run it
+      # offline: the build above has already populated the registry cache, so
+      # a stale bundle fails without any network fetch.
+      - name: Check third-party notice bundle
+        if: runner.os == 'Linux'
+        env:
+          CARGO_NET_OFFLINE: 'true'
+        run: scripts/generate-notices.sh --check
+
       - name: Strip binary
         run: |
           set -euo pipefail
