@@ -25,56 +25,90 @@ pub const MAX_SHAFT_RADIUS: f32 = 0.12;
 pub const MIN_SIDES: u32 = 4;
 pub const MAX_SIDES: u32 = 16;
 
-/// The arrow shape family drawn in the 3D view.
+/// The arrow shape family drawn in the 3D view (ticket 64).
+///
+/// The persisted names are stable: old records used `Pyramid` for the cone and
+/// `Line` for the flat ribbon, so those spellings are aliases here. The new
+/// headless family is `Streamline` on disk and *Line* in the UI; it cannot be
+/// called `Line` on disk without making old records ambiguous.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ArrowStyle {
     /// Tapered n-sided shaft with a matching cone head.
     #[default]
+    #[serde(alias = "Pyramid")]
     Cone,
-    /// The 42-vertex four-sided faceted head from ticket 44.
-    Pyramid,
-    /// Constant-radius n-sided shaft with a cone head.
+    /// Constant-radius n-sided shaft with a far-end cap and no head.
     Cylinder,
-    /// Flat camera-facing 3D ribbon family.
-    Line,
+    /// Flat camera-facing ribbon with a shaft and an arrowhead.
+    #[serde(alias = "Line")]
+    Flat,
+    /// Thin headless camera-facing ribbon, like a streamline segment.
+    Streamline,
 }
 
-/// The arrow family drawn in the 2D view (ticket 61).
+/// The arrow family drawn in the 2D view (ticket 61, split in ticket 64).
 ///
 /// Deliberately independent of [`ArrowStyle`]: the 2D selection never feeds the
 /// 3D draw plan and vice versa. Adding a 2D family is one variant here plus one
 /// arm in [`crate::renderer::SceneGPU::arrow_draw_plan`]; the sidebar selector
 /// and persistence pick it up from [`ArrowStyle2D::ALL`] automatically.
+///
+/// As in the 3D set, old records' `Line` spelling meant the flat ribbon, so it
+/// aliases [`ArrowStyle2D::Flat`] and the new headless family persists as
+/// `Streamline` while showing the label *Line*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ArrowStyle2D {
     /// The flat nine-vertex silhouette drawn by `shaders.arrow2d.wgsl`.
     #[default]
-    #[serde(rename = "Line")]
-    Line,
+    #[serde(alias = "Line")]
+    Flat,
+    /// A thin headless shaft quad drawn by `shaders.arrow2d.wgsl`.
+    Streamline,
 }
 
 impl ArrowStyle2D {
     /// Every 2D family, in the order the `2D arrow style` selector shows them.
-    pub const ALL: [ArrowStyle2D; 1] = [ArrowStyle2D::Line];
+    pub const ALL: [ArrowStyle2D; 2] = [ArrowStyle2D::Flat, ArrowStyle2D::Streamline];
 
     /// Short label for the 2D style selector.
     pub fn label(self) -> &'static str {
         match self {
-            ArrowStyle2D::Line => "Line",
+            ArrowStyle2D::Flat => "Flat",
+            ArrowStyle2D::Streamline => "Line",
         }
     }
 
     /// One-line explanation, short enough for a tooltip.
     pub fn tooltip(self) -> &'static str {
         match self {
-            ArrowStyle2D::Line => "Flat ribbon silhouette for the 2D view",
+            ArrowStyle2D::Flat => "Flat ribbon with an arrowhead",
+            ArrowStyle2D::Streamline => "Thin headless line, like a streamline",
+        }
+    }
+
+    /// The value carried in `Globals.arrow_style.x` while the 2D view paints.
+    pub fn id(self) -> u32 {
+        match self {
+            ArrowStyle2D::Flat => 0,
+            ArrowStyle2D::Streamline => 1,
         }
     }
 
     /// Whether the sides slider changes this family's geometry.
     pub fn uses_sides(self) -> bool {
+        false
+    }
+
+    /// Whether the head length/width sliders apply to this family.
+    pub fn uses_head(self) -> bool {
+        matches!(self, ArrowStyle2D::Flat)
+    }
+
+    /// Vertices the 2D shader emits per arrow for this family.
+    pub fn vertex_count(self, _sides: u32) -> u32 {
         match self {
-            ArrowStyle2D::Line => false,
+            ArrowStyle2D::Flat => 9,
+            ArrowStyle2D::Streamline => 6,
         }
     }
 }
@@ -83,18 +117,18 @@ impl ArrowStyle {
     /// Every family, in the order the Display selector shows them.
     pub const ALL: [ArrowStyle; 4] = [
         ArrowStyle::Cone,
-        ArrowStyle::Pyramid,
         ArrowStyle::Cylinder,
-        ArrowStyle::Line,
+        ArrowStyle::Flat,
+        ArrowStyle::Streamline,
     ];
 
     /// Short label for the style selector.
     pub fn label(self) -> &'static str {
         match self {
             ArrowStyle::Cone => "Cone",
-            ArrowStyle::Pyramid => "Pyramid",
             ArrowStyle::Cylinder => "Cylinder",
-            ArrowStyle::Line => "Line",
+            ArrowStyle::Flat => "Flat",
+            ArrowStyle::Streamline => "Line",
         }
     }
 
@@ -102,9 +136,9 @@ impl ArrowStyle {
     pub fn tooltip(self) -> &'static str {
         match self {
             ArrowStyle::Cone => "Tapered shaft with a round cone head",
-            ArrowStyle::Pyramid => "Four-sided faceted shaft and head",
-            ArrowStyle::Cylinder => "Constant-radius shaft with a round cone head",
-            ArrowStyle::Line => "Flat ribbon that always faces the camera",
+            ArrowStyle::Cylinder => "Plain cylinder, no arrowhead",
+            ArrowStyle::Flat => "Flat ribbon with an arrowhead",
+            ArrowStyle::Streamline => "Thin headless line, like a streamline",
         }
     }
 
@@ -112,9 +146,9 @@ impl ArrowStyle {
     pub fn id(self) -> u32 {
         match self {
             ArrowStyle::Cone => 0,
-            ArrowStyle::Pyramid => 1,
-            ArrowStyle::Cylinder => 2,
-            ArrowStyle::Line => 3,
+            ArrowStyle::Cylinder => 1,
+            ArrowStyle::Flat => 2,
+            ArrowStyle::Streamline => 3,
         }
     }
 
@@ -123,18 +157,24 @@ impl ArrowStyle {
         matches!(self, ArrowStyle::Cone | ArrowStyle::Cylinder)
     }
 
+    /// Whether the head length/width sliders apply to this family.
+    pub fn uses_head(self) -> bool {
+        matches!(self, ArrowStyle::Cone | ArrowStyle::Flat)
+    }
+
     /// Vertices the 3D shader emits per arrow for this family.
     ///
-    /// Cone and Cylinder: shaft `6 * sides`, head `3 * sides`, and a full
-    /// `3 * (sides - 2)` fan under the head — `12 * sides - 6` in total.
-    /// Pyramid: the ticket-44 42-vertex layout. Line: a 9-vertex ribbon.
+    /// Cone: `6 * sides` shaft + `3 * sides` head + `3 * (sides - 2)` plate —
+    /// `12 * sides - 6` in total. Cylinder: the same `6 * sides` shaft plus only
+    /// the `3 * (sides - 2)` far-end cap — `9 * sides - 6`. Flat: a nine-vertex
+    /// ribbon. Line: a six-vertex headless ribbon quad.
     pub fn vertex_count(self, sides: u32) -> u32 {
+        let sides = sides.clamp(MIN_SIDES, MAX_SIDES);
         match self {
-            ArrowStyle::Pyramid => 42,
-            ArrowStyle::Cone | ArrowStyle::Cylinder => {
-                12 * sides.clamp(MIN_SIDES, MAX_SIDES) - 6
-            }
-            ArrowStyle::Line => 9,
+            ArrowStyle::Cone => 12 * sides - 6,
+            ArrowStyle::Cylinder => 9 * sides - 6,
+            ArrowStyle::Flat => 9,
+            ArrowStyle::Streamline => 6,
         }
     }
 }

@@ -183,6 +183,17 @@ pub fn sides_control_enabled(
     if view_3d { style_3d.uses_sides() } else { style_2d.uses_sides() }
 }
 
+/// Whether the Head length/head width sliders apply to the active view's
+/// selected family. Cylinder and Line have no head, so those controls are
+/// disabled rather than silently ignored.
+pub fn head_control_enabled(
+    view_3d: bool,
+    style_3d: ArrowStyle,
+    style_2d: ArrowStyle2D,
+) -> bool {
+    if view_3d { style_3d.uses_head() } else { style_2d.uses_head() }
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -227,7 +238,7 @@ impl Controls {
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             arrows: true,
             arrow_style: ArrowStyle::Cone,
-            arrow_style_2d: ArrowStyle2D::Line,
+            arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
             colormap: Colormap::Viridis,
             auto_fit: true,
@@ -387,22 +398,31 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         egui::CollapsingHeader::new("Arrow appearance")
             .default_open(false)
             .show(ui, |ui| {
-                ui.add(
+                let head_enabled = head_control_enabled(
+                    view_3d,
+                    controls.arrow_style,
+                    controls.arrow_style_2d,
+                );
+                ui.add_enabled(
+                    head_enabled,
                     egui::Slider::new(
                         &mut controls.arrow_params.head_length,
                         MIN_HEAD_LENGTH..=MAX_HEAD_LENGTH,
                     )
                     .text("Head length"),
                 )
-                .on_hover_text("Arrow head length as a fraction of the total arrow length");
-                ui.add(
+                .on_hover_text("Arrow head length as a fraction of the total arrow length")
+                .on_disabled_hover_text("This arrow family has no arrowhead");
+                ui.add_enabled(
+                    head_enabled,
                     egui::Slider::new(
                         &mut controls.arrow_params.head_width,
                         MIN_HEAD_WIDTH..=MAX_HEAD_WIDTH,
                     )
                     .text("Head width"),
                 )
-                .on_hover_text("Arrow head width as a fraction of the total arrow length");
+                .on_hover_text("Arrow head width as a fraction of the total arrow length")
+                .on_disabled_hover_text("This arrow family has no arrowhead");
                 ui.add(
                     egui::Slider::new(
                         &mut controls.arrow_params.shaft_radius,

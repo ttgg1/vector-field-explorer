@@ -84,7 +84,8 @@ pub struct ViewRecord {
     #[serde(default)]
     pub arrow_style: ArrowStyle,
     /// The 2D arrow family (ticket 61). Missing on pre-61 records; the serde
-    /// default loads them as [`ArrowStyle2D::Line`].
+    /// default loads them as [`ArrowStyle2D::Flat`]. Old `Line` spellings also
+    /// decode as Flat (ticket 64).
     #[serde(default)]
     pub arrow_style_2d: ArrowStyle2D,
     /// The 3D arrow head/shaft proportions (ticket 45).

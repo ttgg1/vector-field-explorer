@@ -1,10 +1,15 @@
-// Vector Field Explorer — flat 2D arrow shader (ticket 45).
+// Vector Field Explorer — flat 2D arrow shader (tickets 45, 61 and 64).
 //
 // One flat arrow per instance, geometry generated in the vertex shader from
 // `vertex_index` (no vertex buffer). The arrow lives in world XY: the instance
-// direction is projected onto the view plane, the shaft is a quad and the head
-// a triangle. The 2D camera looks down -Z, so no perspective foreshortening or
-// lighting applies; the fragment returns the colormap colour unchanged.
+// direction is projected onto the view plane. Flat draws the shaft quad plus a
+// head triangle; Line draws only a headless shaft quad over the full length.
+// The 2D camera looks down -Z, so no perspective foreshortening or lighting
+// applies; the fragment returns the colormap colour unchanged.
+//
+// `Globals.arrow_style.x` is the **2D** style id (Flat 0, Line 1) while this
+// pipeline paints. In the 3D pipeline the same slot carries the 3D family id;
+// the uploader writes the id for the active view (ticket 64).
 //
 // Bind group layout (same layout object is shared with the 3D arrow, line and
 // dot pipelines):
@@ -18,7 +23,7 @@ struct Globals {
     light_dir: vec4<f32>,    // xyz: direction *toward* the light (normalized)
     camera_right: vec4<f32>, // xyz: world-space camera right axis (w = 0)
     camera_up: vec4<f32>,    // xyz: world-space camera up axis (w = 0)
-    arrow_style: vec4<u32>,  // x: style id, y: sides, z/w: unused
+    arrow_style: vec4<u32>,  // x: 2D style id (in 2D), y: sides, z/w: unused
     arrow_params: vec4<f32>, // x: head length, y: head width, z: shaft radius, w: unused
 };
 
@@ -39,17 +44,27 @@ struct VertexOut {
     @location(0) color: vec4<f32>,
 };
 
-// Geometry layout per instance (triangle list, no vertex buffer):
-//   verts 0..6 : shaft quad, two triangles
-//   verts 6..9 : head triangle
+// Geometry layouts per instance (triangle list, no vertex buffer):
+//   Flat: verts 0..6 shaft quad, 6..9 head triangle.
+//   Line: verts 0..6 headless shaft quad over the full arrow length.
 const ARROW2D_VERTS: u32 = 9u;
+const ARROW2D_VERTS_LINE: u32 = 6u;
+
+fn style_vertex_count() -> u32 {
+    if (globals.arrow_style.x == 1u) {
+        return ARROW2D_VERTS_LINE;
+    }
+    return ARROW2D_VERTS;
+}
 
 @vertex
 fn vs_arrow2d(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
-    let inst_idx = vertex_index / ARROW2D_VERTS;
-    let j = vertex_index % ARROW2D_VERTS;
+    let count = style_vertex_count();
+    let inst_idx = vertex_index / count;
+    let j = vertex_index % count;
     let inst = arrow_instances[inst_idx];
 
+    let style = globals.arrow_style.x;
     let params = globals.arrow_params;
     let len = inst.dir_len.w;
     let shaft_len = (1.0 - params.x) * len;
@@ -71,8 +86,17 @@ fn vs_arrow2d(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
     let tip = base + axis * len;
 
     var p: vec2<f32>;
-    if (j < 6u) {
-        // r: 0 (base,+) 1 (junction,+) 2 (base,-) / 3 (junction,+) 4 (junction,-) 5 (base,-)
+    if (style == 1u) {
+        // Line: one headless quad over the full length, no head triangle.
+        let at_start = (j == 0u) || (j == 2u) || (j == 5u);
+        let positive = (j == 0u) || (j == 1u) || (j == 3u);
+        let along = select(tip, base, at_start);
+        let sgn = select(-1.0, 1.0, positive);
+        p = along + side * half_shaft * sgn;
+    } else if (j < 6u) {
+        // Flat shaft quad:
+        // r: 0 (base,+) 1 (junction,+) 2 (base,-)
+        //    3 (junction,+) 4 (junction,-) 5 (base,-)
         let at_start = (j == 0u) || (j == 2u) || (j == 5u);
         let positive = (j == 0u) || (j == 1u) || (j == 3u);
         let along = select(junction, base, at_start);

@@ -71,10 +71,18 @@ struct LegacySettings {
     view: LegacyViewRecord,
 }
 
+/// The old serde spellings a pre-ticket-64 record can carry. `Line` meant the
+/// flat ribbon and `Pyramid` meant the cone; both must still decode.
+#[derive(serde::Serialize)]
+enum OldArrowStyle {
+    Pyramid,
+    Line,
+}
+
 /// The exact `ViewRecord` shape a build before ticket 61 wrote: it carries the
 /// 3D `arrow_style` and geometry but no `arrow_style_2d`. Writing this through
 /// real eframe storage proves the new field loads from its serde default while
-/// the existing 3D selection survives.
+/// the old `Pyramid` spelling decodes as Cone.
 #[derive(serde::Serialize)]
 struct Pre2DViewRecord {
     formula: String,
@@ -90,7 +98,7 @@ struct Pre2DViewRecord {
     color_min: f32,
     color_max: f32,
     arrows: bool,
-    arrow_style: ArrowStyle,
+    arrow_style: OldArrowStyle,
     arrow_params: ArrowParams,
     streamlines: bool,
     particles: bool,
@@ -122,11 +130,35 @@ fn pre_2d_style_settings() -> Pre2DSettings {
             color_min: 0.0,
             color_max: 1.0,
             arrows: true,
-            arrow_style: ArrowStyle::Pyramid,
+            arrow_style: OldArrowStyle::Pyramid,
             arrow_params: ArrowParams::default(),
             streamlines: false,
             particles: false,
             speed: 1.0,
+        },
+    }
+}
+
+/// A pre-ticket-64 record whose two style keys use the old `Line` spelling.
+/// `ViewRecord`'s container default fills every other missing field.
+#[derive(serde::Serialize)]
+struct OldLineViewRecord {
+    arrow_style: OldArrowStyle,
+    arrow_style_2d: OldArrowStyle,
+}
+
+#[derive(serde::Serialize)]
+struct OldLineSettings {
+    style: AppStyle,
+    view: OldLineViewRecord,
+}
+
+fn old_line_settings() -> OldLineSettings {
+    OldLineSettings {
+        style: AppStyle::default(),
+        view: OldLineViewRecord {
+            arrow_style: OldArrowStyle::Line,
+            arrow_style_2d: OldArrowStyle::Line,
         },
     }
 }
@@ -178,7 +210,7 @@ fn configured() -> (State, Controls) {
     controls.speed = 2.2;
     controls.arrows = false;
     controls.arrow_style = ArrowStyle::Cylinder;
-    controls.arrow_style_2d = ArrowStyle2D::Line;
+    controls.arrow_style_2d = ArrowStyle2D::Streamline;
     controls.arrow_params = ArrowParams {
         head_length: 0.4,
         head_width: 0.2,
@@ -260,34 +292,63 @@ fn a_legacy_record_without_arrow_style_fields_gets_the_defaults() {
     settings.view.restore(&mut state, &mut controls);
     assert!(state.arrows, "older records show arrows");
     assert_eq!(state.arrow_style, ArrowStyle::Cone, "older records use the cone");
-    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Line, "older records use the 2D line");
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Flat, "older records use the 2D flat ribbon");
     assert_eq!(state.arrow_params, ArrowParams::default(), "older records use default geometry");
     assert_eq!(controls.arrow_style, ArrowStyle::Cone, "the mirror follows");
-    assert_eq!(controls.arrow_style_2d, ArrowStyle2D::Line, "the 2D mirror follows");
+    assert_eq!(controls.arrow_style_2d, ArrowStyle2D::Flat, "the 2D mirror follows");
     assert_eq!(controls.arrow_params, ArrowParams::default());
 }
 
 #[test]
-fn a_pre_ticket_61_record_keeps_its_3d_style_and_defaults_the_2d_style() {
+fn a_pre_ticket_61_record_decodes_old_pyramid_and_defaults_the_2d_style() {
     let mut storage = MemoryStorage::default();
     eframe::set_value(&mut storage, eframe::APP_KEY, &pre_2d_style_settings());
 
     let loaded = load(Some(&storage));
 
-    assert_eq!(loaded.view.arrow_style, ArrowStyle::Pyramid, "the existing 3D style survives");
+    assert_eq!(
+        loaded.view.arrow_style,
+        ArrowStyle::Cone,
+        "the old Pyramid spelling decodes as Cone",
+    );
     assert_eq!(
         loaded.view.arrow_style_2d,
-        ArrowStyle2D::Line,
+        ArrowStyle2D::Flat,
         "the missing 2D field loads from its serde default",
     );
 
     let mut state = State::new(true);
     let mut controls = Controls::new();
     loaded.view.restore(&mut state, &mut controls);
-    assert_eq!(state.arrow_style, ArrowStyle::Pyramid, "restore keeps the 3D selection");
-    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Line, "restore defaults the 2D selection");
-    assert_eq!(controls.arrow_style, ArrowStyle::Pyramid, "the 3D mirror follows");
-    assert_eq!(controls.arrow_style_2d, ArrowStyle2D::Line, "the 2D mirror follows");
+    assert_eq!(state.arrow_style, ArrowStyle::Cone, "restore keeps the decoded 3D selection");
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Flat, "restore defaults the 2D selection");
+    assert_eq!(controls.arrow_style, ArrowStyle::Cone, "the 3D mirror follows");
+    assert_eq!(controls.arrow_style_2d, ArrowStyle2D::Flat, "the 2D mirror follows");
+}
+
+#[test]
+fn a_pre_ticket_64_record_decodes_old_line_to_flat_in_both_sets() {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &old_line_settings());
+
+    let loaded = load(Some(&storage));
+
+    assert_eq!(
+        loaded.view.arrow_style,
+        ArrowStyle::Flat,
+        "the old 3D Line spelling keeps the flat ribbon",
+    );
+    assert_eq!(
+        loaded.view.arrow_style_2d,
+        ArrowStyle2D::Flat,
+        "the old 2D Line spelling keeps the flat ribbon",
+    );
+
+    let mut state = State::new(true);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+    assert_eq!(state.arrow_style, ArrowStyle::Flat);
+    assert_eq!(state.arrow_style_2d, ArrowStyle2D::Flat);
 }
 
 #[test]
@@ -301,12 +362,12 @@ fn new_records_write_and_reload_the_2d_arrow_style() {
         "the 3D style is written with its stable spelling:\n{raw}",
     );
     assert!(
-        raw.contains("arrow_style_2d:Line"),
-        "the 2D style is written with its stable spelling:\n{raw}",
+        raw.contains("arrow_style_2d:Streamline"),
+        "the 2D Line style is written with its stable `Streamline` spelling:\n{raw}",
     );
 
     let loaded = load(Some(&storage));
-    assert_eq!(loaded.view.arrow_style_2d, ArrowStyle2D::Line);
+    assert_eq!(loaded.view.arrow_style_2d, ArrowStyle2D::Streamline);
     assert_eq!(loaded.view.arrow_style, ArrowStyle::Cylinder);
 }
 
@@ -432,7 +493,7 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.speed, state.speed, "speed");
     assert!(!restored_state.arrows, "the Show arrows toggle");
     assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
-    assert_eq!(restored_state.arrow_style_2d, ArrowStyle2D::Line, "2D arrow style");
+    assert_eq!(restored_state.arrow_style_2d, ArrowStyle2D::Streamline, "2D arrow style");
     assert_eq!(restored_state.arrow_params.sides, 8, "arrow sides");
     assert_eq!(restored_state.arrow_params.head_length, 0.4, "arrow head length");
     assert_eq!(restored_controls.arrows, restored_state.arrows, "the mirror follows the toggle");

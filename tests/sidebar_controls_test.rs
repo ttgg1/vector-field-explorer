@@ -6,7 +6,7 @@
 
 use vector_field_explorer::ui::sidebar::{
     ArrowStyleSet, Controls, apply, arrow_scale_enabled, arrow_style_set, domain_summary,
-    magnitude_scale_enabled, sides_control_enabled,
+    head_control_enabled, magnitude_scale_enabled, sides_control_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
@@ -281,15 +281,15 @@ fn display_reset_restores_proportional_and_both_scales() {
 fn display_reset_restores_arrow_visibility_style_and_appearance() {
     let mut c = Controls::new();
     c.arrows = false;
-    c.arrow_style = ArrowStyle::Line;
-    c.arrow_style_2d = ArrowStyle2D::Line;
+    c.arrow_style = ArrowStyle::Streamline;
+    c.arrow_style_2d = ArrowStyle2D::Streamline;
     c.arrow_params = ArrowParams { head_length: 0.5, head_width: 0.3, shaft_radius: 0.12, sides: 4 };
 
     c.reset_display();
 
     assert!(c.arrows, "arrows return");
     assert_eq!(c.arrow_style, ArrowStyle::Cone, "the default style returns");
-    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Line, "the default 2D style returns");
+    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Flat, "the default 2D style returns");
     assert_eq!(c.arrow_params, ArrowParams::default(), "the default appearance returns");
 }
 
@@ -302,19 +302,40 @@ fn the_sidebar_shows_the_matching_arrow_set() {
     assert_eq!(ArrowStyleSet::ThreeD.label(), "Arrow style");
     assert_eq!(ArrowStyleSet::TwoD.label(), "2D arrow style");
     assert_eq!(ArrowStyle::ALL.len(), 4, "the 3D selector keeps its four families");
-    assert_eq!(ArrowStyle2D::ALL, [ArrowStyle2D::Line], "the 2D selector starts with Line only");
+    assert_eq!(ArrowStyle::ALL.map(ArrowStyle::label), ["Cone", "Cylinder", "Flat", "Line"]);
+    assert_eq!(
+        ArrowStyle2D::ALL,
+        [ArrowStyle2D::Flat, ArrowStyle2D::Streamline],
+        "the 2D selector offers Flat and Line",
+    );
+    assert_eq!(ArrowStyle2D::ALL.map(ArrowStyle2D::label), ["Flat", "Line"]);
 }
 
 #[test]
 fn sides_are_enabled_only_for_families_that_use_them() {
     assert!(
-        !sides_control_enabled(false, ArrowStyle::Cone, ArrowStyle2D::Line),
-        "the 2D line has a fixed silhouette",
+        !sides_control_enabled(false, ArrowStyle::Cone, ArrowStyle2D::Flat),
+        "the 2D flat arrow has a fixed silhouette",
     );
-    assert!(sides_control_enabled(true, ArrowStyle::Cone, ArrowStyle2D::Line));
-    assert!(sides_control_enabled(true, ArrowStyle::Cylinder, ArrowStyle2D::Line));
-    assert!(!sides_control_enabled(true, ArrowStyle::Pyramid, ArrowStyle2D::Line));
-    assert!(!sides_control_enabled(true, ArrowStyle::Line, ArrowStyle2D::Line));
+    assert!(sides_control_enabled(true, ArrowStyle::Cone, ArrowStyle2D::Flat));
+    assert!(sides_control_enabled(true, ArrowStyle::Cylinder, ArrowStyle2D::Flat));
+    assert!(!sides_control_enabled(true, ArrowStyle::Flat, ArrowStyle2D::Flat));
+    assert!(!sides_control_enabled(true, ArrowStyle::Streamline, ArrowStyle2D::Flat));
+    assert!(
+        !sides_control_enabled(false, ArrowStyle::Cone, ArrowStyle2D::Streamline),
+        "the 2D line has a fixed silhouette too",
+    );
+}
+
+#[test]
+fn head_controls_are_enabled_only_for_families_with_a_head() {
+    assert!(head_control_enabled(true, ArrowStyle::Cone, ArrowStyle2D::Flat));
+    assert!(head_control_enabled(true, ArrowStyle::Flat, ArrowStyle2D::Flat));
+    assert!(!head_control_enabled(true, ArrowStyle::Cylinder, ArrowStyle2D::Flat));
+    assert!(!head_control_enabled(true, ArrowStyle::Streamline, ArrowStyle2D::Flat));
+
+    assert!(head_control_enabled(false, ArrowStyle::Cone, ArrowStyle2D::Flat));
+    assert!(!head_control_enabled(false, ArrowStyle::Cone, ArrowStyle2D::Streamline));
 }
 
 #[test]
@@ -324,23 +345,23 @@ fn switching_views_preserves_both_arrow_selections_through_apply() {
     assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
 
     c.arrow_style = ArrowStyle::Cylinder;
-    c.arrow_style_2d = ArrowStyle2D::Line;
+    c.arrow_style_2d = ArrowStyle2D::Streamline;
     apply(&mut s, &mut c);
     assert_eq!(s.arrow_style, ArrowStyle::Cylinder);
-    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line);
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Streamline);
 
     assert!(s.set_mode(true), "switch to 3D");
     apply(&mut s, &mut c);
     assert_eq!(s.arrow_style, ArrowStyle::Cylinder, "the 3D selection survives the view switch");
-    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line, "the 2D selection survives too");
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Streamline, "the 2D selection survives too");
     assert_eq!(c.arrow_style, ArrowStyle::Cylinder, "the mirror keeps the 3D family");
-    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Line, "the mirror keeps the 2D family");
+    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Streamline, "the mirror keeps the 2D family");
     assert_eq!(arrow_style_set(s.mode_3d), ArrowStyleSet::ThreeD);
 
     assert!(s.set_mode(false), "switch back to 2D");
     apply(&mut s, &mut c);
     assert_eq!(s.arrow_style, ArrowStyle::Cylinder, "the 3D selection still survives");
-    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line, "the 2D selection still survives");
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Streamline, "the 2D selection still survives");
     assert_eq!(arrow_style_set(s.mode_3d), ArrowStyleSet::TwoD);
 }
 
@@ -350,15 +371,15 @@ fn changing_one_arrow_set_never_changes_the_other_through_apply() {
     let mut s = State::new(false);
     assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
 
-    c.arrow_style = ArrowStyle::Pyramid;
+    c.arrow_style = ArrowStyle::Flat;
     apply(&mut s, &mut c);
-    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Line, "the 2D set is untouched");
+    assert_eq!(s.arrow_style_2d, ArrowStyle2D::Flat, "the 2D set is untouched");
 
-    c.arrow_style_2d = ArrowStyle2D::Line;
+    c.arrow_style_2d = ArrowStyle2D::Streamline;
     apply(&mut s, &mut c);
-    assert_eq!(s.arrow_style, ArrowStyle::Pyramid, "the 3D set is untouched");
-    assert_eq!(c.arrow_style, ArrowStyle::Pyramid);
-    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Line);
+    assert_eq!(s.arrow_style, ArrowStyle::Flat, "the 3D set is untouched");
+    assert_eq!(c.arrow_style, ArrowStyle::Flat);
+    assert_eq!(c.arrow_style_2d, ArrowStyle2D::Streamline);
 }
 
 // --- Domain summary, bounds and reset (ticket 32) ---------------------------

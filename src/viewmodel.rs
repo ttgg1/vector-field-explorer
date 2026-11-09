@@ -187,7 +187,7 @@ impl State {
             color_max: 1.0,
             arrows: true,
             arrow_style: ArrowStyle::Cone,
-            arrow_style_2d: ArrowStyle2D::Line,
+            arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
             streamlines: false,
             particles: false,

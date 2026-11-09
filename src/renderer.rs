@@ -51,32 +51,37 @@ pub struct Globals {
     pub camera_right: [f32; 4],
     /// World-space camera up axis, w = 0.
     pub camera_up: [f32; 4],
-    /// Arrow style id, radial side count, then two unused slots.
+    /// The active view's style id (3D family in 3D, 2D family in 2D), radial
+    /// side count, then two unused slots.
     pub arrow_style: [u32; 4],
     /// Head length, head width, shaft radius, then one unused slot.
     pub arrow_params: [f32; 4],
 }
 
-/// Vertices the Pyramid shader emits per instance: 24 shaft + 12 cone head + 6
-/// base plate. Kept in step with the `ARROW_VERTS` constant in
-/// `src/shaders.arrow.wgsl`; [`crate::arrow_geometry`] mirrors the geometry.
-pub const ARROW_VERTS: u32 = 42;
+/// Vertices the 3D `Flat` style emits per instance: a shaft quad (6) and a head
+/// triangle (3). Kept in step with `ARROW_VERTS_FLAT` in the arrow shader.
+pub const ARROW_VERTS_FLAT: u32 = 9;
 
-/// Vertices the 3D `Line` style emits per instance: a shaft quad (6) and a head
-/// triangle (3). Kept in step with `ARROW_VERTS_LINE` in the arrow shader.
-pub const ARROW_VERTS_LINE: u32 = 9;
+/// Vertices the 3D `Line` style emits per instance: one headless ribbon quad.
+/// Kept in step with `ARROW_VERTS_LINE` in the arrow shader.
+pub const ARROW_VERTS_LINE: u32 = 6;
 
-/// Vertices the flat 2D arrow emits per instance. Kept in step with
+/// Vertices the flat 2D `Flat` arrow emits per instance. Kept in step with
 /// `ARROW2D_VERTS` in `src/shaders.arrow2d.wgsl`.
 pub const ARROW2D_VERTS: u32 = 9;
+
+/// Vertices the 2D `Line` arrow emits per instance: one headless quad. Kept in
+/// step with `ARROW2D_VERTS_LINE` in `src/shaders.arrow2d.wgsl`.
+pub const ARROW2D_VERTS_LINE: u32 = 6;
 
 /// Which arrow pipeline `record` uses and how many vertices per instance it
 /// draws. Pure so the 2D/3D selection is testable without a GPU; `record`
 /// matches on it directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDrawPlan {
-    /// The flat nine-vertex arrow through `arrow2d_pipeline`.
-    Flat2D,
+    /// The flat 2D arrow through `arrow2d_pipeline`, at the selected 2D
+    /// family's vertex count.
+    Flat2D { vertices: u32 },
     /// The selected 3D family through `arrow_pipeline`.
     Mesh3D { vertices: u32 },
 }
@@ -141,15 +146,16 @@ impl SceneGPU {
 
     /// The pipeline and per-instance vertex count the next `record` call uses.
     /// 3D uses the selected [`ArrowStyle`] family's budget; 2D uses the
-    /// independent [`ArrowStyle2D`] set (ticket 61), never the 3D selection.
+    /// independent [`ArrowStyle2D`] set (tickets 61 and 64), never the 3D
+    /// selection, and carries that 2D family's own 9- or 6-vertex count.
     pub fn arrow_draw_plan(&self) -> ArrowDrawPlan {
         if self.mode_3d {
             ArrowDrawPlan::Mesh3D {
                 vertices: self.arrow_style.vertex_count(self.arrow_params.sides),
             }
         } else {
-            match self.arrow_style_2d {
-                ArrowStyle2D::Line => ArrowDrawPlan::Flat2D,
+            ArrowDrawPlan::Flat2D {
+                vertices: self.arrow_style_2d.vertex_count(self.arrow_params.sides),
             }
         }
     }
@@ -157,15 +163,14 @@ impl SceneGPU {
     /// The per-instance vertex count the next `record` call draws.
     pub fn arrow_vertex_count(&self) -> u32 {
         match self.arrow_draw_plan() {
-            ArrowDrawPlan::Flat2D => ARROW2D_VERTS,
-            ArrowDrawPlan::Mesh3D { vertices } => vertices,
+            ArrowDrawPlan::Flat2D { vertices } | ArrowDrawPlan::Mesh3D { vertices } => vertices,
         }
     }
 
     /// Whether arrows paint through the flat 2D pipeline rather than the 3D
     /// family pipeline.
     pub fn uses_flat_arrow(&self) -> bool {
-        matches!(self.arrow_draw_plan(), ArrowDrawPlan::Flat2D)
+        matches!(self.arrow_draw_plan(), ArrowDrawPlan::Flat2D { .. })
     }
 }
 
@@ -500,6 +505,12 @@ impl DrawState {
     ) {
         let (camera_right, camera_up) = camera_basis_from_view_proj(&view_proj);
         let params = scene.arrow_params.sanitized();
+        // `arrow_style.x` is mode-dependent: the 3D family id while the 3D
+        // pipeline paints, the 2D family id while the 2D pipeline paints. The
+        // 2D and 3D ids are separate namespaces, so the matching shader must
+        // be the one that reads it (ticket 64).
+        let arrow_style_id =
+            if scene.mode_3d { scene.arrow_style.id() } else { scene.arrow_style_2d.id() };
         let globals = Globals {
             view_proj: mat4_to_mats(view_proj),
             inv_view_proj: mat4_to_mats(view_proj.inverse()),
@@ -507,7 +518,7 @@ impl DrawState {
             light_dir: self.light_dir,
             camera_right: camera_right.extend(0.0).to_array(),
             camera_up: camera_up.extend(0.0).to_array(),
-            arrow_style: [scene.arrow_style.id(), params.sides, 0, 0],
+            arrow_style: [arrow_style_id, params.sides, 0, 0],
             arrow_params: [params.head_length, params.head_width, params.shaft_radius, 0.0],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
@@ -595,9 +606,9 @@ impl DrawState {
 
         if !scene.arrows.is_empty() {
             let vertices = match scene.arrow_draw_plan() {
-                ArrowDrawPlan::Flat2D => {
+                ArrowDrawPlan::Flat2D { vertices } => {
                     pass.set_pipeline(&self.arrow2d_pipeline);
-                    ARROW2D_VERTS
+                    vertices
                 }
                 ArrowDrawPlan::Mesh3D { vertices } => {
                     pass.set_pipeline(&self.arrow_pipeline);
