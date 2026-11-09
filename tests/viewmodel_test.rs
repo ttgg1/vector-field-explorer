@@ -11,12 +11,14 @@ use vector_field_explorer::renderer::{
     sort_scene_back_to_front, sorted_arrows_back_to_front,
 };
 use vector_field_explorer::sampling::ArrowData;
+use vector_field_explorer::particles::{DOT_SPACING_FRACTION, MAX_PARTICLES};
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, DEFAULT_PROPORTIONAL_EXPONENT,
-    FORMULA_2D, FORMULA_3D, MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT,
-    MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT, MIN_DENSITY, MIN_DOMAIN_EXTENT,
-    MIN_MAGNITUDE_SCALE, MIN_PROPORTIONAL_EXPONENT, STREAMLINE_MAX_LEN, State,
-    StreamlineSeedMode, clamp_domain_extent, domain_between,
+    ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, DEFAULT_PARTICLE_SIZE,
+    DEFAULT_PROPORTIONAL_EXPONENT, FORMULA_2D, FORMULA_3D, MAX_DENSITY_2D, MAX_DENSITY_3D,
+    MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE, MAX_PROPORTIONAL_EXPONENT,
+    MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE,
+    MIN_PROPORTIONAL_EXPONENT, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
+    clamp_domain_extent, domain_between,
 };
 
 #[test]
@@ -1028,4 +1030,86 @@ fn clamp_domain_extent_is_finite_and_bounded() {
     assert_eq!(clamp_domain_extent(f32::NEG_INFINITY), MIN_DOMAIN_EXTENT, "−inf clamps up");
     assert_eq!(clamp_domain_extent(f32::NAN), 0.0, "NaN becomes a finite default");
     assert!(clamp_domain_extent(1.0e30).is_finite(), "huge values stay finite");
+}
+
+// --- Ticket 30: particle size and count --------------------------------
+
+fn close(actual: f32, expected: f32) -> bool {
+    (actual - expected).abs() < 1e-6
+}
+
+#[test]
+fn particle_size_defaults_to_one_and_clamps() {
+    let mut s = State::new(false);
+    assert_eq!(s.particle_size, DEFAULT_PARTICLE_SIZE, "dots start at the base fraction");
+    assert!(s.set_particle_size(0.1), "below the floor moves the value");
+    assert_eq!(s.particle_size, MIN_PARTICLE_SIZE, "size clamps up to 0.25");
+    assert!(s.set_particle_size(9.0), "above the ceiling moves the value");
+    assert_eq!(s.particle_size, MAX_PARTICLE_SIZE, "size clamps down to 3.0");
+    assert!(s.set_particle_size(1.75), "in-range sizes pass through");
+    assert_eq!(s.particle_size, 1.75);
+    assert!(!s.set_particle_size(1.75), "an unchanged size is a no-op");
+    assert!(s.set_particle_size(f32::NAN), "NaN moves the non-default size");
+    assert_eq!(s.particle_size, DEFAULT_PARTICLE_SIZE, "NaN resets to the default");
+    assert!(!s.set_particle_size(f32::NAN), "NaN at the default is a no-op");
+    assert!(s.set_particle_size(2.0));
+    assert!(s.set_particle_size(f32::INFINITY), "a non-finite size also moves the value");
+    assert_eq!(s.particle_size, DEFAULT_PARTICLE_SIZE, "infinity resets to the default");
+}
+
+#[test]
+fn particle_radius_is_linear_in_size_and_spacing() {
+    let mut s = State::new(false);
+    assert!(
+        close(s.particle_radius(0.5), DOT_SPACING_FRACTION * 0.5),
+        "at the default size the radius is the base fraction of the spacing",
+    );
+    let base = s.particle_radius(0.5);
+    assert!(s.set_particle_size(2.0));
+    assert!(close(s.particle_radius(0.5), base * 2.0), "twice the size is twice the radius");
+    assert!(close(s.particle_radius(1.0), s.particle_radius(0.5) * 2.0),
+        "twice the spacing is twice the radius");
+    assert_eq!(DOT_SPACING_FRACTION, 0.3, "the base fraction itself never moves");
+}
+
+#[test]
+fn particle_count_defaults_to_auto_and_clamps() {
+    let mut s = State::new(false);
+    assert_eq!(s.particle_count, 0, "0 is the Auto sentinel");
+    assert!(s.set_particle_count(100), "an explicit count moves the value");
+    assert_eq!(s.particle_count, 100);
+    assert!(!s.set_particle_count(100), "an unchanged count is a no-op");
+    assert!(s.set_particle_count(5000), "above the cap moves the value");
+    assert_eq!(s.particle_count, MAX_PARTICLES as u32, "the count caps at 4000");
+    assert!(s.set_particle_count(0), "zero returns to Auto");
+    assert_eq!(s.particle_count, 0);
+}
+
+#[test]
+fn particle_size_and_count_do_not_redirty_the_scene() {
+    // Dots are rebuilt from the live cloud every frame; size/count are not
+    // sampling-grid inputs, so they must not trigger a scene rebuild.
+    let mut s = State::new(true);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    assert!(s.set_particle_size(2.5));
+    assert!(s.set_particle_count(500));
+    assert!(!s.dirty, "the setters leave the dirty flag alone");
+    assert!(s.snapshot_if_dirty().is_none(), "and no rebuild is requested");
+}
+
+#[test]
+fn particle_target_is_none_while_off_or_in_2d() {
+    let mut s = State::new(true);
+    s.set_density(8);
+    assert_eq!(s.particle_target(), None, "particles off spawns nothing");
+    assert!(s.set_particles(true));
+    assert_eq!(s.particle_target(), Some(128), "Auto follows the density (8 x 16)");
+    assert!(s.set_particle_count(100));
+    assert_eq!(s.particle_target(), Some(100), "an explicit count overrides Auto");
+    assert!(s.set_mode(false));
+    assert_eq!(s.particle_target(), None, "the 2D view has no depth for the cloud");
+    assert!(s.set_mode(true));
+    assert_eq!(s.particle_target(), Some(100), "returning to 3D restores the target");
+    assert!(s.set_particles(false));
+    assert_eq!(s.particle_target(), None);
 }

@@ -30,6 +30,7 @@ use crate::arrow_style::{
 };
 use crate::colormap::Colormap;
 use crate::domain::Domain;
+use crate::particles::MAX_PARTICLES;
 use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
 use crate::viewmodel::{
     ArrowLengthMode,
@@ -37,6 +38,7 @@ use crate::viewmodel::{
     StreamlineSeedMode,
     DEFAULT_DENSITY_2D,
     DEFAULT_MAGNITUDE_SCALE,
+    DEFAULT_PARTICLE_SIZE,
     DEFAULT_PROPORTIONAL_EXPONENT,
     MIN_DENSITY,
     MAX_DENSITY_2D,
@@ -45,6 +47,8 @@ use crate::viewmodel::{
     MAX_ARROW_SCALE,
     MIN_MAGNITUDE_SCALE,
     MAX_MAGNITUDE_SCALE,
+    MIN_PARTICLE_SIZE,
+    MAX_PARTICLE_SIZE,
     MIN_PROPORTIONAL_EXPONENT,
     MAX_PROPORTIONAL_EXPONENT,
     MIN_DOMAIN_EXTENT,
@@ -252,6 +256,19 @@ pub fn seed_mode_enabled(streamlines: bool) -> bool {
     streamlines
 }
 
+/// Whether the particle size slider applies. With Particles off there are no
+/// dots, so the slider is disabled rather than silently ignored (ticket 30).
+pub fn particle_size_enabled(particles: bool) -> bool {
+    particles
+}
+
+/// The particle-count drag value's text: `0` is the Auto sentinel, any other
+/// value shows its number so the widget can both display "Auto" and accept a
+/// typed count (ticket 30).
+pub fn particle_count_label(count: u32) -> String {
+    if count == 0 { "Auto".to_owned() } else { count.to_string() }
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -277,6 +294,10 @@ pub struct Controls {
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
     pub particles: bool,
+    /// Dot radius multiplier on the grid spacing (ticket 30).
+    pub particle_size: f32,
+    /// Explicit particle count; `0` means Auto (density x 16) (ticket 30).
+    pub particle_count: u32,
     pub domain_min: Vec3,
     pub domain_max: Vec3,
     /// Plane-by-plane mirror (ticket 23). The index is only handed to the
@@ -314,6 +335,8 @@ impl Controls {
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             particles: false,
+            particle_size: DEFAULT_PARTICLE_SIZE,
+            particle_count: 0,
             domain_min: domain.min,
             domain_max: domain.max,
             plane: PlaneView::default(),
@@ -348,6 +371,8 @@ impl Controls {
         self.streamlines = defaults.streamlines;
         self.seed_mode = defaults.seed_mode;
         self.particles = defaults.particles;
+        self.particle_size = defaults.particle_size;
+        self.particle_count = defaults.particle_count;
     }
 
     /// Restore the Coloring section's defaults (viridis, auto-fit, 0..1).
@@ -578,6 +603,33 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         );
         ui.checkbox(&mut controls.particles, "Particles")
             .on_hover_text("Animate dots carried by the field (3D view)");
+        ui.add_enabled_ui(particle_size_enabled(controls.particles), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Particle size");
+                ui.add(
+                    egui::Slider::new(
+                        &mut controls.particle_size,
+                        MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE,
+                    )
+                    .fixed_decimals(2),
+                )
+                .on_hover_text("Dot radius relative to the grid spacing");
+            });
+        })
+        .response
+        .on_disabled_hover_text("Turn Particles on to change the dot size");
+        ui.horizontal(|ui| {
+            ui.label("Particle count");
+            ui.add(
+                egui::DragValue::new(&mut controls.particle_count)
+                    .range(0..=MAX_PARTICLES as u32)
+                    .speed(1.0)
+                    .custom_formatter(|value, _| {
+                        particle_count_label(value.max(0.0).round() as u32)
+                    }),
+            )
+            .on_hover_text("0 = Auto (density × 16); a value overrides it.");
+        });
     });
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
@@ -838,6 +890,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_streamlines(controls.streamlines);
     state.set_seed_mode(controls.seed_mode);
     state.set_particles(controls.particles);
+    state.set_particle_size(controls.particle_size);
+    state.set_particle_count(controls.particle_count);
     // Domain extents are bounded here, before `set_domain`'s per-axis swap,
     // so the UI's `.range` and this handoff share one clamp.
     let domain_min = Vec3::new(
@@ -868,6 +922,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.streamlines = state.streamlines;
     controls.seed_mode = state.seed_mode;
     controls.particles = state.particles;
+    controls.particle_size = state.particle_size;
+    controls.particle_count = state.particle_count;
     controls.domain_min = state.domain.min;
     controls.domain_max = state.domain.max;
 }

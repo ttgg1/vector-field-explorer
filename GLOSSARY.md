@@ -139,6 +139,16 @@ A point carried through the field over time, advancing with the simulation
 clock and respawning when it leaves the domain or stagnates.
 _Avoid_: dot
 
+**Particle size**:
+The dot radius as a multiple of the base grid-spacing fraction, so it scales
+with the grid and the user can tune visibility independently of density.
+_Avoid_: dot scale, point size
+
+**Particle count**:
+The explicit number of particles in the cloud. Zero is **Auto** (density ×
+16, capped); any other value overrides the density-derived count.
+_Avoid_: particle limit, dot budget
+
 **Particle trail**:
 The fading history of a particle's recent positions, drawn behind it.
 _Avoid_: trace, tail

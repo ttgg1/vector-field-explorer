@@ -9,15 +9,16 @@ use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
+use vector_field_explorer::particles::MAX_PARTICLES;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, DEFAULT_PROPORTIONAL_EXPONENT, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE,
-    MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State,
-    StreamlineSeedMode,
+    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, MAX_DOMAIN_EXTENT,
+    MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE,
+    STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
 };
 use vector_field_explorer::VfApp;
 
@@ -677,6 +678,8 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
         arrow_scale: f32::NAN,
         magnitude_scale: f32::NAN,
         proportional_exponent: f32::NAN,
+        particle_size: f32::NAN,
+        particle_count: 99_999,
         arrow_params: ArrowParams {
             head_length: f32::NAN,
             head_width: f32::INFINITY,
@@ -710,6 +713,16 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
     assert_eq!(state.arrow_params.head_width, 0.12, "an infinite head width falls back");
     assert_eq!(state.arrow_params.shaft_radius, 0.01, "a negative radius clamps to the min");
     assert_eq!(state.arrow_params.sides, 16, "an absurd side count clamps to the max");
+    assert_eq!(
+        state.particle_size, DEFAULT_PARTICLE_SIZE,
+        "a NaN particle size resets to the default",
+    );
+    assert_eq!(
+        state.particle_count, MAX_PARTICLES as u32,
+        "an absurd particle count clamps to the cap",
+    );
+    assert_eq!(controls.particle_size, state.particle_size, "the mirror follows the size");
+    assert_eq!(controls.particle_count, state.particle_count, "the mirror follows the count");
 }
 
 #[test]
@@ -860,4 +873,47 @@ fn a_launch_without_a_saved_domain_still_targets_the_origin() {
         Vec3::ZERO,
         "empty storage keeps the origin target",
     );
+}
+
+#[test]
+fn particle_size_and_count_round_trip_and_default_when_absent() {
+    let mut state = State::new(false);
+    assert!(state.set_particle_size(2.25));
+    assert!(state.set_particle_count(500));
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(raw.contains("particle_size:2.25"), "the size is written:\n{raw}");
+    assert!(raw.contains("particle_count:500"), "the count is written:\n{raw}");
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.particle_size, 2.25);
+    assert_eq!(loaded.view.particle_count, 500);
+    let mut restored_state = State::new(false);
+    let mut restored_controls = Controls::new();
+    loaded.view.restore(&mut restored_state, &mut restored_controls);
+    assert_eq!(restored_state.particle_size, 2.25, "the size survives the round trip");
+    assert_eq!(restored_state.particle_count, 500, "the count survives the round trip");
+    assert_eq!(restored_controls.particle_size, 2.25, "the mirror follows the size");
+    assert_eq!(restored_controls.particle_count, 500, "the mirror follows the count");
+
+    // A record written before ticket 30 has neither key: defaults apply.
+    let legacy = load_legacy(false);
+    assert_eq!(
+        legacy.view.particle_size, DEFAULT_PARTICLE_SIZE,
+        "an older record loads size 1.0",
+    );
+    assert_eq!(legacy.view.particle_count, 0, "an older record loads Auto");
+    let mut legacy_state = State::new(false);
+    let mut legacy_controls = Controls::new();
+    legacy.view.restore(&mut legacy_state, &mut legacy_controls);
+    assert_eq!(legacy_state.particle_size, 1.0);
+    assert_eq!(legacy_state.particle_count, 0);
+    assert_eq!(legacy_controls.particle_size, 1.0);
+    assert_eq!(legacy_controls.particle_count, 0);
 }

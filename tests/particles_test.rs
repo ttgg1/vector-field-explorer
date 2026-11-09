@@ -14,9 +14,11 @@ use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::particles::{
-    CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, MAX_PARTICLES, PARTICLES_PER_DENSITY, Particles,
-    advect, clear, count, dot_instances, spawn, spawn_at, target_count,
+    CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, DOT_SPACING_FRACTION, MAX_PARTICLES,
+    PARTICLES_PER_DENSITY, Particles, advect, clear, count, dot_instances, effective_particle_count,
+    resize, retarget, spawn, spawn_at, target_count,
 };
+use vector_field_explorer::viewmodel::State;
 
 /// The cloud's positions, for the assertions below.
 fn positions(cloud: &Particles) -> Vec<Vec3> {
@@ -380,4 +382,168 @@ fn spawn_clear_spawn_is_deterministic() {
     spawn(&mut cloud, &domain, 24, 3);
     assert_eq!(positions(&cloud), first,
         "a toggle off/on cycle respawns from the fixed seed, not the advanced stream");
+}
+
+// --- Ticket 30: explicit count and size ---------------------------------
+
+#[test]
+fn effective_count_is_auto_until_an_explicit_count_overrides_it() {
+    assert_eq!(
+        effective_particle_count(8, 0),
+        128,
+        "Auto is density x 16 (8 x 16 here)",
+    );
+    assert_eq!(
+        effective_particle_count(8, 100),
+        100,
+        "a non-zero count overrides the density-derived value",
+    );
+    assert_eq!(
+        effective_particle_count(8, 5000),
+        MAX_PARTICLES as u32,
+        "an explicit count still respects the particle cap",
+    );
+    assert_eq!(effective_particle_count(0, 0), 0, "zero density with Auto asks for nothing");
+    assert_eq!(
+        effective_particle_count(10_000, 0),
+        MAX_PARTICLES as u32,
+        "Auto is capped too",
+    );
+}
+
+#[test]
+fn a_lower_target_trims_the_cloud_and_keeps_the_survivors_in_place() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 120, 3);
+    let before = positions(&cloud);
+
+    resize(&mut cloud, &domain, 100, 3);
+
+    assert_eq!(count(&cloud), 100, "the cloud shrinks to the target");
+    assert_eq!(positions(&cloud), before[..100], "the surviving particles never move");
+}
+
+#[test]
+fn a_higher_target_spawns_only_the_difference_without_moving_existing_particles() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 100, 3);
+    let before = positions(&cloud);
+
+    resize(&mut cloud, &domain, 180, 3);
+
+    let after = positions(&cloud);
+    assert_eq!(after.len(), 180, "the cloud grows to the target");
+    assert_eq!(&after[..100], before.as_slice(), "existing particles keep their positions");
+    for p in &after[100..] {
+        assert!(
+            p.x >= domain.min.x && p.x <= domain.max.x
+                && p.y >= domain.min.y && p.y <= domain.max.y
+                && p.z >= domain.min.z && p.z <= domain.max.z,
+            "the new particles spawn inside the domain",
+        );
+    }
+}
+
+#[test]
+fn resize_to_the_same_count_is_a_no_op() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 37, 3);
+    let before = positions(&cloud);
+
+    resize(&mut cloud, &domain, 37, 3);
+
+    assert_eq!(positions(&cloud), before, "nothing is trimmed or spawned");
+}
+
+#[test]
+fn resize_caps_at_the_particle_budget() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 10, 3);
+
+    resize(&mut cloud, &domain, MAX_PARTICLES + 500, 3);
+
+    assert_eq!(count(&cloud), MAX_PARTICLES, "the instance budget still bounds the cloud");
+}
+
+#[test]
+fn dot_instances_write_the_scaled_state_radius_into_dir_len_w() {
+    let mut state = State::new(true);
+    assert!(state.set_particle_size(2.0));
+    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 16, 3);
+
+    let radius = state.particle_radius(state.spacing());
+    let dots = dot_instances(&cloud, &field, &domain, Colormap::Viridis, (0.0, 1.0), radius);
+
+    assert_eq!(dots.len(), 16);
+    for d in &dots {
+        assert_eq!(d.dir_len[3], radius, "the dot shader reads the radius from dir_len.w");
+    }
+    assert!(
+        radius > DOT_SPACING_FRACTION * state.spacing(),
+        "size 2 doubles the radius over the base fraction",
+    );
+}
+
+#[test]
+fn retarget_applies_a_changed_target_but_preserves_a_click_burst_above_it() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 128, 3);
+    let added = spawn_at(&mut cloud, &domain, Vec3::ZERO, CLICK_BURST_PARTICLES, 3);
+    assert_eq!(added, CLICK_BURST_PARTICLES);
+    let burst = positions(&cloud);
+    assert_eq!(burst.len(), 128 + CLICK_BURST_PARTICLES);
+
+    let kept = retarget(&mut cloud, &domain, Some(128), Some(128), 3);
+    assert_eq!(kept, Some(128), "a stable target is still the target in force");
+    assert_eq!(positions(&cloud), burst, "a click burst above the count survives a stable frame");
+
+    let applied = retarget(&mut cloud, &domain, Some(128), Some(100), 3);
+    assert_eq!(applied, Some(100));
+    assert_eq!(count(&cloud), 100, "a changed, lower target trims the cloud");
+}
+
+#[test]
+fn retarget_spawns_the_difference_when_the_target_rises() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 100, 3);
+    let before = positions(&cloud);
+
+    let applied = retarget(&mut cloud, &domain, Some(100), Some(180), 3);
+
+    assert_eq!(applied, Some(180));
+    assert_eq!(count(&cloud), 180);
+    assert_eq!(&positions(&cloud)[..100], before.as_slice(), "existing particles stay put");
+}
+
+#[test]
+fn retarget_spawns_from_an_empty_cloud_on_the_first_target() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+
+    let applied = retarget(&mut cloud, &domain, None, Some(64), 3);
+
+    assert_eq!(applied, Some(64), "launching with particles on applies the first target");
+    assert_eq!(count(&cloud), 64);
+}
+
+#[test]
+fn retarget_off_spawns_nothing_and_leaves_the_cloud_for_the_clear_branch() {
+    let domain = Domain::default();
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 64, 3);
+    let before = positions(&cloud);
+
+    let applied = retarget(&mut cloud, &domain, Some(64), None, 3);
+
+    assert_eq!(applied, None, "off has no target");
+    assert_eq!(positions(&cloud), before, "particles off spawns nothing");
 }

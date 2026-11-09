@@ -15,6 +15,7 @@ use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
+use crate::particles::{DOT_SPACING_FRACTION, MAX_PARTICLES, effective_particle_count};
 
 use std::sync::Arc;
 
@@ -31,6 +32,12 @@ pub const MAX_DENSITY_2D: u32 = 200;
 pub const MAX_DENSITY_3D: u32 = 40;
 /// The smallest density the sidebar offers.
 pub const MIN_DENSITY: u32 = 4;
+/// Bounds and default of the particle dot size (ticket 30): a multiplier on
+/// [`DOT_SPACING_FRACTION`], so `1.0` keeps the historical radius and the
+/// fraction itself never moves.
+pub const MIN_PARTICLE_SIZE: f32 = 0.25;
+pub const MAX_PARTICLE_SIZE: f32 = 3.0;
+pub const DEFAULT_PARTICLE_SIZE: f32 = 1.0;
 /// The 2D plane is the domain this much wider, so the field fills the window.
 pub const PLANE_MARGIN: f32 = 1.35;
 /// Bounds of the arrow-length slider.
@@ -189,6 +196,13 @@ pub struct State {
     /// click bursts, or both.
     pub seed_mode: StreamlineSeedMode,
     pub particles: bool,
+    /// Dot radius multiplier on the base grid-spacing fraction (ticket 30).
+    /// Painted by the per-frame dot rebuild, so changing it is never a scene
+    /// rebuild.
+    pub particle_size: f32,
+    /// Explicit particle count; `0` means Auto (density x 16) (ticket 30).
+    /// Also consumed by the per-frame cloud, not the scene snapshot.
+    pub particle_count: u32,
     /// Which sampled slice plane-by-plane mode highlights (ticket 23).
     pub plane: PlaneView,
     pub dirty: bool,
@@ -239,6 +253,8 @@ impl State {
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             particles: false,
+            particle_size: DEFAULT_PARTICLE_SIZE,
+            particle_count: 0,
             plane: PlaneView::middle(grid),
             dirty: true,
         }
@@ -473,6 +489,44 @@ impl State {
         self.mark_dirty()
     }
 
+    /// The particle dot size, clamped into
+    /// [`MIN_PARTICLE_SIZE`]..=[`MAX_PARTICLE_SIZE`]. A non-finite size resets
+    /// to the default instead of poisoning the dot shader. Dots are rebuilt
+    /// from the live cloud every frame, so this never dirties the scene.
+    pub fn set_particle_size(self: &mut State, size: f32) -> bool {
+        let size = if size.is_finite() {
+            size.clamp(MIN_PARTICLE_SIZE, MAX_PARTICLE_SIZE)
+        } else {
+            DEFAULT_PARTICLE_SIZE
+        };
+        if self.particle_size == size {
+            return false;
+        }
+        self.particle_size = size;
+        true
+    }
+
+    /// The explicit particle count, capped at
+    /// [`MAX_PARTICLES`](crate::particles::MAX_PARTICLES). `0` means Auto
+    /// (density x 16). Like the size, this paints from the live cloud and
+    /// never dirties the scene.
+    pub fn set_particle_count(self: &mut State, count: u32) -> bool {
+        let count = count.min(MAX_PARTICLES as u32);
+        if self.particle_count == count {
+            return false;
+        }
+        self.particle_count = count;
+        true
+    }
+
+    /// This frame's particle target: `Some(count)` while particles are on in
+    /// the 3D view, `None` otherwise. The simulation only spawns/trims when a
+    /// target exists, so the off state spawns nothing.
+    pub fn particle_target(self: &State) -> Option<usize> {
+        (self.particles && self.mode_3d)
+            .then(|| effective_particle_count(self.density, self.particle_count) as usize)
+    }
+
     /// The plane-by-plane selection, clamped into the current grid. The index
     /// is a user choice once the grid has more than one slice, so toggling the
     /// mode keeps it; only a grid change recentres it (see [`sync_plane`]).
@@ -574,6 +628,12 @@ impl State {
         } else {
             tightest
         }
+    }
+
+    /// The dot radius in world units: the base fraction of one grid cell
+    /// scaled by the user's [`State::particle_size`] (ticket 30).
+    pub fn particle_radius(self: &State, spacing: f32) -> f32 {
+        DOT_SPACING_FRACTION * spacing * self.particle_size
     }
 
     /// The colour range the painted field geometry shares: the state's explicit

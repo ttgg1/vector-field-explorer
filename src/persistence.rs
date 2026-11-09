@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
+use crate::particles::MAX_PARTICLES;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
@@ -101,6 +102,14 @@ pub struct ViewRecord {
     #[serde(default)]
     pub seed_mode: StreamlineSeedMode,
     pub particles: bool,
+    /// The particle dot size multiplier (ticket 30). Missing on older
+    /// records; the serde default loads them at the base fraction.
+    #[serde(default = "default_particle_size")]
+    pub particle_size: f32,
+    /// The explicit particle count; `0` is Auto (ticket 30). Missing on older
+    /// records; the serde default loads them as Auto.
+    #[serde(default)]
+    pub particle_count: u32,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -140,6 +149,8 @@ impl ViewRecord {
             streamlines: state.streamlines,
             seed_mode: state.seed_mode,
             particles: state.particles,
+            particle_size: state.particle_size,
+            particle_count: state.particle_count,
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -178,6 +189,8 @@ impl ViewRecord {
         controls.streamlines = self.streamlines;
         controls.seed_mode = self.seed_mode;
         controls.particles = self.particles;
+        controls.particle_size = finite_or(self.particle_size, defaults.particle_size);
+        controls.particle_count = self.particle_count.min(MAX_PARTICLES as u32);
         // `self.speed` is read-only legacy data and deliberately ignored: the
         // transport clock owns speed and streamlines use a fixed budget.
         // Raw components: `sidebar::apply` is the one place that bounds the
@@ -203,6 +216,12 @@ fn default_arrows() -> bool {
 /// before the contrast existed used the linear mapping.
 fn default_proportional_exponent() -> f32 {
     crate::viewmodel::DEFAULT_PROPORTIONAL_EXPONENT
+}
+
+/// The `particle_size` serde default (ticket 30): records written before the
+/// size control used the base grid-spacing fraction.
+fn default_particle_size() -> f32 {
+    crate::viewmodel::DEFAULT_PARTICLE_SIZE
 }
 
 /// Decode the ticket-14 `normalize` boolean, which was stored as a bare

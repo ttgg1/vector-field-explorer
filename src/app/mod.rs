@@ -50,13 +50,12 @@ use crate::viewmodel::{
 use crate::particles::{
     CLICK_BURST_PARTICLES,
     Particles,
-    DOT_SPACING_FRACTION,
     advect,
     clear,
     dot_instances,
+    retarget,
     spawn,
     spawn_at,
-    target_count,
     count as particle_count,
 };
 
@@ -150,6 +149,11 @@ pub struct VfApp {
     /// only; its per-frame dots ramp with `dots_range`, the same magnitude
     /// range the arrows were coloured with at the last scene rebuild.
     particles: Particles,
+    /// The effective particle count last applied to the cloud (ticket 30).
+    /// `None` while particles are off/in 2D. The simulation only resizes when
+    /// this changes, so a click burst above the configured count is not
+    /// trimmed on the very next frame.
+    particle_target: Option<usize>,
     /// The one simulation clock (ticket 26): the only time source for the
     /// particle cloud. Transient by design — never persisted, so every session
     /// starts at time 0, playing, 1x.
@@ -240,6 +244,7 @@ impl VfApp {
             renderer_ready: false,
             streamline_count: 0,
             particles: Particles::default(),
+            particle_target: None,
             clock: SimClock::default(),
             dots_range: (0.0, 1.0),
             click_seeds: Vec::new(),

@@ -286,14 +286,9 @@ impl VfApp {
         // leave a cloud of just this burst. The count after that ambient spawn
         // is what a double-click truncates back to.
         let mut particles_before = particle_count(&self.particles);
-        if self.state.particles && self.state.mode_3d {
+        if let Some(target) = self.state.particle_target() {
             if particle_count(&self.particles) == 0 {
-                spawn(
-                    &mut self.particles,
-                    &self.state.domain,
-                    target_count(self.state.density),
-                    3,
-                );
+                spawn(&mut self.particles, &self.state.domain, target, 3);
             }
             particles_before = particle_count(&self.particles);
             spawn_at(

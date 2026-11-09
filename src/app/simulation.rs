@@ -72,10 +72,22 @@ impl VfApp {
         // clock reports a zero step, so the cloud keeps its last positions.
         // Placed after the dirty-rebuild block so this frame's dots already see
         // a fresh density, and before the status bar so its count includes them.
-        if self.state.particles && self.state.mode_3d {
-            if particle_count(&self.particles) == 0 {
-                spawn(&mut self.particles, &self.state.domain, target_count(self.state.density), 3);
-            }
+        //
+        // The target follows `particle_count` (0 = Auto, density x 16). Only a
+        // change retargets: a lower target trims, a higher one spawns just the
+        // difference so existing particles never jump, and a click burst that
+        // sits above the configured count survives until the count changes.
+        // Off/2D yields `None` and spawns nothing (the clear branch drops the
+        // cloud).
+        let target = self.state.particle_target();
+        self.particle_target = retarget(
+            &mut self.particles,
+            &self.state.domain,
+            self.particle_target,
+            target,
+            3,
+        );
+        if target.is_some() {
             advect(
                 &mut self.particles,
                 &self.state.field,
@@ -89,7 +101,7 @@ impl VfApp {
                     &self.state.domain,
                     self.state.colormap,
                     self.dots_range,
-                    DOT_SPACING_FRACTION * self.state.spacing(),
+                    self.state.particle_radius(self.state.spacing()),
                 ),
             );
             log::trace!(

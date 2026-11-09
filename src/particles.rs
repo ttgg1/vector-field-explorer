@@ -8,11 +8,13 @@
 //! uses, but with the simulation clock's speed-scaled frame step instead of a
 //! fixed arc-length budget (ticket 26).
 //!
-//! The cloud's size is constant: a particle that sits outside the domain, hits
-//! a zero-velocity point, turns non-finite or steps out of the domain is
-//! respawned inside it, so the on-screen dot count never drifts and never
-//! exceeds its cap (`density` x [`PARTICLES_PER_DENSITY`], capped at
-//! [`MAX_PARTICLES`]).
+//! The cloud's size is constant between target changes: a particle that sits
+//! outside the domain, hits a zero-velocity point, turns non-finite or steps
+//! out of the domain is respawned inside it, so the on-screen dot count never
+//! drifts and never exceeds its cap. The target follows the density
+//! (`density` x [`PARTICLES_PER_DENSITY`], capped at [`MAX_PARTICLES`]) until
+//! the user sets an explicit count (ticket 30); [`resize`] trims or extends
+//! the cloud in place when that target changes.
 //!
 //! Spawn jitter is deterministic: an inline Park/Miller LCG (no `rand`
 //! dependency), so a fresh session puts the dots in the same places.
@@ -33,7 +35,9 @@ pub const PARTICLES_PER_DENSITY: usize = 16;
 /// is strictly inside the domain and a first advect step cannot clip it.
 pub const SPAWN_INSET: f32 = 0.02;
 /// Dot radius as a fraction of the grid spacing, so a denser grid keeps dots
-/// the same relative size (and dots stay visible in the 3D view).
+/// the same relative size (and dots stay visible in the 3D view). The user's
+/// particle size multiplies this base fraction; the fraction itself never
+/// changes (ticket 30).
 pub const DOT_SPACING_FRACTION: f32 = 0.3;
 /// Particles one viewport click adds around the picked spot (ticket 06), on
 /// top of the ambient cloud.
@@ -61,7 +65,7 @@ const UNIT_SCALE: f32 = 2.0 / 2097152.0;
 
 /// A cloud of advected points. Positions are world-space; colouring and dot
 /// size are derived when the dots are drawn, so the state stays small and
-/// survives a colormap or speed change without rebuilding it.
+/// survives a colormap, size or speed change without rebuilding it.
 #[derive(Clone)]
 pub struct Particles {
     pub pos: Vec<Vec3>,
@@ -95,6 +99,17 @@ impl Particles {
 /// the dot buffer stays bounded whatever the slider is set to.
 pub fn target_count(density: u32) -> usize {
     (density as usize * PARTICLES_PER_DENSITY).min(MAX_PARTICLES)
+}
+
+/// The count the cloud should hold for a density setting and an explicit user
+/// count (ticket 30): `0` keeps today's Auto behaviour ([`target_count`]),
+/// any other value overrides it, and both respect [`MAX_PARTICLES`].
+pub fn effective_particle_count(density: u32, particle_count: u32) -> u32 {
+    if particle_count == 0 {
+        target_count(density) as u32
+    } else {
+        particle_count.min(MAX_PARTICLES as u32)
+    }
 }
 
 /// How many particles the cloud currently holds.
@@ -208,6 +223,43 @@ pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize, dimension
         particles.pos.push(jittered_point(region.center, band, state));
     }
     particles.rng = state;
+}
+
+/// Bring the cloud to exactly `target` particles (ticket 30): trim from the
+/// end when the target is lower, spawn only the difference when it is higher.
+/// Existing particles keep their order and positions, and new points come
+/// from the cloud's own stream, so which particles a raise adds is
+/// deterministic for a given history (a repeated raise from the same trimmed
+/// cloud replays the same additions; it is not a fixed prefix of a longer
+/// spawn). Never exceeds [`MAX_PARTICLES`]. The app calls this with the
+/// viewmodel's per-frame target; it must not be called while particles are off.
+pub fn resize(particles: &mut Particles, domain: &Domain, target: usize, dimension: usize) {
+    let target = target.min(MAX_PARTICLES);
+    if particles.pos.len() > target {
+        particles.pos.truncate(target);
+    } else if particles.pos.len() < target {
+        spawn(particles, domain, target - particles.pos.len(), dimension);
+    }
+}
+
+/// Apply a target only when it changed since the last frame, returning the
+/// target now in force (ticket 30). This is the app's per-frame policy: a
+/// stable target leaves the cloud alone, so a click burst that sits above the
+/// configured count survives; `None` (particles off / 2D) spawns nothing and
+/// leaves the cloud for the caller's clear branch.
+pub fn retarget(
+    particles: &mut Particles,
+    domain: &Domain,
+    previous: Option<usize>,
+    target: Option<usize>,
+    dimension: usize,
+) -> Option<usize> {
+    if target != previous
+        && let Some(target) = target
+    {
+        resize(particles, domain, target, dimension);
+    }
+    target
 }
 
 /// Add a `count`-point burst around `center`: the click-seeded counterpart of

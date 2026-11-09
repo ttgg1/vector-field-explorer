@@ -6,16 +6,18 @@
 
 use vector_field_explorer::ui::sidebar::{
     ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
-    domain_summary, head_control_enabled, magnitude_scale_enabled, proportional_exponent_enabled,
-    seed_mode_enabled, sides_control_enabled,
+    domain_summary, head_control_enabled, magnitude_scale_enabled, particle_count_label,
+    particle_size_enabled, proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
+use vector_field_explorer::particles::MAX_PARTICLES;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, State, StreamlineSeedMode, DEFAULT_DENSITY_2D, MAX_DENSITY_3D,
-    MAX_DOMAIN_EXTENT, MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, domain_between,
+    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, State, StreamlineSeedMode, DEFAULT_DENSITY_2D,
+    MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_PARTICLE_SIZE, MAX_PROPORTIONAL_EXPONENT,
+    MIN_DOMAIN_EXTENT, MIN_PARTICLE_SIZE, domain_between,
 };
 use glam::Vec3;
 
@@ -622,4 +624,75 @@ fn features_reset_returns_the_seed_mode_to_auto() {
 
     assert!(!c.streamlines, "the Features reset keeps hiding streamlines");
     assert_eq!(c.seed_mode, StreamlineSeedMode::Auto, "and returns the seed mode to Auto");
+}
+
+// --- Ticket 30: particle size and count controls -----------------------
+
+#[test]
+fn particle_controls_default_to_the_seam_defaults() {
+    let c = Controls::new();
+    let s = State::new(false);
+    assert_eq!(c.particle_size, s.particle_size, "the size mirror starts at the seam's");
+    assert_eq!(c.particle_size, DEFAULT_PARTICLE_SIZE, "…and that default is 1.0");
+    assert_eq!(c.particle_count, s.particle_count, "the count mirror starts at the seam's");
+    assert_eq!(c.particle_count, 0, "…and that default is Auto");
+}
+
+#[test]
+fn particle_size_and_count_flow_through_apply_and_the_mirror_stays_in_sync() {
+    let mut c = Controls::new();
+    let mut s = State::new(true);
+    assert!(s.set_particles(true));
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.density = s.density;
+    c.particles = s.particles;
+
+    c.particle_size = 2.5;
+    c.particle_count = 250;
+    apply(&mut s, &mut c);
+
+    assert_eq!(s.particle_size, 2.5, "the size lands on the seam");
+    assert_eq!(s.particle_count, 250, "the count lands on the seam");
+    assert_eq!(c.particle_size, s.particle_size, "the mirror follows the size");
+    assert_eq!(c.particle_count, s.particle_count, "the mirror follows the count");
+    assert!(s.snapshot_if_dirty().is_none(), "neither control rebuilds the scene");
+
+    c.particle_size = 9.0;
+    c.particle_count = 10_000;
+    apply(&mut s, &mut c);
+    assert_eq!(s.particle_size, MAX_PARTICLE_SIZE, "the seam clamps an oversized dot");
+    assert_eq!(c.particle_size, MAX_PARTICLE_SIZE, "the mirror shows the clamped size");
+    assert_eq!(s.particle_count, MAX_PARTICLES as u32, "the seam caps the count");
+    assert_eq!(c.particle_count, MAX_PARTICLES as u32, "the mirror shows the capped count");
+}
+
+#[test]
+fn particle_count_label_shows_auto_at_zero() {
+    assert_eq!(particle_count_label(0), "Auto", "0 reads as Auto in the drag value");
+    assert_eq!(particle_count_label(100), "100", "an explicit count shows its number");
+    assert_eq!(particle_count_label(MAX_PARTICLES as u32), "4000");
+}
+
+#[test]
+fn particle_size_is_enabled_only_while_particles_are_on() {
+    assert!(!particle_size_enabled(false), "Particles off greys the size slider");
+    assert!(particle_size_enabled(true), "Particles on enables it");
+}
+
+#[test]
+fn features_reset_restores_particle_size_and_count() {
+    let mut c = Controls::new();
+    c.particles = true;
+    c.particle_size = 2.75;
+    c.particle_count = 320;
+
+    c.reset_features();
+
+    assert_eq!(c.particle_size, DEFAULT_PARTICLE_SIZE, "reset restores size 1.0");
+    assert_eq!(c.particle_count, 0, "reset restores Auto");
+    assert!(!c.particles, "reset still turns Particles off");
+    assert!(
+        (MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE).contains(&c.particle_size),
+        "the restored size is inside the documented range",
+    );
 }
