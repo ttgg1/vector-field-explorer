@@ -1,0 +1,78 @@
+name: Pages
+
+# Ticket 16a: publish the wasm build and the static native-download page to
+# https://ttgg1.github.io/vector-field-explorer/. This workflow is prepared but
+# inert until the repository is public and Pages is enabled (ticket 63/16b);
+# it only ever triggers on `main` or by hand, never on a feature branch.
+#
+# Do not add a `pull_request` trigger: a fork could not read the deployment
+# secrets, and this workflow only produces the production site.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'index.html'
+      - 'Trunk.toml'
+      - 'web/**'
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Add the wasm target
+        run: rustup target add wasm32-unknown-unknown
+      # Same Trunk pin as .github/workflows/ci.yml and scripts/test-web.sh.
+      - name: Install Trunk 0.22.1
+        uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.22.1
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      # The project site lives under /vector-field-explorer/, so the base path
+      # must be explicit; Trunk.toml does not set a competing public_url.
+      - name: Build the browser app
+        run: trunk build --release --public-url /vector-field-explorer/
+      - name: Stage the download page
+        run: |
+          set -euo pipefail
+          install -Dm644 site/download.html dist/download.html
+          install -Dm644 site/style.css dist/style.css
+          install -Dm644 docs/images/vector-field-explorer.png \
+            dist/screenshots/vector-field-explorer.png
+      - name: Check the site artifact
+        run: scripts/check-site.sh
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
