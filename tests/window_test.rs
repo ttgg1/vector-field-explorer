@@ -55,4 +55,8 @@ fn installs_the_mark_on_the_window_options() {
 
     assert_eq!((icon.width, icon.height), (256, 256));
     assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+    assert!(
+        icon.rgba.iter().any(|&alpha| alpha != 0),
+        "the mark must not decode to a fully transparent icon",
+    );
 }

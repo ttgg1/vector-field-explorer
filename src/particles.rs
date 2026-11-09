@@ -80,8 +80,9 @@ pub const DEFAULT_TRAIL_WIDTH: f32 = 1.0;
 pub const MIN_STAGNATION_SECONDS: f32 = 0.1;
 pub const MAX_STAGNATION_SECONDS: f32 = 5.0;
 pub const DEFAULT_STAGNATION_SECONDS: f32 = 0.5;
-/// Default fixed colour, the brand cyan `#4cc9f0` used by the app chrome.
-pub const DEFAULT_PARTICLE_FIXED_COLOR: [u8; 4] = [0x4c, 0xc9, 0xf0, 255];
+/// Historical particle default (Material Teal). This is the serialized fallback
+/// for records that predate the field, not the app-chrome accent (`#4cc9f0`).
+pub const DEFAULT_PARTICLE_FIXED_COLOR: [u8; 4] = [0, 150, 136, 255];
 
 /// How a particle's dot and trail get their colour (ticket 48).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

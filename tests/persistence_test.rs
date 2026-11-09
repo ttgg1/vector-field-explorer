@@ -1077,6 +1077,15 @@ fn particle_appearance_round_trips_and_defaults_when_absent() {
 }
 
 #[test]
+fn a_legacy_view_record_without_particle_colour_pins_the_serialized_default() {
+    // Ticket 48 added `particle_fixed_color` after this payload shape. The
+    // fallback is asserted literally (not against the constant) so a future
+    // brand/default change cannot silently rewrite old persisted records.
+    let legacy = load_legacy(false);
+    assert_eq!(legacy.view.particle_fixed_color, [0, 150, 136, 255]);
+}
+
+#[test]
 fn restore_clamps_and_sanitizes_hostile_particle_appearance() {
     let record = ViewRecord {
         particle_opacity: f32::NAN,
