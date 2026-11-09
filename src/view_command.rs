@@ -13,6 +13,7 @@ use glam::Vec3;
 
 use crate::camera::OrbitCamera;
 use crate::domain::Domain;
+use crate::fly_camera::FlyCamera;
 use crate::viewmodel::PLANE_MARGIN;
 
 /// Radians the view orbits per arrow-key press in 3D.
@@ -202,6 +203,27 @@ pub fn apply_view_command(camera: OrbitCamera, view: ViewContext, command: ViewC
 
 fn finite_or_zero(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
+}
+
+/// The app-level camera command: Reset and Fit leave fly mode first and then
+/// act on the untouched orbit camera; orbit/pan/zoom commands are inert while
+/// flying, so the pre-fly orbit view really does come back on exit. Returns the
+/// new orbit camera and drops `fly` when the command takes over the view.
+pub fn apply_view_command_with_fly(
+    camera: OrbitCamera,
+    fly: &mut Option<FlyCamera>,
+    view: ViewContext,
+    command: ViewCommand,
+) -> OrbitCamera {
+    if fly.is_some() {
+        match command {
+            ViewCommand::Reset | ViewCommand::Fit => *fly = None,
+            // WASD/drag drive the fly camera; orbit commands must not mutate
+            // the hidden orbit pose they would otherwise restore.
+            _ => return camera,
+        }
+    }
+    apply_view_command(camera, view, command)
 }
 
 /// The command one camera key stands for, if any. `modifiers` must not carry

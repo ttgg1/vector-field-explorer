@@ -6,7 +6,7 @@
 //! `vector_field_explorer::`.
 
 use glam::{Vec2, Vec3};
-use vector_field_explorer::camera::OrbitCamera;
+use vector_field_explorer::camera::{OrbitCamera, ViewCamera};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::streamlines::{
@@ -166,7 +166,7 @@ fn ray_seed_inside_domain() {
     // This is what pulls streamlines into the 3D view at all.
     let camera = OrbitCamera::default();
     let domain = Domain::default();
-    let seed = ray_seed(camera, &domain, 1.0, Vec2::ZERO).expect("a centre click describes a seed");
+    let seed = ray_seed(ViewCamera::Orbit(&camera), &domain, 1.0, Vec2::ZERO).expect("a centre click describes a seed");
     assert!(inside(&domain, seed), "the seed lands inside the domain: {seed:?}");
 
     let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
@@ -190,7 +190,7 @@ fn ray_seed_stays_on_the_clicked_ray() {
     ];
     for ndc_xy in clicks {
         let (origin, direction) = camera.ndc_ray(1.0, ndc_xy);
-        let seed = ray_seed(camera, &domain, 1.0, ndc_xy).expect("these clicks land on the box");
+        let seed = ray_seed(ViewCamera::Orbit(&camera), &domain, 1.0, ndc_xy).expect("these clicks land on the box");
         let offset = seed - origin;
         assert!(direction.cross(offset).length() <= 1e-2 * direction.length(), "seed on the clicked ray");
         assert!(direction.dot(offset) >= 0.0, "seed in front of the eye");
@@ -214,7 +214,7 @@ fn ray_seed_seeds_the_aimed_point_and_the_focal_plane() {
     pulled.zoom(4.0);
 
     for camera in [OrbitCamera::default(), orbited, zoomed, pulled] {
-        let seed = ray_seed(camera, &domain, 1.6, Vec2::ZERO).expect("a centre click describes a seed");
+        let seed = ray_seed(ViewCamera::Orbit(&camera), &domain, 1.6, Vec2::ZERO).expect("a centre click describes a seed");
         assert_close(seed, camera.target, "a centre click seeds the point the camera is aimed at");
         let view = view_of(camera);
         assert!((seed - camera.target).dot(view).abs() < 1e-3, "the seed lies on the focal plane");
@@ -234,7 +234,7 @@ fn ray_seed_interior_clicks_run_the_line_through_the_box() {
     let camera = OrbitCamera::default();
     let view = view_of(camera);
     for ndc_xy in [Vec2::new(0.2, -0.15), Vec2::new(-0.3, 0.35)] {
-        let seed = ray_seed(camera, &domain, 1.0, ndc_xy).expect("these clicks land on the box");
+        let seed = ray_seed(ViewCamera::Orbit(&camera), &domain, 1.0, ndc_xy).expect("these clicks land on the box");
         assert!(inside(&domain, seed), "seed inside the domain: {seed:?}");
         assert!((seed - camera.target).dot(view).abs() < 1e-3, "interior click stays on the focal plane");
         let line = trace(&field, seed, &domain, &opts);
@@ -251,7 +251,7 @@ fn ray_seed_click_off_the_field_traces_nothing() {
     let field = FieldExpr::parse("(-y, x, 0.5)").expect("depth-carrying vortex parses");
     let opts = StreamlineOpts { max_len: 200, step_scale: 0.02, both_directions: true };
     let wide = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: 3.2, target: Vec3::ZERO, fov_y: 1.5, ..OrbitCamera::default() };
-    let seed = ray_seed(wide, &domain, 1.0, Vec2::new(1.0, -1.0)).expect("a missed click describes a point");
+    let seed = ray_seed(ViewCamera::Orbit(&wide), &domain, 1.0, Vec2::new(1.0, -1.0)).expect("a missed click describes a point");
     assert!(seed.is_finite(), "a missed click describes a finite point: {seed:?}");
     assert!(!inside(&domain, seed), "the shell fallback sits off the domain: {seed:?}");
     assert!(
@@ -267,11 +267,11 @@ fn ray_seed_degenerate_view_gives_no_seed() {
     // choke on.
     let domain = Domain::default();
     let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::INFINITY, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
-    assert!(ray_seed(broken, &domain, 1.0, Vec2::ZERO).is_none(), "an infinite orbit gives no seed");
+    assert!(ray_seed(ViewCamera::Orbit(&broken), &domain, 1.0, Vec2::ZERO).is_none(), "an infinite orbit gives no seed");
     let unusable = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
-    assert!(ray_seed(unusable, &domain, 1.0, Vec2::ZERO).is_none(), "a NaN orbit gives no seed");
+    assert!(ray_seed(ViewCamera::Orbit(&unusable), &domain, 1.0, Vec2::ZERO).is_none(), "a NaN orbit gives no seed");
     let squashed = OrbitCamera { yaw: 0.8, pitch: 1.55, distance: 0.5, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
-    assert!(ray_seed(squashed, &domain, 1.0, Vec2::ZERO).is_some(), "a pole-on orbit still describes a ray");
+    assert!(ray_seed(ViewCamera::Orbit(&squashed), &domain, 1.0, Vec2::ZERO).is_some(), "a pole-on orbit still describes a ray");
 }
 
 // --- the mode-aware click entry point (ticket 06) ------------------------
@@ -294,7 +294,7 @@ fn click_seed_2d_lands_on_the_midplane_under_the_click() {
     let plane_size = 2.7;
     let vp = camera.vp_matrix(aspect, Some(plane_size));
     for ndc in [Vec2::ZERO, Vec2::new(0.4, -0.2), Vec2::new(-0.6, 0.5), Vec2::new(0.9, 0.9)] {
-        let seed = click_seed(camera, &domain, aspect, ndc, Some(plane_size))
+        let seed = click_seed(ViewCamera::Orbit(&camera), &domain, aspect, ndc, Some(plane_size))
             .expect("a 2D click describes a seed");
         let z_mid = (domain.min.z + domain.max.z) * 0.5;
         assert!((seed.z - z_mid).abs() < 1e-4, "the seed sits on the domain's z-midpoint plane: {seed:?}");
@@ -310,7 +310,7 @@ fn click_seed_2d_follows_the_domain_midplane() {
     // picks the point along it.
     let camera = OrbitCamera::default();
     let domain = Domain::new(Vec3::new(-1.0, -1.0, 0.5), Vec3::new(1.0, 1.0, 0.5));
-    let seed = click_seed(camera, &domain, 1.0, Vec2::ZERO, Some(2.7))
+    let seed = click_seed(ViewCamera::Orbit(&camera), &domain, 1.0, Vec2::ZERO, Some(2.7))
         .expect("a 2D click describes a seed");
     assert!((seed.z - 0.5).abs() < 1e-4, "the seed follows the shifted midplane: {seed:?}");
 }
@@ -322,8 +322,8 @@ fn click_seed_3d_is_the_camera_ray_seed() {
     let camera = OrbitCamera::default();
     let domain = Domain::default();
     for ndc in [Vec2::ZERO, Vec2::new(0.35, -0.3), Vec2::new(-0.5, 0.45)] {
-        let direct = ray_seed(camera, &domain, 1.3, ndc).expect("the ray lands on the box");
-        let via = click_seed(camera, &domain, 1.3, ndc, None).expect("a 3D click describes a seed");
+        let direct = ray_seed(ViewCamera::Orbit(&camera), &domain, 1.3, ndc).expect("the ray lands on the box");
+        let via = click_seed(ViewCamera::Orbit(&camera), &domain, 1.3, ndc, None).expect("a 3D click describes a seed");
         assert_close(via, direct, "3D click seeding uses the camera-ray seed");
     }
 }
@@ -334,9 +334,9 @@ fn click_seed_degenerate_camera_gives_no_seed() {
     // a NaN point the tracer and renderer would choke on.
     let domain = Domain::default();
     let broken = OrbitCamera { yaw: 0.8, pitch: 0.9, distance: f32::NAN, target: Vec3::ZERO, fov_y: 55.0_f32.to_radians(), ..OrbitCamera::default() };
-    assert!(click_seed(broken, &domain, 1.0, Vec2::ZERO, None).is_none(), "3D: no seed from a broken camera");
-    assert!(click_seed(broken, &domain, 1.0, Vec2::ZERO, Some(2.7)).is_none(), "2D: no seed from a broken camera");
-    assert!(click_seed(OrbitCamera::default(), &domain, 1.0, Vec2::ZERO, Some(0.0)).is_some(),
+    assert!(click_seed(ViewCamera::Orbit(&broken), &domain, 1.0, Vec2::ZERO, None).is_none(), "3D: no seed from a broken camera");
+    assert!(click_seed(ViewCamera::Orbit(&broken), &domain, 1.0, Vec2::ZERO, Some(2.7)).is_none(), "2D: no seed from a broken camera");
+    assert!(click_seed(ViewCamera::Orbit(&OrbitCamera::default()), &domain, 1.0, Vec2::ZERO, Some(0.0)).is_some(),
         "a zero plane size still describes the centre ray");
 }
 

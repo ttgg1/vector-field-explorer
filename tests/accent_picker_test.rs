@@ -54,7 +54,7 @@ impl Harness {
             let mut changed = false;
             let output = self.ctx.run_ui(input, |ui| {
                 egui::Panel::top("top_bar").show(ui, |ui| {
-                    let (_, frame_changed) = top_bar::show(ui, style, screenshot, open);
+                    let (_, frame_changed) = top_bar::show(ui, style, screenshot, open, false, true);
                     changed = frame_changed;
                 });
             });

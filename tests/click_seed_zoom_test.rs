@@ -2,7 +2,7 @@
 // with 2x zoom lands on the same world point as a click at NDC 0.25 unzoomed.
 
 use glam::Vec2;
-use vector_field_explorer::camera::OrbitCamera;
+use vector_field_explorer::camera::{OrbitCamera, ViewCamera};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::streamlines::click_seed;
 
@@ -14,10 +14,10 @@ fn click_seed_honours_the_2d_ortho_zoom() {
     let mut zoomed = OrbitCamera::default();
     zoomed.zoom_2d(2.0);
 
-    let zoomed_seed = click_seed(zoomed, &domain, aspect, Vec2::new(0.5, 0.0), Some(plane_size))
+    let zoomed_seed = click_seed(ViewCamera::Orbit(&zoomed), &domain, aspect, Vec2::new(0.5, 0.0), Some(plane_size))
         .expect("a zoomed 2D click describes a seed");
     let plain_seed = click_seed(
-        OrbitCamera::default(),
+        ViewCamera::Orbit(&OrbitCamera::default()),
         &domain,
         aspect,
         Vec2::new(0.25, 0.0),

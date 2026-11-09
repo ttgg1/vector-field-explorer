@@ -46,7 +46,7 @@ impl Harness {
             let open = &mut self.open;
             let output = self.ctx.run_ui(input, |ui| {
                 egui::Panel::top("top_bar").show(ui, |ui| {
-                    let _ = top_bar::show(ui, style, screenshot, open);
+                    let _ = top_bar::show(ui, style, screenshot, open, false, true);
                 });
             });
             (output, *open)

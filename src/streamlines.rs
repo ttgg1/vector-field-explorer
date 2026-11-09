@@ -16,7 +16,7 @@
 
 use glam::{Vec2, Vec3, Vec4};
 
-use crate::camera::OrbitCamera;
+use crate::camera::ViewCamera;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
 
@@ -121,21 +121,27 @@ pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineO
 }
 
 /// Seed point for a click at `ndc_xy` in the 3D view: unproject the click with
-/// [`OrbitCamera::ndc_ray`] and land it on the domain box.
+/// the active [`ViewCamera`] and land it on the domain box.
 ///
-/// The seed sits where the user points: on the focal plane through the camera's
-/// `target`, perpendicular to the view direction, clamped to the box's near/far
-/// crossing along the ray. Clamping to that crossing (rather than taking the
-/// bare entry point) is what gives a traced streamline room to run: a near-face
-/// entry would sit in front of the field with only the box's depth ahead of it,
-/// while a centre click then seeds exactly the target the user aimed at.
+/// The seed sits where the user points: on the focal plane through the view's
+/// focus point (the orbit target, or the domain centre while flying),
+/// perpendicular to the view direction, clamped to the box's near/far crossing
+/// along the ray. Clamping to that crossing (rather than taking the bare entry
+/// point) is what gives a traced streamline room to run: a near-face entry would
+/// sit in front of the field with only the box's depth ahead of it, while a
+/// centre click then seeds exactly the point the user aimed at.
 ///
 /// A click whose ray misses the box falls back to a shell entry on a sphere
-/// about the target at half the eye-to-target distance (or, for a ray that
-/// misses that sphere too, the point of closest approach projected out to it),
-/// which `trace` then drops: clicking empty space draws nothing. Returns `None`
-/// only when the camera does not describe a finite ray.
-pub fn ray_seed(camera: OrbitCamera, domain: &Domain, aspect: f32, ndc_xy: Vec2) -> Option<Vec3> {
+/// about the focus at half the eye-to-focus distance (or, for a ray that misses
+/// that sphere too, the point of closest approach projected out to it), which
+/// `trace` then drops: clicking empty space draws nothing. Returns `None` only
+/// when the camera does not describe a finite ray.
+pub fn ray_seed(
+    camera: ViewCamera<'_>,
+    domain: &Domain,
+    aspect: f32,
+    ndc_xy: Vec2,
+) -> Option<Vec3> {
     let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
     let (origin, direction) = camera.ndc_ray(aspect, ndc_xy);
     let span = direction.length();
@@ -143,6 +149,12 @@ pub fn ray_seed(camera: OrbitCamera, domain: &Domain, aspect: f32, ndc_xy: Vec2)
         return None;
     }
     let view = direction * (1.0 / span);
+    // Orbit views aim at their target; a fly camera has no target, so point at
+    // the centre of the field the user is exploring.
+    let focus = match camera {
+        ViewCamera::Orbit(orbit) => orbit.target,
+        ViewCamera::Fly(_) => (domain.min + domain.max) * 0.5,
+    };
 
     // Ray/box crossing (the slab test). `t` is in units of the raw, unnormalized
     // `direction`, so `t == 1` is the far plane; a ray parallel to an axis gives
@@ -154,38 +166,38 @@ pub fn ray_seed(camera: OrbitCamera, domain: &Domain, aspect: f32, ndc_xy: Vec2)
     let t_in = Vec3::min(t_enter, t_exit).max_element().max(0.0);
     let t_out = Vec3::max(t_enter, t_exit).min_element();
     if t_in <= t_out {
-        // Depth of the focal plane — the plane through the camera's target,
-        // perpendicular to the eye-to-target axis — measured along the clicked
-        // ray, then clamped into the box crossing so an extreme click still
-        // seeds a usable point. A centre click lands exactly on the target.
-        let axis = (camera.target - camera.position()).normalize_or_zero();
+        // Depth of the focal plane — the plane through the focus point,
+        // perpendicular to the view axis — measured along the clicked ray,
+        // then clamped into the box crossing so an extreme click still seeds a
+        // usable point. A centre click lands exactly on the focus.
+        let axis = (focus - origin).normalize_or_zero();
         let denom = view.dot(axis);
-        let t_world = if denom.abs() < 1e-6 { 0.0 } else { (camera.target - origin).dot(axis) / denom };
+        let t_world = if denom.abs() < 1e-6 { 0.0 } else { (focus - origin).dot(axis) / denom };
         let t_focal = t_world / span;
         return Some(origin + direction * t_focal.clamp(t_in, t_out));
     }
 
     // Box missed: the shell fallback. `s` below is in world units along the unit
-    // view direction, the sphere being half the eye-to-target distance.
-    let to_target = camera.target - origin;
-    let shell = to_target.length() * 0.5;
-    if !(to_target.is_finite()) || !shell.is_finite() || shell <= 0.0 {
+    // view direction, the sphere being half the eye-to-focus distance.
+    let to_focus = focus - origin;
+    let shell = to_focus.length() * 0.5;
+    if !(to_focus.is_finite()) || !shell.is_finite() || shell <= 0.0 {
         return None;
     }
-    let along = to_target.dot(view);
-    let lateral = (to_target - view * along).length();
+    let along = to_focus.dot(view);
+    let lateral = (to_focus - view * along).length();
     if lateral <= shell {
-        // Entry into the shell, on the near side of the target.
+        // Entry into the shell, on the near side of the focus.
         return Some(origin + view * (along - (shell * shell - lateral * lateral).sqrt()));
     }
     // The ray misses the shell as well: project its point of closest approach
     // radially out onto it, so the seed still reads as "the direction clicked".
     let nearest = origin + view * along;
-    let outward = nearest - camera.target;
+    let outward = nearest - focus;
     if !outward.is_finite() || outward.length() <= 0.0 {
         return None;
     }
-    Some(camera.target + outward.normalize() * shell)
+    Some(focus + outward.normalize() * shell)
 }
 
 /// The mode-aware click-to-seed entry point: where a click at `ndc_xy` plants a
@@ -202,7 +214,7 @@ pub fn ray_seed(camera: OrbitCamera, domain: &Domain, aspect: f32, ndc_xy: Vec2)
 /// Returns `None` only when the camera or the aspect does not describe a usable
 /// ray.
 pub fn click_seed(
-    camera: OrbitCamera,
+    camera: ViewCamera<'_>,
     domain: &Domain,
     aspect: f32,
     ndc_xy: Vec2,

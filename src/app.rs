@@ -3,8 +3,9 @@ use std::sync::Arc;
 use eframe::egui;
 use glam::{Vec2, Vec3};
 
-use crate::camera::OrbitCamera;
+use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use crate::domain::Domain;
+use crate::fly_camera::{FlyCamera, FlyKeys, is_command_chord, sync_fly};
 use crate::reference::reference_lines;
 use crate::render::Camera;
 use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
@@ -92,6 +93,13 @@ pub struct VfApp {
     /// the shared [`OrbitCamera`] (its ortho mode is the 2D view).
     pub camera: Camera,
     pub orbit: OrbitCamera,
+    /// The active six-DOF fly camera (ticket 46). `None` means the orbit
+    /// camera is showing; entering fly snapshots the orbit pose, exiting drops
+    /// this and the untouched orbit view returns. Never persisted.
+    pub fly: Option<FlyCamera>,
+    /// Movement keys held this frame, accumulated from `Event::Key` so the
+    /// physical QWERTY positions drive movement on native.
+    pub fly_keys: FlyKeys,
     pub presets: PresetPanel,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
@@ -172,6 +180,8 @@ impl VfApp {
             },
             camera: Camera::default(),
             orbit: OrbitCamera::default(),
+            fly: None,
+            fly_keys: FlyKeys::default(),
             presets: PresetPanel::new(),
             style: settings.style,
             layout: settings.layout,
@@ -210,6 +220,7 @@ impl VfApp {
             &mut menu::UiState {
                 layout: &mut self.layout,
                 orbit: &mut self.orbit,
+                fly: &mut self.fly,
                 camera: &mut self.camera,
                 state: &mut self.state,
                 controls: &mut self.sidebar,
@@ -250,9 +261,57 @@ impl VfApp {
     /// camera buttons, menu). Reset and fit invalidate the highlighted preset:
     /// the camera no longer matches the saved view.
     fn apply_view_command(&mut self, command: ViewCommand) {
-        self.orbit = view_command::apply_view_command(self.orbit, self.view_context(), command);
+        let context = self.view_context();
+        self.orbit = view_command::apply_view_command_with_fly(
+            self.orbit,
+            &mut self.fly,
+            context,
+            command,
+        );
         if matches!(command, ViewCommand::Reset | ViewCommand::Fit) {
             self.presets.clear_active();
+        }
+    }
+
+    /// Accumulate this frame's fly keys from the raw key events. `keys_down` is
+    /// logical-key only, so the physical QWERTY position is taken first; the
+    /// app also clears the set on focus loss and on Esc, where Esc leaves fly
+    /// mode. Inert unless fly is active, so movement keys never leak into the
+    /// orbit view.
+    fn update_fly_keys(&mut self, ctx: &egui::Context) {
+        if self.fly.is_none() || ctx.text_edit_focused() {
+            // Never steal keys from the formula bar: typing WASD must not fly,
+            // and Esc belongs to the text field while it has focus.
+            self.fly_keys.clear();
+            return;
+        }
+        // Ctrl/Cmd/Alt chords belong to menus and the browser; holding one
+        // clears the set so Ctrl+S or Cmd+W never move the camera.
+        if is_command_chord(ctx.input(|input| input.modifiers)) {
+            self.fly_keys.clear();
+            return;
+        }
+        let mut exit = false;
+        {
+            let keys = &mut self.fly_keys;
+            ctx.input(|input| {
+                for event in &input.events {
+                    match event {
+                        egui::Event::WindowFocused(false) => keys.clear(),
+                        egui::Event::Key { key, physical_key, pressed, .. } => {
+                            if *pressed && *key == egui::Key::Escape {
+                                exit = true;
+                            }
+                            keys.apply_key(*key, *physical_key, *pressed);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+        if exit {
+            self.fly = None;
+            self.fly_keys.clear();
         }
     }
 
@@ -268,7 +327,11 @@ impl VfApp {
             1.0 - (pos.y - rect.top()) / height * 2.0,
         );
         let ortho = if self.state.mode_3d { None } else { Some(self.state.plane_size()) };
-        let Some(seed) = click_seed(self.orbit, &self.state.domain, aspect, ndc, ortho) else {
+        let view_camera = match &self.fly {
+            Some(fly) => ViewCamera::Fly(fly),
+            None => ViewCamera::Orbit(&self.orbit),
+        };
+        let Some(seed) = click_seed(view_camera, &self.state.domain, aspect, ndc, ortho) else {
             // A click that lands off the domain plants nothing, so it cannot
             // be the first half of a seeding double-click either.
             self.last_click_seed = None;
@@ -425,6 +488,8 @@ impl eframe::App for VfApp {
                 &mut self.style,
                 &self.screenshot,
                 &mut self.appearance_open,
+                self.fly.is_some(),
+                self.state.is_3d(),
             );
             style_changed = changed;
             if let Some(action) = action {
@@ -442,6 +507,12 @@ impl eframe::App for VfApp {
         egui::Panel::top("formula_bar").show(ui, |ui| {
             crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
         });
+
+        // Free flight is 3D-only: the formula bar's 2D/3D toggle (or a formula
+        // that loses its third component) drops the fly camera before any
+        // camera work this frame, then the held movement keys are accumulated.
+        sync_fly(&mut self.fly, self.state.is_3d());
+        self.update_fly_keys(&ctx);
 
         // Left Controls panel, or its collapsed rail. The panel is shown
         // before the scene rebuild below so a control edit is reflected in this
@@ -534,20 +605,10 @@ impl eframe::App for VfApp {
             self.apply_view_command(command);
         }
         if let Some(applied) = self.presets.take_applied() {
-            // Guard the hand-editable preset file: `f32::clamp` passes NaN
-            // through, so a non-finite component keeps the current camera
-            // (review M-3).
-            if applied.position[0].is_finite() {
-                self.orbit.target.x = applied.position[0];
-            }
-            if applied.position[1].is_finite() {
-                self.orbit.target.y = applied.position[1];
-            }
-            if applied.scale.is_finite() {
-                self.orbit.ortho_zoom = applied
-                    .scale
-                    .clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
-            }
+            // Presets are orbit views: apply one to the untouched orbit camera
+            // and leave fly mode, with the hand-editable file's non-finite
+            // components ignored (review M-3).
+            apply_camera_record(&applied, &mut self.orbit, &mut self.fly);
         }
 
         // Rebuild the scene only when a setter marked the state dirty. The
@@ -649,53 +710,86 @@ impl eframe::App for VfApp {
                 log::info!("wgpu renderer initialized");
             }
 
-            // Camera gestures feed the seam's pure camera action. Ticket 18
-            // maps the buttons through `drag_channel`: in 3D left- and
-            // right-drag orbit, middle-drag and Shift+right-drag pan; in 2D
-            // every drag pans. The wheel/pinch factor zooms both views (the
-            // camera clamps it).
+            // Free flight drives the camera directly: held WASD/QE keys step
+            // along the look basis, primary drag looks, the wheel scales speed.
+            // Everything else (orbit/pan/zoom gestures) is bypassed so the
+            // orbit camera keeps the pose the exit will restore.
             let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
-            let pointer_delta = resp.drag_delta();
-            let pointer_delta = Vec2::new(pointer_delta.x, pointer_delta.y);
-            let buttons = DragButtons {
-                primary: resp.dragged_by(egui::PointerButton::Primary),
-                secondary: resp.dragged_by(egui::PointerButton::Secondary),
-                middle: resp.dragged_by(egui::PointerButton::Middle),
-                shift: ui.ctx().input(|input| input.modifiers.shift),
-            };
-            let channel = drag_channel(self.state.mode_3d, buttons);
-            let (drag, pan) = match channel {
-                Some(DragChannel::Orbit) => (pointer_delta, Vec2::ZERO),
-                Some(DragChannel::Pan) => (Vec2::ZERO, pointer_delta),
-                None => (Vec2::ZERO, Vec2::ZERO),
-            };
-            let zoom = if resp.hovered() || resp.dragged() {
-                crate::ui::top_bar::wheel_zoom(ui.ctx())
-            } else {
-                1.0
-            };
-            self.orbit = apply_camera_input(
-                self.orbit,
-                self.state.mode_3d,
-                self.state.plane_size(),
-                ViewGesture {
-                    drag,
-                    pan,
-                    zoom,
-                    viewport_height: rect.height(),
-                },
-            );
-
-            // Cursor feedback (ticket 18): orbiting shows grab/grabbing,
-            // panning shows move; the wheel zoom leaves the cursor alone.
-            if resp.hovered() || resp.dragged() {
-                let icon = match channel {
-                    Some(DragChannel::Orbit) => egui::CursorIcon::Grabbing,
-                    Some(DragChannel::Pan) => egui::CursorIcon::Move,
-                    None if self.state.mode_3d => egui::CursorIcon::Grab,
-                    None => egui::CursorIcon::Move,
+            if let Some(fly) = self.fly.as_mut() {
+                let drag = if resp.dragged_by(egui::PointerButton::Primary) {
+                    let delta = resp.drag_delta();
+                    Vec2::new(delta.x, delta.y)
+                } else {
+                    Vec2::ZERO
                 };
-                ui.ctx().set_cursor_icon(icon);
+                let boost = ui.ctx().input(|input| input.modifiers.shift);
+                let input = self.fly_keys.input(drag, boost);
+                let dt = ui.ctx().input(|input| input.stable_dt);
+                fly.step(input, dt);
+                if resp.hovered() || resp.dragged() {
+                    let scroll = ui.ctx().input(|input| input.smooth_scroll_delta.y);
+                    fly.adjust_speed(scroll);
+                    let icon = if resp.dragged() {
+                        egui::CursorIcon::Grabbing
+                    } else {
+                        egui::CursorIcon::Grab
+                    };
+                    ui.ctx().set_cursor_icon(icon);
+                }
+                // Movement continues while a key is held: keep painting even
+                // when the pointer never moves. An empty set stops the loop so
+                // an idle fly view costs nothing.
+                if self.fly_keys.movement_held() {
+                    ui.ctx().request_repaint();
+                }
+            } else {
+                // Camera gestures feed the seam's pure camera action. Ticket 18
+                // maps the buttons through `drag_channel`: in 3D left- and
+                // right-drag orbit, middle-drag and Shift+right-drag pan; in 2D
+                // every drag pans. The wheel/pinch factor zooms both views (the
+                // camera clamps it).
+                let pointer_delta = resp.drag_delta();
+                let pointer_delta = Vec2::new(pointer_delta.x, pointer_delta.y);
+                let buttons = DragButtons {
+                    primary: resp.dragged_by(egui::PointerButton::Primary),
+                    secondary: resp.dragged_by(egui::PointerButton::Secondary),
+                    middle: resp.dragged_by(egui::PointerButton::Middle),
+                    shift: ui.ctx().input(|input| input.modifiers.shift),
+                };
+                let channel = drag_channel(self.state.mode_3d, buttons);
+                let (drag, pan) = match channel {
+                    Some(DragChannel::Orbit) => (pointer_delta, Vec2::ZERO),
+                    Some(DragChannel::Pan) => (Vec2::ZERO, pointer_delta),
+                    None => (Vec2::ZERO, Vec2::ZERO),
+                };
+                let zoom = if resp.hovered() || resp.dragged() {
+                    crate::ui::top_bar::wheel_zoom(ui.ctx())
+                } else {
+                    1.0
+                };
+                self.orbit = apply_camera_input(
+                    self.orbit,
+                    self.state.mode_3d,
+                    self.state.plane_size(),
+                    ViewGesture {
+                        drag,
+                        pan,
+                        zoom,
+                        viewport_height: rect.height(),
+                    },
+                );
+
+                // Cursor feedback (ticket 18): orbiting shows grab/grabbing,
+                // panning shows move; the wheel zoom leaves the cursor alone.
+                if resp.hovered() || resp.dragged() {
+                    let icon = match channel {
+                        Some(DragChannel::Orbit) => egui::CursorIcon::Grabbing,
+                        Some(DragChannel::Pan) => egui::CursorIcon::Move,
+                        None if self.state.mode_3d => egui::CursorIcon::Grab,
+                        None => egui::CursorIcon::Move,
+                    };
+                    ui.ctx().set_cursor_icon(icon);
+                }
             }
 
             let aspect = rect.width().max(1.0) / rect.height().max(1.0);
@@ -719,8 +813,23 @@ impl eframe::App for VfApp {
             }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so
-            // order the instances far-to-near along this frame's view.
-            let view = self.orbit.view();
+            // order the instances far-to-near along this frame's view. The
+            // active camera also provides the framing the screenshot and the
+            // click seeding use.
+            let (view, view_proj, eye_position) = {
+                let camera = match &self.fly {
+                    Some(fly) => ViewCamera::Fly(fly),
+                    None => ViewCamera::Orbit(&self.orbit),
+                };
+                (
+                    camera.view(),
+                    camera.vp_matrix(
+                        aspect,
+                        if self.state.mode_3d { None } else { Some(self.state.plane_size()) },
+                    ),
+                    camera.eye_position(!self.state.mode_3d),
+                )
+            };
             let mut arrows = Arc::unwrap_or_clone(Arc::clone(&self.scene.arrows));
             crate::renderer::sort_back_to_front(arrows.as_mut_slice(), &view);
             self.scene.arrows = Arc::new(arrows);
@@ -733,13 +842,6 @@ impl eframe::App for VfApp {
                 arrow_params: self.scene.arrow_params,
                 mode_3d: self.state.mode_3d,
             };
-
-            // 2D mode covers the domain's plane orthographically; 3D mode is
-            // the orbiting perspective camera.
-            let view_proj = self.orbit.vp_matrix(
-                aspect,
-                if self.state.mode_3d { None } else { Some(self.state.plane_size()) },
-            );
 
             // Screenshot export (ticket 08): re-render this frame's scene
             // offscreen at the viewport's pixel size (capped at 4096 on the
@@ -783,7 +885,7 @@ impl eframe::App for VfApp {
                                 &render_state.queue,
                                 &scene,
                                 view_proj,
-                                self.orbit.eye_position(!self.state.mode_3d),
+                                eye_position,
                                 capture_width,
                                 capture_height,
                                 [
@@ -822,7 +924,7 @@ impl eframe::App for VfApp {
                                 &render_state.queue,
                                 &scene,
                                 view_proj,
-                                self.orbit.eye_position(!self.state.mode_3d),
+                                eye_position,
                                 capture_width,
                                 capture_height,
                                 [
@@ -854,7 +956,7 @@ impl eframe::App for VfApp {
                 DrawCallback {
                     scene,
                     view_proj,
-                    camera_pos: self.orbit.eye_position(!self.state.mode_3d),
+                    camera_pos: eye_position,
                 },
             );
             ui.painter().add(callback);

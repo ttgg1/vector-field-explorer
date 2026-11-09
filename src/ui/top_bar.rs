@@ -88,6 +88,8 @@ pub fn show(
     style: &mut AppStyle,
     screenshot: &Screenshot,
     appearance_open: &mut bool,
+    fly_active: bool,
+    is_3d: bool,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
@@ -97,11 +99,16 @@ pub fn show(
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
-                    let mut button = egui::Button::new(item.label);
+                    // Ticket 46: View > Fly camera is the one checkable item,
+                    // mirroring the active camera; it renders disabled (while
+                    // keeping a checkmark if active) outside the 3D view.
+                    let checked = menu::item_checked(item, fly_active);
+                    let enabled = menu::item_enabled(item, is_3d);
+                    let mut button = egui::Button::new(item.label).selected(checked);
                     if let Some(label) = menu::item_shortcut_label(item) {
                         button = button.shortcut_text(label);
                     }
-                    if ui.add(button).clicked() {
+                    if ui.add_enabled(enabled, button).clicked() {
                         action = Some(item.action);
                         // Every item is a one-shot command: close the dropdown
                         // so the next click lands on the app, not the menu.

@@ -22,6 +22,7 @@ const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
     ("R", "Reset view"),
     ("F", "Fit domain"),
     ("Click", "Seed streamlines"),
+    ("C", "fly · WASD move · Q/E down/up · Shift boost · drag look · Esc exit"),
 ];
 
 const VIEW_2D_BINDINGS: &[(&str, &str)] = &[

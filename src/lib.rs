@@ -6,6 +6,7 @@ pub mod colormap;
 pub mod domain;
 pub mod export;
 pub mod field;
+pub mod fly_camera;
 pub mod i18n;
 pub mod particles;
 pub mod persistence;

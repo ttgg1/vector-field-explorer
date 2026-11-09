@@ -3,6 +3,9 @@
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+use crate::fly_camera::FlyCamera;
+use crate::render::Camera;
+
 /// Spherical orbit camera around a target point.
 ///
 /// The same camera drives both views: the perspective orbit in 3D mode and a
@@ -166,6 +169,81 @@ impl OrbitCamera {
         let direction = (self.view().inverse() * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
             .truncate();
         (self.position(), direction)
+    }
+}
+
+/// The active view camera: the orbit camera normally, or the fly camera while
+/// ticket 46's free-flight mode is on. The viewport, screenshot capture and
+/// click seeding read one of these instead of matching on the mode themselves,
+/// so the framing they paint/seed is always the framing the user sees.
+#[derive(Debug, Clone, Copy)]
+pub enum ViewCamera<'a> {
+    Orbit(&'a OrbitCamera),
+    Fly(&'a FlyCamera),
+}
+
+impl ViewCamera<'_> {
+    /// World-to-eye transform, for the painter's depth sort.
+    pub fn view(&self) -> Mat4 {
+        match self {
+            ViewCamera::Orbit(camera) => camera.view(),
+            ViewCamera::Fly(camera) => camera.view(),
+        }
+    }
+
+    /// Full view-projection. `ortho_plane_size` selects the 2D orthographic
+    /// front view; the fly camera is 3D-only and always uses its perspective.
+    pub fn vp_matrix(&self, aspect: f32, ortho_plane_size: Option<f32>) -> Mat4 {
+        match self {
+            ViewCamera::Orbit(camera) => camera.vp_matrix(aspect, ortho_plane_size),
+            ViewCamera::Fly(camera) => camera.vp_matrix(aspect),
+        }
+    }
+
+    /// The eye the renderer's camera-facing ribbons orient against. `ortho` is
+    /// the 2D mode for the orbit camera; the fly camera is always perspective.
+    pub fn eye_position(&self, ortho: bool) -> Vec3 {
+        match self {
+            ViewCamera::Orbit(camera) => camera.eye_position(ortho),
+            ViewCamera::Fly(camera) => camera.position,
+        }
+    }
+
+    /// Ray through `ndc_xy` (in `[-1,1]^2`); direction intentionally
+    /// unnormalized, see [`OrbitCamera::ndc_ray`].
+    pub fn ndc_ray(&self, aspect: f32, ndc_xy: Vec2) -> (Vec3, Vec3) {
+        match self {
+            ViewCamera::Orbit(camera) => camera.ndc_ray(aspect, ndc_xy),
+            ViewCamera::Fly(camera) => camera.ndc_ray(aspect, ndc_xy),
+        }
+    }
+
+    /// Whether free flight is the active camera.
+    pub fn is_fly(&self) -> bool {
+        matches!(self, ViewCamera::Fly(_))
+    }
+}
+
+/// Apply a saved 2D camera record (a preset's target and zoom) to the live
+/// orbit camera. Applying a preset leaves fly mode first: presets are orbit
+/// views and never carry a fly pose, so the user gets the saved framing back
+/// rather than a stale free-flight view. Non-finite components are ignored, so
+/// a hand-edited preset file cannot poison the camera.
+pub fn apply_camera_record(
+    record: &Camera,
+    orbit: &mut OrbitCamera,
+    fly: &mut Option<FlyCamera>,
+) {
+    *fly = None;
+    if record.position[0].is_finite() {
+        orbit.target.x = record.position[0];
+    }
+    if record.position[1].is_finite() {
+        orbit.target.y = record.position[1];
+    }
+    if record.scale.is_finite() {
+        orbit.ortho_zoom =
+            record.scale.clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
     }
 }
 

@@ -75,6 +75,13 @@ pub struct HelpSection {
     pub rows: &'static [HelpRow],
 }
 
+/// The fly-mode key hint (ticket 46): the input token and its action, split the
+/// same way as every other help row. Concatenated they spell the line shown in
+/// the overlay.
+pub const FLY_HELP_INPUT: &str = "C";
+pub const FLY_HELP_ACTION: &str =
+    "fly · WASD move · Q/E down/up · Shift boost · drag look · Esc exit";
+
 const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "Left-drag", action: "Orbit" },
     HelpRow { input: "Right-drag", action: "Orbit" },
@@ -88,6 +95,7 @@ const ROWS_3D: &[HelpRow] = &[
     HelpRow { input: "R", action: "Reset view" },
     HelpRow { input: "F", action: "Fit domain" },
     HelpRow { input: "Click", action: "Seed streamlines" },
+    HelpRow { input: FLY_HELP_INPUT, action: FLY_HELP_ACTION },
 ];
 
 const ROWS_2D: &[HelpRow] = &[

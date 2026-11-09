@@ -11,6 +11,7 @@
 use eframe::egui;
 
 use crate::camera::OrbitCamera;
+use crate::fly_camera::{FlyCamera, toggle_fly};
 use crate::render::Camera;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
@@ -20,6 +21,7 @@ use crate::viewmodel::State;
 /// [`SHORTCUTS`] so a label can never drift from the key it describes.
 pub const CONTROLS_SHORTCUT: &str = "Ctrl+B";
 pub const PRESETS_SHORTCUT: &str = "Ctrl+P";
+pub const FLY_SHORTCUT: &str = "C";
 pub const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+S";
 pub const COPY_FORMULA_SHORTCUT: &str = "Ctrl+Shift+C";
 pub const QUIT_SHORTCUT: &str = "Ctrl+Q";
@@ -61,6 +63,7 @@ menu_actions! {
     ResetAllControls,
     ToggleControls,
     TogglePresets,
+    ToggleFly,
     ResetLayout,
     ResetCamera,
     ToggleHelp,
@@ -136,6 +139,7 @@ pub const MENUS: &[Menu] = &[
         items: &[
             MenuItem { label: "Toggle Controls", action: MenuAction::ToggleControls },
             MenuItem { label: "Toggle Presets", action: MenuAction::TogglePresets },
+            MenuItem { label: "Fly camera", action: MenuAction::ToggleFly },
             MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
             MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
             // The user reported looking for color controls under View (ticket
@@ -204,6 +208,13 @@ pub const SHORTCUTS: &[Shortcut] = &[
         global: false,
     },
     Shortcut {
+        action: MenuAction::ToggleFly,
+        label: FLY_SHORTCUT,
+        key: egui::Key::C,
+        modifiers: egui::Modifiers::NONE,
+        global: false,
+    },
+    Shortcut {
         action: MenuAction::ToggleHelp,
         label: HELP_SHORTCUT,
         key: egui::Key::F1,
@@ -230,6 +241,22 @@ pub fn item_shortcut_label(item: &MenuItem) -> Option<&'static str> {
     match item.action {
         MenuAction::ShowHelpTable => shortcut_label(MenuAction::ToggleHelp),
         action => shortcut_label(action),
+    }
+}
+
+/// Whether `item` shows its checked (active) state. Fly camera is the one
+/// checkable command; its state mirrors the active camera.
+pub fn item_checked(item: &MenuItem, fly_active: bool) -> bool {
+    item.action == MenuAction::ToggleFly && fly_active
+}
+
+/// Whether `item` is enabled in the current view. Fly camera is 3D-only, so it
+/// renders disabled in 2D while `C` stays ignored there (the shortcut path
+/// reuses [`toggle_fly`](crate::fly_camera::toggle_fly)).
+pub fn item_enabled(item: &MenuItem, is_3d: bool) -> bool {
+    match item.action {
+        MenuAction::ToggleFly => is_3d,
+        _ => true,
     }
 }
 
@@ -283,6 +310,9 @@ pub fn help_key_pressed(ctx: &egui::Context) -> bool {
 pub struct UiState<'a> {
     pub layout: &'a mut LayoutState,
     pub orbit: &'a mut OrbitCamera,
+    /// The active fly camera, if any (ticket 46). Shared so the menu can leave
+    /// fly mode before an orbit command and toggle it from View > Fly camera.
+    pub fly: &'a mut Option<FlyCamera>,
     pub camera: &'a mut Camera,
     pub state: &'a mut State,
     pub controls: &'a mut Controls,
@@ -309,11 +339,19 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             ui.layout.toggle_presets();
             SideEffect::None
         }
+        MenuAction::ToggleFly => {
+            // Free flight is 3D-only; `toggle_fly` ignores the key in 2D.
+            toggle_fly(ui.fly, ui.orbit, ui.state.is_3d());
+            SideEffect::None
+        }
         MenuAction::ResetLayout => {
             ui.layout.reset();
             SideEffect::ResetLayout
         }
         MenuAction::ResetCamera => {
+            // Reset is an orbit framing command: leave fly first so the reset
+            // applies to the view the user sees, and the old fly pose is gone.
+            *ui.fly = None;
             *ui.orbit = crate::view_command::apply_view_command(
                 *ui.orbit,
                 crate::view_command::ViewContext::new(ui.state.mode_3d, ui.state.domain, 1.0),

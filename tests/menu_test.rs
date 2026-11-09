@@ -6,6 +6,7 @@ use eframe::egui;
 use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::fly_camera::FlyCamera;
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::menu::{
@@ -20,6 +21,7 @@ use vector_field_explorer::viewmodel::{ArrowLengthMode, DEFAULT_DENSITY_2D, Stat
 struct Fixture {
     layout: LayoutState,
     orbit: OrbitCamera,
+    fly: Option<FlyCamera>,
     camera: Camera,
     state: State,
     controls: Controls,
@@ -30,6 +32,7 @@ impl Fixture {
         Self {
             layout: LayoutState::default(),
             orbit: OrbitCamera::default(),
+            fly: None,
             camera: Camera::default(),
             state: State::new(false),
             controls: Controls::new(),
@@ -40,6 +43,7 @@ impl Fixture {
         UiState {
             layout: &mut self.layout,
             orbit: &mut self.orbit,
+            fly: &mut self.fly,
             camera: &mut self.camera,
             state: &mut self.state,
             controls: &mut self.controls,
@@ -99,6 +103,7 @@ fn the_bar_carries_the_v1_menu_table() {
                 vec![
                     "Toggle Controls",
                     "Toggle Presets",
+                    "Fly camera",
                     "Reset layout",
                     "Reset camera",
                     "Appearance…",
@@ -125,6 +130,7 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ResetAllControls, SideEffect::None),
         (MenuAction::ToggleControls, SideEffect::None),
         (MenuAction::TogglePresets, SideEffect::None),
+        (MenuAction::ToggleFly, SideEffect::None),
         (MenuAction::ResetLayout, SideEffect::ResetLayout),
         (MenuAction::ResetCamera, SideEffect::ResetCamera),
         (MenuAction::ToggleHelp, SideEffect::None),
@@ -165,9 +171,11 @@ fn reset_camera_restores_the_default_framing() {
     fixture.orbit.ortho_zoom = 7.0;
     fixture.camera.position = [5.0, 6.0];
     fixture.camera.scale = 3.0;
+    fixture.fly = Some(FlyCamera::from_orbit(&fixture.orbit));
 
     let effect = apply_action(MenuAction::ResetCamera, &mut fixture.ui());
     assert_eq!(effect, SideEffect::ResetCamera, "the app clears the preset highlight");
+    assert!(fixture.fly.is_none(), "Reset camera leaves fly mode before resetting");
     assert_eq!(fixture.orbit, OrbitCamera::default(), "orbit framing returns");
     let default_camera = Camera::default();
     assert_eq!(fixture.camera.position, default_camera.position, "the 2D camera record returns");
@@ -339,6 +347,7 @@ fn shortcuts_are_shown_from_the_one_table() {
     assert_eq!(menu::shortcut_label(MenuAction::Quit), Some("Ctrl+Q"));
     assert_eq!(menu::shortcut_label(MenuAction::CopyFormula), Some("Ctrl+Shift+C"));
     assert_eq!(menu::shortcut_label(MenuAction::ToggleHelp), Some("F1"));
+    assert_eq!(menu::shortcut_label(MenuAction::ToggleFly), Some("C"));
     assert_eq!(
         menu::shortcut_label(MenuAction::ResetCamera),
         None,
@@ -388,6 +397,34 @@ fn extra_modifiers_do_not_fire_the_plain_shortcuts() {
         fired_shortcuts(egui::Modifiers::COMMAND, egui::Key::Q),
         vec![MenuAction::Quit],
         "Ctrl+Q still quits",
+    );
+}
+
+#[test]
+fn plain_c_toggles_fly_but_modified_c_does_not() {
+    // Ticket 46: C is the fly toggle; Shift+C (boost + C), Ctrl/Cmd+C and
+    // Ctrl+Shift+C (copy formula) must never toggle fly mode.
+    assert_eq!(
+        fired_shortcuts(egui::Modifiers::NONE, egui::Key::C),
+        vec![MenuAction::ToggleFly],
+        "plain C toggles fly",
+    );
+    assert!(
+        fired_shortcuts(egui::Modifiers::SHIFT, egui::Key::C).is_empty(),
+        "Shift+C must not toggle fly",
+    );
+    assert!(
+        fired_shortcuts(egui::Modifiers::COMMAND, egui::Key::C).is_empty(),
+        "Ctrl/Cmd+C must not toggle fly",
+    );
+    assert!(
+        fired_shortcuts(
+            egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+            egui::Key::C,
+        )
+        .iter()
+        .all(|action| *action != MenuAction::ToggleFly),
+        "Ctrl+Shift+C is Copy formula, never the fly toggle",
     );
 }
 
