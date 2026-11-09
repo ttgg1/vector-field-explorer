@@ -1,0 +1,276 @@
+use std::sync::Arc;
+
+use eframe::egui;
+use glam::{Vec2, Vec3};
+
+use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
+use crate::domain::Domain;
+use crate::fly_camera::{
+    CROSSHAIR_ALPHA, FlyCamera, FlyKeys, capture_exit_required, capture_transition,
+    crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
+    sync_fly, sync_fly_mirror,
+};
+use crate::reference::reference_lines;
+use crate::render::Camera;
+use crate::renderer::{
+    DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
+    sort_scene_back_to_front, sorted_arrows_back_to_front,
+};
+use crate::screenshot::{self, Instant, Screenshot};
+use crate::sim_clock::SimClock;
+use crate::streamlines::click_seed;
+use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::ui::formula_bar::FormulaBarState;
+use crate::ui::layout::{self, LayoutState};
+use crate::ui::menu::{self, MenuAction};
+use crate::ui::presets::PresetPanel;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ui::presets::default_preset_dir;
+use crate::ui::sidebar::Controls;
+use crate::ui::style_panel::{self, AppStyle};
+use crate::ui::top_bar;
+use crate::view_command::{self, ViewCommand, ViewContext};
+use crate::viewmodel::{
+    CapturedClickOutcome,
+    ClickOutcome,
+    DragButtons,
+    DragChannel,
+    LastClickSeed,
+    State,
+    ViewGesture,
+    apply_camera_input,
+    captured_click_outcome,
+    click_outcome,
+    drag_channel,
+    undo_click_seed,
+};
+
+// Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
+// the app owns the cloud and decides when to run these pure functions.
+use crate::particles::{
+    CLICK_BURST_PARTICLES,
+    Particles,
+    DOT_SPACING_FRACTION,
+    advect,
+    clear,
+    dot_instances,
+    spawn,
+    spawn_at,
+    target_count,
+    count as particle_count,
+};
+
+mod frame;
+mod input;
+mod panels;
+mod simulation;
+mod viewport;
+
+/// Directory where the app persists camera presets. Kept in one place so the
+/// panel and any export helper always agree (preset-persistence plan Task 3).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn presets_data_dir() -> std::path::PathBuf {
+    default_preset_dir()
+}
+
+/// What the status bar reports this frame: the latest formula parse state
+/// (empty when the field is good) and the size of the scene being painted —
+/// field geometry only (arrows + streamline segments + dots; the app's
+/// backdrop lines are decoration and are excluded from the count).
+pub struct StatusBarState {
+    pub parse_message: String,
+    pub instance_count: usize,
+    pub streamline_count: usize,
+}
+
+/// How many viewport clicks keep their seeded bursts. Clicks accumulate only up
+/// to this bound (the oldest burst is dropped), so repeated clicking cannot
+/// grow the scene without limit.
+const MAX_CLICK_SEEDS: usize = 6;
+// Double-click seed handling (ticket 18): the first click seeds immediately and
+// a second click within `viewmodel::DOUBLE_CLICK_WINDOW` takes that burst back
+// before resetting the view. This is an accepted transient — a deferred seed
+// would add ~300 ms of latency to every single click, while the final state
+// after a double-click is clean. A triple-click is not special-cased: egui
+// reports the third click as a plain click, so it seeds again after the reset.
+/// Application root state: the viewmodel State (the single source of truth for
+/// what is on screen), the formula bar's local widgets, the sidebar's local
+/// Controls, the status readouts, both cameras (the 2D `Camera` and the
+/// `OrbitCamera`), the preset manager, the persisted appearance and layout
+/// records, and the GPU scene currently being painted.
+pub struct VfApp {
+    pub state: State,
+    pub bar: FormulaBarState,
+    pub sidebar: Controls,
+    pub status: StatusBarState,
+    /// The 2D camera record the preset panel saves/applies; the live view is
+    /// the shared [`OrbitCamera`] (its ortho mode is the 2D view).
+    pub camera: Camera,
+    pub orbit: OrbitCamera,
+    /// The active six-DOF fly camera (ticket 46). `None` means the orbit
+    /// camera is showing; entering fly snapshots the orbit pose, exiting drops
+    /// this and the untouched orbit view returns. Never persisted.
+    pub fly: Option<FlyCamera>,
+    /// Movement keys held this frame, accumulated from `Event::Key` so the
+    /// physical QWERTY positions drive movement on native.
+    pub fly_keys: FlyKeys,
+    /// Whether pointer capture is active (ticket 65): the last state sent to
+    /// the platform. The commands are edge-triggered from this flag, never
+    /// every frame.
+    capture_active: bool,
+    /// The click that entered fly (the sidebar checkbox, normally) must not
+    /// also seed the field through the captured-click path.
+    suppress_capture_click: bool,
+    pub presets: PresetPanel,
+    /// The persisted look-and-feel record (ticket 07): restored from eframe's
+    /// app-state storage on startup and written back in [`eframe::App::save`].
+    /// It lives app-side and never touches the viewmodel `State`.
+    pub style: AppStyle,
+    /// The persisted layout record (ticket 14): panel visibility, expanded
+    /// widths and help-overlay visibility.
+    pub layout: LayoutState,
+    /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
+    /// forget their last dragged size, letting the default widths apply.
+    panel_generation: u32,
+    /// Whether the Appearance popover is up (ticket 15; one entry point since
+    /// ticket 59).
+    appearance_open: bool,
+    /// Whether the Help > About dialog is up (ticket 15).
+    about_open: bool,
+    /// Whether the Help > Keyboard & mouse window is up (ticket 18): the full
+    /// help table, sharing `HELP_SECTIONS` with the viewport overlay.
+    help_open: bool,
+    /// The viewport rect from this frame (set in the central panel) so the help
+    /// overlay can anchor to its bottom-left corner.
+    last_viewport_rect: Option<egui::Rect>,
+    scene: SceneGPU,
+    renderer_ready: bool,
+    streamline_count: usize,
+    /// The advected cloud behind the "Particles" toggle (ticket 05): 3D-view
+    /// only; its per-frame dots ramp with `dots_range`, the same magnitude
+    /// range the arrows were coloured with at the last scene rebuild.
+    particles: Particles,
+    /// The one simulation clock (ticket 26): the only time source for the
+    /// particle cloud. Transient by design — never persisted, so every session
+    /// starts at time 0, playing, 1x.
+    pub clock: SimClock,
+    dots_range: (f32, f32),
+    /// Where the user clicked in the viewport (ticket 06), bounded by
+    /// [`MAX_CLICK_SEEDS`] and oldest-first. The viewmodel turns each pick into
+    /// a deterministic streamline burst; the newest click also drops a
+    /// particle burst when the particle toggle is on.
+    click_seeds: Vec<Vec3>,
+    /// The most recent single click's seed, so a double-click can take it back
+    /// (ticket 18: double-click resets the view, it must not seed).
+    last_click_seed: Option<LastClickSeed>,
+    /// The grid-seeded streamline segments from the last scene rebuild, kept
+    /// separately so a click can recompose the line collection without
+    /// re-sampling or re-tracing the grid.
+    flow_lines: Vec<LineInstanceGPU>,
+    /// The current click bursts' streamline segments.
+    click_lines: Vec<LineInstanceGPU>,
+    /// The screenshot action (ticket 08): the pending capture request, the
+    /// channel its save thread reports on, and the completion toast.
+    pub screenshot: Screenshot,
+}
+impl VfApp {
+    /// App with no persistent storage (defaults for every persisted record).
+    pub fn new() -> Self {
+        Self::new_with_storage(None)
+    }
+
+    /// App wired to eframe's persistent storage: the settings envelope
+    /// (style + layout + view state) is restored from it — absent, corrupt or
+    /// older records fall back to sensible defaults — and written back on save.
+    pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
+        let settings = persistence::load(storage);
+        let mut state = State::new(false);
+        let mut sidebar = Controls::new();
+        // Restore through the viewmodel setters so the first frame samples the
+        // saved field; a corrupt record cannot poison the grid.
+        settings.view.restore(&mut state, &mut sidebar);
+        // Ticket 47: a restored non-default domain must already be framed on
+        // the first frame, not only after the first edit. This is the same
+        // tested recentre helper the live domain editor uses; the default
+        // domain's centre is the origin, so a fresh session is unchanged.
+        let mut orbit = OrbitCamera::default();
+        if state.mode_3d {
+            orbit.recentre_on(&state.domain);
+        } else {
+            orbit.recentre_on_2d(&state.domain);
+        }
+        let backdrop = reference_lines(&state.domain, state.is_3d());
+        let arrow_style = state.arrow_style;
+        let arrow_style_2d = state.arrow_style_2d;
+        let arrow_params = state.arrow_params;
+        let mode_3d = state.mode_3d;
+        Self {
+            state,
+            bar: FormulaBarState::new(),
+            sidebar,
+            status: StatusBarState {
+                parse_message: String::new(),
+                instance_count: 0,
+                streamline_count: 0,
+            },
+            camera: Camera::default(),
+            orbit,
+            fly: None,
+            fly_keys: FlyKeys::default(),
+            capture_active: false,
+            suppress_capture_click: false,
+            presets: PresetPanel::new(),
+            style: settings.style,
+            layout: settings.layout,
+            panel_generation: 0,
+            appearance_open: false,
+            about_open: false,
+            help_open: false,
+            last_viewport_rect: None,
+            scene: SceneGPU {
+                arrows: Arc::new(Vec::new()),
+                lines: Arc::new(backdrop),
+                dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
+                arrow_style,
+                arrow_style_2d,
+                arrow_params,
+                mode_3d,
+            },
+            renderer_ready: false,
+            streamline_count: 0,
+            particles: Particles::default(),
+            clock: SimClock::default(),
+            dots_range: (0.0, 1.0),
+            click_seeds: Vec::new(),
+            last_click_seed: None,
+            flow_lines: Vec::new(),
+            click_lines: Vec::new(),
+            screenshot: Screenshot::new(),
+        }
+    }
+}
+
+impl Default for VfApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fold the domain-matched backdrop, the grid-seeded streamlines and the click
+/// bursts into the one line collection the viewport paints. Rebuilt only on a
+/// scene rebuild or a click, so the per-frame path still clones an `Arc`. The
+/// backdrop follows the current domain and sampling dimension (ticket 23):
+/// `reference_lines` is cheap, and a rebuild is exactly when the domain may
+/// have moved.
+fn compose_lines(
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+    domain: &Domain,
+    sampling_3d: bool,
+) -> Vec<LineInstanceGPU> {
+    let mut lines = reference_lines(domain, sampling_3d);
+    lines.extend_from_slice(flow);
+    lines.extend_from_slice(clicks);
+    lines
+}
