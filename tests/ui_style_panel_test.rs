@@ -5,7 +5,9 @@
 //! are all public.
 
 use eframe::egui;
-use vector_field_explorer::ui::style_panel::{AppStyle, SPACING_Y_RATIO, apply};
+use vector_field_explorer::ui::style_panel::{
+    ACCENT_PRESETS, AppStyle, SPACING_Y_RATIO, apply, selected_preset, show_controls,
+};
 
 fn sample_style() -> AppStyle {
     AppStyle {
@@ -64,4 +66,220 @@ fn apply_is_idempotent() {
     let once = (*ctx.global_style()).clone();
     apply(&ctx, &style);
     assert_eq!(*ctx.global_style(), once);
+}
+
+#[test]
+fn accent_presets_are_eight_unique_named_fully_opaque_colours() {
+    assert_eq!(ACCENT_PRESETS.len(), 8);
+    let mut names = std::collections::HashSet::new();
+    for preset in ACCENT_PRESETS {
+        assert!(!preset.name.is_empty(), "every preset is named");
+        assert!(
+            names.insert(preset.name),
+            "preset names are unique; `{}` appears twice",
+            preset.name
+        );
+        assert_eq!(
+            preset.color.a(),
+            255,
+            "`{}` must be fully opaque",
+            preset.name
+        );
+    }
+}
+
+#[test]
+fn accent_presets_are_pairwise_distinct() {
+    for (index, preset) in ACCENT_PRESETS.iter().enumerate() {
+        for other in &ACCENT_PRESETS[index + 1..] {
+            assert_ne!(
+                preset.color, other.color,
+                "`{}` and `{}` must be distinguishable",
+                preset.name, other.name
+            );
+        }
+    }
+}
+
+#[test]
+fn selected_preset_matches_exactly_or_not_at_all() {
+    for (index, preset) in ACCENT_PRESETS.iter().enumerate() {
+        assert_eq!(
+            selected_preset(preset.color),
+            Some(index),
+            "`{}` is recognised as preset {index}",
+            preset.name
+        );
+    }
+    // A custom accent matches no preset, even one that is nearly a preset.
+    assert_eq!(selected_preset(egui::Color32::from_rgb(12, 34, 56)), None);
+    let teal = ACCENT_PRESETS[0].color;
+    assert_eq!(
+        selected_preset(egui::Color32::from_rgba_unmultiplied(
+            teal.r(),
+            teal.g(),
+            teal.b(),
+            teal.a() - 1
+        )),
+        None,
+        "an accent only matches when every channel matches"
+    );
+}
+
+/// One headless style panel running the real `show_controls` surface.
+struct Panel {
+    ctx: egui::Context,
+    style: AppStyle,
+    changed: bool,
+}
+
+impl Panel {
+    fn new(style: AppStyle) -> Self {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        Self {
+            ctx,
+            style,
+            changed: false,
+        }
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(400.0, 400.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let (mut output, changed) = {
+            let style = &mut self.style;
+            let mut changed = false;
+            let output = self.ctx.run_ui(input, |ui| {
+                changed = show_controls(ui, style).changed;
+            });
+            (output, changed)
+        };
+        output.textures_delta.clear();
+        self.changed = changed;
+        output
+    }
+
+    fn idle(&mut self) -> egui::FullOutput {
+        self.frame(Vec::new())
+    }
+
+    fn click(&mut self, pos: egui::Pos2) -> bool {
+        self.frame(pointer(pos, true));
+        let pressed_changed = self.changed;
+        self.frame(pointer(pos, false));
+        pressed_changed || self.changed
+    }
+}
+
+fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+
+/// The accesskit view of one button node: label, selected state and rect.
+struct Node {
+    label: Option<String>,
+    toggled: bool,
+    rect: egui::Rect,
+}
+
+fn nodes(output: &egui::FullOutput) -> Vec<Node> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let bounds = node.bounds()?;
+            Some(Node {
+                label: node.label().map(str::to_owned),
+                toggled: node.toggled() == Some(egui::accesskit::Toggled::True),
+                rect: egui::Rect::from_min_max(
+                    egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                    egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                ),
+            })
+        })
+        .collect()
+}
+
+fn preset_node(output: &egui::FullOutput, name: &str) -> Node {
+    nodes(output)
+        .into_iter()
+        .find(|node| node.label.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("the `{name}` preset swatch must be exposed to accessibility"))
+}
+
+#[test]
+fn clicking_a_preset_swatch_changes_the_accent() {
+    let mut panel = Panel::new(AppStyle::default());
+    panel.idle();
+    panel.idle();
+    let out = panel.idle();
+
+    // The default accent is the first preset (Teal).
+    assert!(
+        preset_node(&out, "Teal").toggled,
+        "the default teal accent marks the Teal preset"
+    );
+
+    let blue = preset_node(&out, "Blue");
+    assert!(
+        (blue.rect.width() - 20.0).abs() < 0.01 && (blue.rect.height() - 20.0).abs() < 0.01,
+        "preset swatches are 20x20 pt, got {:?}",
+        blue.rect.size()
+    );
+
+    assert!(
+        panel.click(blue.rect.center()),
+        "clicking a preset reports a style change"
+    );
+
+    let expected = ACCENT_PRESETS
+        .iter()
+        .find(|preset| preset.name == "Blue")
+        .expect("Blue is a preset")
+        .color;
+    assert_eq!(panel.style.accent, expected);
+
+    let out = panel.idle();
+    assert!(
+        preset_node(&out, "Blue").toggled,
+        "the clicked preset is marked selected"
+    );
+    assert!(
+        !preset_node(&out, "Teal").toggled,
+        "only one preset is marked selected"
+    );
+}
+
+#[test]
+fn custom_accent_marks_no_preset() {
+    let mut panel = Panel::new(sample_style());
+    panel.idle();
+    panel.idle();
+    let out = panel.idle();
+
+    for preset in ACCENT_PRESETS {
+        assert!(
+            !preset_node(&out, preset.name).toggled,
+            "a custom accent marks no preset, but `{}` is selected",
+            preset.name
+        );
+    }
 }

@@ -27,6 +27,63 @@ pub const MAX_SPACING: f32 = 24.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 24.0;
 
+/// Edge length of one accent-preset swatch, in points.
+const ACCENT_SWATCH_SIZE: f32 = 20.0;
+
+/// One named accent colour offered above the custom picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccentPreset {
+    /// Human-readable name, also used as the accessible label and tooltip.
+    pub name: &'static str,
+    /// Opaque sRGB colour written into [`AppStyle::accent`].
+    pub color: egui::Color32,
+}
+
+/// The fixed accent palette. Material 700-series shades: distinguishable from
+/// each other, and dark enough to keep white check marks and rings legible.
+pub const ACCENT_PRESETS: [AccentPreset; 8] = [
+    AccentPreset {
+        name: "Teal",
+        color: egui::Color32::from_rgb(0, 150, 136),
+    },
+    AccentPreset {
+        name: "Blue",
+        color: egui::Color32::from_rgb(25, 118, 210),
+    },
+    AccentPreset {
+        name: "Indigo",
+        color: egui::Color32::from_rgb(63, 81, 181),
+    },
+    AccentPreset {
+        name: "Purple",
+        color: egui::Color32::from_rgb(123, 31, 162),
+    },
+    AccentPreset {
+        name: "Pink",
+        color: egui::Color32::from_rgb(194, 24, 91),
+    },
+    AccentPreset {
+        name: "Red",
+        color: egui::Color32::from_rgb(211, 47, 47),
+    },
+    AccentPreset {
+        name: "Orange",
+        color: egui::Color32::from_rgb(239, 108, 0),
+    },
+    AccentPreset {
+        name: "Green",
+        color: egui::Color32::from_rgb(56, 142, 60),
+    },
+];
+
+/// Index of the preset whose colour is exactly `accent`, or `None` for a
+/// custom colour picked through the free-form picker.
+pub fn selected_preset(accent: egui::Color32) -> Option<usize> {
+    ACCENT_PRESETS
+        .iter()
+        .position(|preset| preset.color == accent)
+}
+
 /// The persisted UI-chrome style record. Field names are distinct from the
 /// repo's three existing `Preset` types; this one only carries look-and-feel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +207,70 @@ pub struct StyleControls {
     pub accent_popup_id: egui::Id,
 }
 
+/// Draw the fixed accent swatches above the custom picker. The row wraps, so
+/// the eight swatches stay inside a narrow popover. A custom accent simply
+/// leaves every swatch unselected.
+fn show_accent_presets(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
+    let selected = selected_preset(style.accent);
+    let enabled = ui.is_enabled();
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        for (index, preset) in ACCENT_PRESETS.iter().enumerate() {
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ACCENT_SWATCH_SIZE, ACCENT_SWATCH_SIZE),
+                egui::Sense::click(),
+            );
+            let is_selected = selected == Some(index);
+
+            let painter = ui.painter();
+            let corner = egui::CornerRadius::same(3);
+            painter.rect_filled(rect, corner, preset.color);
+            // A mid-grey border keeps the swatch readable on both the dark and
+            // the light panel fill instead of blending into either one.
+            painter.rect_stroke(
+                rect,
+                corner,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(120)),
+                egui::StrokeKind::Inside,
+            );
+            if is_selected {
+                // White ring plus a dark inner edge: contrast against both the
+                // panel and the swatch fill, in either theme.
+                painter.rect_stroke(
+                    rect,
+                    corner,
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+                painter.rect_stroke(
+                    rect.shrink(2.0),
+                    corner,
+                    egui::Stroke::new(1.0, egui::Color32::from_gray(20)),
+                    egui::StrokeKind::Inside,
+                );
+                let check = egui::Stroke::new(2.0, egui::Color32::WHITE);
+                let start = rect.lerp_inside(egui::vec2(0.24, 0.52));
+                let elbow = rect.lerp_inside(egui::vec2(0.42, 0.70));
+                let end = rect.lerp_inside(egui::vec2(0.76, 0.30));
+                painter.line_segment([start, elbow], check);
+                painter.line_segment([elbow, end], check);
+            }
+
+            if response.clicked() {
+                style.accent = preset.color;
+                changed = true;
+            }
+            let response = response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(preset.name);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::Button, enabled, is_selected, preset.name)
+            });
+        }
+    });
+    changed
+}
+
 /// Draw the bare appearance controls, without a collapsing header, for the
 /// Settings popover (ticket 14 moved them out of the sidebar).
 pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
@@ -163,6 +284,7 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
             .selectable_value(&mut style.theme_dark, true, "Dark")
             .changed();
     });
+    changed |= show_accent_presets(ui, style);
     // `color_edit_button_srgba` anchors a popup to this button, deriving the
     // popup id from the row ui's next auto id *before* it allocates the
     // swatch. Reading that id here is what lets the owning popover recognise
