@@ -36,13 +36,19 @@ TEXT_ATTRS = {
     "value",
 }
 # An embedded URL in any other attribute is suspicious: a malformed
-# `<link/rel=stylesheet/href="https://…">` arrives as one `rel` value.
-EMBEDDED_URL_RE = re.compile(r"(?i)https?://")
+# `<link/rel=stylesheet/href="https://…">` arrives as one `rel` value, and a
+# `data:` URL on a non-image can carry an external fetch. Protocol-relative
+# matches need an argument boundary so local `icons//x.png` is not flagged.
+EMBEDDED_URL_RE = re.compile(r"(?i)https?://|(?:^|[\s\"'<>(,])//[a-z0-9]")
 SCRIPT_EXTERNAL_RE = re.compile(r"(?i)https?://")
 # Any quoted protocol-relative URL in an inline script, not just import/fetch:
 # `s.src = '//evil.example/x.js'` is the same external fetch.
 SCRIPT_PROTOCOL_RELATIVE_RE = re.compile(r"""(?i)['"`]//[a-z0-9]""")
-JS_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\(.)", re.S)
+JS_ESCAPE_RE = re.compile(
+    r"\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})"
+    r"|\\([0-7]{1,3})|\\(.)",
+    re.S,
+)
 CSS_HEX_ESCAPE_RE = re.compile(r"[0-9a-fA-F]{1,6}")
 # A `//` only counts at an argument boundary, so local `icons//x.png` passes;
 # `https?:` still catches scheme URLs without slashes.
@@ -75,7 +81,11 @@ def js_decode(text: str) -> str:
             return chr(int(match.group(1), 16))
         if match.group(2):
             return chr(int(match.group(2), 16))
-        return match.group(3) or ""
+        if match.group(3):
+            return chr(int(match.group(3), 16))
+        if match.group(4):
+            return chr(int(match.group(4), 8))
+        return match.group(5) or ""
 
     return JS_ESCAPE_RE.sub(replace, text)
 
@@ -348,9 +358,15 @@ def check_html(text: str, page: str, dist: Path, depth: int = 0) -> tuple[int, i
         meta_refresh = (attr_map.get("http-equiv") or "").lower() == "refresh"
 
         for name, value in attrs:
+            name = name.lower()
+            if name.startswith("on"):
+                fail(f"event-handler attribute '{name}' on <{tag}> in {page}:{line}")
             if value is None:
                 continue
-            name = name.lower()
+            if name == "href" and decode_value(value).lower().startswith(
+                "javascript:"
+            ):
+                fail(f"javascript: href on <{tag}> in {page}:{line}")
             if name == "srcdoc":
                 tags, refs = check_html(value, f"{page}:{line} srcdoc", dist, depth + 1)
                 nested_tags += tags
@@ -381,9 +397,15 @@ def check_html(text: str, page: str, dist: Path, depth: int = 0) -> tuple[int, i
             if name == "href" and (tag == "a" or canonical):
                 continue
             decoded_value = decode_value(value)
-            if not decoded_value.lower().startswith("data:") and EMBEDDED_URL_RE.search(
-                decoded_value
-            ):
+            # Only an image's data: URL is exempt from the embedded-URL scan:
+            # SVG payloads legitimately contain `http://www.w3.org/…`. A
+            # data: iframe/stylesheet/script/object can still fetch externally.
+            trusted_data_img = (
+                tag == "img"
+                and name == "src"
+                and decoded_value.lower().startswith("data:")
+            )
+            if not trusted_data_img and EMBEDDED_URL_RE.search(decoded_value):
                 fail(
                     f"embedded external URL in {name} on <{tag}> in {page}:{line}: {value}"
                 )
