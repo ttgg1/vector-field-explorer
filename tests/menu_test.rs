@@ -5,63 +5,19 @@
 use eframe::egui;
 
 use crate::support;
+use crate::support::menu_fixture::{MenuFixture, effect_of};
 
 use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::fly_camera::FlyCamera;
 use vector_field_explorer::render::Camera;
-use vector_field_explorer::sim_clock::SimClock;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::menu::{
     self, ABOUT_COPYRIGHT, ABOUT_LICENSE, ABOUT_SITE_URL, ABOUT_TAGLINE, ABOUT_URL, ABOUT_VERSION,
-    MenuAction, SHORTCUTS, SideEffect, UiState, apply_action,
+    MenuAction, SHORTCUTS, SideEffect, apply_action,
 };
-use vector_field_explorer::ui::sidebar::Controls;
 use vector_field_explorer::viewmodel::{ArrowLengthMode, DEFAULT_DENSITY_2D, State};
-
-/// The mutable state the menu actions touch, owned so each test can build one
-/// and borrow it into [`UiState`].
-struct Fixture {
-    layout: LayoutState,
-    orbit: OrbitCamera,
-    fly: Option<FlyCamera>,
-    camera: Camera,
-    state: State,
-    controls: Controls,
-    clock: SimClock,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        Self {
-            layout: LayoutState::default(),
-            orbit: OrbitCamera::default(),
-            fly: None,
-            camera: Camera::default(),
-            state: State::new(false),
-            controls: Controls::new(),
-            clock: SimClock::default(),
-        }
-    }
-
-    fn ui(&mut self) -> UiState<'_> {
-        UiState {
-            layout: &mut self.layout,
-            orbit: &mut self.orbit,
-            fly: &mut self.fly,
-            camera: &mut self.camera,
-            state: &mut self.state,
-            controls: &mut self.controls,
-            clock: &mut self.clock,
-        }
-    }
-}
-
-fn effect_of(action: MenuAction) -> SideEffect {
-    let mut fixture = Fixture::new();
-    apply_action(action, &mut fixture.ui())
-}
 
 /// Run one egui pass with one key press and report what the real shortcut loop
 /// fires. `run_pass` may run more than one pass; only the first sees the key,
@@ -159,7 +115,7 @@ fn every_action_maps_to_its_side_effect() {
 
 #[test]
 fn reset_layout_restores_expanded_panels_widths_and_help() {
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     fixture.layout = LayoutState {
         controls_expanded: false,
         presets_expanded: false,
@@ -177,7 +133,7 @@ fn reset_layout_restores_expanded_panels_widths_and_help() {
 
 #[test]
 fn reset_camera_restores_the_default_framing() {
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     fixture.orbit.yaw = 2.4;
     fixture.orbit.pitch = -0.2;
     fixture.orbit.distance = 9.0;
@@ -198,7 +154,7 @@ fn reset_camera_restores_the_default_framing() {
 
 #[test]
 fn copy_formula_reads_the_formula_at_invocation_time() {
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     assert!(fixture.state.set_formula("(-y, x)".to_string()));
     let effect = apply_action(MenuAction::CopyFormula, &mut fixture.ui());
     assert_eq!(effect, SideEffect::CopyText("(-y, x)".to_string()));
@@ -213,7 +169,7 @@ fn copy_formula_reads_the_formula_at_invocation_time() {
 
 #[test]
 fn copy_formula_copies_even_an_unparseable_edit() {
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     let broken = ")( not a formula";
     assert!(fixture.state.set_formula(broken.to_string()));
     assert!(
@@ -229,7 +185,7 @@ fn copy_formula_copies_even_an_unparseable_edit() {
 
 #[test]
 fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     assert!(fixture.state.set_formula("(-y, x)".to_string()));
     assert!(fixture.state.set_density(99));
     assert!(fixture.state.set_colormap(Colormap::Turbo));
@@ -264,7 +220,7 @@ fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
 
 #[test]
 fn toggles_flip_visibility() {
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     apply_action(MenuAction::ToggleControls, &mut fixture.ui());
     assert!(!fixture.layout.controls_expanded);
     apply_action(MenuAction::TogglePresets, &mut fixture.ui());
@@ -564,7 +520,7 @@ fn f1_still_toggles_the_compact_overlay() {
         "F1 still dispatches the overlay toggle",
     );
 
-    let mut fixture = Fixture::new();
+    let mut fixture = MenuFixture::new();
     assert!(fixture.layout.help_visible, "the overlay starts visible");
     assert_eq!(apply_action(fired[0], &mut fixture.ui()), SideEffect::None);
     assert!(!fixture.layout.help_visible, "F1 dismisses the compact overlay");

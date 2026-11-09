@@ -43,8 +43,9 @@ pub const ABOUT_COPYRIGHT: &str = "Copyright © 2026 The Vector Field Explorer a
 /// The deployed browser build, linked from About.
 pub const ABOUT_SITE_URL: &str = "https://ttgg1.github.io/vector-field-explorer/";
 /// The static native-download page beside the browser build (ticket 16a),
-/// linked from Help. It is not deployed until the repository goes public, so
-/// the item stays inert until then (it only opens the URL).
+/// linked from Help. The URL 404s until the first Pages deploy (gated on the
+/// `v0.1.0` release); the menu item only opens it. A deliberate public UI-link
+/// constant mirroring [`ABOUT_SITE_URL`], not test-only API widening.
 pub const DOWNLOAD_URL: &str = "https://ttgg1.github.io/vector-field-explorer/download.html";
 
 /// Every command a menu item (or a shortcut) can dispatch. Adding a variant

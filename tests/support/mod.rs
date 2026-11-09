@@ -1,9 +1,12 @@
-//! Shared headless egui context for integration tests.
+//! Shared helpers for integration tests: a headless egui context and the
+//! menu-action fixture.
 //!
 //! Ticket 67 removed eframe's bundled fonts, so a bare `Context::default()`
 //! has empty font families and lays out synthetic tofu. Tests that measure or
 //! assert real text use this helper, which installs the shipped faces through
 //! the same production seam the app uses.
+
+pub mod menu_fixture;
 
 use eframe::egui;
 
