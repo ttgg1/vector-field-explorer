@@ -84,7 +84,7 @@ WebGPU support is still uneven. This is the status as of November 2026:
 
 | Browser | WebGPU status |
 | --- | --- |
-| Chrome / Edge | Available since version 113 on Windows, macOS, and ChromeOS. Linux support is rolling out: Intel Gen12+ from Chrome 144, NVIDIA on Wayland from Chrome 147; other Linux configurations may need flags. |
+| Chrome / Edge | Available since version 113 on Windows, macOS, and ChromeOS. Linux support is rolling out: Intel Gen12+ from Chrome 144, NVIDIA on Wayland from Chrome 147 (driver 535.183.01+); other Linux configurations may need flags. |
 | Firefox | Windows: 141+. macOS 26 Tahoe on Apple Silicon: 145+; all supported macOS versions: 147+. Linux: Nightly only, not Stable or Beta. |
 | Safari | 26+ on macOS 26 Tahoe, iOS 26, and iPadOS 26. |
 
@@ -186,8 +186,9 @@ It needs a display. CI runs it headlessly with `xvfb-run`, software Vulkan
 
 ### Browser build with Trunk
 
-Install the WebAssembly target and Trunk 0.22.1 (the version pinned by
-`Trunk.toml` and the release workflow), then serve or build:
+Install the WebAssembly target and Trunk 0.22.1 (the version pinned by the CI
+wasm job in `.github/workflows/ci.yml` and matching the `wasm_bindgen` 0.2.130
+pin in `Trunk.toml`), then serve or build:
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -307,7 +308,7 @@ The app writes one settings envelope under eframe's app key. The following
 survive a restart:
 
 - the view state: formula or loaded preset, 2D/3D mode, domain, density, arrow
-  settings, colouring, plane selection, streamline and particle settings;
+  settings, colouring, streamline and particle settings;
 - the layout: panel visibility, panel widths, and help-overlay visibility;
 - the appearance: theme, accent, rounding, spacing, and font size.
 
@@ -336,7 +337,8 @@ list). On the web, eframe's browser storage is used and camera presets use
   hole in the arrows rather than crashing or blanking the scene; a parse error
   keeps the last valid field. Built-in singular-looking presets are softened.
 - **Particles are 3D-only.** Streamlines and arrows work in both views. The 2D
-  view is a single z slice; x/y slice selection is not implemented.
+  view samples one z slice; the 3D plane inspector steps through x, y, or z
+  slices.
 - **No WebGL2 fallback.** The browser build requires WebGPU, and an unsupported
   browser gets the app's explanation panel.
 - **No signing, notarization, auto-update, or telemetry.** macOS builds are

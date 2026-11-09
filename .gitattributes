@@ -1,0 +1,4 @@
+# THIRD_PARTY_LICENSES.md embeds the DejaVu font notice byte-for-byte. The
+# source notice has two trailing spaces, so suppress the trailing-space warning
+# for this file only; ordinary Markdown stays under the normal diff check.
+THIRD_PARTY_LICENSES.md whitespace=-trailing-space

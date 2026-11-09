@@ -2089,8 +2089,10 @@ until a workflow does.
   unsigned and un-notarized; the release notes explain the first-launch approval.
   No auto-update, signing, notarization, or telemetry.
 - Licence: GPL-3.0-only (`Cargo.toml`, `LICENSE`). Dependencies must remain
-  GPL-3.0-compatible; the packaging workflow ships `README.md` and `LICENSE` in
-  both archive types.
+  GPL-3.0-compatible; the packaging workflow ships `README.md`, `LICENSE`, and
+  `THIRD_PARTY_LICENSES.md` in both archive types. The Linux AppImage also
+  carries the bundled system libraries' package copyright notices under
+  `usr/share/doc/vector-field-explorer/system-libraries/`.
 
 ### 7.4 Test layout rule
 

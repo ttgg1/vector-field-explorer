@@ -64,7 +64,7 @@ Foundation, and Bitstream Inc., shall not be used in advertising or
 otherwise to promote the sale, use or other dealings in this Font Software
 without prior written authorization from the Gnome Foundation or Bitstream
 Inc., respectively. For further information, contact: fonts at gnome dot
-org.
+org. 
 
 Arev Fonts Copyright
 ------------------------------
@@ -91,7 +91,7 @@ Fonts, only if the fonts are renamed to names not containing either
 the words "Tavmjong Bah" or the word "Arev".
 
 This License becomes null and void to the extent applicable to Fonts
-or Font Software that has been modified and is distributed under the
+or Font Software that has been modified and is distributed under the 
 "Tavmjong Bah Arev" names.
 
 The Font Software may be sold as part of a larger software package but
@@ -105,7 +105,7 @@ OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL
 TAVMJONG BAH BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
 INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE FONT SOFTWARE OR FROM
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 Except as contained in this notice, the name of Tavmjong Bah shall not
@@ -128,23 +128,11 @@ MIT License
 
 Copyright (c) 2014 John Slegers
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 The same notice is kept verbatim in
@@ -179,18 +167,25 @@ supplies the Viridis and Turbo colour ramps. `meval` is the formula evaluator.
 platform seam; `dirs-next` and `env_logger` are native-only.
 
 The remaining crates resolved by `Cargo.lock` are transitive dependencies and
-are under permissive licences: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause,
-ISC, Zlib, BSL-1.0, Unicode-3.0, CC0-1.0, 0BSD, Unlicense, or a dual/triple
-alternative containing one of these. The only GPL-3.0-only package in the graph
-is this project; a small number of crates offer LGPL-2.1-or-later as an
-alternative to MIT/Apache-2.0, and the permissive option is used. Each crate's
-exact copyright line and licence text are in its source distribution named by
-`Cargo.lock`; the standard MIT text below covers the MIT option.
+are under permissive licences: MIT, Apache-2.0, Apache-2.0 WITH
+LLVM-exception, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, BSL-1.0, Unicode-3.0,
+CC0-1.0, 0BSD, Unlicense, NCSA, or a dual/triple alternative containing one of
+these. The only GPL-3.0-only package in the graph is this project; a small
+number of crates offer LGPL-2.1-or-later as an alternative to MIT/Apache-2.0,
+and the permissive option is used.
+
+Notable transitive licence families are NCSA for `libfuzzer-sys` (whose
+expression is `(MIT OR Apache-2.0) AND NCSA`), Apache-2.0 WITH LLVM-exception
+for `linux-raw-sys`, `rustix`, `wasi`, `wasip2`, and `wit-bindgen` (each also
+offers Apache-2.0 and/or MIT), and `Apache-2.0 OR GPL-2.0-only` for `self_cell`
+(this project uses the Apache-2.0 option). Each crate's exact copyright line
+and licence text are in its source distribution named by `Cargo.lock`; this
+file does not reproduce those copyright lines.
+
+The standard MIT permission text follows.
 
 ```text
 MIT License
-
-Copyright (c) the respective crate authors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -220,11 +215,14 @@ notice says otherwise.
 
 - **Linux AppImage:** linuxdeploy bundles the non-graphics shared libraries that
   the release build links against (for example xkbcommon and other desktop
-  dependencies). Their copyright notices are not duplicated in this file or in
-  the AppImage; they live in the build distribution's
-  `/usr/share/doc/<package>/` directories. The packaging workflow deliberately
-  excludes `libvulkan*`, `libGL*`, `libEGL*`, `libOpenGL*`, `libdrm*`, and
-  `libgbm*`, so the host GPU driver and its licences stay on the host.
+  dependencies). The packaging workflow derives the bundled list from the
+  AppDir, resolves each library's Debian/Ubuntu package, and copies that
+  package's copyright notice into
+  `usr/share/doc/vector-field-explorer/system-libraries/` inside the AppImage,
+  with a `SOURCES.txt` mapping each library to its package. The package step
+  fails if a bundled library has no notice. The workflow deliberately excludes
+  `libvulkan*`, `libGL*`, `libEGL*`, `libOpenGL*`, `libdrm*`, and `libgbm*`, so
+  the host GPU driver and its licences stay on the host.
 - **macOS:** the app links against the system frameworks supplied by macOS; no
   Apple framework binaries are redistributed in the `.app.zip`.
 - The release archives include this file, `README.md`, and `LICENSE` alongside
