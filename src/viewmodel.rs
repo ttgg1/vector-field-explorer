@@ -45,6 +45,15 @@ pub const PLANE_MARGIN: f32 = 1.35;
 /// Bounds of the arrow-length slider.
 pub const MIN_ARROW_SCALE: f32 = 0.1;
 pub const MAX_ARROW_SCALE: f32 = 4.0;
+/// Bounds of the global arrow-opacity slider (ticket 36): a floor rather than
+/// zero so a de-emphasised field never disappears, and `1.0` (the default) is
+/// fully opaque.
+pub const MIN_ARROW_OPACITY: f32 = 0.05;
+pub const MAX_ARROW_OPACITY: f32 = 1.0;
+/// Bounds of the plane-mode off-plane opacity (ticket 36). Its default is the
+/// historical [`DIM_ALPHA`], not a second constant that could drift.
+pub const MIN_PLANE_DIM_OPACITY: f32 = 0.0;
+pub const MAX_PLANE_DIM_OPACITY: f32 = 1.0;
 /// Bounds and default of the Proportional contrast exponent: the power applied
 /// to `mag / max_mag` before the arrow length is scaled. `1.0` is the plain
 /// linear mapping; below it lifts short arrows, above it pushes them down.
@@ -177,6 +186,13 @@ pub struct State {
     pub density: u32,
     pub domain: Domain,
     pub arrow_scale: f32,
+    /// Global arrow de-emphasis (ticket 36): the alpha every arrow is painted
+    /// with, `1.0` (fully opaque) by default.
+    pub arrow_opacity: f32,
+    /// Opacity of arrows outside the selected slice in plane-by-plane mode
+    /// (ticket 36). The effective off-plane alpha is `arrow_opacity *
+    /// plane_dim_opacity`; the default is [`DIM_ALPHA`].
+    pub plane_dim_opacity: f32,
     pub arrow_length_mode: ArrowLengthMode,
     pub magnitude_scale: f32,
     /// Power applied to `mag / max_mag` in [`ArrowLengthMode::Proportional`]
@@ -244,6 +260,8 @@ impl State {
             density,
             domain: Domain::default(),
             arrow_scale: 1.0,
+            arrow_opacity: MAX_ARROW_OPACITY,
+            plane_dim_opacity: DIM_ALPHA,
             arrow_length_mode: ArrowLengthMode::Proportional,
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
@@ -340,6 +358,40 @@ impl State {
             return false;
         }
         self.arrow_scale = scale;
+        self.mark_dirty()
+    }
+
+    /// The alpha every arrow is painted with (ticket 36). Clamped into
+    /// [`MIN_ARROW_OPACITY`]..=[`MAX_ARROW_OPACITY`]; a non-finite value falls
+    /// back to fully opaque rather than poisoning the scene.
+    pub fn set_arrow_opacity(self: &mut State, opacity: f32) -> bool {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(MIN_ARROW_OPACITY, MAX_ARROW_OPACITY)
+        } else {
+            MAX_ARROW_OPACITY
+        };
+        if self.arrow_opacity == opacity {
+            return false;
+        }
+        self.arrow_opacity = opacity;
+        self.mark_dirty()
+    }
+
+    /// How strongly plane-by-plane mode fades the arrows outside the selected
+    /// slice (ticket 36). Clamped into
+    /// [`MIN_PLANE_DIM_OPACITY`]..=[`MAX_PLANE_DIM_OPACITY`]; a non-finite
+    /// value falls back to [`DIM_ALPHA`]. The plane mode itself decides whether
+    /// the value has any effect.
+    pub fn set_plane_dim_opacity(self: &mut State, opacity: f32) -> bool {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(MIN_PLANE_DIM_OPACITY, MAX_PLANE_DIM_OPACITY)
+        } else {
+            DIM_ALPHA
+        };
+        if self.plane_dim_opacity == opacity {
+            return false;
+        }
+        self.plane_dim_opacity = opacity;
         self.mark_dirty()
     }
 
@@ -681,9 +733,12 @@ impl State {
     /// fitting.
     ///
     /// Plane-by-plane mode (ticket 23) keeps the selected slice's colormap
-    /// colour at full alpha and lerps every other arrow toward grey at
-    /// [`DIM_ALPHA`]. Sampling still produced the whole cube, so stepping the
-    /// plane only rebuilds these instances, never the field.
+    /// colour at the state's arrow opacity and lerps every other arrow's colour
+    /// toward grey (the default off-plane alpha is [`DIM_ALPHA`]). Ticket 36
+    /// scales that dimming by [`State::plane_dim_opacity`]: on-plane arrows get
+    /// `arrow_opacity`, off-plane arrows `arrow_opacity * plane_dim_opacity`.
+    /// Sampling still produced the whole cube, so stepping the plane only
+    /// rebuilds these instances, never the field.
     pub fn arrow_instances(self: &State, arrows: &[ArrowData]) -> Vec<ArrowInstanceGPU> {
         let unit = self.arrow_scale * self.spacing();
         let max_mag = arrows.iter().fold(0.0_f32, |m, a| m.max(a.mag));
@@ -715,9 +770,9 @@ impl State {
                 };
                 let (rgb, alpha) =
                     if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
-                        (dim_color(a.color), DIM_ALPHA)
+                        (dim_color(a.color), self.arrow_opacity * self.plane_dim_opacity)
                     } else {
-                        (a.color, 1.0)
+                        (a.color, self.arrow_opacity)
                     };
                 ArrowInstanceGPU {
                     origin: [a.position.x, a.position.y, a.position.z, 1.0],

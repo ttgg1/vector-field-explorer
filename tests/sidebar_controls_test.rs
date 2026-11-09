@@ -15,11 +15,12 @@ use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
-use vector_field_explorer::plane::{PlaneAxis, PlaneView};
+use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView};
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_PARTICLE_SIZE, State, StreamlineSeedMode, DEFAULT_DENSITY_2D,
-    MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_PARTICLE_SIZE, MAX_PROPORTIONAL_EXPONENT,
-    MIN_DOMAIN_EXTENT, MIN_PARTICLE_SIZE, domain_between,
+    MAX_ARROW_OPACITY, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_PARTICLE_SIZE,
+    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MIN_ARROW_OPACITY, MIN_DOMAIN_EXTENT,
+    MIN_PARTICLE_SIZE, domain_between,
 };
 use glam::Vec3;
 
@@ -30,6 +31,10 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.density, s.density, "density starts at the seam default");
     assert_eq!(c.density, DEFAULT_DENSITY_2D, "…and that default is pinned");
     assert_eq!(c.arrow_scale, s.arrow_scale, "arrow scale agrees");
+    assert_eq!(c.arrow_opacity, s.arrow_opacity, "the global arrow opacity agrees");
+    assert_eq!(c.arrow_opacity, 1.0, "arrows start fully opaque");
+    assert_eq!(c.plane_dim_opacity, s.plane_dim_opacity, "the off-plane opacity agrees");
+    assert_eq!(c.plane_dim_opacity, DIM_ALPHA, "off-plane starts at the dim alpha");
     assert_eq!(c.arrow_length_mode, s.arrow_length_mode, "arrow length mode agrees");
     assert_eq!(c.magnitude_scale, s.magnitude_scale, "magnitude scale agrees");
     assert_eq!(
@@ -77,6 +82,8 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(s.snapshot_if_dirty().is_some(), "the fresh scene builds once");
     assert!(!s.set_density(c.density), "synced density does not re-dirty");
     assert!(!s.set_arrow_scale(c.arrow_scale));
+    assert!(!s.set_arrow_opacity(c.arrow_opacity));
+    assert!(!s.set_plane_dim_opacity(c.plane_dim_opacity));
     assert!(!s.set_arrow_length_mode(c.arrow_length_mode));
     assert!(!s.set_magnitude_scale(c.magnitude_scale));
     assert!(!s.set_proportional_exponent(c.proportional_exponent));
@@ -181,6 +188,12 @@ fn every_control_dirties_the_scene_through_apply() {
     c.arrow_scale = 2.0;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "arrow scale dirties the scene");
+    c.arrow_opacity = 0.5;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "arrow opacity dirties the scene");
+    c.plane_dim_opacity = 0.4;
+    apply(&mut s, &mut c);
+    assert!(s.snapshot_if_dirty().is_some(), "the off-plane opacity dirties the scene");
     c.arrow_length_mode = ArrowLengthMode::Magnitude;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "arrow length mode dirties the scene");
@@ -342,7 +355,53 @@ fn display_reset_restores_arrow_visibility_style_and_appearance() {
     assert_eq!(c.arrow_params, ArrowParams::default(), "the default appearance returns");
 }
 
-// --- Separate 2D arrow set (ticket 61) --------------------------------------
+// --- Arrow and off-plane opacity (ticket 36) -------------------------------
+
+#[test]
+fn arrow_and_plane_opacities_flow_through_apply_and_the_mirror_stays_in_sync() {
+    let mut c = Controls::new();
+    let mut s = State::new(true);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+
+    c.arrow_opacity = 0.35;
+    c.plane_dim_opacity = 0.7;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_opacity, 0.35, "the global opacity lands on the seam");
+    assert_eq!(s.plane_dim_opacity, 0.7, "the off-plane opacity lands too");
+    assert_eq!(c.arrow_opacity, s.arrow_opacity, "the mirror follows the global opacity");
+    assert_eq!(c.plane_dim_opacity, s.plane_dim_opacity, "the mirror follows the off-plane one");
+    assert!(s.snapshot_if_dirty().is_some(), "the edit rebuilds the scene once");
+
+    c.arrow_opacity = 0.0;
+    c.plane_dim_opacity = 5.0;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_opacity, MIN_ARROW_OPACITY, "the seam clamps the global opacity floor");
+    assert_eq!(s.plane_dim_opacity, MAX_PLANE_DIM_OPACITY, "the seam clamps the off-plane ceiling");
+    assert_eq!(c.arrow_opacity, MIN_ARROW_OPACITY, "the mirror shows the clamp");
+    assert_eq!(c.plane_dim_opacity, MAX_PLANE_DIM_OPACITY);
+
+    c.arrow_opacity = f32::NAN;
+    c.plane_dim_opacity = f32::INFINITY;
+    apply(&mut s, &mut c);
+    assert_eq!(s.arrow_opacity, MAX_ARROW_OPACITY, "NaN falls back to full opacity");
+    assert_eq!(s.plane_dim_opacity, DIM_ALPHA, "Infinity falls back to the dim alpha");
+    assert_eq!(c.arrow_opacity, MAX_ARROW_OPACITY, "the mirror follows the fallback");
+    assert_eq!(c.plane_dim_opacity, DIM_ALPHA);
+}
+
+#[test]
+fn display_reset_restores_the_arrow_and_off_plane_opacities() {
+    let mut c = Controls::new();
+    c.arrow_opacity = 0.25;
+    c.plane_dim_opacity = 0.75;
+
+    c.reset_display();
+
+    assert_eq!(c.arrow_opacity, 1.0, "the global opacity returns to fully opaque");
+    assert_eq!(c.plane_dim_opacity, DIM_ALPHA, "the off-plane opacity returns to 0.2");
+}
+
+
 
 #[test]
 fn the_sidebar_shows_the_matching_arrow_set() {

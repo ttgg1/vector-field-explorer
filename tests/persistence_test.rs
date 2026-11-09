@@ -10,15 +10,16 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
+use vector_field_explorer::plane::DIM_ALPHA;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
 use vector_field_explorer::viewmodel::{
-    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, MAX_DOMAIN_EXTENT,
-    MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE,
-    STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
+    ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, MAX_ARROW_OPACITY,
+    MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT,
+    MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
 };
 use vector_field_explorer::VfApp;
 
@@ -244,6 +245,8 @@ fn configured() -> (State, Controls) {
     state.set_formula("(x, y, z)".to_string());
     controls.density = 12;
     controls.arrow_scale = 2.5;
+    controls.arrow_opacity = 0.4;
+    controls.plane_dim_opacity = 0.65;
     controls.arrow_length_mode = ArrowLengthMode::Magnitude;
     controls.magnitude_scale = 2.5;
     controls.proportional_exponent = 2.5;
@@ -480,6 +483,73 @@ fn proportional_exponent_round_trips_and_defaults_when_absent() {
 }
 
 #[test]
+fn arrow_opacities_round_trip_and_default_when_absent() {
+    let mut state = State::new(false);
+    assert!(state.set_arrow_opacity(0.35));
+    assert!(state.set_plane_dim_opacity(0.65));
+    let settings = AppSettings {
+        view: ViewRecord::capture(&state),
+        ..AppSettings::default()
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(raw.contains("arrow_opacity:0.35"), "the global opacity is written:\n{raw}");
+    assert!(raw.contains("plane_dim_opacity:0.65"), "the off-plane opacity is written:\n{raw}");
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.arrow_opacity, 0.35);
+    assert_eq!(loaded.view.plane_dim_opacity, 0.65);
+    let mut restored_state = State::new(false);
+    let mut restored_controls = Controls::new();
+    loaded.view.restore(&mut restored_state, &mut restored_controls);
+    assert_eq!(restored_state.arrow_opacity, 0.35);
+    assert_eq!(restored_state.plane_dim_opacity, 0.65);
+    assert_eq!(restored_controls.arrow_opacity, 0.35, "the mirror follows");
+    assert_eq!(restored_controls.plane_dim_opacity, 0.65);
+
+    // The pre-ticket-36 shape has neither key at all.
+    let legacy = load_legacy(false);
+    assert_eq!(legacy.view.arrow_opacity, MAX_ARROW_OPACITY, "an older record loads fully opaque");
+    assert_eq!(
+        legacy.view.plane_dim_opacity, DIM_ALPHA,
+        "…and its plane dim defaults to 0.2",
+    );
+    let mut legacy_state = State::new(false);
+    let mut legacy_controls = Controls::new();
+    legacy.view.restore(&mut legacy_state, &mut legacy_controls);
+    assert_eq!(legacy_state.arrow_opacity, 1.0);
+    assert_eq!(legacy_state.plane_dim_opacity, DIM_ALPHA);
+    assert_eq!(legacy_controls.arrow_opacity, 1.0);
+    assert_eq!(legacy_controls.plane_dim_opacity, DIM_ALPHA);
+}
+
+#[test]
+fn corrupt_arrow_opacities_are_sanitized_on_restore() {
+    let mut record = ViewRecord {
+        arrow_opacity: f32::NAN,
+        plane_dim_opacity: f32::INFINITY,
+        ..ViewRecord::default()
+    };
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    record.restore(&mut state, &mut controls);
+    assert_eq!(state.arrow_opacity, 1.0, "NaN falls back to full opacity");
+    assert_eq!(state.plane_dim_opacity, DIM_ALPHA, "Infinity falls back to the dim alpha");
+    assert_eq!(controls.arrow_opacity, 1.0, "the mirror follows the fallback");
+    assert_eq!(controls.plane_dim_opacity, DIM_ALPHA);
+
+    record.arrow_opacity = 5.0;
+    record.plane_dim_opacity = -2.0;
+    record.restore(&mut state, &mut controls);
+    assert_eq!(state.arrow_opacity, MAX_ARROW_OPACITY, "above one clamps");
+    assert_eq!(state.plane_dim_opacity, 0.0, "below zero clamps");
+    assert_eq!(controls.arrow_opacity, MAX_ARROW_OPACITY);
+    assert_eq!(controls.plane_dim_opacity, 0.0);
+}
+
+#[test]
 fn absent_storage_falls_back_to_defaults() {
     assert_eq!(load(None), AppSettings::default());
     let empty = MemoryStorage::default();
@@ -566,6 +636,16 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.domain, state.domain, "domain");
     assert_eq!(restored_state.density, state.density, "density");
     assert_eq!(restored_state.arrow_scale, state.arrow_scale, "arrow scale");
+    assert_eq!(restored_state.arrow_opacity, state.arrow_opacity, "arrow opacity");
+    assert_eq!(
+        restored_state.plane_dim_opacity, state.plane_dim_opacity,
+        "off-plane opacity",
+    );
+    assert_eq!(restored_controls.arrow_opacity, state.arrow_opacity, "the mirror follows opacity");
+    assert_eq!(
+        restored_controls.plane_dim_opacity, state.plane_dim_opacity,
+        "the mirror follows the off-plane opacity",
+    );
     assert_eq!(restored_state.arrow_length_mode, state.arrow_length_mode, "arrow length mode");
     assert_eq!(restored_state.magnitude_scale, state.magnitude_scale, "magnitude scale");
     assert_eq!(

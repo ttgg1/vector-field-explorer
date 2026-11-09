@@ -63,6 +63,14 @@ pub struct ViewRecord {
     pub domain_max: [f32; 3],
     pub density: u32,
     pub arrow_scale: f32,
+    /// Global arrow opacity (ticket 36). Older records lack the key; the serde
+    /// default keeps them fully opaque.
+    #[serde(default = "default_arrow_opacity")]
+    pub arrow_opacity: f32,
+    /// Plane-mode off-plane opacity (ticket 36). Missing on older records; the
+    /// serde default is the historical `DIM_ALPHA`.
+    #[serde(default = "default_plane_dim_opacity")]
+    pub plane_dim_opacity: f32,
     /// Ticket-14's normalization flag. Only read: a record written before
     /// ticket 33 still carries a bare `normalize: true|false`, and
     /// [`ViewRecord::restore`] maps it onto [`ArrowLengthMode`]. New records
@@ -156,6 +164,8 @@ impl ViewRecord {
             domain_max: state.domain.max.to_array(),
             density: state.density,
             arrow_scale: state.arrow_scale,
+            arrow_opacity: state.arrow_opacity,
+            plane_dim_opacity: state.plane_dim_opacity,
             normalize: None,
             arrow_length_mode: state.arrow_length_mode,
             magnitude_scale: state.magnitude_scale,
@@ -200,6 +210,9 @@ impl ViewRecord {
 
         controls.density = self.density;
         controls.arrow_scale = finite_or(self.arrow_scale, defaults.arrow_scale);
+        controls.arrow_opacity = finite_or(self.arrow_opacity, defaults.arrow_opacity);
+        controls.plane_dim_opacity =
+            finite_or(self.plane_dim_opacity, defaults.plane_dim_opacity);
         // Legacy records carried a `normalize` bool instead of a mode; it wins
         // when present so old settings land in the matching mode, and new
         // records (where it is absent) use the stored three-way mode.
@@ -262,6 +275,18 @@ pub fn finite_or(value: f32, fallback: f32) -> f32 {
 /// toggle, and arrows were always drawn then.
 fn default_arrows() -> bool {
     true
+}
+
+/// The `arrow_opacity` serde default (ticket 36): records written before the
+/// control existed were fully opaque.
+fn default_arrow_opacity() -> f32 {
+    crate::viewmodel::MAX_ARROW_OPACITY
+}
+
+/// The `plane_dim_opacity` serde default (ticket 36): the historical off-plane
+/// alpha, reused directly so the two cannot drift.
+fn default_plane_dim_opacity() -> f32 {
+    crate::plane::DIM_ALPHA
 }
 
 /// The `proportional_exponent` serde default (ticket 57): records written

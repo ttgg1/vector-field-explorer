@@ -35,7 +35,7 @@ use crate::particles::{
     MIN_TRAIL_FADE, MAX_TRAIL_FADE, MIN_TRAIL_WIDTH, MAX_TRAIL_WIDTH,
     MIN_STAGNATION_SECONDS, MAX_STAGNATION_SECONDS, ParticleAppearance, ParticleColorMode,
 };
-use crate::plane::{PlaneAxis, PlaneView, plane_coordinate};
+use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
 use crate::viewmodel::{
     ArrowLengthMode,
     State,
@@ -49,6 +49,10 @@ use crate::viewmodel::{
     MAX_DENSITY_3D,
     MIN_ARROW_SCALE,
     MAX_ARROW_SCALE,
+    MIN_ARROW_OPACITY,
+    MAX_ARROW_OPACITY,
+    MIN_PLANE_DIM_OPACITY,
+    MAX_PLANE_DIM_OPACITY,
     MIN_MAGNITUDE_SCALE,
     MAX_MAGNITUDE_SCALE,
     MIN_PARTICLE_SIZE,
@@ -316,6 +320,11 @@ pub fn particle_count_label(count: u32) -> String {
 pub struct Controls {
     pub density: u32,
     pub arrow_scale: f32,
+    /// Global arrow de-emphasis (ticket 36).
+    pub arrow_opacity: f32,
+    /// Plane-mode off-plane opacity (ticket 36); the plane controls own the
+    /// widget, but the value persists with the other Display knobs.
+    pub plane_dim_opacity: f32,
     pub arrow_length_mode: ArrowLengthMode,
     pub magnitude_scale: f32,
     /// The Proportional contrast exponent (ticket 57); disabled outside
@@ -364,6 +373,8 @@ impl Controls {
         Controls {
             density: DEFAULT_DENSITY_2D,
             arrow_scale: 1.0,
+            arrow_opacity: MAX_ARROW_OPACITY,
+            plane_dim_opacity: DIM_ALPHA,
             arrow_length_mode: ArrowLengthMode::Proportional,
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
@@ -390,12 +401,14 @@ impl Controls {
     }
 
     /// Restore the Display section's defaults (density, arrow length mode,
-    /// both scales, the proportional contrast, arrow visibility/style/
-    /// appearance, plane-by-plane).
+    /// both scales, arrow and off-plane opacity, the proportional contrast,
+    /// arrow visibility/style/appearance, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
         self.arrow_scale = defaults.arrow_scale;
+        self.arrow_opacity = defaults.arrow_opacity;
+        self.plane_dim_opacity = defaults.plane_dim_opacity;
         self.arrow_length_mode = defaults.arrow_length_mode;
         self.magnitude_scale = defaults.magnitude_scale;
         self.proportional_exponent = defaults.proportional_exponent;
@@ -506,6 +519,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         .response
         .on_hover_text(arrow_scale_hover)
         .on_disabled_hover_text("Disabled in Magnitude mode; use Magnitude scale instead");
+        ui.add(
+            egui::Slider::new(&mut controls.arrow_opacity, MIN_ARROW_OPACITY..=MAX_ARROW_OPACITY)
+                .text("Arrow opacity")
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+        )
+        .on_hover_text(
+            "Opacity of the whole arrow field; 100% is fully solid. Dense fields can be \
+             de-emphasised without hiding them",
+        );
         ui.horizontal(|ui| {
             ui.label("Length mode");
             for mode in ArrowLengthMode::ALL {
@@ -921,6 +943,15 @@ fn plane_controls(
         index + 1,
         count,
     ));
+    ui.add(
+        egui::Slider::new(
+            &mut controls.plane_dim_opacity,
+            MIN_PLANE_DIM_OPACITY..=MAX_PLANE_DIM_OPACITY,
+        )
+        .text("Off-plane opacity")
+        .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+    )
+    .on_hover_text("Opacity of arrows outside the selected plane");
     commit
 }
 
@@ -1032,6 +1063,8 @@ fn extent_or_previous(value: f32, previous: f32) -> f32 {
 pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_density(controls.density);
     state.set_arrow_scale(controls.arrow_scale);
+    state.set_arrow_opacity(controls.arrow_opacity);
+    state.set_plane_dim_opacity(controls.plane_dim_opacity);
     state.set_arrow_length_mode(controls.arrow_length_mode);
     state.set_magnitude_scale(controls.magnitude_scale);
     state.set_proportional_exponent(controls.proportional_exponent);
@@ -1064,6 +1097,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
 
     controls.density = state.density;
     controls.arrow_scale = state.arrow_scale;
+    controls.arrow_opacity = state.arrow_opacity;
+    controls.plane_dim_opacity = state.plane_dim_opacity;
     controls.arrow_length_mode = state.arrow_length_mode;
     controls.magnitude_scale = state.magnitude_scale;
     controls.proportional_exponent = state.proportional_exponent;
