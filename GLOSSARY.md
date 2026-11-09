@@ -1,7 +1,7 @@
 # Vector Field Explorer
 
-A desktop app for exploring vector fields typed as formulas. This glossary names
-the app's view, controls, and camera concepts.
+A native and browser app for exploring vector fields typed as formulas. This
+glossary names the app's view, controls, camera, and motion concepts.
 
 ## View and chrome
 
@@ -67,3 +67,64 @@ click-to-seed, and formula syntax; its visibility is a setting.
 **Style**:
 App-wide appearance (theme, accent, rounding, spacing, font size), persisted
 apart from view state and layout.
+
+## Field and motion
+
+**Field**:
+The vector function `f(x,y,z)` typed in the formula bar and sampled over the
+domain.
+_Avoid_: vector field function, field expression
+
+**Domain**:
+The axis-aligned box `[x_min,x_max] × [y_min,y_max] × [z_min,z_max]` over which
+the field is sampled; 2D uses the x/y extents and the z midpoint.
+_Avoid_: bounds, range (that is a control)
+
+**Grid density**:
+The number of samples per axis: n² in 2D and n³ in 3D.
+_Avoid_: resolution
+
+**Arrow**:
+One sampled field vector drawn at its sample point, with a direction and a
+length derived from the vector's magnitude or a uniform scale.
+_Avoid_: vector glyph
+
+**Arrow style**:
+The shape family used to draw arrows (Cone, Pyramid, Cylinder, Line) together
+with its geometry parameters: head length and width, shaft radius, and sides. In
+2D the flat Line-style arrow is used.
+_Avoid_: arrow type, arrow texture
+
+**Plane dimming**:
+The greyscale and opacity applied to arrows that are not on the selected plane
+in plane-by-plane mode, so the selected slice reads clearly.
+_Avoid_: slicing opacity, cross-section fade
+
+**Streamline**:
+A curve everywhere tangent to the field, traced forward from a seed and drawn
+as a polyline. Seeds come from the sampling grid or from a click.
+_Avoid_: trace, flow line
+
+**Particle**:
+A point carried through the field over time, advancing with the simulation
+clock and respawning when it leaves the domain or stagnates.
+_Avoid_: dot
+
+**Particle trail**:
+The fading history of a particle's recent positions, drawn behind it.
+_Avoid_: trace, tail
+
+**Simulation clock**:
+The single time source for animated formulas, plots, and particles. It owns the
+current simulation time, whether time is playing, and the speed multiplier.
+_Avoid_: animation timer, per-feature clock
+
+**Transport**:
+The Play/Pause, reset-time, time readout, and speed controls for the simulation
+clock; shown when at least one feature consumes the clock.
+_Avoid_: playback bar, timeline
+
+**Fly camera**:
+A free six-degrees-of-freedom camera mode for the 3D view, moved with physical
+WASD/QE positions and drag-to-look, alongside the orbit camera.
+_Avoid_: freecam, FPS camera
