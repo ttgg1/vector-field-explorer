@@ -1,11 +1,16 @@
-// Vector Field Explorer — instanced 3D arrow shader (tickets 44, 45 and 64).
+// Vector Field Explorer — instanced combined 3D scene shader (tickets 44, 45,
+// 62 and 64).
 //
-// One arrow per instance, geometry generated in the vertex shader from
-// `vertex_index` (no vertex buffer). Local geometry extends along +Y and is
-// rotated so +Y maps onto the instance's unit direction. The style id in
-// `Globals.arrow_style.x` selects one of four families; `arrow_style.y` is the
-// radial side count shared by Cone and Cylinder, and `arrow_params` carries the
-// head/shaft proportions. Half-lambert lit by Globals.light_dir.
+// One instance per arrow OR particle dot (ticket 62's combined, depth-sorted
+// stream). Geometry is generated in the vertex shader from `vertex_index` (no
+// vertex buffer). Every instance is allocated MAX_ARROW_VERTS invocations; the
+// shader derives the instance index from that budget, reads the `origin.w` kind
+// tag and exits unused invocations before any ring/trig work. Arrow instances
+// run the style branch selected by `Globals.arrow_style.x` (0 Cone, 1 Cylinder,
+// 2 Flat, 3 Line); particle instances expand a camera-facing dot billboard.
+// `arrow_style.y` is the radial side count shared by Cone and Cylinder, and
+// `arrow_params` carries the head/shaft proportions. Half-lambert lit by
+// Globals.light_dir.
 //
 // Bind group layout (same layout object is shared with the 2D arrow, line and
 // dot pipelines):
@@ -27,8 +32,8 @@ struct Globals {
 var<uniform> globals: Globals;
 
 struct ArrowInstance {
-    origin: vec4<f32>,   // xyz base position, w = 1.0
-    dir_len: vec4<f32>,  // xyz unit direction, w = length
+    origin: vec4<f32>,   // xyz base position, w = kind tag: 1.0 arrow, 0.0 particle
+    dir_len: vec4<f32>,  // xyz unit direction (arrows) / unused (dots), w = length or radius
     color: vec4<f32>,    // rgba 0..1
 };
 
@@ -38,7 +43,9 @@ var<storage, read> arrow_instances: array<ArrowInstance>;
 struct VertexOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) light: f32, // 0..1 half-lambert factor
+    @location(1) light: f32, // 0..1 half-lambert factor (arrows; dots ignore it)
+    @location(2) uv: vec2<f32>, // dot-local disc coordinate, |uv| <= 1 inside
+    @location(3) @interpolate(flat) kind: f32, // 1.0 arrow, 0.0 particle
 };
 
 const TAU: f32 = 6.283185307179586;
@@ -48,6 +55,12 @@ const ARROW_VERTS_FLAT: u32 = 9u;
 const ARROW_VERTS_LINE: u32 = 6u;
 // The Cone tapers its shaft to this fraction at the head junction.
 const CONE_TIP_RATIO: f32 = 0.6;
+// Ticket 62: one draw cannot vary vertices per instance, so every instance is
+// allocated the widest arrow family's budget (a MAX_SIDES-side cone). Mirrors
+// `MAX_ARROW_VERTS` in src/renderer.rs.
+const MAX_ARROW_VERTS: u32 = 186u;
+// The particle billboard's six vertices (two triangles).
+const DOT_VERTS: u32 = 6u;
 
 // Style ids: 0 Cone, 1 Cylinder, 2 Flat, 3 Line.
 fn style_vertex_count() -> u32 {
@@ -89,12 +102,52 @@ fn shaft_normal(t: f32, bottom_radius: f32, top_radius: f32, shaft_len: f32) -> 
     return normalize(radial * shaft_len + vec3<f32>(0.0, bottom_radius - top_radius, 0.0));
 }
 
+// Corner `j` of the particle billboard quad in [-1,1] dot-local space:
+//   (-1,-1) (1,-1) (1,1) / (-1,-1) (1,1) (-1,1)
+// so the unit circle inscribed in the square is the dot's silhouette. Mirrors
+// `DOT_QUAD_CORNERS` in src/particles.rs and the 2D dot shader.
+fn quad_corner(j: u32) -> vec2<f32> {
+    let min_x = (j == 0u) || (j == 3u) || (j == 5u);
+    let min_y = (j == 0u) || (j == 1u) || (j == 3u);
+    return vec2<f32>(select(1.0, -1.0, min_x), select(1.0, -1.0, min_y));
+}
+
 @vertex
-fn vs_arrow(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
-    let count = style_vertex_count();
-    let inst_idx = vertex_index / count;
-    let j = vertex_index % count;
+fn vs_scene(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
+    // Ticket 62: every instance owns a fixed MAX_ARROW_VERTS slice. Derive the
+    // instance and local vertex from that budget, then read the kind tag.
+    let inst_idx = vertex_index / MAX_ARROW_VERTS;
+    let j = vertex_index % MAX_ARROW_VERTS;
     let inst = arrow_instances[inst_idx];
+
+    let kind = inst.origin.w;
+    let is_arrow = inst.origin.w > 0.5;
+    var count = DOT_VERTS;
+    if (is_arrow) {
+        count = style_vertex_count();
+    }
+    // Cheap early-out before any basis/ring/trig work. All skipped vertices
+    // land on one clip-space point outside the view volume, so unused
+    // invocations cannot gain area.
+    if (j >= count) {
+        return VertexOut(vec4<f32>(0.0, 0.0, 2.0, 1.0), inst.color, 0.0, vec2<f32>(0.0), kind);
+    }
+
+    if (!is_arrow) {
+        // Particle: the same camera-facing billboard as shaders.dot.wgsl. The
+        // radius is in dir_len.w; the quad spans the camera's right/up axes.
+        let corner = quad_corner(j);
+        let radius = inst.dir_len.w;
+        let world = inst.origin.xyz
+            + (globals.camera_right.xyz * corner.x + globals.camera_up.xyz * corner.y) * radius;
+        return VertexOut(
+            globals.view_proj * vec4<f32>(world, 1.0),
+            inst.color,
+            1.0,
+            corner,
+            kind,
+        );
+    }
 
     let style = globals.arrow_style.x;
     let params = globals.arrow_params;
@@ -138,7 +191,7 @@ fn vs_arrow(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
             world = tip;
         }
         // Flat and unlit: a light factor of 1 resolves to the plain colour.
-        return VertexOut(globals.view_proj * vec4<f32>(world, 1.0), inst.color, 1.0);
+        return VertexOut(globals.view_proj * vec4<f32>(world, 1.0), inst.color, 1.0, vec2<f32>(0.0), kind);
     }
 
     // Line: a headless camera-facing ribbon over the full arrow length, built
@@ -163,7 +216,7 @@ fn vs_arrow(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
         let sgn = select(-1.0, 1.0, positive);
         let world = along + side * shaft_radius * sgn;
         // Flat and unlit, like the streamline line shader.
-        return VertexOut(globals.view_proj * vec4<f32>(world, 1.0), inst.color, 1.0);
+        return VertexOut(globals.view_proj * vec4<f32>(world, 1.0), inst.color, 1.0, vec2<f32>(0.0), kind);
     }
 
     let b = basis(inst.dir_len.xyz);
@@ -258,11 +311,39 @@ fn vs_arrow(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
         globals.view_proj * vec4<f32>(world, 1.0),
         inst.color,
         nl,
+        vec2<f32>(0.0),
+        kind,
     );
 }
 
 @fragment
-fn fs_main(v: VertexOut) -> @location(0) vec4<f32> {
+fn fs_scene(v: VertexOut) -> @location(0) vec4<f32> {
+    // Derivatives run before the kind branch: divergent control flow makes
+    // them implementation-defined. Arrow fragments carry uv = 0, so r/aa are
+    // inert for them; dot fragments use them for the disc and its one-pixel rim.
+    let r = length(v.uv);
+    let aa = max(fwidth(r), 1e-5);
+
+    if (v.kind < 0.5) {
+        // Particle: the same round dot as shaders.dot.wgsl. The quad is the
+        // disc's bounding square, so the fade runs inward from r == 1; nothing
+        // outside the disc survives, and the alpha rim blends into whatever is
+        // behind the dot.
+        if (r > 1.0) {
+            discard;
+        }
+        let coverage = 1.0 - smoothstep(1.0 - aa, 1.0, r);
+        // Spherical normal in the camera basis; unit length by construction,
+        // so no normalize (and none at the rim, where it would divide by zero).
+        let nz = sqrt(max(1.0 - r * r, 0.0));
+        let normal = globals.camera_right.xyz * v.uv.x
+            + globals.camera_up.xyz * v.uv.y
+            + cross(globals.camera_right.xyz, globals.camera_up.xyz) * nz;
+        let nl = clamp(dot(normal, globals.light_dir.xyz) * 0.5 + 0.5, 0.0, 1.0);
+        let lit = v.color.rgb * (0.35 + 0.65 * nl);
+        return vec4<f32>(lit, v.color.a * coverage);
+    }
+
     let lit = v.color.rgb * (0.35 + 0.65 * v.light);
     return vec4<f32>(lit, v.color.a);
 }

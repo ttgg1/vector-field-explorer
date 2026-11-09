@@ -8,7 +8,10 @@ use crate::domain::Domain;
 use crate::fly_camera::{FlyCamera, FlyKeys, is_command_chord, sync_fly};
 use crate::reference::reference_lines;
 use crate::render::Camera;
-use crate::renderer::{DrawCallback, DrawState, LineInstanceGPU, SceneGPU};
+use crate::renderer::{
+    DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
+    sort_scene_back_to_front, sorted_arrows_back_to_front,
+};
 use crate::screenshot::{self, Instant, Screenshot};
 use crate::streamlines::click_seed;
 use crate::persistence::{self, AppSettings, ViewRecord};
@@ -205,6 +208,7 @@ impl VfApp {
                 arrows: Arc::new(Vec::new()),
                 lines: Arc::new(backdrop),
                 dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
                 arrow_style,
                 arrow_style_2d,
                 arrow_params,
@@ -662,6 +666,7 @@ impl eframe::App for VfApp {
             self.scene.mode_3d = fresh.mode_3d;
             self.scene.arrows = fresh.arrows;
             self.scene.dots = fresh.dots;
+            self.scene.combined = fresh.combined;
             // A rebuild refreshes the magnitude range the per-frame dots ramp
             // with (one extra sample pass on rebuild frames only), so dots
             // keep matching the arrows' colours.
@@ -854,9 +859,9 @@ impl eframe::App for VfApp {
             }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so
-            // order the instances far-to-near along this frame's view. The
-            // active camera also provides the framing the screenshot and the
-            // click seeding use.
+            // order the combined arrow + particle stream far-to-near along this
+            // frame's view. The active camera also provides the framing the
+            // screenshot and the click seeding use.
             let (view, view_proj, eye_position) = {
                 let camera = match &self.fly {
                     Some(fly) => ViewCamera::Fly(fly),
@@ -871,14 +876,35 @@ impl eframe::App for VfApp {
                     camera.eye_position(!self.state.mode_3d),
                 )
             };
-            let mut arrows = Arc::unwrap_or_clone(Arc::clone(&self.scene.arrows));
-            crate::renderer::sort_back_to_front(arrows.as_mut_slice(), &view);
-            self.scene.arrows = Arc::new(arrows);
+            // Ticket 62: the combined stream is the single sorted source for
+            // 3D. The viewmodel's arrow order stays frame-invariant (no
+            // write-back), so equal-depth ties are deterministic; this vector
+            // is built before the screenshot block and consumed by both the
+            // capture and the viewport. 2D keeps its arrows-then-dots path and
+            // never reads the combined stream, but it still paints a stable
+            // far-to-near copy of the arrows (the pre-ticket-62 order).
+            let combined = if self.state.mode_3d {
+                let mut instances = combined_instances(
+                    self.scene.arrows.as_slice(),
+                    self.scene.dots.as_slice(),
+                );
+                sort_scene_back_to_front(&mut instances, &view);
+                Arc::new(instances)
+            } else {
+                Arc::new(Vec::new())
+            };
+            let arrows = if self.state.mode_3d {
+                Arc::clone(&self.scene.arrows)
+            } else {
+                Arc::new(sorted_arrows_back_to_front(self.scene.arrows.as_slice(), &view))
+            };
+            self.scene.combined = Arc::clone(&combined);
 
             let scene = SceneGPU {
-                arrows: Arc::clone(&self.scene.arrows),
+                arrows,
                 lines: Arc::clone(&self.scene.lines),
                 dots: Arc::clone(&self.scene.dots),
+                combined,
                 arrow_style: self.scene.arrow_style,
                 arrow_style_2d: self.scene.arrow_style_2d,
                 arrow_params: self.scene.arrow_params,

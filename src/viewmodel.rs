@@ -672,6 +672,10 @@ impl State {
             arrows: Arc::new(arrows),
             lines: Arc::new(self.streamlines_snapshot(&sampled)),
             dots: Arc::new(Vec::new()),
+            // Ticket 62: the app builds and sorts the per-frame combined
+            // arrow + particle stream, because dots advect every frame. The
+            // viewmodel's arrows stay frame-invariant in sampling order.
+            combined: Arc::new(Vec::new()),
             arrow_style: self.arrow_style,
             arrow_style_2d: self.arrow_style_2d,
             arrow_params: self.arrow_params,

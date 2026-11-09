@@ -23,7 +23,7 @@ use glam::Vec3;
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
-use crate::renderer::ArrowInstanceGPU;
+use crate::renderer::{ArrowInstanceGPU, PARTICLE_KIND};
 
 /// Hard cap on the particle cloud, whatever the density slider asks for.
 pub const MAX_PARTICLES: usize = 4000;
@@ -303,7 +303,7 @@ pub fn dot_instances(
         };
         let ramp = colormap.colormap(mag, lo, hi);
         dots.push(ArrowInstanceGPU {
-            origin: [p.x, p.y, p.z, 1.0],
+            origin: [p.x, p.y, p.z, PARTICLE_KIND],
             dir_len: [0.0, 0.0, 1.0, radius],
             color: [ramp[0] as f32 / 255.0, ramp[1] as f32 / 255.0, ramp[2] as f32 / 255.0, 1.0],
         });

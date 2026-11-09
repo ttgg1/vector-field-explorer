@@ -2,10 +2,14 @@
 // edits and the mode toggle route through the viewmodel State, which owns
 // parsing, the dirty flag and the scene snapshots the viewport paints.
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
+use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
-use vector_field_explorer::renderer::LineInstanceGPU;
+use vector_field_explorer::renderer::{
+    ArrowInstanceGPU, LineInstanceGPU, combined_instances, sort_back_to_front,
+    sort_scene_back_to_front, sorted_arrows_back_to_front,
+};
 use vector_field_explorer::sampling::ArrowData;
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D,
@@ -662,6 +666,73 @@ fn snapshot_reports_active_mode() {
     );
     let flat = scene.arrows.iter().all(|a| a.origin[2] == 0.0);
     assert!(flat, "every arrow origin sits on the z = 0 plane when sampling runs flat");
+}
+
+#[test]
+fn snapshot_leaves_the_combined_stream_empty_for_the_app_to_sort() {
+    // Ticket 62 ruling: the viewmodel keeps emitting frame-invariant arrows in
+    // sampling order; the app builds and sorts the combined arrow+particle
+    // stream each frame. An empty combined here is the contract.
+    let s = State::new(true);
+    let scene = s.snapshot();
+    assert!(
+        scene.combined.is_empty(),
+        "the viewmodel does not own the per-frame combined stream",
+    );
+}
+
+#[test]
+fn particle_free_combined_matches_the_arrow_count_and_order() {
+    // Pixel identity when particles are off: the combined stream has exactly
+    // one instance per arrow and the same comparator produces the same order
+    // as the legacy arrow sort.
+    let s = State::new(true);
+    let scene = s.snapshot();
+    let mut combined = combined_instances(&scene.arrows, &[]);
+    assert_eq!(
+        combined.len(),
+        scene.arrows.len(),
+        "particles off: one combined instance per arrow",
+    );
+
+    let view = Mat4::from_rotation_x(0.4);
+    sort_scene_back_to_front(&mut combined, &view);
+    let mut reference = scene.arrows.as_ref().clone();
+    sort_back_to_front(&mut reference, &view);
+
+    let key = |i: &ArrowInstanceGPU| (i.origin, i.dir_len, i.color);
+    let combined_keys: Vec<_> = combined.iter().map(key).collect();
+    let reference_keys: Vec<_> = reference.iter().map(key).collect();
+    assert_eq!(
+        combined_keys, reference_keys,
+        "the combined stream orders arrows exactly like the legacy sort",
+    );
+}
+
+#[test]
+fn two_d_arrow_draw_order_matches_the_old_sorted_order() {
+    // Ticket 62 fix: 2D keeps its own two-draw path but still paints a stable
+    // far-to-near copy of the arrows (the pre-ticket-62 order), while the
+    // snapshot itself stays unsorted. The orbit view tilts across the z = 0
+    // grid, so input order and sorted order genuinely differ here.
+    let s = State::new(false);
+    let scene = s.snapshot();
+    let view = OrbitCamera::default().view();
+    let sorted = sorted_arrows_back_to_front(&scene.arrows, &view);
+
+    let mut reference = scene.arrows.as_ref().clone();
+    sort_back_to_front(&mut reference, &view);
+
+    let key = |i: &ArrowInstanceGPU| i.origin;
+    let sorted_keys: Vec<_> = sorted.iter().map(key).collect();
+    let reference_keys: Vec<_> = reference.iter().map(key).collect();
+    assert_eq!(sorted_keys, reference_keys, "the 2D draw order is the legacy sorted order");
+
+    let input_keys: Vec<_> = scene.arrows.iter().map(key).collect();
+    assert_ne!(
+        input_keys, sorted_keys,
+        "this case really reorders: the snapshot order is not the sorted draw order",
+    );
 }
 
 #[test]

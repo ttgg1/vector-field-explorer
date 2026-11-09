@@ -11,7 +11,7 @@ use vector_field_explorer::arrow_geometry::{
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle};
 use vector_field_explorer::renderer::{
-    ARROW2D_VERTS, ARROW2D_VERTS_LINE, ARROW_VERTS_FLAT, ARROW_VERTS_LINE,
+    ARROW2D_VERTS, ARROW2D_VERTS_LINE, ARROW_VERTS_FLAT, ARROW_VERTS_LINE, MAX_ARROW_VERTS,
 };
 
 /// Anything at or below this is a zero-area triangle for these sizes.
@@ -286,6 +286,11 @@ fn renderer_budgets_match_the_new_families() {
     assert_eq!(ARROW_VERTS_LINE, 6, "the headless line");
     assert_eq!(ARROW2D_VERTS, 9, "the 2D flat arrow");
     assert_eq!(ARROW2D_VERTS_LINE, 6, "the 2D headless line");
+    assert_eq!(MAX_ARROW_VERTS, 186, "the combined 3D draw's per-instance budget is a 16-side cone");
+    assert!(
+        ARROW_SHADER.contains("const MAX_ARROW_VERTS: u32 = 186u;"),
+        "the merged shader declares the same budget",
+    );
 }
 
 #[test]

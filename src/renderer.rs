@@ -1,16 +1,17 @@
-//! Instanced wgpu renderer for arrows and lines (main plan Task 7).
+//! Instanced wgpu renderer for arrows, particles and lines (main plan Task 7).
 //!
-//! Four pipelines (3D arrow + flat 2D arrow + line + dot) share one bind-group
-//! layout holding the `Globals` uniform and the per-mode instance storage
-//! array. The `DrawState` lives in the egui_wgpu callback_resources TypeMap
-//! (installed once by the app); each frame a `DrawCallback` uploads the current
-//! `SceneGPU` and draws.
+//! Four pipelines (combined 3D scene + flat 2D arrow + line + dot) share one
+//! bind-group layout holding the `Globals` uniform and the per-mode instance
+//! storage array. The `DrawState` lives in the egui_wgpu callback_resources
+//! TypeMap (installed once by the app); each frame a `DrawCallback` uploads the
+//! current `SceneGPU` and draws.
 //!
-//! Depth note: egui_wgpu paint callbacks have no depth attachment, so arrows
-//! are CPU-sorted far-to-near (painter's algorithm) by the caller. The arrow
-//! pipeline blends straight alpha (`SrcAlpha` over `OneMinusSrcAlpha`) so
-//! plane-by-plane mode can paint the off-plane arrows translucently; selected
-//! plane arrows arrive with alpha 1.0 and therefore still paint opaquely.
+//! Depth note: egui_wgpu paint callbacks have no depth attachment, so the 3D
+//! combined arrow + particle stream is CPU-sorted far-to-near (painter's
+//! algorithm) by the caller. The scene pipeline blends straight alpha
+//! (`SrcAlpha` over `OneMinusSrcAlpha`) so plane-by-plane mode can paint the
+//! off-plane arrows translucently; selected plane arrows arrive with alpha 1.0
+//! and therefore still paint opaquely.
 
 use std::sync::Arc;
 
@@ -19,14 +20,19 @@ use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3};
 
-use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
+use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MAX_SIDES, MIN_SIDES};
 
 /// Per-arrow GPU instance: base position, unit direction + length, color.
+///
+/// `origin.w` is the kind tag for the ticket-62 combined 3D stream: `1.0` means
+/// an arrow, `0.0` means a particle dot (see [`ARROW_KIND`]/[`PARTICLE_KIND`]).
+/// Dots keep their radius in `dir_len.w`; arrows keep their length there. Both
+/// pipelines share this 48-byte layout and the same storage buffer.
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct ArrowInstanceGPU {
-    pub origin: [f32; 4],  // pos.xyz, 1.0
-    pub dir_len: [f32; 4], // unit dir.xyz, length
+    pub origin: [f32; 4],  // pos.xyz, kind tag (1.0 arrow / 0.0 particle)
+    pub dir_len: [f32; 4], // unit dir.xyz, length (arrows) or radius (dots)
     pub color: [f32; 4],   // rgba 0..1
 }
 
@@ -74,16 +80,46 @@ pub const ARROW2D_VERTS: u32 = 9;
 /// step with `ARROW2D_VERTS_LINE` in `src/shaders.arrow2d.wgsl`.
 pub const ARROW2D_VERTS_LINE: u32 = 6;
 
+/// The per-instance vertex budget for the ticket-62 combined 3D draw. One draw
+/// call cannot vary its vertex count per instance, so every instance (arrow or
+/// particle) gets the widest arrow family's budget: the cone at [`MAX_SIDES`]
+/// sides, `12 * sides - 6`. The merged shader derives the instance index from
+/// this budget and exits unused invocations before any ring/trig work.
+pub const MAX_ARROW_VERTS: u32 = 12 * MAX_SIDES - 6;
+
+/// `origin.w` tag for an arrow instance in the combined 3D stream.
+pub const ARROW_KIND: f32 = 1.0;
+
+/// `origin.w` tag for a particle (dot) instance in the combined 3D stream.
+pub const PARTICLE_KIND: f32 = 0.0;
+
 /// Which arrow pipeline `record` uses and how many vertices per instance it
 /// draws. Pure so the 2D/3D selection is testable without a GPU; `record`
 /// matches on it directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDrawPlan {
     /// The flat 2D arrow through `arrow2d_pipeline`, at the selected 2D
-    /// family's vertex count.
+    /// family's vertex count. 2D keeps its arrows-then-dots path and never
+    /// reads the combined stream.
     Flat2D { vertices: u32 },
-    /// The selected 3D family through `arrow_pipeline`.
-    Mesh3D { vertices: u32 },
+    /// The ticket-62 combined arrow + particle stream through `scene_pipeline`,
+    /// at the fixed [`MAX_ARROW_VERTS`] per-instance budget.
+    Combined3D { budget: u32 },
+}
+
+/// One draw the renderer records, in painter order. Structural only: the
+/// tests use it to prove 3D is lines → one combined draw and 2D keeps its
+/// arrows-then-dots draws, without a GPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawPass {
+    /// Backdrop/streamline lines, six vertices per instance.
+    Lines { instances: usize },
+    /// The single 3D combined arrow + particle draw.
+    Scene3D { instances: usize, budget: u32 },
+    /// The flat 2D arrow draw at its family's vertex count.
+    Arrow2D { instances: usize, vertices: u32 },
+    /// The 2D dot billboard draw (six vertices per instance).
+    Dots { instances: usize },
 }
 
 /// Vertices the dot shader emits per instance: the two triangles of a
@@ -112,11 +148,17 @@ pub fn camera_basis_from_view_proj(view_proj: &Mat4) -> (Vec3, Vec3) {
 /// The arrow fields select the geometry family and the 2D/3D draw path. They
 /// travel with the instance collections so screenshots and the viewport paint
 /// exactly the same scene.
+///
+/// `combined` is the ticket-62 3D stream: arrows followed by dots, sorted
+/// far-to-near by the app each frame because the egui_wgpu pass has no depth
+/// attachment. `arrows`/`dots` stay the frame-invariant sources (and drive the
+/// 2D path); 3D `record` reads only `combined`.
 #[derive(Clone)]
 pub struct SceneGPU {
     pub arrows: Arc<Vec<ArrowInstanceGPU>>,
     pub lines: Arc<Vec<LineInstanceGPU>>,
     pub dots: Arc<Vec<ArrowInstanceGPU>>,
+    pub combined: Arc<Vec<ArrowInstanceGPU>>,
     pub arrow_style: ArrowStyle,
     pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
@@ -129,6 +171,7 @@ impl Default for SceneGPU {
             arrows: Arc::new(Vec::new()),
             lines: Arc::new(Vec::new()),
             dots: Arc::new(Vec::new()),
+            combined: Arc::new(Vec::new()),
             arrow_style: ArrowStyle::default(),
             arrow_style_2d: ArrowStyle2D::default(),
             arrow_params: ArrowParams::default(),
@@ -141,18 +184,19 @@ impl Default for SceneGPU {
 
 impl SceneGPU {
     pub fn is_empty(&self) -> bool {
-        self.arrows.is_empty() && self.lines.is_empty() && self.dots.is_empty()
+        self.arrows.is_empty()
+            && self.lines.is_empty()
+            && self.dots.is_empty()
+            && self.combined.is_empty()
     }
 
     /// The pipeline and per-instance vertex count the next `record` call uses.
-    /// 3D uses the selected [`ArrowStyle`] family's budget; 2D uses the
-    /// independent [`ArrowStyle2D`] set (tickets 61 and 64), never the 3D
-    /// selection, and carries that 2D family's own 9- or 6-vertex count.
+    /// 3D uses one combined stream at the fixed [`MAX_ARROW_VERTS`] budget; 2D
+    /// uses the independent [`ArrowStyle2D`] set (tickets 61 and 64), never the
+    /// 3D selection, and carries that 2D family's own 9- or 6-vertex count.
     pub fn arrow_draw_plan(&self) -> ArrowDrawPlan {
         if self.mode_3d {
-            ArrowDrawPlan::Mesh3D {
-                vertices: self.arrow_style.vertex_count(self.arrow_params.sides),
-            }
+            ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS }
         } else {
             ArrowDrawPlan::Flat2D {
                 vertices: self.arrow_style_2d.vertex_count(self.arrow_params.sides),
@@ -160,18 +204,91 @@ impl SceneGPU {
         }
     }
 
-    /// The per-instance vertex count the next `record` call draws.
+    /// The per-instance vertex count the next `record` call draws: the combined
+    /// 3D budget, or the selected 2D family's own count.
     pub fn arrow_vertex_count(&self) -> u32 {
         match self.arrow_draw_plan() {
-            ArrowDrawPlan::Flat2D { vertices } | ArrowDrawPlan::Mesh3D { vertices } => vertices,
+            ArrowDrawPlan::Flat2D { vertices } => vertices,
+            ArrowDrawPlan::Combined3D { budget } => budget,
+        }
+    }
+
+    /// The current family's real geometry count, independent of the combined
+    /// draw's budget. Keeps the per-family vertex-count coverage that used to
+    /// live on [`arrow_vertex_count`] (ticket 62 moved it here).
+    pub fn style_vertex_count(&self) -> u32 {
+        if self.mode_3d {
+            self.arrow_style.vertex_count(self.arrow_params.sides)
+        } else {
+            self.arrow_style_2d.vertex_count(self.arrow_params.sides)
         }
     }
 
     /// Whether arrows paint through the flat 2D pipeline rather than the 3D
-    /// family pipeline.
+    /// combined pipeline.
     pub fn uses_flat_arrow(&self) -> bool {
         matches!(self.arrow_draw_plan(), ArrowDrawPlan::Flat2D { .. })
     }
+
+    /// The draws `record` performs, in painter order. 3D is the backdrop lines
+    /// followed by exactly one combined arrow+particle draw (even when the
+    /// arrow list is empty: the dots live in `combined`). 2D keeps its
+    /// arrows-then-dots draws and ignores `combined`.
+    pub fn draw_passes(&self) -> Vec<DrawPass> {
+        let mut passes = Vec::with_capacity(4);
+        if !self.lines.is_empty() {
+            passes.push(DrawPass::Lines { instances: self.lines.len() });
+        }
+        if self.mode_3d {
+            if !self.combined.is_empty() {
+                passes.push(DrawPass::Scene3D {
+                    instances: self.combined.len(),
+                    budget: MAX_ARROW_VERTS,
+                });
+            }
+        } else {
+            if !self.arrows.is_empty() {
+                passes.push(DrawPass::Arrow2D {
+                    instances: self.arrows.len(),
+                    // The 2D branch of `style_vertex_count` is the selected
+                    // family's real geometry count; using the accessor keeps
+                    // one source for it (production caller, ticket 62 fix).
+                    vertices: self.style_vertex_count(),
+                });
+            }
+            if !self.dots.is_empty() {
+                passes.push(DrawPass::Dots { instances: self.dots.len() });
+            }
+        }
+        passes
+    }
+}
+
+/// Vertices one combined 3D draw issues for `instances` instances: every
+/// instance consumes the fixed [`MAX_ARROW_VERTS`] budget.
+pub fn scene_vertex_count(instances: usize) -> u32 {
+    (instances as u32).saturating_mul(MAX_ARROW_VERTS)
+}
+
+/// Build the ticket-62 combined 3D stream: arrows then dots, with `origin.w`
+/// forced to [`ARROW_KIND`]/[`PARTICLE_KIND`] so the shader can branch on the
+/// kind. Order is the frame-invariant input order; [`sort_scene_back_to_front`]
+/// then sorts the whole stream. Equal-depth mixed kinds therefore keep this
+/// concat order (arrows before dots).
+pub fn combined_instances(
+    arrows: &[ArrowInstanceGPU],
+    dots: &[ArrowInstanceGPU],
+) -> Vec<ArrowInstanceGPU> {
+    let mut combined = Vec::with_capacity(arrows.len() + dots.len());
+    combined.extend(arrows.iter().copied().map(|mut arrow| {
+        arrow.origin[3] = ARROW_KIND;
+        arrow
+    }));
+    combined.extend(dots.iter().copied().map(|mut dot| {
+        dot.origin[3] = PARTICLE_KIND;
+        dot
+    }));
+    combined
 }
 
 const LIGHT_DIR: [f32; 4] = [0.4211, 0.8521, 0.3108, 0.0]; // normalize(0.42, 0.85, 0.31)
@@ -199,7 +316,7 @@ fn mat4_to_mats(m: Mat4) -> [[f32; 4]; 4] {
 /// buffers. Installed into the egui_wgpu callback_resources TypeMap.
 pub struct DrawState {
     bind_layout: wgpu::BindGroupLayout,
-    arrow_pipeline: wgpu::RenderPipeline,
+    scene_pipeline: wgpu::RenderPipeline,
     arrow2d_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     dot_pipeline: wgpu::RenderPipeline,
@@ -269,18 +386,18 @@ impl DrawState {
                 immediate_size: 0,
             });
 
-        let arrow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("vfe arrow pipeline"),
+        let scene_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vfe scene pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader_arrow,
-                entry_point: Some("vs_arrow"),
+                entry_point: Some("vs_scene"),
                 compilation_options: Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader_arrow,
-                entry_point: Some("fs_main"),
+                entry_point: Some("fs_scene"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -476,7 +593,7 @@ impl DrawState {
 
         Self {
             bind_layout,
-            arrow_pipeline,
+            scene_pipeline,
             arrow2d_pipeline,
             line_pipeline,
             dot_pipeline,
@@ -505,6 +622,14 @@ impl DrawState {
     ) {
         let (camera_right, camera_up) = camera_basis_from_view_proj(&view_proj);
         let params = scene.arrow_params.sanitized();
+        // `sanitized` is the single 4..=16 side clamp; re-clamp explicitly and
+        // pin it so the uniform can never carry a raw out-of-range side count
+        // (the shader only guards the low end).
+        let sides = params.sides.clamp(MIN_SIDES, MAX_SIDES);
+        debug_assert!(
+            (MIN_SIDES..=MAX_SIDES).contains(&params.sides),
+            "sanitized sides stay within {MIN_SIDES}..={MAX_SIDES}",
+        );
         // `arrow_style.x` is mode-dependent: the 3D family id while the 3D
         // pipeline paints, the 2D family id while the 2D pipeline paints. The
         // 2D and 3D ids are separate namespaces, so the matching shader must
@@ -518,7 +643,7 @@ impl DrawState {
             light_dir: self.light_dir,
             camera_right: camera_right.extend(0.0).to_array(),
             camera_up: camera_up.extend(0.0).to_array(),
-            arrow_style: [arrow_style_id, params.sides, 0, 0],
+            arrow_style: [arrow_style_id, sides, 0, 0],
             arrow_params: [params.head_length, params.head_width, params.shaft_radius, 0.0],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
@@ -526,15 +651,21 @@ impl DrawState {
         // Empty collections are skipped: a zero-size storage buffer cannot be
         // bound (the bind group would be rejected with "binding size is zero").
         // The one-instance placeholders from `new()` remain bound and valid,
-        // and `paint()` skips drawing any empty collection anyway.
-        if !scene.arrows.is_empty() {
+        // and `record` skips drawing any empty collection anyway.
+        //
+        // 3D binds the combined sorted stream (arrows + dots) to the arrow
+        // slot, so an all-particle scene still binds a buffer. 2D binds its
+        // arrow list instead and never reads `combined`.
+        let arrow_instances: &[ArrowInstanceGPU] =
+            if scene.mode_3d { scene.combined.as_slice() } else { scene.arrows.as_slice() };
+        if !arrow_instances.is_empty() {
             self.arrow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("vfe arrows (frame)"),
-                contents: bytemuck::cast_slice(scene.arrows.as_slice()),
+                label: Some("vfe scene instances (frame)"),
+                contents: bytemuck::cast_slice(arrow_instances),
                 usage: wgpu::BufferUsages::STORAGE,
             });
             self.arrow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("vfe arrow bind (frame)"),
+                label: Some("vfe scene bind (frame)"),
                 layout: &self.bind_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -571,7 +702,8 @@ impl DrawState {
             });
         }
 
-        if !scene.dots.is_empty() {
+        // The dot buffer feeds the 2D path only; 3D dots travel in `combined`.
+        if !scene.mode_3d && !scene.dots.is_empty() {
             self.dot_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("vfe dots (frame)"),
                 contents: bytemuck::cast_slice(scene.dots.as_slice()),
@@ -594,35 +726,34 @@ impl DrawState {
         }
     }
 
-    /// Record this frame's scene into a render pass: lines, then opaque
-    /// arrows, then dots — the same order the on-screen pass uses, so an
-    /// offscreen capture paints exactly what the viewport paints.
+    /// Record this frame's scene into a render pass: backdrop lines, then the
+    /// single combined 3D arrow+particle draw (or, in 2D, the arrows-then-dots
+    /// draws). The same plan runs for the on-screen and offscreen passes, so a
+    /// capture paints exactly what the viewport paints.
     fn record(&self, pass: &mut wgpu::RenderPass<'_>, scene: &SceneGPU) {
-        if !scene.lines.is_empty() {
-            pass.set_pipeline(&self.line_pipeline);
-            pass.set_bind_group(0, &self.line_bind, &[]);
-            pass.draw(0..(scene.lines.len() as u32) * 6, 0..1);
-        }
-
-        if !scene.arrows.is_empty() {
-            let vertices = match scene.arrow_draw_plan() {
-                ArrowDrawPlan::Flat2D { vertices } => {
+        for draw in scene.draw_passes() {
+            match draw {
+                DrawPass::Lines { instances } => {
+                    pass.set_pipeline(&self.line_pipeline);
+                    pass.set_bind_group(0, &self.line_bind, &[]);
+                    pass.draw(0..(instances as u32) * 6, 0..1);
+                }
+                DrawPass::Scene3D { instances, .. } => {
+                    pass.set_pipeline(&self.scene_pipeline);
+                    pass.set_bind_group(0, &self.arrow_bind, &[]);
+                    pass.draw(0..scene_vertex_count(instances), 0..1);
+                }
+                DrawPass::Arrow2D { instances, vertices } => {
                     pass.set_pipeline(&self.arrow2d_pipeline);
-                    vertices
+                    pass.set_bind_group(0, &self.arrow_bind, &[]);
+                    pass.draw(0..(instances as u32) * vertices, 0..1);
                 }
-                ArrowDrawPlan::Mesh3D { vertices } => {
-                    pass.set_pipeline(&self.arrow_pipeline);
-                    vertices
+                DrawPass::Dots { instances } => {
+                    pass.set_pipeline(&self.dot_pipeline);
+                    pass.set_bind_group(0, &self.dot_bind, &[]);
+                    pass.draw(0..(instances as u32) * DOT_VERTS_PER_INSTANCE, 0..1);
                 }
-            };
-            pass.set_bind_group(0, &self.arrow_bind, &[]);
-            pass.draw(0..(scene.arrows.len() as u32) * vertices, 0..1);
-        }
-
-        if !scene.dots.is_empty() {
-            pass.set_pipeline(&self.dot_pipeline);
-            pass.set_bind_group(0, &self.dot_bind, &[]);
-            pass.draw(0..(scene.dots.len() as u32) * DOT_VERTS_PER_INSTANCE, 0..1);
+            }
         }
     }
 
@@ -871,14 +1002,44 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
     }
 }
 
-/// Painter's-algorithm helper: order arrow instances far-to-near along the
+/// Painter's-algorithm helper: order a scene's instances far-to-near along the
 /// view direction, since the egui_wgpu pass has no depth attachment.
-pub fn sort_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4) {
+///
+/// Works on any instance mix: the ticket-62 combined stream carries arrows and
+/// particle dots together, so the whole scene interleaves by depth. The sort is
+/// stable, so equal-depth instances keep their pre-sort order. A non-finite
+/// view depth (NaN or either infinity) is mapped to `NEG_INFINITY`: view-space
+/// z grows toward the eye, so this puts it in the far group, first in the
+/// painter order, instead of letting `INFINITY` paint on top. A bad origin can
+/// therefore neither panic nor wedge itself in front of the scene.
+pub fn sort_scene_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4) {
     instances.sort_by(|a, b| {
-        let pa = Vec3::new(a.origin[0], a.origin[1], a.origin[2]);
-        let pb = Vec3::new(b.origin[0], b.origin[1], b.origin[2]);
-        let za = (*view * pa.extend(1.0)).z;
-        let zb = (*view * pb.extend(1.0)).z;
-        za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal)
+        let depth = |instance: &ArrowInstanceGPU| {
+            let position =
+                Vec3::new(instance.origin[0], instance.origin[1], instance.origin[2]);
+            let z = (*view * position.extend(1.0)).z;
+            if z.is_finite() { z } else { f32::NEG_INFINITY }
+        };
+        depth(a).partial_cmp(&depth(b)).unwrap_or(std::cmp::Ordering::Equal)
     });
+}
+
+/// The 2D arrow draw order: a stable far-to-near copy of the frame-invariant
+/// arrow list under the current view. 2D keeps its own arrow2d → dots draws;
+/// this helper reproduces the pre-ticket-62 sorted-arrow order without writing
+/// the order back into the snapshot (the 3D combined stream is unaffected).
+pub fn sorted_arrows_back_to_front(
+    arrows: &[ArrowInstanceGPU],
+    view: &Mat4,
+) -> Vec<ArrowInstanceGPU> {
+    let mut sorted = arrows.to_vec();
+    sort_scene_back_to_front(&mut sorted, view);
+    sorted
+}
+
+/// The long-standing arrow painter sort. Kept as a named alias so existing
+/// callers/tests keep compiling; it is the same stable far-to-near comparator
+/// as [`sort_scene_back_to_front`].
+pub fn sort_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4) {
+    sort_scene_back_to_front(instances, view);
 }

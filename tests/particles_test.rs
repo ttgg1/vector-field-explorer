@@ -317,7 +317,11 @@ fn dots_count_matches_particles() {
     assert_eq!(dots.len(), count(&cloud), "one dot instance per particle");
     assert!(dots.len() <= MAX_PARTICLES, "inside the instance budget");
     for (d, p) in dots.iter().zip(positions(&cloud).iter()) {
-        assert_eq!(d.origin, [p.x, p.y, p.z, 1.0], "the dot is centered on the particle");
+        assert_eq!(d.origin[..3], [p.x, p.y, p.z], "the dot is centered on the particle");
+        assert_eq!(
+            d.origin[3], 0.0,
+            "origin.w tags a dot as a particle (ticket 62's combined stream)",
+        );
     }
 }
 

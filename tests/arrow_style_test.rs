@@ -9,9 +9,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::sync::Arc;
+
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MIN_SIDES};
 use vector_field_explorer::renderer::{
-    ARROW2D_VERTS, ARROW2D_VERTS_LINE, ARROW_VERTS_FLAT, ARROW_VERTS_LINE, ArrowDrawPlan, SceneGPU,
+    ARROW2D_VERTS, ARROW2D_VERTS_LINE, ARROW_VERTS_FLAT, ARROW_VERTS_LINE, ArrowDrawPlan,
+    ArrowInstanceGPU, DrawPass, MAX_ARROW_VERTS, SceneGPU, scene_vertex_count,
 };
 use vector_field_explorer::viewmodel::State;
 
@@ -142,27 +145,38 @@ fn scene_carries_the_style_params_and_mode() {
     assert_eq!(scene.arrow_params, ArrowParams::default());
     assert!(scene.mode_3d, "the default keeps the old 3D pipeline");
     assert_eq!(
-        scene.arrow_vertex_count(),
+        scene.style_vertex_count(),
         138,
-        "the default Cone is 12-sided with a full cap",
+        "the default Cone emits 138 vertices at 12 sides",
+    );
+    assert_eq!(
+        scene.arrow_vertex_count(),
+        MAX_ARROW_VERTS,
+        "3D draws the combined per-instance vertex budget",
     );
 
     let mut scene = SceneGPU { mode_3d: true, ..SceneGPU::default() };
     scene.arrow_style = ArrowStyle::Flat;
-    assert_eq!(scene.arrow_vertex_count(), 9, "a 3D flat ribbon draws its 9 vertices");
+    assert_eq!(scene.style_vertex_count(), 9, "a 3D flat ribbon emits its 9 vertices");
 
     scene.arrow_style = ArrowStyle::Streamline;
-    assert_eq!(scene.arrow_vertex_count(), 6, "a 3D line draws its 6 vertices");
+    assert_eq!(scene.style_vertex_count(), 6, "a 3D line emits its 6 vertices");
 
     scene.arrow_style = ArrowStyle::Cylinder;
     scene.arrow_params.sides = 8;
-    assert_eq!(scene.arrow_vertex_count(), 9 * 8 - 6, "a 3D cylinder draws by its sides");
+    assert_eq!(scene.style_vertex_count(), 9 * 8 - 6, "a 3D cylinder counts by its sides");
+    assert_eq!(scene.arrow_vertex_count(), MAX_ARROW_VERTS, "3D always draws the budget");
     assert!(!scene.uses_flat_arrow());
 
     scene.mode_3d = false;
     scene.arrow_style = ArrowStyle::Flat;
     scene.arrow_style_2d = ArrowStyle2D::Flat;
     scene.arrow_params.sides = 16;
+    assert_eq!(
+        scene.style_vertex_count(),
+        9,
+        "2D reports the flat arrow's own vertex count",
+    );
     assert_eq!(
         scene.arrow_vertex_count(),
         9,
@@ -171,8 +185,34 @@ fn scene_carries_the_style_params_and_mode() {
     assert!(scene.uses_flat_arrow(), "2D ignores the selected 3D family");
 
     scene.arrow_style_2d = ArrowStyle2D::Streamline;
+    assert_eq!(scene.style_vertex_count(), 6, "2D line reports its own 6-vertex budget");
     assert_eq!(scene.arrow_vertex_count(), 6, "2D line draws its own 6-vertex budget");
     assert!(scene.uses_flat_arrow(), "2D line still uses the flat pipeline");
+}
+
+#[test]
+fn style_vertex_count_keeps_the_per_family_coverage() {
+    let mut scene = SceneGPU { mode_3d: true, ..SceneGPU::default() };
+    for style in ArrowStyle::ALL {
+        for sides in [4, 8, 12, 16] {
+            scene.arrow_style = style;
+            scene.arrow_params.sides = sides;
+            assert_eq!(
+                scene.style_vertex_count(),
+                style.vertex_count(sides),
+                "{style:?} at {sides} sides keeps its real geometry count",
+            );
+        }
+    }
+    scene.mode_3d = false;
+    for style in ArrowStyle2D::ALL {
+        scene.arrow_style_2d = style;
+        assert_eq!(
+            scene.style_vertex_count(),
+            style.vertex_count(12),
+            "{style:?} keeps its 2D geometry count",
+        );
+    }
 }
 
 #[test]
@@ -180,19 +220,20 @@ fn arrow_draw_plan_selects_the_pipeline_and_count() {
     let mut scene = SceneGPU::default();
     assert_eq!(
         scene.arrow_draw_plan(),
-        ArrowDrawPlan::Mesh3D { vertices: 138 },
-        "the default Cone uses the 3D mesh at 12 sides",
+        ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS },
+        "3D draws one combined stream at the maximum arrow budget",
     );
+    assert_eq!(MAX_ARROW_VERTS, 186, "the 16-side cone is the widest family");
 
     scene.arrow_style = ArrowStyle::Flat;
-    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Mesh3D { vertices: 9 });
+    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS });
 
     scene.arrow_style = ArrowStyle::Streamline;
-    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Mesh3D { vertices: 6 });
+    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS });
 
     scene.arrow_style = ArrowStyle::Cylinder;
     scene.arrow_params.sides = 12;
-    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Mesh3D { vertices: 102 });
+    assert_eq!(scene.arrow_draw_plan(), ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS });
 
     scene.mode_3d = false;
     scene.arrow_style_2d = ArrowStyle2D::Flat;
@@ -260,10 +301,173 @@ fn three_d_draw_plan_ignores_the_2d_style() {
         scene.arrow_style_2d = style;
         assert_eq!(
             scene.arrow_draw_plan(),
-            ArrowDrawPlan::Mesh3D { vertices: 9 },
+            ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS },
             "the 2D {style:?} family does not affect the 3D plan",
         );
     }
+}
+
+/// One instance; only field presence matters to the draw-plan structure.
+fn instance() -> ArrowInstanceGPU {
+    ArrowInstanceGPU {
+        origin: [0.0, 0.0, 0.0, 1.0],
+        dir_len: [0.0, 1.0, 0.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+    }
+}
+
+#[test]
+fn three_d_draw_passes_are_lines_then_one_combined_scene() {
+    let scene = SceneGPU {
+        lines: Arc::new(vec![]),
+        combined: Arc::new(vec![instance(), instance(), instance()]),
+        ..SceneGPU::default()
+    };
+    // The default SceneGPU has no lines; give it a non-empty line list through
+    // a second scene so the order assertion is meaningful.
+    let with_lines = SceneGPU {
+        lines: Arc::new(vec![vector_field_explorer::renderer::LineInstanceGPU {
+            a: [0.0; 4],
+            b: [0.0; 4],
+            color: [0.0; 4],
+        }]),
+        ..scene.clone()
+    };
+    assert_eq!(
+        with_lines.draw_passes(),
+        vec![
+            DrawPass::Lines { instances: 1 },
+            DrawPass::Scene3D { instances: 3, budget: MAX_ARROW_VERTS },
+        ],
+        "3D paints backdrop lines then the single combined arrow+particle draw",
+    );
+    assert_eq!(
+        scene.draw_passes(),
+        vec![DrawPass::Scene3D { instances: 3, budget: MAX_ARROW_VERTS }],
+        "no lines still means one 3D draw",
+    );
+}
+
+#[test]
+fn an_all_particle_scene_still_draws_the_combined_stream() {
+    // Ops hazard: an empty arrow list must not hide the dots. The combined
+    // stream carries the dots and drives the single 3D draw.
+    let scene = SceneGPU {
+        arrows: Arc::new(vec![]),
+        dots: Arc::new(vec![instance(), instance()]),
+        combined: Arc::new(vec![instance(), instance()]),
+        ..SceneGPU::default()
+    };
+    assert_eq!(
+        scene.draw_passes(),
+        vec![DrawPass::Scene3D { instances: 2, budget: MAX_ARROW_VERTS }],
+        "3D dots paint through the combined scene, not a separate dot pass",
+    );
+}
+
+#[test]
+fn two_d_draw_passes_keep_arrows_then_dots_and_ignore_combined() {
+    let mut scene = SceneGPU {
+        mode_3d: false,
+        arrows: Arc::new(vec![instance(), instance()]),
+        dots: Arc::new(vec![instance()]),
+        combined: Arc::new(vec![instance(), instance(), instance()]),
+        ..SceneGPU::default()
+    };
+    scene.arrow_style_2d = ArrowStyle2D::Flat;
+    assert_eq!(
+        scene.draw_passes(),
+        vec![
+            DrawPass::Arrow2D { instances: 2, vertices: 9 },
+            DrawPass::Dots { instances: 1 },
+        ],
+        "2D keeps the arrows-then-dots draws and never reads the combined stream",
+    );
+
+    scene.arrow_style_2d = ArrowStyle2D::Streamline;
+    assert_eq!(
+        scene.draw_passes(),
+        vec![
+            DrawPass::Arrow2D { instances: 2, vertices: 6 },
+            DrawPass::Dots { instances: 1 },
+        ],
+        "the 2D line family keeps its 6-vertex draw",
+    );
+}
+
+#[test]
+fn scene_vertex_count_multiplies_instances_by_the_budget() {
+    assert_eq!(scene_vertex_count(0), 0);
+    assert_eq!(scene_vertex_count(1), MAX_ARROW_VERTS);
+    assert_eq!(scene_vertex_count(4000), 4000 * MAX_ARROW_VERTS);
+}
+
+#[test]
+fn combined_scene_shader_guards_the_budget_and_early_out() {
+    // Value-critical: the Rust draw budget and the shader constant must agree.
+    assert_eq!(MAX_ARROW_VERTS, 186, "the Rust budget is the 16-side cone");
+    let budget_decl = ARROW_SHADER
+        .split_once("const MAX_ARROW_VERTS: u32 =")
+        .expect("the shader declares the combined budget")
+        .1;
+    assert!(
+        budget_decl.trim_start().starts_with("186"),
+        "the shader budget matches MAX_ARROW_VERTS",
+    );
+
+    assert!(ARROW_SHADER.contains("fn vs_scene("), "the merged vertex entrypoint exists");
+    assert!(ARROW_SHADER.contains("fn fs_scene("), "the merged fragment entrypoint exists");
+    let vs = ARROW_SHADER
+        .split_once("fn vs_scene(")
+        .expect("the merged vertex entrypoint exists")
+        .1;
+
+    // Structure: derive the instance/local vertex from the budget, tag the
+    // kind, and exit before any expensive geometry.
+    assert!(vs.contains("/ MAX_ARROW_VERTS"), "the instance index comes from the budget");
+    assert!(vs.contains("% MAX_ARROW_VERTS"), "the local vertex comes from the budget");
+    assert!(vs.contains("let kind = inst.origin.w"), "origin.w is the kind tag");
+    assert!(
+        vs.contains("let is_arrow = inst.origin.w > 0.5"),
+        "origin.w is the arrow/particle discriminator",
+    );
+    let guard = vs.find("j >= count").expect("the vertex shader early-outs on the budget");
+    let ring = vs.find("ring_point(").expect("the arrow ring math is still present");
+    assert!(guard < ring, "the j >= count guard runs before any ring math");
+
+    // Count selection: particles get the six-vertex billboard budget, arrows
+    // the selected style's real vertex count.
+    let particle_count = vs.find("var count = DOT_VERTS").expect("particles use DOT_VERTS");
+    let arrow_count =
+        vs.find("count = style_vertex_count()").expect("arrows use the style count");
+    assert!(
+        particle_count < arrow_count,
+        "the kind branch replaces the particle budget with the arrow style count",
+    );
+    let dot_branch = vs.find("if (!is_arrow)").expect("the particle branch exists");
+    let dot_corner = vs.find("quad_corner(j)").expect("the particle quad corner exists");
+    assert!(dot_branch < dot_corner, "the particle branch builds the dot quad");
+    assert!(
+        vs[dot_branch..].contains("globals.camera_right.xyz")
+            && vs[dot_branch..].contains("globals.camera_up.xyz"),
+        "the particle billboard expands along the camera basis",
+    );
+
+    // The fragment branches on the same tag: particle disc/rim vs arrow light.
+    let fs = ARROW_SHADER
+        .split_once("fn fs_scene(")
+        .expect("the merged fragment entrypoint exists")
+        .1;
+    assert!(fs.contains("v.kind < 0.5"), "the fragment branches on the kind tag");
+    assert!(fs.contains("discard") && fs.contains("smoothstep("), "the dot disc/rim is intact");
+}
+
+#[test]
+fn the_merged_shader_keeps_the_2d_and_dot_shaders_separate() {
+    // 2D keeps its own shader/pipeline and the dot shader stays for that path.
+    assert!(ARROW2D_SHADER.contains("fn vs_arrow2d("));
+    assert!(DOT_SHADER.contains("fn vs_dot("));
+    assert!(!ARROW_SHADER.contains("fn vs_arrow("), "the old single-purpose entrypoint is gone");
 }
 
 #[test]
