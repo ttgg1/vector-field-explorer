@@ -43,5 +43,6 @@ explicitly lists the three faces:
 - `egui-icons-LICENSE.txt`: verbatim MIT licence from
   `emoji-icon-font-mit-license.txt`, Copyright (c) 2014 John Slegers.
 
-`THIRD_PARTY_LICENSES.md` is owned by ticket 19; these files are the raw
-sources for its DejaVu and egui-icons notices.
+[`THIRD_PARTY_LICENSES.md`](../../THIRD_PARTY_LICENSES.md) repeats these
+notices; these files are the raw sources for its DejaVu and egui-icons
+sections.

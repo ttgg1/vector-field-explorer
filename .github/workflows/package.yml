@@ -151,7 +151,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          for f in README.md LICENSE; do
+          for f in README.md LICENSE THIRD_PARTY_LICENSES.md; do
             if [ ! -f "$f" ]; then
               echo "::error::release assets require $f in the repo root"
               exit 1
@@ -184,6 +184,8 @@ jobs:
               "${appdir}/usr/share/doc/vector-field-explorer/README.md"
             install -Dm644 LICENSE \
               "${appdir}/usr/share/doc/vector-field-explorer/LICENSE"
+            install -Dm644 THIRD_PARTY_LICENSES.md \
+              "${appdir}/usr/share/doc/vector-field-explorer/THIRD_PARTY_LICENSES.md"
 
             # Ticket 68: linuxdeploy gets the stable 256 px icon for desktop
             # integration; install the full committed hicolor set beside it so
@@ -219,7 +221,8 @@ jobs:
               usr/bin/vector-field-explorer \
               usr/share/applications/vector-field-explorer.desktop \
               usr/share/doc/vector-field-explorer/README.md \
-              usr/share/doc/vector-field-explorer/LICENSE; do
+              usr/share/doc/vector-field-explorer/LICENSE \
+              usr/share/doc/vector-field-explorer/THIRD_PARTY_LICENSES.md; do
               if [ ! -e "${root}/${required}" ]; then
                 echo "::error::AppImage is missing ${required}"
                 exit 1
@@ -301,8 +304,8 @@ jobs:
               exit 1
             fi
             file "${app}/Contents/Resources/vector-field-explorer.icns"
-            cp README.md LICENSE dist/
-            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE )
+            cp README.md LICENSE THIRD_PARTY_LICENSES.md dist/
+            ( cd dist && zip -q -r "../${name}.zip" vector-field-explorer.app README.md LICENSE THIRD_PARTY_LICENSES.md )
             echo "asset=${name}.zip" >> "$GITHUB_OUTPUT"
           fi
 
