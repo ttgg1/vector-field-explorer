@@ -39,6 +39,7 @@ const VIEW_2D_BINDINGS: &[(&str, &str)] = &[
 ];
 
 const GLOBAL_BINDINGS: &[(&str, &str)] = &[
+    ("Space", "Play/pause simulation; particles follow the clock"),
     ("F1 / ?", "Toggle help"),
     ("Ctrl+B / Ctrl+P", "Toggle panels (not while typing)"),
     ("Ctrl+Shift+S", "Export screenshot"),

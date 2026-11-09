@@ -13,6 +13,7 @@ use eframe::egui;
 use crate::camera::OrbitCamera;
 use crate::fly_camera::{FlyCamera, toggle_fly};
 use crate::render::Camera;
+use crate::sim_clock::SimClock;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::viewmodel::State;
@@ -316,6 +317,9 @@ pub struct UiState<'a> {
     pub camera: &'a mut Camera,
     pub state: &'a mut State,
     pub controls: &'a mut Controls,
+    /// The one simulation clock (ticket 26): `Reset all controls` returns it to
+    /// a fresh session's time 0, playing, 1x.
+    pub clock: &'a mut SimClock,
 }
 
 /// Apply `action` to the UI state and report what the app must still do.
@@ -329,6 +333,10 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             // the document, the controls are how it is displayed.
             *ui.controls = Controls::new();
             sidebar::apply(ui.state, ui.controls);
+            // The transport is session state, not part of the Controls panel,
+            // but "Reset all controls" means a fresh session: time 0, playing,
+            // 1x. The particle cloud itself is left alone.
+            *ui.clock = SimClock::default();
             SideEffect::None
         }
         MenuAction::ToggleControls => {

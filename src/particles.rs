@@ -5,8 +5,8 @@
 //! cloud by the frame's stable dt every frame, so motion reads as flow rather
 //! than as a static sampling. Each particle takes one RK4 step through the
 //! field per [`advect`] call — the same 4-evaluation step the streamline tracer
-//! uses, but with a time step derived from the frame (`dt * speed`) instead of
-//! from a fixed arc-length budget.
+//! uses, but with the simulation clock's speed-scaled frame step instead of a
+//! fixed arc-length budget (ticket 26).
 //!
 //! The cloud's size is constant: a particle that sits outside the domain, hits
 //! a zero-velocity point, turns non-finite or steps out of the domain is
@@ -254,22 +254,22 @@ pub fn spawn_at(
     added
 }
 
-/// Advect every particle by one RK4 step for the frame's `dt` (seconds) scaled
-/// by the speed slider, respawning the ones that leave the domain, hit zero
-/// velocity or turn non-finite. The cloud keeps its size.
-pub fn advect(particles: &mut Particles, field: &FieldExpr, domain: &Domain, dt: f32, speed: f32) {
-    if !(dt.is_finite() && dt > 0.0) {
+/// Advect every particle by one RK4 step of `step` simulated seconds — the
+/// [`SimClock`](crate::sim_clock::SimClock)'s clamped, speed-scaled frame step
+/// — respawning the ones that leave the domain, hit zero velocity or turn
+/// non-finite. The cloud keeps its size; a zero or non-finite step is a no-op,
+/// so a paused clock leaves every particle exactly where it was.
+pub fn advect(particles: &mut Particles, field: &FieldExpr, domain: &Domain, step: f32) {
+    if !(step.is_finite() && step > 0.0) {
         return;
     }
-    let step = if speed.is_finite() { speed.max(0.0) } else { 1.0 };
-    let h = dt * step;
     let region = spawn_box(domain);
     let mut state = particles.rng;
     let mut next = Vec::with_capacity(particles.pos.len());
     for i in 0..particles.pos.len() {
         state = lcg_next(state);
         let p = particles.pos[i];
-        let q = if inside(domain, p) { rk4_step(field, p, h) } else { Vec3::splat(NAN_F32) };
+        let q = if inside(domain, p) { rk4_step(field, p, step) } else { Vec3::splat(NAN_F32) };
         next.push(if q.is_finite() && inside(domain, q) { q } else { jittered_point(region.center, region.band, state) });
     }
     particles.pos = next;

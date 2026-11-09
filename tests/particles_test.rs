@@ -173,17 +173,16 @@ fn spawn_is_reproducible() {
 }
 
 #[test]
-fn pump_field_speed_scales_the_step() {
-    // Pinned binding test: a pump field advances every particle by dt x speed
-    // (within RK4 slack), never past the domain, whatever the spawn jitter.
+fn pump_field_step_scales_the_move() {
+    // Pinned binding test: a pump field advances every particle by the clock's
+    // step (within RK4 slack), never past the domain, whatever the spawn jitter.
     let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
     let domain = Domain::default();
     let mut particles = Particles::default();
     spawn(&mut particles, &domain, 9, 3);
-    let dt = 0.016;
-    let speed = 1.0;
+    let step = 0.016;
     let before = positions(&particles);
-    advect(&mut particles, &field, &domain, dt, speed);
+    advect(&mut particles, &field, &domain, step);
     let after = positions(&particles);
     assert_eq!(before.len(), after.len(), "advect never changes the count");
     for i in 0..after.len() {
@@ -195,28 +194,28 @@ fn pump_field_speed_scales_the_step() {
             "still inside",
         );
         assert!(
-            (p.x - before[i].x) >= dt * speed * 0.5,
-            "advanced along the flow by dt x speed (within RK4 slack)",
+            (p.x - before[i].x) >= step * 0.5,
+            "advanced along the flow by the step (within RK4 slack)",
         );
         assert!(p.x <= 1.0, "never past the domain edge");
     }
 }
 
 #[test]
-fn speed_zero_leaves_particles_put() {
+fn zero_step_leaves_particles_put() {
     let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
     let domain = Domain::default();
     let mut particles = Particles::default();
     spawn(&mut particles, &domain, 11, 3);
     let before = positions(&particles);
-    advect(&mut particles, &field, &domain, 0.016, 0.0);
+    advect(&mut particles, &field, &domain, 0.0);
     let ps = positions(&particles);
     assert_eq!(ps.len(), 11, "the count is constant");
     for (i, p) in ps.iter().enumerate() {
         assert_eq!(
             *p,
             before[i],
-            "a speed of 0 leaves every particle exactly at its previous position",
+            "a zero step leaves every particle exactly at its previous position",
         );
         assert!(
             p.x >= domain.min.x && p.x <= domain.max.x
@@ -237,7 +236,7 @@ fn outside_particle_respawns_inside() {
         Vec3::splat(5.0),
         Vec3::new(5.0, 0.0, 0.0),
     ]);
-    advect(&mut particles, &field, &domain, 0.016, 1.0);
+    advect(&mut particles, &field, &domain, 0.016);
     let ps = positions(&particles);
     assert_eq!(ps.len(), 2, "respawning keeps the count");
     for p in &ps {
@@ -255,7 +254,7 @@ fn zero_velocity_particle_respawns() {
     let field = FieldExpr::parse("(0, 0)").expect("zero field parses");
     let domain = Domain::default();
     let mut particles = Particles::with_positions(vec![Vec3::splat(0.0)]);
-    advect(&mut particles, &field, &domain, 0.016, 1.0);
+    advect(&mut particles, &field, &domain, 0.016);
     let ps = positions(&particles);
     assert_eq!(ps.len(), 1, "the count is constant");
     let p = ps[0];
@@ -278,9 +277,9 @@ fn count_constant_under_vortex_advection() {
     spawn(&mut particles, &domain, target_count(density), 2);
     let base = count(&particles);
     assert!(base <= MAX_PARTICLES, "spawned count respects the cap");
-    let dt = 0.016;
+    let step = 0.016 * 2.0;
     for _ in 0..100 {
-        advect(&mut particles, &field, &domain, dt, 2.0);
+        advect(&mut particles, &field, &domain, step);
         assert_eq!(count(&particles), base, "count constant while pumping a vortex");
         assert!(count(&particles) <= MAX_PARTICLES, "and never exceeds the cap");
     }
@@ -302,8 +301,8 @@ fn respawn_stays_reproducible() {
     let mut b = Particles::default();
     a.pos = vec![Vec3::splat(5.0), Vec3::splat(-5.0), Vec3::new(0.0, 0.0, 9.0)];
     b.pos = vec![Vec3::splat(5.0), Vec3::splat(-5.0), Vec3::new(0.0, 0.0, 9.0)];
-    advect(&mut a, &field, &domain, 0.016, 1.0);
-    advect(&mut b, &field, &domain, 0.016, 1.0);
+    advect(&mut a, &field, &domain, 0.016);
+    advect(&mut b, &field, &domain, 0.016);
     assert_eq!(positions(&a), positions(&b), "respawns come from the same seeded stream");
 }
 

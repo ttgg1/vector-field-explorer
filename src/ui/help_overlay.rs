@@ -112,6 +112,10 @@ const ROWS_2D: &[HelpRow] = &[
 ];
 
 const ROWS_GLOBAL: &[HelpRow] = &[
+    HelpRow {
+        input: "Space",
+        action: "Play/pause simulation; particles follow the clock",
+    },
     HelpRow { input: "F1 / ?", action: "Toggle help" },
     HelpRow { input: "Ctrl+B / Ctrl+P", action: "Toggle panels (not while typing)" },
     HelpRow { input: "Ctrl+Shift+S", action: "Export screenshot" },

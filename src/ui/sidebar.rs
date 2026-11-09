@@ -1,6 +1,7 @@
 //! Left sidebar: every scene knob the widgets expose — sampling density,
-//! arrow length modes and magnitude scale, colormap and color range, streamlines and
-//! particles with their trace speed, and the six domain extrema.
+//! arrow length modes and magnitude scale, colormap and color range, streamlines
+//! and particles, and the six domain extrema. Transport speed lives in the
+//! strip under the formula bar (ticket 26), not here.
 //!
 //! Sections follow the agreed order (ticket 14): **Display → Features →
 //! Coloring → Domain**. Display and Features start open, the two less-used
@@ -41,8 +42,6 @@ use crate::viewmodel::{
     MAX_ARROW_SCALE,
     MIN_MAGNITUDE_SCALE,
     MAX_MAGNITUDE_SCALE,
-    MIN_SPEED,
-    MAX_SPEED,
     MIN_DOMAIN_EXTENT,
     MAX_DOMAIN_EXTENT,
     clamp_domain_extent,
@@ -214,7 +213,6 @@ pub struct Controls {
     pub color_max: f32,
     pub streamlines: bool,
     pub particles: bool,
-    pub speed: f32,
     pub domain_min: Vec3,
     pub domain_max: Vec3,
     /// Plane-by-plane mirror (ticket 23). The index is only handed to the
@@ -246,7 +244,6 @@ impl Controls {
             color_max: 1.0,
             streamlines: false,
             particles: false,
-            speed: 1.0,
             domain_min: domain.min,
             domain_max: domain.max,
             plane: PlaneView::default(),
@@ -270,12 +267,13 @@ impl Controls {
         self.plane_drag = false;
     }
 
-    /// Restore the Features section's defaults (traces off, speed 1).
+    /// Restore the Features section's defaults (traces off). Speed is not a
+    /// Features control since ticket 26: it belongs to the transport's clock,
+    /// so this reset leaves it alone.
     pub fn reset_features(&mut self) {
         let defaults = Controls::new();
         self.streamlines = defaults.streamlines;
         self.particles = defaults.particles;
-        self.speed = defaults.speed;
     }
 
     /// Restore the Coloring section's defaults (viridis, auto-fit, 0..1).
@@ -456,10 +454,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             .on_hover_text("Trace field lines from a grid of seeds");
         ui.checkbox(&mut controls.particles, "Particles")
             .on_hover_text("Animate dots carried by the field (3D view)");
-        ui.add(
-            egui::Slider::new(&mut controls.speed, MIN_SPEED..=MAX_SPEED).text("Trace speed"),
-        )
-        .on_hover_text("How fast traces advance, in grid cells per second");
     });
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
@@ -708,7 +702,6 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
     state.set_particles(controls.particles);
-    state.set_speed(controls.speed);
     // Domain extents are bounded here, before `set_domain`'s per-axis swap,
     // so the UI's `.range` and this handoff share one clamp.
     let domain_min = Vec3::new(
@@ -737,7 +730,6 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
     controls.particles = state.particles;
-    controls.speed = state.speed;
     controls.domain_min = state.domain.min;
     controls.domain_max = state.domain.max;
 }

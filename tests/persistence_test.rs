@@ -16,7 +16,7 @@ use vector_field_explorer::ui::style_panel::{
 };
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DOMAIN_EXTENT,
-    MIN_MAGNITUDE_SCALE, State,
+    MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State,
 };
 use vector_field_explorer::VfApp;
 
@@ -192,6 +192,49 @@ fn load_legacy(normalize: bool) -> AppSettings {
     load(Some(&storage))
 }
 
+#[test]
+fn a_legacy_speed_envelope_loads_and_streamlines_keep_the_fixed_budget() {
+    #[derive(serde::Serialize)]
+    struct SpeedOnlyView {
+        speed: f32,
+    }
+
+    #[derive(serde::Serialize)]
+    struct SpeedOnlySettings {
+        style: AppStyle,
+        view: SpeedOnlyView,
+    }
+
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(
+        &mut storage,
+        eframe::APP_KEY,
+        &SpeedOnlySettings {
+            style: AppStyle::default(),
+            view: SpeedOnlyView { speed: 2.7 },
+        },
+    );
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.speed, 2.7, "the obsolete key is still readable from an old envelope");
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+    assert_eq!(STREAMLINE_MAX_LEN, 120, "streamlines keep a fixed point budget, not the old speed");
+    assert!(state.set_formula("(-y, x)".to_string()));
+    assert!(state.set_streamlines(true));
+    assert!(
+        !state.snapshot().lines.is_empty(),
+        "streamlines still trace at the fixed budget after an old speed loads",
+    );
+
+    let mut rewritten = MemoryStorage::default();
+    save(&mut rewritten, &loaded);
+    let raw = rewritten.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    assert!(!raw.contains("speed"), "new records never write the obsolete key:\n{raw}");
+}
+
 fn configured() -> (State, Controls) {
     let mut state = State::new(false);
     let mut controls = Controls::new();
@@ -207,7 +250,6 @@ fn configured() -> (State, Controls) {
     controls.color_max = 3.0;
     controls.streamlines = true;
     controls.particles = true;
-    controls.speed = 2.2;
     controls.arrows = false;
     controls.arrow_style = ArrowStyle::Cylinder;
     controls.arrow_style_2d = ArrowStyle2D::Streamline;
@@ -490,7 +532,6 @@ fn every_view_value_round_trips() {
     assert_eq!(restored_state.color_max, state.color_max, "color max");
     assert_eq!(restored_state.streamlines, state.streamlines, "streamlines");
     assert_eq!(restored_state.particles, state.particles, "particles");
-    assert_eq!(restored_state.speed, state.speed, "speed");
     assert!(!restored_state.arrows, "the Show arrows toggle");
     assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
     assert_eq!(restored_state.arrow_style_2d, ArrowStyle2D::Streamline, "2D arrow style");
@@ -542,7 +583,6 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
             shaft_radius: -4.0,
             sides: 999,
         },
-        speed: f32::INFINITY,
         color_min: f32::NAN,
         color_max: f32::NEG_INFINITY,
         domain_min: [f32::NAN, 0.0, 0.0],
@@ -559,7 +599,6 @@ fn restore_clamps_and_sanitizes_a_hostile_record() {
         (MIN_MAGNITUDE_SCALE..=MAX_MAGNITUDE_SCALE).contains(&state.magnitude_scale),
         "the magnitude scale stays inside its documented bounds",
     );
-    assert!(state.speed.is_finite(), "an infinite speed falls back");
     assert!(state.color_min.is_finite() && state.color_max.is_finite());
     assert!(state.domain.min.is_finite() && state.domain.max.is_finite());
     assert!(state.domain.min.x < state.domain.max.x, "the domain stays a real box");

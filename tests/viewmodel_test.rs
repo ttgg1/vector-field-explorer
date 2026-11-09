@@ -14,7 +14,8 @@ use vector_field_explorer::sampling::ArrowData;
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D,
     MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MIN_DENSITY,
-    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, State, clamp_domain_extent, domain_between,
+    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, clamp_domain_extent,
+    domain_between,
 };
 
 #[test]
@@ -754,18 +755,12 @@ fn streamlines_run_in_both_modes_and_off_by_default() {
 }
 
 #[test]
-fn speed_slider_changes_streamline_length() {
-    let mut slow = State::new(false);
-    assert!(slow.set_formula("(-y, x)".to_string()), "switch the plane to a vortex");
-    assert!(slow.set_streamlines(true));
-    assert!(slow.set_speed(0.1), "crawling speed gives each line a small budget");
-    let mut fast = State::new(false);
-    assert!(fast.set_formula("(-y, x)".to_string()));
-    assert!(fast.set_streamlines(true));
-    assert!(fast.set_speed(3.0), "top speed grows the point budget per line");
-    let slow_lines = slow.snapshot().lines.len();
-    let fast_lines = fast.snapshot().lines.len();
-    assert!(fast_lines > slow_lines, "the budget, and so the length, follows the speed slider");
+fn streamlines_use_the_fixed_point_budget() {
+    assert_eq!(STREAMLINE_MAX_LEN, 120, "streamlines keep a fixed point budget");
+    let mut state = State::new(false);
+    assert!(state.set_formula("(-y, x)".to_string()), "switch the plane to a vortex");
+    assert!(state.set_streamlines(true));
+    assert!(!state.snapshot().lines.is_empty(), "the static trace still draws");
 }
 
 #[test]

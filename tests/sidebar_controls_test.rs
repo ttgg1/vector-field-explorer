@@ -37,7 +37,6 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
     assert_eq!(c.color_max, s.color_max, "color max agrees");
     assert_eq!(c.streamlines, s.streamlines, "streamlines start off");
     assert_eq!(c.particles, s.particles, "particles start off");
-    assert_eq!(c.speed, s.speed, "speed agrees");
     assert_eq!(c.domain_min, s.domain.min, "domain min agrees");
     assert_eq!(c.domain_max, s.domain.max, "domain max agrees");
     assert_eq!(c.plane, s.plane, "the plane mirror starts where the seam does");
@@ -78,7 +77,6 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_color_range(c.color_min, c.color_max));
     assert!(!s.set_streamlines(c.streamlines));
     assert!(!s.set_particles(c.particles));
-    assert!(!s.set_speed(c.speed));
     assert!(!s.set_domain(c.domain_min, c.domain_max), "synced extrema are a no-op");
     assert!(s.snapshot_if_dirty().is_none(), "an untouched frame rebuilds nothing");
 }
@@ -201,9 +199,6 @@ fn every_control_dirties_the_scene_through_apply() {
     c.particles = true;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "particles stub still flows state");
-    c.speed = 2.0;
-    apply(&mut s, &mut c);
-    assert!(s.snapshot_if_dirty().is_some(), "speed slider flows to the seam");
     c.domain_max.x = 0.5;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "domain extrema dirty the scene");

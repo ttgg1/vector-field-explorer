@@ -17,6 +17,7 @@ pub mod render;
 pub mod renderer;
 pub mod sampling;
 pub mod screenshot;
+pub mod sim_clock;
 pub mod streamlines;
 pub mod ui;
 pub mod version;

@@ -8,6 +8,7 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::fly_camera::FlyCamera;
 use vector_field_explorer::render::Camera;
+use vector_field_explorer::sim_clock::SimClock;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::menu::{
     self, ABOUT_LICENSE, ABOUT_URL, ABOUT_VERSION, MenuAction, SHORTCUTS, SideEffect, UiState,
@@ -25,6 +26,7 @@ struct Fixture {
     camera: Camera,
     state: State,
     controls: Controls,
+    clock: SimClock,
 }
 
 impl Fixture {
@@ -36,6 +38,7 @@ impl Fixture {
             camera: Camera::default(),
             state: State::new(false),
             controls: Controls::new(),
+            clock: SimClock::default(),
         }
     }
 
@@ -47,6 +50,7 @@ impl Fixture {
             camera: &mut self.camera,
             state: &mut self.state,
             controls: &mut self.controls,
+            clock: &mut self.clock,
         }
     }
 }

@@ -42,9 +42,6 @@ pub const MAX_ARROW_SCALE: f32 = 4.0;
 pub const MIN_MAGNITUDE_SCALE: f32 = 0.01;
 pub const MAX_MAGNITUDE_SCALE: f32 = 10.0;
 pub const DEFAULT_MAGNITUDE_SCALE: f32 = 1.0;
-/// Bounds of the particle and streamline speed slider.
-pub const MIN_SPEED: f32 = 0.1;
-pub const MAX_SPEED: f32 = 3.0;
 /// Bounds of one domain extent, world units. The editor keeps the sampled box
 /// finite and in a range where a drag move is still meaningful; the seam's
 /// [`clamp_domain_extent`] is the single place both the widgets and the
@@ -53,6 +50,10 @@ pub const MIN_DOMAIN_EXTENT: f32 = -100.0;
 pub const MAX_DOMAIN_EXTENT: f32 = 100.0;
 /// Line width streamlines are painted with, world units.
 pub const STREAMLINE_WIDTH: f32 = 0.012;
+/// Fixed point budget per streamline. Streamlines are not clock consumers, so
+/// their length no longer follows a speed slider; the transport's clock speed
+/// only animates particles (ticket 26).
+pub const STREAMLINE_MAX_LEN: usize = 120;
 /// Seed jitter as a fraction of a seed-grid cell (`seed_grid` caps it below
 /// half a cell so lattice neighbours never swap).
 pub const STREAMLINE_JITTER: f32 = 0.45;
@@ -142,7 +143,6 @@ pub struct State {
     pub arrow_params: ArrowParams,
     pub streamlines: bool,
     pub particles: bool,
-    pub speed: f32,
     /// Which sampled slice plane-by-plane mode highlights (ticket 23).
     pub plane: PlaneView,
     pub dirty: bool,
@@ -191,7 +191,6 @@ impl State {
             arrow_params: ArrowParams::default(),
             streamlines: false,
             particles: false,
-            speed: 1.0,
             plane: PlaneView::middle(grid),
             dirty: true,
         }
@@ -389,16 +388,6 @@ impl State {
         self.mark_dirty()
     }
 
-    /// How fast traces move, a multiple of the grid spacing per second.
-    pub fn set_speed(self: &mut State, speed: f32) -> bool {
-        let speed = speed.clamp(MIN_SPEED, MAX_SPEED);
-        if self.speed == speed {
-            return false;
-        }
-        self.speed = speed;
-        self.mark_dirty()
-    }
-
     /// The plane-by-plane selection, clamped into the current grid. The index
     /// is a user choice once the grid has more than one slice, so toggling the
     /// mode keeps it; only a grid change recentres it (see [`sync_plane`]).
@@ -565,9 +554,9 @@ impl State {
     /// across rebuilds, salt-keyed to the sampling grid so a density change
     /// reseeds), each seed RK4-traced through the field, one instance per
     /// segment coloured like the arrows it crosses — same magnitude range as
-    /// the arrows. The speed slider sets the per-line point budget and the
-    /// grid spacing sets the step scale, so streamlines advance at a
-    /// spacing-multiple per second comparable with arrows and particles.
+    /// the arrows. [`STREAMLINE_MAX_LEN`] sets the per-line point budget and
+    /// the grid spacing sets the step scale. Streamlines are a static trace,
+    /// not clock consumers, so the transport speed never changes their length.
     /// Both views trace the same RK4 [`streamlines::trace`] through the same
     /// 3D-sampled field: the pan/zoom view uses the jittered grid of the view
     /// plane, while the orbit view uses the same grid at the domain's mid-depth
@@ -592,14 +581,13 @@ impl State {
         lines
     }
 
-    /// The tracing parameters both seed sources share: the speed slider sets
-    /// the point budget (bounded inside the tracer's 400-point cap) and the
-    /// grid spacing sets the step scale, so lines advance at a comparable
-    /// spacing-multiple per second in either view.
+    /// The tracing parameters both seed sources share: a fixed point budget
+    /// ([`STREAMLINE_MAX_LEN`], bounded inside the tracer's own 400-point cap)
+    /// and a step scale from the grid spacing. Streamlines are static, so no
+    /// transport or particle setting changes these.
     fn streamline_opts(self: &State) -> StreamlineOpts {
-        let speed = if self.speed.is_finite() { self.speed.clamp(MIN_SPEED, MAX_SPEED) } else { 1.0 };
         StreamlineOpts {
-            max_len: (120.0 * speed).round() as usize,
+            max_len: STREAMLINE_MAX_LEN,
             step_scale: 0.5 * self.spacing(),
             both_directions: true,
         }

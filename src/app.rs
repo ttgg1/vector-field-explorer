@@ -13,6 +13,7 @@ use crate::renderer::{
     sort_scene_back_to_front, sorted_arrows_back_to_front,
 };
 use crate::screenshot::{self, Instant, Screenshot};
+use crate::sim_clock::SimClock;
 use crate::streamlines::click_seed;
 use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
@@ -132,6 +133,10 @@ pub struct VfApp {
     /// only; its per-frame dots ramp with `dots_range`, the same magnitude
     /// range the arrows were coloured with at the last scene rebuild.
     particles: Particles,
+    /// The one simulation clock (ticket 26): the only time source for the
+    /// particle cloud. Transient by design — never persisted, so every session
+    /// starts at time 0, playing, 1x.
+    pub clock: SimClock,
     dots_range: (f32, f32),
     /// Where the user clicked in the viewport (ticket 06), bounded by
     /// [`MAX_CLICK_SEEDS`] and oldest-first. The viewmodel turns each pick into
@@ -217,6 +222,7 @@ impl VfApp {
             renderer_ready: false,
             streamline_count: 0,
             particles: Particles::default(),
+            clock: SimClock::default(),
             dots_range: (0.0, 1.0),
             click_seeds: Vec::new(),
             last_click_seed: None,
@@ -240,6 +246,7 @@ impl VfApp {
                 camera: &mut self.camera,
                 state: &mut self.state,
                 controls: &mut self.sidebar,
+                clock: &mut self.clock,
             },
         );
         match effect {
@@ -482,6 +489,20 @@ impl eframe::App for VfApp {
             self.apply_menu_action(action, &ctx);
         }
 
+        // Space is the transport's play/pause (ticket 26). The helper is inert
+        // while a text field owns the keyboard or no clock consumer exists,
+        // and consumes the key so a focused widget never also activates.
+        crate::ui::transport::toggle_on_space(&ctx, &self.state, &mut self.clock);
+
+        // One global clock advances once per frame from egui's stable frame
+        // time, but only while something consumes it. `advance_for` clamps to
+        // MAX_STEP, ignores non-finite frames, holds the held time while
+        // particles are off/in 2D or paused, and resumes from that time when a
+        // consumer returns. A long idle gap still cannot make the particle
+        // cloud jump.
+        self.clock
+            .advance_for(&self.state, ctx.input(|input| input.stable_dt));
+
         // Camera keys (ticket 18): arrows, `+`/`-`, `R` and `F` feed the same
         // view-command seam as the double-click and the camera buttons. The
         // loop is inert while a text field has focus, so the formula bar keeps
@@ -529,6 +550,12 @@ impl eframe::App for VfApp {
         // and the dirty flag.
         egui::Panel::top("formula_bar").show(ui, |ui| {
             crate::ui::formula_bar::show(ui, &mut self.state, &mut self.bar);
+            // The transport is a compact strip, not a panel: it appears in the
+            // same top panel directly under the formula row, and only while a
+            // clock consumer exists (ticket 26).
+            if crate::sim_clock::transport_visible(&self.state) {
+                crate::ui::transport::show(ui, &mut self.clock, false);
+            }
         });
 
         // Free flight is 3D-only: the formula bar's 2D/3D toggle (or a formula
@@ -693,16 +720,21 @@ impl eframe::App for VfApp {
 
         // Particle cloud: while the toggle is on (3D view only — the 2D
         // camera has no depth for the dots to sit in), keep the cloud alive,
-        // advect it by the frame's stable dt and rebuild the dot instances so
-        // they ride the same color_range as the arrows. Placed after the
-        // dirty-rebuild block so this frame's dots already see a fresh
-        // density/speed, and before the status bar so its count includes them.
+        // advance it by the simulation clock's step and rebuild the dot
+        // instances so they ride the same color_range as the arrows. A paused
+        // clock reports a zero step, so the cloud keeps its last positions.
+        // Placed after the dirty-rebuild block so this frame's dots already see
+        // a fresh density, and before the status bar so its count includes them.
         if self.state.particles && self.state.mode_3d {
             if particle_count(&self.particles) == 0 {
                 spawn(&mut self.particles, &self.state.domain, target_count(self.state.density), 3);
             }
-            let dt = ui.ctx().input(|i| i.stable_dt).max(0.0);
-            advect(&mut self.particles, &self.state.field, &self.state.domain, dt, self.state.speed);
+            advect(
+                &mut self.particles,
+                &self.state.field,
+                &self.state.domain,
+                self.clock.step_dt(),
+            );
             self.scene.dots = Arc::new(
                 dot_instances(
                     &self.particles,
@@ -724,6 +756,11 @@ impl eframe::App for VfApp {
             // because the toggle marks the state dirty.
             clear(&mut self.particles);
         }
+
+        // Keep egui painting only while something consumes the clock (particles
+        // on in 3D and playing). Paused or consumer-free frames request
+        // nothing, so the app goes idle instead of busy-looping.
+        crate::ui::transport::request_particle_repaint(ui.ctx(), &self.state, &self.clock);
 
         // Bottom status bar: the parse state (red when bad) plus how many
         // field-geometry instances are being painted — arrows, streamline

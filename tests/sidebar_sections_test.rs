@@ -33,7 +33,6 @@ fn each_reset_restores_only_its_own_section() {
     controls.color_max = 9.0;
     controls.streamlines = true;
     controls.particles = true;
-    controls.speed = 2.7;
     controls.domain_min = Vec3::splat(-5.0);
     controls.domain_max = Vec3::splat(5.0);
 
@@ -43,13 +42,11 @@ fn each_reset_restores_only_its_own_section() {
     assert_eq!(controls.arrow_length_mode, defaults.arrow_length_mode);
     assert_eq!(controls.magnitude_scale, defaults.magnitude_scale);
     assert_eq!(controls.colormap, Colormap::Turbo, "Display reset leaves Coloring alone");
-    assert_eq!(controls.speed, 2.7, "Display reset leaves Features alone");
     assert_eq!(controls.domain_max, Vec3::splat(5.0), "Display reset leaves Domain alone");
 
     controls.reset_features();
     assert!(!controls.streamlines);
     assert!(!controls.particles);
-    assert_eq!(controls.speed, defaults.speed);
     assert_eq!(controls.colormap, Colormap::Turbo, "Features reset leaves Coloring alone");
 
     controls.reset_coloring();

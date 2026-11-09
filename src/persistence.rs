@@ -93,6 +93,10 @@ pub struct ViewRecord {
     pub arrow_params: ArrowParams,
     pub streamlines: bool,
     pub particles: bool,
+    /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
+    /// envelopes still carry the key, but the simulation clock owns speed now
+    /// and streamlines use a fixed budget. New records never write it.
+    #[serde(default, skip_serializing)]
     pub speed: f32,
 }
 
@@ -126,7 +130,9 @@ impl ViewRecord {
             arrow_params: state.arrow_params,
             streamlines: state.streamlines,
             particles: state.particles,
-            speed: state.speed,
+            // Never written; kept at the serde default for old-record
+            // compatibility only.
+            speed: 0.0,
         }
     }
 
@@ -159,7 +165,8 @@ impl ViewRecord {
         controls.arrow_params = self.arrow_params.sanitized();
         controls.streamlines = self.streamlines;
         controls.particles = self.particles;
-        controls.speed = finite_or(self.speed, defaults.speed);
+        // `self.speed` is read-only legacy data and deliberately ignored: the
+        // transport clock owns speed and streamlines use a fixed budget.
         // Raw components: `sidebar::apply` is the one place that bounds the
         // extents, swaps a reversed pair and keeps the previous value for NaN.
         controls.domain_min = Vec3::from_array(self.domain_min);
