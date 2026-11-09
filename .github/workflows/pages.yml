@@ -2,8 +2,14 @@ name: Pages
 
 # Ticket 16a: publish the wasm build and the static native-download page to
 # https://ttgg1.github.io/vector-field-explorer/. This workflow is prepared but
-# inert until the repository is public and Pages is enabled (ticket 63/16b);
-# it only ever triggers on `main` or by hand, never on a feature branch.
+# inert until the repository is public, Pages is enabled, and v0.1.0 exists
+# (ticket 63/16b/19). The push trigger is main-only; a manual
+# `workflow_dispatch` can be started from any branch, so both jobs pin
+# `github.ref == 'refs/heads/main'` and a dispatch from a feature branch only
+# builds/skips without deploying.
+#
+# Once the `github-pages` environment exists, restrict its deployment branches
+# and tags to `main` as defense in depth.
 #
 # Do not add a `pull_request` trigger: a fork could not read the deployment
 # secrets, and this workflow only produces the production site.
@@ -19,9 +25,13 @@ on:
       - 'Trunk.toml'
       - 'web/**'
       - 'site/**'
+      - 'docs/images/**'
+      - 'scripts/check-site.sh'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
+# `contents: read` is required by actions/checkout now that the workflow sets
+# explicit permissions; without it checkout cannot read the repository.
 permissions:
   contents: read
   pages: write
@@ -33,6 +43,8 @@ concurrency:
 
 jobs:
   build:
+    # A manual dispatch can select any ref; only main is deployable.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +59,7 @@ jobs:
         with:
           tool: trunk@0.22.1
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       # The project site lives under /vector-field-explorer/, so the base path
       # must be explicit; Trunk.toml does not set a competing public_url.
       - name: Build the browser app
@@ -62,12 +74,15 @@ jobs:
       - name: Check the site artifact
         run: scripts/check-site.sh
       - name: Upload the Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
   deploy:
     needs: build
+    # Same main-only guard as build; the environment should also be restricted
+    # to main once it exists.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -75,4 +90,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
