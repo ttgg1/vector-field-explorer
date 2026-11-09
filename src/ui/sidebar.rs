@@ -35,6 +35,9 @@ use crate::viewmodel::{
     MAX_ARROW_SCALE,
     MIN_SPEED,
     MAX_SPEED,
+    MIN_DOMAIN_EXTENT,
+    MAX_DOMAIN_EXTENT,
+    clamp_domain_extent,
 };
 use glam::Vec3;
 
@@ -70,6 +73,53 @@ impl Section {
     /// Coloring and Domain keep their space until the user asks for them.
     pub fn default_open(self) -> bool {
         matches!(self, Section::Display | Section::Features)
+    }
+}
+
+/// The effective domain box as the Domain header's summary line, e.g.
+/// `x -1…1 · y -1…1 · z -1…1`. `include_z` is false when the view is 2D, so
+/// the header never advertises an extent the user cannot see or sample
+/// (ticket 50 passes the same flag to the row list). Numbers are rounded to at
+/// most two decimals and integers lose their trailing `.00`, which keeps the
+/// line short enough for the panel's 180 pt minimum.
+pub fn domain_summary(domain: &Domain, include_z: bool) -> String {
+    let axis = |name: &str, lo: f32, hi: f32| {
+        format!("{name} {}…{}", extent_text(lo), extent_text(hi))
+    };
+    let mut parts = vec![
+        axis("x", domain.min.x, domain.max.x),
+        axis("y", domain.min.y, domain.max.y),
+    ];
+    if include_z {
+        parts.push(axis("z", domain.min.z, domain.max.z));
+    }
+    parts.join(" · ")
+}
+
+/// One number in [`domain_summary`]: an integer when it rounds to one, else
+/// at most two decimals with trailing zeros trimmed. Non-finite values cannot
+/// reach the state, but the summary still renders something harmless if one
+/// appears in a mirror mid-edit.
+fn extent_text(value: f32) -> String {
+    if !value.is_finite() {
+        return "0".to_string();
+    }
+    let rounded = if value.abs() < 0.005 {
+        0.0
+    } else {
+        (value * 100.0).round() / 100.0
+    };
+    if rounded.fract() == 0.0 {
+        format!("{}", rounded as i64)
+    } else {
+        let mut text = format!("{rounded:.2}");
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+        text
     }
 }
 
@@ -182,7 +232,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     }
     let mut commit_plane = false;
 
-    section(ui, Section::Display, controls, |ui, controls| {
+    section(ui, Section::Display, controls, None, |ui, controls| {
         ui.horizontal(|ui| {
             ui.label(if sampling_3d { "Density (n³)" } else { "Density (n²)" });
             ui.add(egui::DragValue::new(&mut controls.density).range(MIN_DENSITY..=max_density))
@@ -200,7 +250,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         }
     });
 
-    section(ui, Section::Features, controls, |ui, controls| {
+    section(ui, Section::Features, controls, None, |ui, controls| {
         ui.checkbox(&mut controls.streamlines, "Streamlines")
             .on_hover_text("Trace field lines from a grid of seeds");
         ui.checkbox(&mut controls.particles, "Particles")
@@ -211,7 +261,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         .on_hover_text("How fast traces advance, in grid cells per second");
     });
 
-    section(ui, Section::Coloring, controls, |ui, controls| {
+    section(ui, Section::Coloring, controls, None, |ui, controls| {
         ui.horizontal(|ui| {
             ui.label("Colormap");
             for colormap in Colormap::ALL {
@@ -234,34 +284,30 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     });
 
     // Six extrema; reversed drags are handed over as-is and the seam's
-    // per-axis swap normalizes them (mirrored back below so the widgets
-    // show the effective box).
-    section(ui, Section::Domain, controls, |ui, controls| {
-        ui.horizontal(|ui| {
-            ui.label("x:");
-            ui.add(egui::DragValue::new(&mut controls.domain_min.x).speed(0.01));
-            ui.label("to");
-            ui.add(egui::DragValue::new(&mut controls.domain_max.x).speed(0.01));
-        })
-        .response
-        .on_hover_text("Sampled x extent, world units");
-        ui.horizontal(|ui| {
-            ui.label("y:");
-            ui.add(egui::DragValue::new(&mut controls.domain_min.y).speed(0.01));
-            ui.label("to");
-            ui.add(egui::DragValue::new(&mut controls.domain_max.y).speed(0.01));
-        })
-        .response
-        .on_hover_text("Sampled y extent, world units");
-        ui.horizontal(|ui| {
-            ui.label("z:");
-            ui.add(egui::DragValue::new(&mut controls.domain_min.z).speed(0.01));
-            ui.label("to");
-            ui.add(egui::DragValue::new(&mut controls.domain_max.z).speed(0.01));
-        })
-        .response
-        .on_hover_text("Sampled z extent, world units");
-    });
+    // per-axis swap normalizes them (mirrored back below so the widgets show
+    // the effective box). The header summary shows the box while collapsed;
+    // z is omitted in 2D (ticket 50 hides the row itself later).
+    section(
+        ui,
+        Section::Domain,
+        controls,
+        Some(domain_summary(&state.domain, sampling_3d)),
+        |ui, controls| {
+            domain_axis_row(ui, "x", &mut controls.domain_min.x, &mut controls.domain_max.x);
+            domain_axis_row(ui, "y", &mut controls.domain_min.y, &mut controls.domain_max.y);
+            domain_axis_row(ui, "z", &mut controls.domain_min.z, &mut controls.domain_max.z);
+            ui.add_space(ui.spacing().item_spacing.y);
+            if ui
+                .button("Reset domain")
+                .on_hover_text("Restore x, y, z to -1…1")
+                .clicked()
+            {
+                // Same seam as the generic header button, so there is one
+                // reset path.
+                controls.reset_domain();
+            }
+        },
+    );
 
     // Hand the whole mirror to the seam (below); the rebuild that the dirty
     // flag asks for happens in app.rs right after this panel, so this frame's
@@ -342,11 +388,42 @@ fn plane_controls(
     commit
 }
 
+/// One axis's min/max row: the axis label names the component, both drag
+/// values are bounded by the seam's single extent range, and the tooltips name
+/// the world-unit meaning. The row is the same in 2D and 3D for now; ticket 50
+/// will decide which rows to render.
+fn domain_axis_row(ui: &mut egui::Ui, axis: &str, min: &mut f32, max: &mut f32) {
+    ui.horizontal(|ui| {
+        ui.label(format!("{axis}:"));
+        ui.add(
+            egui::DragValue::new(min)
+                .speed(0.01)
+                .range(MIN_DOMAIN_EXTENT..=MAX_DOMAIN_EXTENT)
+                .max_decimals(2),
+        )
+        .on_hover_text(format!("Minimum {axis} of the sampled box, world units"));
+        ui.label("to");
+        ui.add(
+            egui::DragValue::new(max)
+                .speed(0.01)
+                .range(MIN_DOMAIN_EXTENT..=MAX_DOMAIN_EXTENT)
+                .max_decimals(2),
+        )
+        .on_hover_text(format!("Maximum {axis} of the sampled box, world units"));
+    })
+    .response
+    .on_hover_text(format!("Sampled {axis} extent, world units"));
+}
+
 /// One collapsible section with a reset-to-defaults button in its header.
+/// `summary`, when present, is a second header line that stays visible while
+/// the section is collapsed (the Domain box needs to be readable without
+/// opening it).
 fn section(
     ui: &mut egui::Ui,
     section: Section,
     controls: &mut Controls,
+    summary: Option<String>,
     body: impl FnOnce(&mut egui::Ui, &mut Controls),
 ) {
     let id = ui.make_persistent_id(("controls_section", section.title()));
@@ -356,17 +433,16 @@ fn section(
         id,
         section.default_open(),
     )
-    .show_header(ui, |ui| {
-        ui.label(egui::RichText::new(section.title()).strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Full-size button, not `small_button`: the section action gets a
-            // normal click target. (In egui 0.37 `small_button` only trims
-            // vertical padding, so this is about target size, not type size.)
-            reset = ui
-                .button("Reset")
-                .on_hover_text(format!("Reset {} to defaults", section.title()))
-                .clicked();
-        });
+    .show_header(ui, |ui| match summary {
+        Some(summary) => {
+            ui.vertical(|ui| {
+                section_header_line(ui, section, &mut reset);
+                ui.add(egui::Label::new(summary).wrap()).on_hover_text(
+                    "Current sampled box, world units; drag the rows below to change it",
+                );
+            });
+        }
+        None => section_header_line(ui, section, &mut reset),
     })
     .body(|ui| body(ui, controls));
 
@@ -377,6 +453,33 @@ fn section(
             Section::Coloring => controls.reset_coloring(),
             Section::Domain => controls.reset_domain(),
         }
+    }
+}
+
+/// The title row every section header shares: the strong title and the
+/// generic reset button in the right-hand corner. The Domain header wraps this
+/// in a vertical layout to add its summary line.
+fn section_header_line(ui: &mut egui::Ui, section: Section, reset: &mut bool) {
+    ui.label(egui::RichText::new(section.title()).strong());
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Full-size button, not `small_button`: the section action gets a
+        // normal click target. (In egui 0.37 `small_button` only trims
+        // vertical padding, so this is about target size, not type size.)
+        *reset = ui
+            .button("Reset")
+            .on_hover_text(format!("Reset {} to defaults", section.title()))
+            .clicked();
+    });
+}
+
+/// Keep a dragged extent honest before the seam sees it: NaN has no direction,
+/// so the previous effective value stays (the box must not jump); every other
+/// value passes through the one bounded clamp.
+fn extent_or_previous(value: f32, previous: f32) -> f32 {
+    if value.is_nan() {
+        previous
+    } else {
+        clamp_domain_extent(value)
     }
 }
 
@@ -400,7 +503,19 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_streamlines(controls.streamlines);
     state.set_particles(controls.particles);
     state.set_speed(controls.speed);
-    state.set_domain(controls.domain_min, controls.domain_max);
+    // Domain extents are bounded here, before `set_domain`'s per-axis swap,
+    // so the UI's `.range` and this handoff share one clamp.
+    let domain_min = Vec3::new(
+        extent_or_previous(controls.domain_min.x, state.domain.min.x),
+        extent_or_previous(controls.domain_min.y, state.domain.min.y),
+        extent_or_previous(controls.domain_min.z, state.domain.min.z),
+    );
+    let domain_max = Vec3::new(
+        extent_or_previous(controls.domain_max.x, state.domain.max.x),
+        extent_or_previous(controls.domain_max.y, state.domain.max.y),
+        extent_or_previous(controls.domain_max.z, state.domain.max.z),
+    );
+    state.set_domain(domain_min, domain_max);
 
     controls.density = state.density;
     controls.arrow_scale = state.arrow_scale;

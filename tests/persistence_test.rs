@@ -12,7 +12,7 @@ use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
-use vector_field_explorer::viewmodel::State;
+use vector_field_explorer::viewmodel::{MAX_DOMAIN_EXTENT, MIN_DOMAIN_EXTENT, State};
 
 /// In-memory stand-in for eframe's disk-backed storage.
 #[derive(Default)]
@@ -231,4 +231,44 @@ fn a_bad_formula_in_the_record_keeps_the_last_good_field() {
     record.restore(&mut state, &mut controls);
     assert!(!state.parse_error.is_empty(), "the bad stored formula is reported, not hidden");
     assert!(state.field.eval3(Vec3::ZERO).is_some(), "a usable field stays in place");
+}
+
+#[test]
+fn restore_recovers_a_reversed_out_of_range_domain_per_axis() {
+    // A hand-edited or older record can carry extents outside the editor bound
+    // and a non-finite component. Restore must hand each component through the
+    // real `sidebar::apply` path: finite values clamp, reversed pairs still
+    // swap, and a non-finite component keeps the previous effective value
+    // rather than throwing away its finite neighbours.
+    let mut state = State::new(false);
+    assert!(
+        state.set_domain(Vec3::new(-0.5, -0.25, -2.0), Vec3::new(0.5, 0.25, 2.0)),
+        "seed a non-default previous box",
+    );
+    let mut controls = Controls::new();
+    let record = ViewRecord {
+        domain_min: [500.0, -50.0, f32::NAN],
+        domain_max: [-500.0, 50.0, f32::NAN],
+        ..Default::default()
+    };
+
+    record.restore(&mut state, &mut controls);
+
+    assert_eq!(
+        (state.domain.min.x, state.domain.max.x),
+        (MIN_DOMAIN_EXTENT, MAX_DOMAIN_EXTENT),
+        "out-of-range x clamps to the documented bound, then the reversed pair swaps",
+    );
+    assert_eq!(
+        (state.domain.min.y, state.domain.max.y),
+        (-50.0, 50.0),
+        "in-range y survives and keeps its direction",
+    );
+    assert_eq!(
+        (state.domain.min.z, state.domain.max.z),
+        (-2.0, 2.0),
+        "NaN z keeps the previous effective z extent",
+    );
+    assert_eq!(controls.domain_min, state.domain.min, "the mirror is refreshed");
+    assert_eq!(controls.domain_max, state.domain.max, "…for both corners");
 }

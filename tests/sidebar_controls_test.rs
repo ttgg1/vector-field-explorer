@@ -4,10 +4,14 @@
 // sidebar frame would change settings the user never touched (and the status
 // bar would count a scene the user never asked for).
 
-use vector_field_explorer::ui::sidebar::{Controls, apply};
+use vector_field_explorer::ui::sidebar::{Controls, apply, domain_summary};
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneView};
-use vector_field_explorer::viewmodel::{State, DEFAULT_DENSITY_2D, MAX_DENSITY_3D};
+use vector_field_explorer::viewmodel::{
+    State, DEFAULT_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MIN_DOMAIN_EXTENT, domain_between,
+};
+use glam::Vec3;
 
 #[test]
 fn sidebar_defaults_mirror_the_seam_defaults() {
@@ -176,4 +180,111 @@ fn every_control_dirties_the_scene_through_apply() {
     c.domain_max.x = 0.5;
     apply(&mut s, &mut c);
     assert!(s.snapshot_if_dirty().is_some(), "domain extrema dirty the scene");
+}
+
+// --- Domain summary, bounds and reset (ticket 32) ---------------------------
+
+#[test]
+fn domain_summary_is_stable_for_default_reversed_and_non_unit_boxes() {
+    assert_eq!(
+        domain_summary(&Domain::default(), true),
+        "x -1…1 · y -1…1 · z -1…1",
+        "the default unit cube reads as whole numbers",
+    );
+    assert_eq!(
+        domain_summary(&Domain::default(), false),
+        "x -1…1 · y -1…1",
+        "2D omits the z extent (ticket 50 passes the flag)",
+    );
+
+    // A reversed pair is normalised by the seam; the summary shows the
+    // effective box, not the raw drag mirror.
+    let reversed = domain_between(Vec3::new(2.0, -4.0, 0.5), Vec3::new(-2.0, 4.0, 1.5));
+    assert_eq!(domain_summary(&reversed, true), "x -2…2 · y -4…4 · z 0.5…1.5");
+
+    let fractional = Domain::new(Vec3::new(-2.5, 0.125, -0.004), Vec3::new(3.0, 4.0, 10.0));
+    assert_eq!(
+        domain_summary(&fractional, true),
+        "x -2.5…3 · y 0.13…4 · z 0…10",
+        "decimals stay short and negative zero is not printed",
+    );
+}
+
+#[test]
+fn domain_extents_are_clamped_before_the_seam_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.domain_min = Vec3::new(-500.0, 0.0, 0.0);
+    c.domain_max = Vec3::new(500.0, 2.0, 1.0);
+    apply(&mut s, &mut c);
+    assert_eq!(s.domain.min.x, MIN_DOMAIN_EXTENT, "the min drag cannot leave the bound");
+    assert_eq!(s.domain.max.x, MAX_DOMAIN_EXTENT, "the max drag cannot leave the bound");
+    assert_eq!(c.domain_min.x, MIN_DOMAIN_EXTENT, "the mirror shows the clamped value");
+    assert_eq!(c.domain_max.x, MAX_DOMAIN_EXTENT);
+    assert_eq!((s.domain.min.y, s.domain.max.y), (0.0, 2.0), "other axes are untouched");
+    assert!(s.snapshot_if_dirty().is_some(), "a clamped edit still changes the scene");
+}
+
+#[test]
+fn reversed_domain_still_swaps_after_clamping_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.domain_min = Vec3::new(500.0, 2.0, 0.0);
+    c.domain_max = Vec3::new(-500.0, -2.0, 1.0);
+    apply(&mut s, &mut c);
+    assert_eq!(
+        (s.domain.min.x, s.domain.max.x),
+        (MIN_DOMAIN_EXTENT, MAX_DOMAIN_EXTENT),
+        "clamp first, then the existing per-axis swap",
+    );
+    assert_eq!((s.domain.min.y, s.domain.max.y), (-2.0, 2.0), "the y pair swaps too");
+}
+
+#[test]
+fn nan_domain_edit_keeps_the_previous_extent_through_apply() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the fresh scene");
+    c.domain_min.x = f32::NAN;
+    c.domain_max.x = f32::NAN;
+    c.domain_min.y = 2.0;
+    c.domain_max.y = 3.0;
+    apply(&mut s, &mut c);
+    assert_eq!((s.domain.min.x, s.domain.max.x), (-1.0, 1.0), "NaN cannot enter the state");
+    assert_eq!(c.domain_min.x, -1.0, "the mirror falls back to the previous extent");
+    assert_eq!(c.domain_max.x, 1.0);
+    assert_eq!((s.domain.min.y, s.domain.max.y), (2.0, 3.0), "a valid axis still applies");
+}
+
+#[test]
+fn domain_reset_restores_all_axes_including_z_in_2d() {
+    let mut s = State::new(false);
+    assert!(s.set_domain(Vec3::splat(-5.0), Vec3::splat(5.0)), "a non-default box is stored");
+    let mut c = Controls::new();
+    c.domain_min = s.domain.min;
+    c.domain_max = s.domain.max;
+    assert_eq!(c.domain_min.z, -5.0, "2D still stores z");
+
+    // The header and body reset buttons both call this same seam.
+    c.reset_domain();
+    apply(&mut s, &mut c);
+    assert_eq!(s.domain, Domain::default(), "reset restores the unit cube");
+    assert_eq!(c.domain_min, Domain::default().min, "the mirror follows");
+    assert_eq!(c.domain_max, Domain::default().max);
+}
+
+#[test]
+fn domain_reset_clears_a_partial_unapplied_mirror_edit() {
+    // The Reset domain button acts on the local mirror before the next frame's
+    // `apply`; a stale partial edit must not survive it.
+    let mut controls = Controls::new();
+    controls.domain_min = Vec3::new(0.25, -2.0, f32::NAN);
+    controls.domain_max = Vec3::new(5.0, 3.0, -0.5);
+
+    controls.reset_domain();
+
+    assert_eq!(controls.domain_min, Vec3::splat(-1.0), "all three minima reset before apply");
+    assert_eq!(controls.domain_max, Vec3::splat(1.0), "all three maxima reset before apply");
 }

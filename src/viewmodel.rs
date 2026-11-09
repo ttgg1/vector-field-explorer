@@ -37,6 +37,12 @@ pub const MAX_ARROW_SCALE: f32 = 4.0;
 /// Bounds of the particle and streamline speed slider.
 pub const MIN_SPEED: f32 = 0.1;
 pub const MAX_SPEED: f32 = 3.0;
+/// Bounds of one domain extent, world units. The editor keeps the sampled box
+/// finite and in a range where a drag move is still meaningful; the seam's
+/// [`clamp_domain_extent`] is the single place both the widgets and the
+/// per-frame handoff take the bound from.
+pub const MIN_DOMAIN_EXTENT: f32 = -100.0;
+pub const MAX_DOMAIN_EXTENT: f32 = 100.0;
 /// Line width streamlines are painted with, world units.
 pub const STREAMLINE_WIDTH: f32 = 0.012;
 /// Seed jitter as a fraction of a seed-grid cell (`seed_grid` caps it below
@@ -555,6 +561,21 @@ pub fn domain_between(min: Vec3, max: Vec3) -> Domain {
         Vec3::new(min.x.min(max.x), min.y.min(max.y), min.z.min(max.z)),
         Vec3::new(min.x.max(max.x), min.y.max(max.y), min.z.max(max.z)),
     )
+}
+
+/// Clamp one domain extent into [`MIN_DOMAIN_EXTENT`]..=[`MAX_DOMAIN_EXTENT`].
+///
+/// This is the single bound the domain editor and its per-frame handoff use,
+/// so the widgets and the seam cannot drift apart. Infinities clamp to the
+/// nearer edge; NaN has no direction and becomes `0`. The call site keeps the
+/// *previous* extent for NaN instead (a dragged box should not jump to zero),
+/// but the pure function still promises a finite, in-range result.
+pub fn clamp_domain_extent(value: f32) -> f32 {
+    if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(MIN_DOMAIN_EXTENT, MAX_DOMAIN_EXTENT)
+    }
 }
 
 /// Radians of orbit per point of left-drag in the 3D view.

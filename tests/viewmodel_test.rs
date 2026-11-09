@@ -8,7 +8,8 @@ use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordi
 use vector_field_explorer::renderer::LineInstanceGPU;
 use vector_field_explorer::viewmodel::{
     DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, FORMULA_2D, FORMULA_3D, MAX_DENSITY_2D,
-    MAX_DENSITY_3D, MIN_DENSITY, State, domain_between,
+    MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MIN_DENSITY, MIN_DOMAIN_EXTENT, State, clamp_domain_extent,
+    domain_between,
 };
 
 #[test]
@@ -568,4 +569,27 @@ fn click_streamlines_are_deterministic_and_bounded_by_the_clicks() {
         s.click_streamlines_snapshot((0.0, 1.5), &[Vec3::new(9.0, 9.0, 9.0)]).is_empty(),
         "a click off the field draws nothing",
     );
+}
+
+#[test]
+fn clamp_domain_extent_is_finite_and_bounded() {
+    // The pure seam bound the sidebar hands extents through: finite values
+    // pass through inside the box, extremes clamp to the documented edge,
+    // and non-finite input still yields a usable number.
+    assert_eq!(clamp_domain_extent(5.0), 5.0, "an in-range extent is unchanged");
+    assert_eq!(clamp_domain_extent(-5.0), -5.0, "negative extents too");
+    assert_eq!(
+        clamp_domain_extent(MAX_DOMAIN_EXTENT + 1.0),
+        MAX_DOMAIN_EXTENT,
+        "above the ceiling clamps down",
+    );
+    assert_eq!(
+        clamp_domain_extent(MIN_DOMAIN_EXTENT - 1.0),
+        MIN_DOMAIN_EXTENT,
+        "below the floor clamps up",
+    );
+    assert_eq!(clamp_domain_extent(f32::INFINITY), MAX_DOMAIN_EXTENT, "+inf clamps down");
+    assert_eq!(clamp_domain_extent(f32::NEG_INFINITY), MIN_DOMAIN_EXTENT, "−inf clamps up");
+    assert_eq!(clamp_domain_extent(f32::NAN), 0.0, "NaN becomes a finite default");
+    assert!(clamp_domain_extent(1.0e30).is_finite(), "huge values stay finite");
 }

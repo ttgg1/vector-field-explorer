@@ -97,8 +97,10 @@ impl ViewRecord {
 
     /// Apply the record through the viewmodel setters (they own clamping,
     /// swapping and the dirty flag), then refresh the widget mirror with
-    /// [`sidebar::apply`]. Non-finite numbers fall back to the defaults so a
-    /// corrupt record cannot poison the sampling grid.
+    /// [`sidebar::apply`]. Non-finite domain components are left for that
+    /// handoff — NaN keeps the previous effective extent and infinities clamp
+    /// — while the other non-finite numbers fall back to defaults so a corrupt
+    /// record cannot poison the sampling grid.
     pub fn restore(&self, state: &mut State, controls: &mut Controls) {
         let defaults = Controls::new();
         state.set_mode(self.mode_3d);
@@ -114,8 +116,10 @@ impl ViewRecord {
         controls.streamlines = self.streamlines;
         controls.particles = self.particles;
         controls.speed = finite_or(self.speed, defaults.speed);
-        controls.domain_min = vec3_or(self.domain_min, defaults.domain_min);
-        controls.domain_max = vec3_or(self.domain_max, defaults.domain_max);
+        // Raw components: `sidebar::apply` is the one place that bounds the
+        // extents, swaps a reversed pair and keeps the previous value for NaN.
+        controls.domain_min = Vec3::from_array(self.domain_min);
+        controls.domain_max = Vec3::from_array(self.domain_max);
         sidebar::apply(state, controls);
     }
 }
@@ -123,15 +127,6 @@ impl ViewRecord {
 /// `value` when finite, `fallback` otherwise.
 pub fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
-}
-
-/// A finite `[f32; 3]`, or `fallback` if any component is corrupt.
-fn vec3_or(value: [f32; 3], fallback: Vec3) -> Vec3 {
-    if value.iter().all(|v| v.is_finite()) {
-        Vec3::from_array(value)
-    } else {
-        fallback
-    }
 }
 
 /// Load the settings envelope, migrating a ticket-07 bare `AppStyle` record and
