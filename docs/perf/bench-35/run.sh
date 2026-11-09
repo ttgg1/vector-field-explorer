@@ -7,12 +7,26 @@ bin="${VFE_BENCH_BIN:-target/release/vector-field-explorer}"
 out="${VFE_BENCH_OUT:-/tmp/vfe35}"
 mkdir -p "$out"
 
+# App scenes have no fixed frame count, so require at least one BENCH row.
+# GPU scenes are deterministic: one process emits six BENCHGPU rows
+# (clear/lines/trails/arrows/dots/scene).
+app_min_lines=1
+gpu_expected_lines=6
+status=0
+
 run() {
   local label="$1"; shift
   echo "=== $label ==="
   env VFE_BENCH_SECONDS=25 VFE_BENCH_LABEL="$label" RUST_LOG=info "$@" \
     timeout --kill-after=5s 60s "$bin" 2>"$out/$label.log"
-  echo "exit=$? lines=$(grep -c 'BENCH,' "$out/$label.log")"
+  local code=$?
+  local lines
+  lines=$(grep -c 'BENCH,' "$out/$label.log" || true)
+  echo "exit=$code lines=$lines"
+  if [ "$lines" -lt "$app_min_lines" ]; then
+    echo "FAIL $label: expected at least $app_min_lines BENCH line, got $lines" >&2
+    status=1
+  fi
 }
 
 run_gpu() {
@@ -21,7 +35,14 @@ run_gpu() {
   env VFE_BENCH_SECONDS="$seconds" VFE_BENCH_GPU=1 VFE_BENCH_LABEL="$label" \
     RUST_LOG=info "$@" \
     timeout --kill-after=5s 60s "$bin" 2>"$out/$label.log"
-  echo "exit=$? gpu_lines=$(grep -c 'BENCHGPU,' "$out/$label.log")"
+  local code=$?
+  local lines
+  lines=$(grep -c 'BENCHGPU,' "$out/$label.log" || true)
+  echo "exit=$code gpu_lines=$lines"
+  if [ "$lines" -ne "$gpu_expected_lines" ]; then
+    echo "FAIL $label: expected $gpu_expected_lines BENCHGPU lines, got $lines" >&2
+    status=1
+  fi
 }
 
 # 1. Default scene: fresh app defaults (2D Pump, density 24, arrows, no particles).
@@ -98,3 +119,5 @@ run_gpu gpu_worst_4000_t32 25 \
 run_gpu gpusmoke 8 \
   VFE_BENCH_MODE=3d VFE_BENCH_FORMULA='(x, y, z)' VFE_BENCH_DENSITY=16 \
   VFE_BENCH_ARROWS=1 VFE_BENCH_PARTICLES=1 VFE_BENCH_COUNT=4000 VFE_BENCH_TRAIL=32
+
+exit "$status"

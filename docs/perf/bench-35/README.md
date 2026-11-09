@@ -59,6 +59,9 @@ bash /tmp/bench-35/run.sh
 
 # analyze.py must read the runner's output directory, not a saved copy.
 python3 /tmp/bench-35/analyze.py /tmp/vfe35
+
+# Read the GPU microbenchmark rows.
+grep -h BENCHGPU /tmp/vfe35/gpu_*.log
 ```
 
 The runner invokes `timeout` and the release binary. App scenes run for 25 s and
@@ -72,6 +75,11 @@ was produced the same way; the raw logs themselves are local/untracked.
 `counts=` in `summary.txt` is the **first steady-window frame**, not a median.
 For `worst_3d_4000_trail32` the steady-window trail count (n=619) has median
 ≈31 800 segments and range ≈30 400–33 600; 33 255 is that first steady frame.
+
+**Durations.** The saved `gpu_*` phase rows came from ~9 s captures, while
+`BENCHGPU` values are sampled at frame 60 and do not depend on run duration.
+The current runner uses 25 s for the GPU scenes intentionally, to get steadier
+phase rows; those phase rows are not comparable to the saved ~9 s phase times.
 
 ## Local-only raw logs
 
