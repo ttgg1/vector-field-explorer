@@ -1,10 +1,10 @@
-//! Conventional top menu bar (ticket 15): File / Edit / View / Settings / Help
-//! plus the screenshot action at the right end. It replaces ticket 14's
-//! View/Settings/Help button row.
+//! Conventional top menu bar (ticket 15): File / Edit / View / Help, the
+//! top-bar Appearance gear, and the screenshot action at the right end. It
+//! replaces ticket 14's View/Settings/Help button row.
 //!
 //! The bar renders [`crate::ui::menu::MENUS`] and reports the picked
 //! [`MenuAction`]; the app applies it through `menu::apply_action`, so menu
-//! behaviour is testable without a window. The Settings popover and the About
+//! behaviour is testable without a window. The Appearance popover and the About
 //! dialog are the only stateful surfaces left here — they need egui anchoring
 //! and therefore cannot live in the pure seam.
 
@@ -13,6 +13,11 @@ use eframe::egui;
 use crate::screenshot::Screenshot;
 use crate::ui::menu::{self, MenuAction, MENUS};
 use crate::ui::style_panel::{self, AppStyle};
+
+/// The gear button that anchors the Appearance popover. Ticket 59 replaced the
+/// Settings menu (whose only item was Appearance…) with this button, leaving
+/// `View > Appearance…` as the one menu command.
+pub const APPEARANCE_BUTTON_LABEL: &str = "⚙";
 
 /// One point of wheel scroll zooms by `exp(rate * points)`: about 10.5% per
 /// typical 50-point notch, and the reciprocal when scrolling the other way.
@@ -76,21 +81,21 @@ pub fn dismisses_appearance_popover(
 
 /// Draw the menu bar. Returns the action the user picked (if any) and whether
 /// the appearance popover changed the style record (the app re-applies it in
-/// the same frame). `settings_open` is the popover's visibility flag, set by
-/// the Settings > Appearance… or View > Appearance… item.
+/// the same frame). `appearance_open` is the popover's visibility flag, toggled
+/// by the gear and set by the `View > Appearance…` command.
 pub fn show(
     ui: &mut egui::Ui,
     style: &mut AppStyle,
     screenshot: &Screenshot,
-    settings_open: &mut bool,
+    appearance_open: &mut bool,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
-    let mut settings_button = None;
+    let mut appearance_button = None;
 
     egui::MenuBar::new().ui(ui, |ui| {
         for menu in MENUS {
-            let response = ui.menu_button(menu.title, |ui| {
+            ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
                     let mut button = egui::Button::new(item.label);
                     if let Some(label) = menu::item_shortcut_label(item) {
@@ -104,11 +109,17 @@ pub fn show(
                     }
                 }
             });
-            if menu.title == menu::SETTINGS_TITLE {
-                // The appearance popover anchors under the Settings title.
-                settings_button = Some(response.response);
-            }
         }
+
+        // Ticket 59: the Settings menu held only Appearance…, so it is now a
+        // direct gear toggle that anchors the same popover as View > Appearance….
+        let gear = ui
+            .button(APPEARANCE_BUTTON_LABEL)
+            .on_hover_text("Appearance");
+        if gear.clicked() {
+            *appearance_open = !*appearance_open;
+        }
+        appearance_button = Some(gear);
 
         // The screenshot action lives at the right end of the bar and
         // dispatches the same ExportScreenshot action as File > Export.
@@ -124,7 +135,7 @@ pub fn show(
         });
     });
 
-    if let Some(button) = settings_button {
+    if let Some(button) = appearance_button {
         let mut accent_popup_id = egui::Id::NULL;
         let response = egui::Popup::new(
             button.id.with("appearance_popover"),
@@ -133,7 +144,7 @@ pub fn show(
             button.layer_id,
         )
         .anchor_widget(button.id)
-        .open_bool(settings_open)
+        .open_bool(appearance_open)
         // Dismissal is decided below, where the nested color picker's layer
         // can be excluded from "outside" (ticket 41).
         .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
@@ -154,14 +165,18 @@ pub fn show(
             let (any_click, click_pos) =
                 ui.ctx().input(|input| (input.pointer.any_click(), input.pointer.interact_pos()));
             let layer_under_pointer = click_pos.and_then(|pos| ui.ctx().layer_id_at(pos));
-            if dismisses_appearance_popover(
-                any_click,
-                click_pos,
-                popover.response.rect,
-                layer_under_pointer,
-                accent_layer,
-            ) {
-                *settings_open = false;
+            // The gear click that opens the popover is outside its rect this
+            // frame, so it must not immediately dismiss what it just opened.
+            if !button.clicked()
+                && dismisses_appearance_popover(
+                    any_click,
+                    click_pos,
+                    popover.response.rect,
+                    layer_under_pointer,
+                    accent_layer,
+                )
+            {
+                *appearance_open = false;
             }
         }
     }

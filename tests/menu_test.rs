@@ -104,7 +104,6 @@ fn the_bar_carries_the_v1_menu_table() {
                     "Appearance…",
                 ],
             ),
-            ("Settings", vec!["Appearance…"]),
             (
                 "Help",
                 vec!["Keyboard & mouse", "About Vector Field Explorer"],
@@ -130,8 +129,7 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::ResetCamera, SideEffect::ResetCamera),
         (MenuAction::ToggleHelp, SideEffect::None),
         (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
-        (MenuAction::OpenSettings, SideEffect::OpenSettings),
-        (MenuAction::OpenAppearance, SideEffect::OpenSettings),
+        (MenuAction::OpenAppearance, SideEffect::OpenAppearance),
         (MenuAction::About, SideEffect::ShowAbout),
     ];
     for (action, expected) in expected {
@@ -488,9 +486,9 @@ fn the_removed_view_help_overlay_entry_is_gone() {
 
 #[test]
 fn view_appearance_opens_the_existing_appearance_popover() {
-    // Ticket 41: the user looked for color controls under View. The View entry
-    // must dispatch the same side effect as Settings > Appearance, never a
-    // second picker or a parallel appearance surface.
+    // Ticket 59: View > Appearance… is the only menu command that opens the
+    // one Appearance popover. It must keep dispatching the open-appearance
+    // side effect, never a second picker or a parallel appearance surface.
     let view = menu::MENUS
         .iter()
         .find(|menu| menu.title == "View")
@@ -501,12 +499,38 @@ fn view_appearance_opens_the_existing_appearance_popover() {
         .find(|item| item.label == "Appearance…")
         .expect("View > Appearance… exists");
     assert_eq!(item.action, MenuAction::OpenAppearance);
+    assert_eq!(effect_of(item.action), SideEffect::OpenAppearance);
+}
+
+#[test]
+fn appearance_has_exactly_one_menu_home_and_it_is_under_view() {
+    // Ticket 59: Settings > Appearance… duplicated the command. The Settings
+    // menu is gone entirely, leaving View > Appearance… as the one menu route.
+    let homes: Vec<(&str, &str)> = menu::MENUS
+        .iter()
+        .flat_map(|menu| {
+            menu.items
+                .iter()
+                .filter(|item| item.action == MenuAction::OpenAppearance)
+                .map(move |item| (menu.title, item.label))
+        })
+        .collect();
     assert_eq!(
-        effect_of(item.action),
-        effect_of(MenuAction::OpenSettings),
-        "both entries raise the one Appearance popover",
+        homes,
+        vec![("View", "Appearance…")],
+        "one Appearance command, and it lives under View",
     );
-    assert_eq!(effect_of(item.action), SideEffect::OpenSettings);
+    assert!(
+        !menu::MENUS.iter().any(|menu| menu.title == "Settings"),
+        "the empty Settings menu is replaced by the top-bar gear, not kept",
+    );
+    assert!(
+        !menu::MENUS
+            .iter()
+            .flat_map(|menu| menu.items.iter())
+            .any(|item| item.label == "Appearance…" && item.action != MenuAction::OpenAppearance),
+        "no other menu item claims an Appearance label with a different action",
+    );
 }
 
 /// Run one egui pass with one `?` press and report what the real help-key

@@ -25,10 +25,6 @@ pub const COPY_FORMULA_SHORTCUT: &str = "Ctrl+Shift+C";
 pub const QUIT_SHORTCUT: &str = "Ctrl+Q";
 pub const HELP_SHORTCUT: &str = "F1";
 
-/// The Settings menu's title. The top bar captures that title's button to
-/// anchor the appearance popover it opens.
-pub const SETTINGS_TITLE: &str = "Settings";
-
 /// About dialog facts, all from the package metadata except the display name.
 /// The version is the compile-time seam, so a nightly build reports its
 /// `<version>-nightly.<date>+<sha>` string (ticket 42).
@@ -69,7 +65,6 @@ menu_actions! {
     ResetCamera,
     ToggleHelp,
     ShowHelpTable,
-    OpenSettings,
     OpenAppearance,
     About,
 }
@@ -80,8 +75,8 @@ menu_actions! {
 pub enum SideEffect {
     /// The action only mutated [`UiState`].
     None,
-    /// Show the appearance popover anchored to the Settings title.
-    OpenSettings,
+    /// Show the appearance popover anchored to the top-bar gear.
+    OpenAppearance,
     /// Show the About dialog.
     ShowAbout,
     /// Show the full keyboard & mouse window (all three help groups).
@@ -144,15 +139,10 @@ pub const MENUS: &[Menu] = &[
             MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
             MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
             // The user reported looking for color controls under View (ticket
-            // 41). This is deliberately a second entry point to the one
-            // Appearance popover, not a second picker: `OpenAppearance` maps
-            // to the same `SideEffect::OpenSettings`.
+            // 41). Ticket 59 removed the duplicate Settings entry, so this is
+            // the one menu command that opens the Appearance popover.
             MenuItem { label: "Appearance…", action: MenuAction::OpenAppearance },
         ],
-    },
-    Menu {
-        title: SETTINGS_TITLE,
-        items: &[MenuItem { label: "Appearance…", action: MenuAction::OpenSettings }],
     },
     Menu {
         title: "Help",
@@ -337,7 +327,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             SideEffect::None
         }
         MenuAction::ShowHelpTable => SideEffect::ShowHelp,
-        MenuAction::OpenSettings | MenuAction::OpenAppearance => SideEffect::OpenSettings,
+        MenuAction::OpenAppearance => SideEffect::OpenAppearance,
         MenuAction::About => SideEffect::ShowAbout,
     }
 }

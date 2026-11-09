@@ -1,6 +1,6 @@
 //! Ticket 41: the Appearance popover's accent color picker.
 //!
-//! The Settings > Appearance popover owns a nested egui color-picker popup.
+//! The Appearance popover owns a nested egui color-picker popup.
 //! That popup is a separate floating area, so a click on its widgets used to
 //! look like an outside click to the popover and closed the whole panel mid
 //! pick. These tests drive the real `top_bar::show` surface headlessly through

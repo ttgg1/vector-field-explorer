@@ -62,16 +62,16 @@ An expanded panel that stays open until collapsed; the app has no hover-preview
 panels.
 
 **Top menu bar**:
-The row above the formula bar hosting View, Settings, Help, and the screenshot
-action.
+The row above the formula bar hosting File, Edit, View, Help, the Appearance
+gear, and the screenshot action.
 
 **Formula bar**:
 The row holding the field-preset selector, the 2D/3D toggle, and the editable
 formula.
 
-**Settings popover**:
-A non-modal panel opened from the top menu bar for appearance, help-overlay
-visibility, and layout reset.
+**Appearance popover**:
+A non-modal panel opened by `View > Appearance…` or the top-bar gear for
+appearance settings (theme, accent, rounding, spacing, font size).
 
 **Help overlay**:
 Dismissible grey text in the viewport corner listing mouse gestures,

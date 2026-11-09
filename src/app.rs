@@ -103,8 +103,9 @@ pub struct VfApp {
     /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
     /// forget their last dragged size, letting the default widths apply.
     panel_generation: u32,
-    /// Whether the Settings > Appearance… popover is up (ticket 15).
-    settings_open: bool,
+    /// Whether the Appearance popover is up (ticket 15; one entry point since
+    /// ticket 59).
+    appearance_open: bool,
     /// Whether the Help > About dialog is up (ticket 15).
     about_open: bool,
     /// Whether the Help > Keyboard & mouse window is up (ticket 18): the full
@@ -172,7 +173,7 @@ impl VfApp {
             style: settings.style,
             layout: settings.layout,
             panel_generation: 0,
-            settings_open: false,
+            appearance_open: false,
             about_open: false,
             help_open: false,
             last_viewport_rect: None,
@@ -210,7 +211,7 @@ impl VfApp {
         );
         match effect {
             menu::SideEffect::None => {}
-            menu::SideEffect::OpenSettings => self.settings_open = true,
+            menu::SideEffect::OpenAppearance => self.appearance_open = true,
             menu::SideEffect::ShowAbout => self.about_open = true,
             menu::SideEffect::ShowHelp => self.help_open = true,
             // The capture itself happens in the viewport, where this frame's
@@ -403,20 +404,21 @@ impl eframe::App for VfApp {
             self.layout.toggle_help();
         }
         if !ctx.text_edit_focused() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.settings_open = false;
+            self.appearance_open = false;
             self.help_open = false;
             self.layout.help_visible = false;
         }
 
-        // Top menu bar: File / Edit / View / Settings / Help and the screenshot
-        // action. The bar only reports the action; the app dispatches it.
+        // Top menu bar: File / Edit / View / Help, the Appearance gear, and the
+        // screenshot action. The bar only reports the action; the app dispatches
+        // it.
         let mut style_changed = false;
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = top_bar::show(
                 ui,
                 &mut self.style,
                 &self.screenshot,
-                &mut self.settings_open,
+                &mut self.appearance_open,
             );
             style_changed = changed;
             if let Some(action) = action {
