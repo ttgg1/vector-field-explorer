@@ -212,17 +212,46 @@ impl VfApp {
 
     /// Frame phase: the bottom status bar readouts and the panel itself.
     pub(super) fn frame_status_bar(&mut self, ui: &mut egui::Ui) {
-        // Bottom status bar: the parse state (red when bad) plus how many
-        // field-geometry instances are being painted — arrows, streamline
-        // segments and dots; the app's backdrop lines are decoration and
-        // stay out of the count, while the streamline portion gets its own
-        // readout so toggling streamlines moves a visible number.
+        // One FPS sample per frame, from the same stable delta the simulation
+        // clock consumes. Non-finite/zero frames leave the last reading alone.
+        let dt = ui.ctx().input(|input| input.stable_dt);
+        self.fps_meter.update(dt);
+        self.status.fps = self.fps_meter.fps();
+        self.status.frame_ms = self.fps_meter.frame_ms();
+
+        // Counts come from the snapshot being painted, so they move exactly
+        // when the scene does. Streamlines stay the app's field-geometry
+        // segment count: `scene.lines` also holds the decorative backdrop.
         self.status.parse_message = self.state.parse_error.clone();
-        self.status.instance_count = self.scene.arrows.len()
-            + self.streamline_count
-            + self.scene.dots.len()
-            + self.scene.trails.len();
+        self.status.arrow_count = self.scene.arrows.len();
         self.status.streamline_count = self.streamline_count;
+        self.status.particle_count = self.scene.dots.len();
+        self.status.trail_count = self.scene.trails.len();
+        self.status.density = self.state.density;
+        self.status.is_3d = self.state.is_3d();
+        self.status.sim_time = if crate::sim_clock::transport_visible(&self.state) {
+            Some(self.clock.time)
+        } else {
+            None
+        };
+        self.status.flying = self.fly.is_some();
+
+        // Ticket 60 sets `status.hint`; a changed text restarts the 2.5 s
+        // frame-time lifetime, which the pure helper then expires.
+        if self.status.hint != self.hint_seen {
+            self.hint_seen = self.status.hint.clone();
+            self.hint_elapsed = 0.0;
+        }
+        if self.status.hint.is_some() {
+            if dt.is_finite() && dt > 0.0 {
+                self.hint_elapsed += dt;
+            }
+            advance_hint(&mut self.status.hint, self.hint_elapsed);
+            if self.status.hint.is_none() {
+                self.hint_seen = None;
+            }
+        }
+
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             crate::ui::status_bar::show(ui, &self.status);
         });

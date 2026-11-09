@@ -6,7 +6,8 @@
 
 use eframe::egui;
 use vector_field_explorer::ui::style_panel::{
-    ACCENT_PRESETS, AppStyle, SPACING_Y_RATIO, apply, selected_preset, show_controls,
+    ACCENT_PRESETS, AppStyle, SPACING_Y_RATIO, apply, selected_preset, selection_text_color,
+    show_controls,
 };
 
 fn sample_style() -> AppStyle {
@@ -66,6 +67,72 @@ fn apply_is_idempotent() {
     let once = (*ctx.global_style()).clone();
     apply(&ctx, &style);
     assert_eq!(*ctx.global_style(), once);
+}
+
+/// WCAG relative luminance of an opaque sRGB colour.
+fn relative_luminance(color: egui::Color32) -> f32 {
+    fn linear(channel: u8) -> f32 {
+        let channel = channel as f32 / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+}
+
+fn contrast_ratio(a: egui::Color32, b: egui::Color32) -> f32 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+#[test]
+fn selection_text_color_is_readable_on_every_accent() {
+    let accents = [
+        ("teal #009688", egui::Color32::from_rgb(0, 150, 136)),
+        ("yellow", egui::Color32::from_rgb(255, 255, 0)),
+        ("white", egui::Color32::WHITE),
+        ("black", egui::Color32::BLACK),
+        ("red", egui::Color32::from_rgb(211, 47, 47)),
+        ("blue", egui::Color32::from_rgb(25, 118, 210)),
+        ("green", egui::Color32::from_rgb(56, 142, 60)),
+    ];
+    for (name, accent) in accents {
+        let text = selection_text_color(accent);
+        let ratio = contrast_ratio(text, accent);
+        assert!(
+            ratio >= 4.5,
+            "selected text on `{name}` must reach 4.5:1, got {ratio:.2}:1"
+        );
+    }
+}
+
+#[test]
+fn apply_sets_the_selection_stroke_in_both_themes() {
+    for theme_dark in [true, false] {
+        let ctx = egui::Context::default();
+        let mut style = sample_style();
+        style.theme_dark = theme_dark;
+        apply(&ctx, &style);
+
+        let expected = selection_text_color(style.accent);
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let visuals = &ctx.style_of(theme).visuals;
+            assert_eq!(
+                visuals.selection.bg_fill, style.accent,
+                "the accent still fills the selection in {theme:?}"
+            );
+            assert_eq!(
+                visuals.selection.stroke.color, expected,
+                "selected text is readable in {theme:?}"
+            );
+            assert_eq!(
+                visuals.selection.stroke.width, 1.0,
+                "the text stroke keeps egui's 1 pt width"
+            );
+        }
+    }
 }
 
 #[test]

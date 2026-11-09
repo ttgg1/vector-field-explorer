@@ -27,6 +27,7 @@ use crate::ui::presets::PresetPanel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::presets::default_preset_dir;
 use crate::ui::sidebar::Controls;
+use crate::ui::status_bar::{FpsMeter, advance_hint};
 use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
 use crate::view_command::{self, ViewCommand, ViewContext};
@@ -76,13 +77,33 @@ pub fn presets_data_dir() -> std::path::PathBuf {
 }
 
 /// What the status bar reports this frame: the latest formula parse state
-/// (empty when the field is good) and the size of the scene being painted —
-/// field geometry only (arrows + streamline segments + dots; the app's
-/// backdrop lines are decoration and are excluded from the count).
+/// (empty when the field is good), a transient hint that replaces "ready"
+/// while live, and the live frame/scene readout. Counts are snapshot-derived:
+/// arrows, particles and trail segments come from the built scene, while
+/// streamlines stay the app's field-geometry segment count (the scene's line
+/// collection also holds the decorative backdrop).
+#[derive(Debug, Clone, Default)]
 pub struct StatusBarState {
     pub parse_message: String,
-    pub instance_count: usize,
+    /// Smoothed frames per second; zero until the first valid frame time.
+    pub fps: f32,
+    /// Smoothed frame time in milliseconds; zero until the first valid frame.
+    pub frame_ms: f32,
+    pub arrow_count: usize,
+    /// Grid + click streamline segments, excluding the backdrop lines.
     pub streamline_count: usize,
+    pub particle_count: usize,
+    pub trail_count: usize,
+    pub density: u32,
+    /// Labels the density as `n³` (3D sampling) or `n²` (2D).
+    pub is_3d: bool,
+    /// Simulated seconds while the transport is visible; `None` otherwise.
+    /// Paused clocks keep showing their frozen time.
+    pub sim_time: Option<f32>,
+    /// The fly camera is active, so the readout gets a `fly` prefix.
+    pub flying: bool,
+    /// Transient one-line hint (ticket 60 sets it); the parse error still wins.
+    pub hint: Option<String>,
 }
 
 /// How many viewport clicks keep their seeded bursts. Clicks accumulate only up
@@ -105,6 +126,12 @@ pub struct VfApp {
     pub bar: FormulaBarState,
     pub sidebar: Controls,
     pub status: StatusBarState,
+    /// Smoothed FPS/frame-time source, fed once per frame from `stable_dt`.
+    pub fps_meter: FpsMeter,
+    /// Frame time accumulated while the current transient hint is live.
+    hint_elapsed: f32,
+    /// The hint text observed last frame, so a new hint restarts its lifetime.
+    hint_seen: Option<String>,
     /// The 2D camera record the preset panel saves/applies; the live view is
     /// the shared [`OrbitCamera`] (its ortho mode is the 2D view).
     pub camera: Camera,
@@ -215,11 +242,10 @@ impl VfApp {
             state,
             bar: FormulaBarState::new(),
             sidebar,
-            status: StatusBarState {
-                parse_message: String::new(),
-                instance_count: 0,
-                streamline_count: 0,
-            },
+            status: StatusBarState::default(),
+            fps_meter: FpsMeter::default(),
+            hint_elapsed: 0.0,
+            hint_seen: None,
             camera: Camera::default(),
             orbit,
             fly: None,

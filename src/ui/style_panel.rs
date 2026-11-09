@@ -133,6 +133,40 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
 }
 
+/// sRGB channel to linear light, the WCAG relative-luminance transfer curve.
+fn linearize(channel: u8) -> f32 {
+    let channel = channel as f32 / 255.0;
+    if channel <= 0.04045 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// WCAG relative luminance of an opaque sRGB colour.
+fn relative_luminance(color: egui::Color32) -> f32 {
+    0.2126 * linearize(color.r())
+        + 0.7152 * linearize(color.g())
+        + 0.0722 * linearize(color.b())
+}
+
+/// A readable text colour for selected text on `accent`.
+///
+/// Compares the WCAG contrast of white (`1.05 / (L + 0.05)`) against a
+/// near-black (`(L + 0.05) / 0.05`, using `Color32::from_gray(16)` for a softer
+/// result) and returns whichever wins. Every accent therefore gets the better
+/// of the two, so selected labels stay legible in both themes.
+pub fn selection_text_color(accent: egui::Color32) -> egui::Color32 {
+    let luminance = relative_luminance(accent);
+    let on_white = 1.05 / (luminance + 0.05);
+    let on_black = (luminance + 0.05) / 0.05;
+    if on_white >= on_black {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_gray(16)
+    }
+}
+
 /// Map the style record onto egui's global styles (both themes, so switching
 /// theme later never resurrects stale accents/spacing). Idempotent: it runs at
 /// the start of every frame, so applying the same record twice must leave the
@@ -162,6 +196,9 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
             egui::Visuals::light()
         };
         visuals.selection.bg_fill = style.accent;
+        // egui derives selected text from `selection.stroke`; the theme
+        // default (pale blue / dark blue) is unreadable on several accents.
+        visuals.selection.stroke = egui::Stroke::new(1.0, selection_text_color(style.accent));
         visuals.hyperlink_color = style.accent;
         visuals.window_corner_radius = rounding;
         visuals.menu_corner_radius = rounding;
