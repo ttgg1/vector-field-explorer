@@ -160,10 +160,12 @@ fn every_top_level_test_file_is_registered_in_the_suite() {
         "ticket 21 requires every test to run; remove {ignore_attr} from: {}",
         ignored.join(", "),
     );
-    // 704 tests at the ticket-21 baseline, plus this guard (and one `#[test]`
-    // line whose sibling platform gate excludes it from the harness).
+    // 704 tests run on this platform (703 in the suite plus the isolated
+    // `config_test`), and one more `#[test]` line is wasm-only. Ticket 19
+    // removed the i18n placeholder test, so the floor is 705 raw lines rather
+    // than the ticket-21 baseline of 706.
     assert!(
-        test_attributes >= 706,
-        "the suite lost tests: found {test_attributes} `#[test]` lines (baseline 706)",
+        test_attributes >= 705,
+        "the suite lost tests: found {test_attributes} `#[test]` lines (baseline 705)",
     );
 }
