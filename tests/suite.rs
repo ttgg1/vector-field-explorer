@@ -35,6 +35,7 @@ mod line_alpha_test;
 mod menu_test;
 mod nightly_version_test;
 mod notices_test;
+mod packaging_notices_test;
 mod particle_playback_test;
 mod particles_test;
 mod persistence_test;
