@@ -81,6 +81,11 @@ click-to-seed, and formula syntax; its visibility is a setting.
 App-wide appearance (theme, accent, rounding, spacing, font size), persisted
 apart from view state and layout.
 
+**Accent preset**:
+A fixed accent colour offered as a swatch beside the custom colour picker; it
+sets the app accent but does not replace the picker.
+_Avoid_: theme preset
+
 ## Field and motion
 
 **Field**:
@@ -141,3 +146,13 @@ _Avoid_: playback bar, timeline
 A free six-degrees-of-freedom camera mode for the 3D view, moved with physical
 WASD/QE positions and drag-to-look, alongside the orbit camera.
 _Avoid_: freecam, FPS camera
+
+**Seed mode**:
+How streamlines get their seeds: Auto uses the sampling grid and also accepts
+click seeds; Click uses only click seeds.
+_Avoid_: seed source, seeding toggle
+
+**Left-click action**:
+What a single left click in the viewport does: seed a streamline or add a
+particle burst. The two are exclusive.
+_Avoid_: click mode, click behavior
