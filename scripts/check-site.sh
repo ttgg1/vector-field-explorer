@@ -15,11 +15,16 @@
 # prove the absence of every possible claim.
 #
 # HTML is normalized (`tr '\n' ' '`) and inspected tag by tag, not line by
-# line, so attributes split across lines, single-quoted or unquoted values,
-# uppercase names and protocol-relative URLs are all visible. Inline
-# `<script>`/`<style>` bodies are scanned conservatively: a literal `https?:`,
-# `@import`, `import(` or `//host.tld` fails even inside a comment, because
-# this check is a release gate, not a JavaScript parser.
+# line. The tag regex keeps a `>` inside a quoted value, so attributes split
+# across lines, quoted/unquoted values, uppercase names and protocol-relative
+# URLs are visible to the checks below. Inline `<script>`/`<style>` bodies are
+# extracted with Perl, which handles bodies containing `<`. Both inline and
+# stylesheet scans are conservative: a literal `https?:`, `@import`, `import(`
+# or `//host.tld` fails even inside a comment, because this is a release gate,
+# not a JavaScript/CSS parser. Perl is required (present on ubuntu-latest).
+#
+# Known low-impact gap: local CSS `url(../…)` is not resolved; no stylesheet
+# in this artifact uses a local `url()` today. External CSS URLs are rejected.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,6 +53,14 @@ reject_text() {
     fail "forbidden claim '$needle' in ${file#"$root"/}"
   fi
 }
+
+command -v perl >/dev/null 2>&1 ||
+  fail "perl is required to scan inline <script>/<style> bodies"
+
+# A quoted value may contain `>`, so the tag ends only at an unquoted `>`.
+tag_pattern="<[a-z]([^>\"']|\"[^\"]*\"|'[^']*')*>"
+css_external_pattern="url\([[:space:]]*[\"']?(https?:)?//|@import"
+inline_external_pattern='https?:|@import|import[[:space:]]*\(|//[a-z0-9.-]+\.[a-z]{2,}'
 
 index="$dist/index.html"
 download="$dist/download.html"
@@ -139,7 +152,7 @@ is_external() {
 
 # Print every value of `attr` from one normalized tag. Quote-agnostic and
 # case-insensitive; an unquoted value ends only at whitespace or `>`, so URLs
-# keep their slashes.
+# keep their slashes. `:` is a valid boundary so `xlink:href` is checked too.
 attr_values() {
   local tag="$1" attr="$2" value
   while IFS= read -r value; do
@@ -149,7 +162,7 @@ attr_values() {
     value="${value%\'}"
     printf '%s\n' "$value"
   done < <(printf '%s\n' "$tag" |
-    grep -oiE "(^|[[:space:]])${attr}[[:space:]]*=[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:]>]+)" |
+    grep -oiE "(^|[[:space:]:])${attr}[[:space:]]*=[[:space:]]*(\"[^\"]*\"|'[^']*'|[^[:space:]>]+)" |
     sed -E 's/^[^=]*=[[:space:]]*//' || true)
 }
 
@@ -183,20 +196,15 @@ tag_has_canonical_rel() {
     grep -qE '(^|[[:space:]])canonical([[:space:]]|$)' || return 1
 }
 
-# Reject external references inside inline <script>/<style> bodies. The block
-# extractor stops at the next `<`, so a body containing markup is not scanned;
-# that is the documented conservative limit, together with the comment
-# false-positive note in the header.
+# Reject external references inside inline <script>/<style> bodies. Perl
+# captures the body with dot-all, so a body containing `<` is still scanned.
+# This is conservative: a literal token in a comment also fails.
 scan_inline_blocks() {
-  local file="$1" normalized="$2" block body
-  while IFS= read -r block; do
-    [ -n "$block" ] || continue
-    body="$(printf '%s\n' "$block" | sed -E 's#^<[^>]*>##; s#</[^>]*>$##')"
-    if printf '%s\n' "$body" |
-      grep -Eqi 'https?:|@import|import[[:space:]]*\(|//[a-z0-9.-]+\.[a-z]{2,}'; then
-      fail "external reference in inline <script>/<style> in ${file#"$root"/}"
-    fi
-  done < <(grep -oiE '<(script|style)[^>]*>[^<]*</(script|style)>' "$normalized" || true)
+  local file="$1" normalized="$2"
+  if perl -0ne 'while(/<(script|style)\b[^>]*>(.*?)<\/\1\s*>/gis){print "$2\n"}' "$normalized" |
+    grep -Eqi "$inline_external_pattern"; then
+    fail "external reference in inline <script>/<style> in ${file#"$root"/}"
+  fi
 }
 
 # --- No external runtime dependencies -------------------------------------
@@ -223,10 +231,10 @@ for file in "$index" "$download"; do
     name="$(tag_name "$tag")"
 
     # Fetched resources never leave the artifact, including srcset candidates.
-    for attr in src data srcset poster; do
+    for attr in src data srcset imagesrcset poster; do
       while IFS= read -r value; do
         [ -n "$value" ] || continue
-        if [[ "$attr" == srcset ]]; then
+        if [[ "$attr" == srcset || "$attr" == imagesrcset ]]; then
           for candidate in $(srcset_urls "$value"); do
             if is_external "$candidate"; then
               fail "external $attr on <$name> in ${file#"$root"/}: $candidate"
@@ -253,12 +261,20 @@ for file in "$index" "$download"; do
       fi
     done < <(attr_values "$tag" href)
 
+    # Inline style attributes must not fetch or import anything either.
+    while IFS= read -r value; do
+      [ -n "$value" ] || continue
+      if printf '%s\n' "$value" | grep -Eqi "$css_external_pattern"; then
+        fail "external CSS dependency in style attribute on <$name> in ${file#"$root"/}: $value"
+      fi
+    done < <(attr_values "$tag" style)
+
     # Local-file resolution for every attribute a browser may fetch or follow.
-    for attr in href src data poster srcset; do
+    for attr in href src data poster srcset imagesrcset; do
       while IFS= read -r value; do
         [ -n "$value" ] || continue
         candidates=("$value")
-        if [[ "$attr" == srcset ]]; then
+        if [[ "$attr" == srcset || "$attr" == imagesrcset ]]; then
           candidates=()
           while IFS= read -r candidate; do
             candidates+=("$candidate")
@@ -305,13 +321,13 @@ for file in "$index" "$download"; do
         done
       done < <(attr_values "$tag" "$attr")
     done
-  done < <(grep -oiE '<[a-z][^>]*>' "$normalized")
+  done < <(grep -oiE "$tag_pattern" "$normalized")
 done
 
 # CSS must not fetch anything at runtime or import another sheet.
 shopt -s nullglob
 for sheet in "$dist"/*.css; do
-  if grep -Eqi 'url\(\s*["'"'"']?(https?:)?//|@import' "$sheet"; then
+  if grep -Eqi "$css_external_pattern" "$sheet"; then
     fail "external CSS dependency in ${sheet#"$root"/}"
   fi
 done
