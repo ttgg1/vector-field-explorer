@@ -160,6 +160,9 @@ Scripts and prompt templates:
 - Review seats: `opencode-go/claude-haiku-5-5#high` (cheap, avoids usage
   limits); `#max` for the final whole-branch review; free fallback
   `opencode-go/beam-free`.
+- **Usage limits:** when a seat's model hits its usage limit, switch that seat
+  to `opencode-go/beam-free` (free) instead of waiting, retrying, or moving to
+  kimi. This applies to coding and review seats alike.
 - No NVIDIA/Nemotron, LM Studio, or `strata` seats.
 
 **Implementer contract:** work from the brief; TDD where required; run the full
