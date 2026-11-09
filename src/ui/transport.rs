@@ -17,9 +17,9 @@ use crate::viewmodel::State;
 /// Play/Pause label for the current state. Compact mode is icon-only.
 pub fn play_label(playing: bool, compact: bool) -> &'static str {
     match (playing, compact) {
-        (true, true) => "⏸",
+        (true, true) => "❚❚",
         (false, true) => "▶",
-        (true, false) => "⏸ Pause",
+        (true, false) => "❚❚ Pause",
         (false, false) => "▶ Play",
     }
 }

@@ -16,7 +16,10 @@ fn main() -> eframe::Result {
     eframe::run_native(
         WINDOW_TITLE,
         options,
-        Box::new(|cc| Ok(Box::new(VfApp::new_with_storage(cc.storage)))),
+        Box::new(|cc| {
+            vector_field_explorer::fonts::install(&cc.egui_ctx);
+            Ok(Box::new(VfApp::new_with_storage(cc.storage)))
+        }),
     )
 }
 
@@ -101,6 +104,7 @@ async fn start_app() -> Result<(), JsValue> {
             canvas,
             eframe::WebOptions::default(),
             Box::new(|cc| {
+                vector_field_explorer::fonts::install(&cc.egui_ctx);
                 Ok(Box::new(vector_field_explorer::VfApp::new_with_storage(cc.storage)))
             }),
         )

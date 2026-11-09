@@ -7,6 +7,9 @@
 //! is no replica of the row.
 
 use eframe::egui;
+
+mod support;
+
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::viewmodel::State;
 
@@ -19,7 +22,7 @@ struct Sidebar {
 
 impl Sidebar {
     fn new(mode_3d: bool) -> Self {
-        let ctx = egui::Context::default();
+        let ctx = support::context();
         ctx.enable_accesskit();
         Self {
             ctx,

@@ -4,6 +4,9 @@
 // the unchanged click/tooltip contract.
 
 use eframe::egui;
+
+mod support;
+
 use vector_field_explorer::ui::layout::{
     DEFAULT_CONTROLS_WIDTH, DEFAULT_PRESETS_WIDTH, LayoutState, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH,
     RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel, RailSide,
@@ -102,7 +105,7 @@ fn screen_rect() -> egui::Rect {
 /// tests assert against the font metrics the rail actually paints instead of a
 /// synthetic worst-case rectangle.
 fn measure_galley(label: &str) -> std::sync::Arc<egui::Galley> {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
     let mut galley = None;
     let mut output = ctx.run_pass(
@@ -212,7 +215,7 @@ fn rail_angles_are_vertical_with_opposite_signs() {
 
 #[test]
 fn rail_panel_is_outer_width_and_the_label_band_is_narrower() {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     let line_height = measure_galley("Controls").size().y;
     for side in [RailSide::Left, RailSide::Right] {
         let (panel, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
@@ -245,7 +248,7 @@ fn rail_panel_is_outer_width_and_the_label_band_is_narrower() {
 
 #[test]
 fn rotated_labels_fit_inside_the_real_rail_band() {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
         let (panel, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let band = panel.content_rect;
@@ -284,7 +287,7 @@ fn chevron_stays_at_the_bottom_pointing_outward() {
     assert_eq!(collapse_chevron(RailSide::Left), "‹");
     assert_eq!(collapse_chevron(RailSide::Right), "›");
 
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
         let (panel, text) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let band = panel.content_rect;
@@ -329,7 +332,7 @@ fn rail_tooltip_is_unchanged() {
 
 #[test]
 fn rail_paints_one_rotated_label_inside_the_real_band() {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
         for label in ["Controls", "Presets"] {
             let (panel, text) = rail_pass(&ctx, side, label, None, 0.0);
@@ -372,7 +375,7 @@ fn rail_click_target_covers_the_label_and_pins() {
     // Hover, press, release: egui's press detection uses the previous frame's
     // hover, and the click fires on release over the same widget.
     for side in [RailSide::Left, RailSide::Right] {
-        let ctx = egui::Context::default();
+        let ctx = support::context();
         // One paint pass gives the label's painted ink, so the click can target
         // the glyph itself rather than the panel's geometric centre.
         let (panel, text) = rail_pass(&ctx, side, "Controls", None, 0.0);
@@ -461,7 +464,7 @@ fn collapse_pass(
 #[test]
 fn collapse_button_paints_the_inward_chevron_and_reports_a_click() {
     for side in [RailSide::Left, RailSide::Right] {
-        let ctx = egui::Context::default();
+        let ctx = support::context();
         // One paint pass gives the chevron's painted ink, so the click can
         // target the glyph itself.
         let (clicked, text) = collapse_pass(&ctx, side, None, 0.0);

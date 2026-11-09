@@ -3,6 +3,9 @@
 // open the one popover that View > Appearance… also opens.
 
 use eframe::egui;
+
+mod support;
+
 use vector_field_explorer::screenshot::Screenshot;
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
@@ -19,7 +22,7 @@ struct Harness {
 
 impl Harness {
     fn new(open: bool) -> Self {
-        let ctx = egui::Context::default();
+        let ctx = support::context();
         // Accesskit publishes widget rects, so the test can find the gear and
         // the popover's controls without hard-coded geometry.
         ctx.enable_accesskit();

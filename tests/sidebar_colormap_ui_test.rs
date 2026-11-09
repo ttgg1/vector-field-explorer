@@ -8,6 +8,9 @@
 //! Coloring label".
 
 use eframe::egui;
+
+mod support;
+
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord};
 use vector_field_explorer::ui::layout::LayoutState;
@@ -41,7 +44,7 @@ struct Sidebar {
 
 impl Sidebar {
     fn new() -> Self {
-        let ctx = egui::Context::default();
+        let ctx = support::context();
         ctx.enable_accesskit();
         Self {
             ctx,

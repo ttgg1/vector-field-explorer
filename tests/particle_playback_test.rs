@@ -8,6 +8,8 @@
 
 use eframe::egui;
 
+mod support;
+
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
@@ -223,7 +225,7 @@ fn transport_is_visible_only_with_a_clock_consumer() {
 /// A context that has served egui's initial repaint request, so a later
 /// `has_requested_repaint` reports only what the test itself asked for.
 fn quiet_context() -> egui::Context {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     // A fresh context has egui's initial multi-pass repaint pending (and the
     // first pass installs fonts); three empty passes leave it genuinely idle.
     for _ in 0..3 {
@@ -302,7 +304,7 @@ struct SpaceOutcome {
 /// One egui pass with a Space press (and an optional focused text field), and
 /// what the real transport shortcut did with it.
 fn run_space(state: &State, clock: &mut SimClock, focus_text: bool) -> SpaceOutcome {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     if focus_text {
         let mut text = String::new();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -390,7 +392,7 @@ fn space_is_left_to_a_focused_formula_field() {
 fn transport_labels_reflect_state_and_stay_compact_ready() {
     assert!(play_label(true, false).contains("Pause"), "playing shows Pause");
     assert!(play_label(false, false).contains("Play"), "paused shows Play");
-    assert_eq!(play_label(true, true), "⏸", "compact mode is icon-only");
+    assert_eq!(play_label(true, true), "❚❚", "compact mode is icon-only");
     assert_eq!(play_label(false, true), "▶");
     assert_eq!(time_label(12.4, false), "t = 12.4 s", "the readout is compact");
     assert_eq!(time_label(12.4, true), "t = 12.4", "with a shorter compact label");
@@ -443,7 +445,7 @@ fn button_rect(nodes: &[Node], label: &str) -> egui::Rect {
 
 #[test]
 fn the_transport_strip_shows_play_reset_time_and_speed_and_toggles() {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     ctx.enable_accesskit();
     let mut clock = SimClock::default();
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(960.0, 600.0));
@@ -458,11 +460,11 @@ fn the_transport_strip_shows_play_reset_time_and_speed_and_toggles() {
 
     let output = frame(&ctx, &mut clock, Vec::new());
     let ui_nodes = nodes(&output);
-    assert!(has_label(&ui_nodes, "⏸ Pause"), "the strip offers Pause while playing");
+    assert!(has_label(&ui_nodes, "❚❚ Pause"), "the strip offers Pause while playing");
     assert!(has_label(&ui_nodes, "↺ Reset time"), "and a reset-time button");
     assert!(has_label(&ui_nodes, "t = 0.0 s"), "with the simulated time readout");
 
-    let pause = button_rect(&ui_nodes, "⏸ Pause");
+    let pause = button_rect(&ui_nodes, "❚❚ Pause");
     let click = |pos: egui::Pos2, pressed: bool| {
         vec![
             egui::Event::PointerMoved(pos),

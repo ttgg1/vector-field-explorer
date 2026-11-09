@@ -3,6 +3,9 @@
 // pinned here.
 
 use eframe::egui;
+
+mod support;
+
 use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
@@ -64,7 +67,7 @@ fn effect_of(action: MenuAction) -> SideEffect {
 /// fires. `run_pass` may run more than one pass; only the first sees the key,
 /// so its result is captured once.
 fn fired_shortcuts(modifiers: egui::Modifiers, key: egui::Key) -> Vec<MenuAction> {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     let mut input = egui::RawInput::default();
     input.events.push(egui::Event::ModifiersChanged(modifiers));
     input.events.push(egui::Event::Key {
@@ -435,7 +438,7 @@ fn plain_c_toggles_fly_but_modified_c_does_not() {
 fn c_types_in_a_focused_text_field_instead_of_toggling_fly() {
     // Ticket 65 keeps C as the fly shortcut, but the menu table's text-field
     // rule still wins: typing C in the formula bar inserts a character.
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     let mut text = String::new();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         ui.text_edit_singleline(&mut text).request_focus();
@@ -613,7 +616,7 @@ fn appearance_has_exactly_one_menu_home_and_it_is_under_view() {
 /// Run one egui pass with one `?` press and report what the real help-key
 /// check sees.
 fn question_mark_fires(modifiers: egui::Modifiers) -> bool {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     let mut input = egui::RawInput::default();
     input.events.push(egui::Event::ModifiersChanged(modifiers));
     input.events.push(egui::Event::Key {

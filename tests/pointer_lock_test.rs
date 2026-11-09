@@ -6,6 +6,9 @@
 //! is also the fallback when a platform refuses the locked grab.
 
 use eframe::egui;
+
+mod support;
+
 use glam::Vec2;
 use std::fs;
 use std::path::PathBuf;
@@ -70,7 +73,7 @@ fn native_take_delta_is_empty_and_request_release_are_noops() {
 
 /// One egui pass carrying `events`, then this frame's native motion delta.
 fn delta_for(events: Vec<egui::Event>, pixels_per_point: f32) -> Vec2 {
-    let ctx = egui::Context::default();
+    let ctx = support::context();
     ctx.set_pixels_per_point(pixels_per_point);
     let input = egui::RawInput {
         events,
