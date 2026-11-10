@@ -1,21 +1,7 @@
 # Seat model availability — 2026-11-10
 
-## Update (latest on 2026-11-10) — effort follows task difficulty
-
-This update supersedes the "step the variant up at every fix round" rule
-below.
-
-The user ruled that the **implementer seat's effort variant is chosen by the
-difficulty of the task**, not by the review round: `openai/gpt-6-luna#low`
-for a narrow mechanical change (a fix round with a clear file list, a
-documentation edit, a small well-specified slice), `#medium` for ordinary
-feature work, `#high` for a wide or subtle task. The **review seat's
-variant is chosen by the scope of the review** — a scoped re-review of a few
-findings is lighter than a whole-task review.
-
-A repeated finding no longer raises the effort automatically. What it changes
-is the *seat*: if the same finding comes back twice, resume a different,
-stronger implementer rather than repeating the same seat at the same effort.
+See [Current seat policy](#current-seat-policy--latest-user-ruling-2026-11-10)
+for the latest ruling; earlier decisions below are retained as history.
 
 ## Update (later on 2026-11-10) — reviewer/implementer split
 
@@ -71,20 +57,31 @@ every dispatch a coin flip that costs a full minute to discover.
   (`#high`) is the preferred coding seat and `opencode-go/claude-haiku-5-5#high`
   the preferred review seat. At that time, `AGENTS.md` carried this as a conditional note.
 
-## Update (later on 2026-11-10) — current seat policy
+## Superseded decision (2026-11-10) — fixed seats and round-based escalation
 
-This update supersedes the earlier reviewer/implementer split and all seat
-assignments and fallback advice in the preceding sections. The user ruling
-recorded in `progress.md:4348-4357` assigns the controller and reviewers to
-`openai/gpt-6.1-sol#medium`, and implementers to `openai/gpt-6-luna#low`.
-At the second fix round, step the variant up one level (low → medium → high),
-and step up again at every further round. A round that returns the same finding
-signals escalation rather than repeating the same seat at the same effort.
-The older free models (`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`)
-are fallbacks when an `openai` seat is unavailable. Every `opencode-go` paid
-model fails with "Policy budget exceeded" (verified 2026-11-10); do not retry
-a seat that failed that way. This is the policy recorded in `AGENTS.md` Models
-section (2026-11-10).
+The user ruling recorded in `progress.md:4348-4357` assigned the controller
+and reviewers to `openai/gpt-6.1-sol#medium`, and implementers to
+`openai/gpt-6-luna#low`. At the second fix round, step the variant up one
+level (low → medium → high), and step up again at every further round. A
+round that returns the same finding signals escalation rather than repeating
+the same seat at the same effort. The older free models
+(`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`) were fallbacks when
+an `openai` seat was unavailable. This was the then-current policy; the later
+user ruling below supersedes its round-based effort rule.
+
+## Current seat policy — latest user ruling, 2026-11-10
+
+The named user ruling in the final dated section of `progress.md` (2026-11-10;
+policy recorded in commit `2d28e50`) supersedes the round-based effort rule
+above. The controller uses `openai/gpt-6.1-sol#medium`;
+implementers use `openai/gpt-6-luna` with effort selected by task difficulty
+(`#low` for narrow/mechanical work, `#medium` for ordinary work, `#high` for
+wide or subtle work); reviewers use `openai/gpt-6.1-sol` with effort selected
+by review scope. A repeated finding twice changes the implementer seat to a
+different, stronger seat; it does not automatically raise effort by round.
+Older free models (`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`)
+are fallbacks when an OpenAI seat is unavailable. See `AGENTS.md` for the
+active operational policy.
 
 ## Cost of a blocked seat
 

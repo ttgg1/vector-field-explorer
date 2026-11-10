@@ -1,6 +1,6 @@
 # Plan — Vector Field Explorer, post-v0.1.0 effort (2026-11-05 →)
 
-**Status:** active. This is the plan file for the SDD workspace
+**Status:** historical plan; completion recovery note below is current. This is the plan file for the SDD workspace
 `.superpowers/sdd/2026-11-05-vector-field-explorer/` (the `plan-path` marker
 in that directory points here). The superpowers helper scripts resolve the
 workspace from this file:
@@ -11,7 +11,7 @@ bash $SDD/task-brief <this-file> <task-id> [outfile]
 bash $SDD/review-package [-C <worktree>] <this-file> <base> <head> [outfile]
 ```
 
-## Where the effort stands (2026-11-10)
+## Where the effort stood (2026-11-10; historical)
 
 `v0.1.0` is released. The three tickets implemented just after it (69 SVG
 export, 70 fly camera, 71 mobile UI) were pushed to `main` without review
@@ -23,6 +23,16 @@ The ticket-69b SVG export UI repair belongs to the current repair sequence.
 Separately, after repairs merge, the next frontier is Windows packaging (72)
 and time-dependent fields (39) in parallel. Ticket 38 (plot animation) waits
 for tickets 37 and 39.
+
+### Completion recovery (2026-11-10)
+
+Tickets 72, 39 (Part A), and 74 are merged and verified on `main` at
+`f6111341ccf903b4cc889b9841754578ef8dc025`. Ticket 72's workflow-dispatch
+release dry-run remains open, so not all acceptance criteria are complete.
+These tickets must not be redispatched. Use the final dated sections of
+`.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` for verified
+completion details and the current frontier. Physics execution is not yet
+approved/spec-ready; investigation is ongoing.
 
 Rules every seat in this plan inherits:
 
@@ -37,12 +47,11 @@ Rules every seat in this plan inherits:
   ticket number in the message.
 - **One worktree and one branch per seat**; file-disjoint seats only.
 - **A seat never dispatches a subagent.**
-- Controller and reviewers run on `openai/gpt-6.1-sol#medium`; implementers
-  run on `openai/gpt-6-luna#low`. At the second fix round, step the variant up
-  one level (low → medium → high), and step up again at every further round.
-  Use `opencode-go/beam-free` and `opencode-go/longcat-2.5-free` as fallbacks
-  when an `openai` seat is unavailable (2026-11-10 user ruling,
-  `progress.md:4348-4357`).
+- **Historical seat guidance (superseded):** earlier plan iterations named
+  fixed variants and round-based escalation. The latest user ruling in the
+  final dated ledger section governs: implementer effort follows task
+  difficulty, reviewer effort follows review scope, and a finding repeated
+twice changes to a different, stronger implementer seat. See `AGENTS.md`.
 
 ## Task 69b: SVG export — the UI half
 
