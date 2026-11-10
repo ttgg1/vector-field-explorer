@@ -168,7 +168,14 @@ fi
 [ -d "$common_license_dir" ] || fail "AppImage is missing system-libraries/common-licenses"
 
 notice="$(find "$notice_dir" -maxdepth 1 -type f -name '*.copyright' -print -quit)"
-[ -n "$notice" ] || fail "AppImage has no bundled system-library copyright notices"
+# A linuxdeploy run that bundles no shared libraries produces an empty
+# system-libraries directory (SOURCES.txt header only). That is a valid
+# outcome, so the copyright check applies only when libraries were bundled.
+bundled_libs="$(find "${target}/usr/lib" -maxdepth 2 \( -type f -o -type l \) \
+  -name '*.so*' -print -quit 2>/dev/null || true)"
+if [ -n "$bundled_libs" ]; then
+  [ -n "$notice" ] || fail "AppImage has no bundled system-library copyright notices"
+fi
 
 # Every /usr/share/common-licenses/... reference in a shipped copyright must
 # resolve inside the AppImage, not just on the runner.
