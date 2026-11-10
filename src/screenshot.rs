@@ -194,10 +194,19 @@ pub fn date_stamp(now: SystemTime) -> String {
 /// testable, and the mode label is lowercased with any non-alphanumeric run
 /// folded to a single `-`, so "2D" gives the brief's
 /// `vector-field-explorer-2026-11-05-2d.png`.
+/// Maximum number of vector elements an SVG export is expected to carry
+/// before it becomes large enough to warn the user about file size / render
+/// cost. The export is never truncated: exceeding this only logs a warning so
+/// the caller can surface a toast.
+pub const SVG_ELEMENT_CAP: usize = 50_000;
+pub const MAX_SVG_ELEMENTS: usize = SVG_ELEMENT_CAP;
+pub const MAX_SVG_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
+pub const SVG_SAFE_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
+
 /// SVG variant of [`default_filename`].
 pub fn default_svg_filename(now: SystemTime, mode_label: &str) -> String {
     let png = default_filename(now, mode_label);
-    png.trim_end_matches(".png").to_string() + ".svg"
+    png.strip_suffix(".png").unwrap_or(&png).to_string() + ".svg"
 }
 
 pub fn default_filename(now: SystemTime, mode_label: &str) -> String {
@@ -459,6 +468,11 @@ fn color_to_hex(c: [f32; 4]) -> String {
 /// camera's view-projection matrix; `width`/`height` are the output pixel
 /// dimensions. Arrows, streamlines, trails and particles are emitted as
 /// vector elements with their colormap colour baked in.
+///
+/// Size risk: a dense scene can produce tens of thousands of elements and a
+/// multi-megabyte file. When the element count exceeds [`SVG_ELEMENT_CAP`] a
+/// warning is logged (and the caller is expected to surface it to the user);
+/// the export is never truncated or silently dropped.
 pub fn scene_to_svg(
     scene: &crate::renderer::SceneGPU,
     view_proj: Mat4,
@@ -466,7 +480,18 @@ pub fn scene_to_svg(
     height: u32,
     clear: [f64; 4],
 ) -> String {
+    // Warn (never truncate) when the scene is larger than the safe cap.
+    let element_count = svg_element_count(scene);
+    if element_count > SVG_ELEMENT_CAP {
+        log::warn!(
+            "SVG export contains {} elements, exceeding the safe cap of {}; \
+             file may be large",
+            element_count, SVG_ELEMENT_CAP
+        );
+    }
+
     let mut out = String::new();
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(&format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">",
         width, height, width, height
@@ -543,8 +568,40 @@ pub fn scene_to_svg(
         }
     }
 
+    // 2D particles live in scene.dots (not in scene.arrows), so emit them as
+    // circles here. In 3D they are part of scene.combined above.
+    if !scene.mode_3d {
+        for inst in scene.dots.iter() {
+            let pos = [inst.origin[0], inst.origin[1], inst.origin[2]];
+            let Some((sx, sy)) = world_to_screen(view_proj, pos, width, height) else {
+                continue;
+            };
+            let color = color_to_hex(inst.color);
+            let r = inst.dir_len[3].max(1.0);
+            out.push_str(&format!(
+                "<circle cx=\"{:.2}\" cy=\"{:.2}\" r=\"{:.2}\" fill=\"{}\"/>",
+                sx, sy, r, color
+            ));
+        }
+    }
+
     out.push_str("</svg>");
     out
+}
+
+/// Count the vector elements a scene would serialize to (arrows, particles,
+/// streamlines, trails). Used for the size warning; never affects output.
+pub fn svg_element_count(scene: &crate::renderer::SceneGPU) -> usize {
+    let arrow_count = if scene.mode_3d {
+        scene.combined.len()
+    } else {
+        scene.arrows.len() + scene.dots.len()
+    };
+    arrow_count + scene.lines.len() + scene.trails.len()
+}
+
+pub fn exceeds_svg_element_cap(scene: &crate::renderer::SceneGPU) -> bool {
+    svg_element_count(scene) > SVG_ELEMENT_CAP
 }
 
 /// A short-lived completion message.
