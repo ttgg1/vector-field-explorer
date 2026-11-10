@@ -334,8 +334,11 @@ fn css_hides_brand_header(css: &str, breakpoint: f32) -> bool {
 #[test]
 fn header_boundary_assertion_accepts_windows_line_endings() {
     let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
-    let windows_css = css.replace('\n', "\r\n");
-    assert!(css_hides_brand_header(&windows_css, 700.0));
+    let crlf_source = css.replace('\n', "\r\n");
+    for source in [&css, &crlf_source] {
+        let windows_css = source.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert!(css_hides_brand_header(&windows_css, 700.0));
+    }
 }
 
 #[test]
