@@ -91,8 +91,10 @@ const LIKE_CHARGES: &str = "((x+0.5)/((x+0.5)^2+y^2+0.05) + (x-0.5)/((x-0.5)^2+y
 const MAGNETIC_DIPOLE: &str = "(3*x*z/(x^2+y^2+z^2+0.05)^2.5, 3*y*z/(x^2+y^2+z^2+0.05)^2.5,\
  (3*z^2-(x^2+y^2+z^2))/(x^2+y^2+z^2+0.05)^2.5)";
 
+pub const START_HERE: [&str; 3] = ["Vortex", "3D swirl", "Dipole"];
+
 pub fn presets() -> &'static [Preset] {
-    &[
+    let all = &[
         // Classic: kinematic demos and generic flows.
         Preset {
             name: "Pump",
@@ -232,7 +234,19 @@ pub fn presets() -> &'static [Preset] {
             dimension: 3,
             category: PresetCategory::Electrodynamics,
         },
-    ]
+    ];
+    #[cfg(debug_assertions)]
+    {
+        let mut seen = std::collections::HashSet::<&str>::new();
+        for name in START_HERE {
+            debug_assert!(
+                all.iter().any(|preset| preset.name == name),
+                "START_HERE entry `{name}` must resolve in presets()"
+            );
+            debug_assert!(seen.insert(name), "START_HERE entries must be distinct");
+        }
+    }
+    all
 }
 
 /// The presets in one category, in declaration order. This is the grouping

@@ -10,7 +10,7 @@ use crate::export::{delete_preset, load_presets, save_preset};
 #[cfg(target_arch = "wasm32")]
 use crate::export::{load_wasm_presets, save_wasm_presets};
 use crate::export::Preset;
-use crate::presets::{PresetCategory, presets, presets_in};
+use crate::presets::{PresetCategory, START_HERE, presets, presets_in};
 use crate::render::Camera;
 use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
@@ -295,6 +295,31 @@ impl PresetPanel {
         // dimension, so duplicate formulas highlight one row and formula-bar
         // edits clear the highlight.
         ui.weak("Field presets");
+        ui.weak("Start here");
+        for name in START_HERE {
+            let preset = presets().iter().find(|preset| *preset.name == *name);
+            let (label, selected) = match preset {
+                Some(preset) => {
+                    let selected = self.active_field.as_deref() == Some(name)
+                        && state.formula == preset.formula
+                        && state.mode_3d == (preset.dimension == 3);
+                    let label = if preset.dimension == 3 {
+                        format!("{} (3D)", preset.name)
+                    } else {
+                        preset.name.to_string()
+                    };
+                    (label, selected)
+                }
+                None => (name.to_string(), false),
+            };
+            if ui
+                .selectable_label(selected, label)
+                .on_hover_text(format!("Load the {name} preset"))
+                .clicked()
+            {
+                self.load_field(name, state);
+            }
+        }
         for category in PresetCategory::ALL {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(category.title()).strong())
