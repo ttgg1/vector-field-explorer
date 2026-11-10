@@ -71,20 +71,19 @@ every dispatch a coin flip that costs a full minute to discover.
   (`#high`) is the preferred coding seat and `opencode-go/claude-haiku-5-5#high`
   the preferred review seat. At that time, `AGENTS.md` carried this as a conditional note.
 
-## Update (later on 2026-11-10) — current seat policy
+## Update (latest on 2026-11-10) — current seat policy
 
-This update supersedes the earlier reviewer/implementer split and all seat
-assignments and fallback advice in the preceding sections. The user ruling
-recorded in `progress.md:4348-4357` assigns the controller and reviewers to
-`openai/gpt-6.1-sol#medium`, and implementers to `openai/gpt-6-luna#low`.
-At the second fix round, step the variant up one level (low → medium → high),
-and step up again at every further round. A round that returns the same finding
-signals escalation rather than repeating the same seat at the same effort.
-The older free models (`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`)
-are fallbacks when an `openai` seat is unavailable. Every `opencode-go` paid
-model fails with "Policy budget exceeded" (verified 2026-11-10); do not retry
-a seat that failed that way. This is the policy recorded in `AGENTS.md` Models
-section (2026-11-10).
+The latest user ruling in `progress.md` (final dated section; read the ledger's
+last 150 lines for the authoritative record) supersedes earlier seat and
+variant guidance above. The controller uses `openai/gpt-6.1-sol#medium`;
+implementers use `openai/gpt-6-luna` with effort selected by task difficulty
+(`#low` for narrow/mechanical work, `#medium` for ordinary work, `#high` for
+wide or subtle work); reviewers use `openai/gpt-6.1-sol` with effort selected
+by review scope. A repeated finding twice changes the implementer seat to a
+different, stronger seat; it does not automatically raise effort by round.
+Older free models (`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`)
+are fallbacks when an OpenAI seat is unavailable. See `AGENTS.md` for the
+active operational policy.
 
 ## Cost of a blocked seat
 

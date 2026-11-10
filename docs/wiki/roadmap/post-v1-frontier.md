@@ -1,9 +1,9 @@
 # Post-v1 frontier and critical path — as of 2026-11-10
 
-## Update (later on 2026-11-10) — ticketed and split
+## Historical update (2026-11-10) — ticketed and split
 
-This update supersedes the original order and scheduling claims below; see the
-2026-11-10 ruling in `AGENTS.md` and tickets 72 and 39.
+This dated update records the original ticketing and scheduling decision; the
+completion recovery note below is the latest status.
 
 The two fronts became tickets on 2026-11-10: **72** (Windows packaging) and
 **39** (time-dependent fields). Ticket 39 was split — Part A (fields) is
@@ -12,6 +12,16 @@ ticket 38, blocked by 37 and 39. Windows ships as **v0.2.0**. The order in
 `AGENTS.md` now reads: Windows packaging and time-dependent fields in
 parallel → Phase 1 (sources) → Phase 3 → Phase 5 → Phase 2 → Phase 4 →
 overlays → shareable presets → CSV import.
+
+## Completion recovery (2026-11-10)
+
+Tickets 72, 39 (Part A), and 74 are merged and verified on `main` at
+`f6111341ccf903b4cc889b9841754578ef8dc025`. Ticket 72 still has its
+workflow-dispatch release dry-run open; do not treat all acceptance criteria
+as complete. Do not redispatch these tasks. For verified dispositions and the
+current frontier, consult the final dated sections of
+`.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md`. The next
+physics execution is not approved/spec-ready; investigation is ongoing.
 
 ## The claim
 
