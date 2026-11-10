@@ -1,4 +1,4 @@
-use vector_field_explorer::screenshot::{default_svg_filename, scene_to_svg, svg_element_count, SVG_ELEMENT_CAP, svg_export_enabled};
+use vector_field_explorer::screenshot::{default_svg_filename, scene_to_svg, svg_element_count, SVG_ELEMENT_CAP, svg_export_enabled, compose_svg_export_message};
 use vector_field_explorer::renderer::{SceneGPU, ArrowInstanceGPU, LineInstanceGPU};
 use vector_field_explorer::export::ensure_svg_extension;
 use std::time::SystemTime;
@@ -87,14 +87,15 @@ fn scene_to_svg_does_not_truncate_large_scene() {
     let n = SVG_ELEMENT_CAP + 5;
     let scene = SceneGPU {
         mode_3d: false,
-        arrows: std::sync::Arc::new((0..n).map(|i| arrow([i as f32 *0.01,0.0,0.0],[1.0,0.0,0.0,1.0])).collect()),
+        arrows: std::sync::Arc::new((0..n).map(|_| arrow([0.0,0.0,0.0],[1.0,0.0,0.0,1.0])).collect()),
         ..Default::default()
     };
     let count = svg_element_count(&scene);
     assert!(count > SVG_ELEMENT_CAP);
     let vp = glam::Mat4::IDENTITY;
     let svg = scene_to_svg(&scene, vp, 64, 48, [0.0,0.0,0.0,1.0]);
-    // still contains all (no truncation): count circles? just ensure not empty and root closed
+    let emitted = svg.matches("marker-end=\"url(#ah)\"").count();
+    assert_eq!(emitted, n, "serializer must not truncate");
     assert!(svg.ends_with("</svg>"));
 }
 
@@ -102,6 +103,17 @@ fn scene_to_svg_does_not_truncate_large_scene() {
 fn svg_export_rejected_in_3d() {
     assert!(!svg_export_enabled(true));
     assert!(svg_export_enabled(false));
+}
+
+#[test]
+fn compose_svg_export_message_carries_both_facts() {
+    let msg = compose_svg_export_message(SVG_ELEMENT_CAP + 5, true);
+    assert!(msg.contains("download started"), "{}", msg);
+    assert!(msg.contains("file may be large"), "{}", msg);
+    let msg2 = compose_svg_export_message(10, true);
+    assert_eq!(msg2, "screenshot download started");
+    let msg3 = compose_svg_export_message(SVG_ELEMENT_CAP + 5, false);
+    assert!(msg3.contains("file may be large"), "{}", msg3);
 }
 
 #[test]

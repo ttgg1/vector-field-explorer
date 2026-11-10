@@ -188,19 +188,18 @@ pub fn date_stamp(now: SystemTime) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// SVG variant of [`default_filename`]: same stamp, `.svg` extension.
+pub fn default_svg_filename(now: SystemTime, mode_label: &str) -> String {
+    let png = default_filename(now, mode_label);
+    png.strip_suffix(".png").unwrap_or(&png).to_string() + ".svg"
+}
+
 /// The save dialog's opening name: `vector-field-explorer-YYYY-MM-DD-<mode>.png`.
 ///
 /// `now` is a parameter (not a hidden `SystemTime::now()`) so the stamp is
 /// testable, and the mode label is lowercased with any non-alphanumeric run
 /// folded to a single `-`, so "2D" gives the brief's
 /// `vector-field-explorer-2026-11-05-2d.png`.
-///
-/// SVG variant of [`default_filename`].
-pub fn default_svg_filename(now: SystemTime, mode_label: &str) -> String {
-    let png = default_filename(now, mode_label);
-    png.strip_suffix(".png").unwrap_or(&png).to_string() + ".svg"
-}
-
 pub fn default_filename(now: SystemTime, mode_label: &str) -> String {
     let mut mode = String::new();
     for ch in mode_label.chars() {
@@ -596,6 +595,31 @@ pub fn exceeds_svg_element_cap(scene: &crate::renderer::SceneGPU) -> bool {
     svg_element_count(scene) > SVG_ELEMENT_CAP
 }
 
+/// Compose the user-facing toast message for an SVG export. Carries the
+/// download confirmation and, when the scene exceeds [`SVG_ELEMENT_CAP`],
+/// the size warning in a single message so the warning is not overwritten
+/// by the download confirmation on the web path. Promoted as a single
+/// `#[doc(hidden)]` seam so the message text is testable without an app
+/// harness (and without a browser). Reason: the wasm export path replaces
+/// the whole toast in one frame, so the two facts must be composed into one
+/// string before notifying.
+#[doc(hidden)]
+pub fn compose_svg_export_message(element_count: usize, download_started: bool) -> String {
+    let over_cap = element_count > SVG_ELEMENT_CAP;
+    match (download_started, over_cap) {
+        (true, true) => format!(
+            "screenshot download started; scene has {} elements, file may be large",
+            element_count
+        ),
+        (true, false) => "screenshot download started".to_string(),
+        (false, true) => format!(
+            "SVG export: scene has {} elements, file may be large",
+            element_count
+        ),
+        (false, false) => "SVG export complete".to_string(),
+    }
+}
+
 /// Whether an SVG export is allowed for the current view mode. SVG export is
 /// 2D only; in 3D the entry is disabled and PNG remains the only raster
 /// export. Promoted as a single `#[doc(hidden)]` seam so the rejection rule
@@ -610,9 +634,6 @@ pub fn svg_export_enabled(mode_3d: bool) -> bool {
 /// cost. The export is never truncated: exceeding this only logs a warning so
 /// the caller can surface a toast.
 pub const SVG_ELEMENT_CAP: usize = 50_000;
-pub const MAX_SVG_ELEMENTS: usize = SVG_ELEMENT_CAP;
-pub const MAX_SVG_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
-pub const SVG_SAFE_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
 
 /// A short-lived completion message.
 struct Toast {
