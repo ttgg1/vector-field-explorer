@@ -72,8 +72,9 @@ bigger tasks).
    sub-subagents and never merge or push.
 3. **Review.** A separate seat reviews the diff against the brief and the
    ledger rulings, and writes findings.
-4. **Fix round.** A fresh seat addresses the findings; the controller appends
-   `Task <N>: fix round <R>/5 (<X> addressed, <Y> open — …; commits <a>..<b>)`
+4. **Fix round.** Rounds 1–3 resume the original implementer; later-round
+   assignments follow `references/fix-loop.md`. The controller appends
+   `Ticket <N>: fix round <R>/5 (<X> addressed — <what>; <Y> open — <what>; commits <a>..<b>)`
    to the ledger. Rounds 4 and 5 are the last; beyond that the task is
    re-scoped or split.
 5. **Re-review.** A scoped re-review checks the findings list, the brief and

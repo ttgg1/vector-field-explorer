@@ -15,13 +15,14 @@ bash $SDD/review-package [-C <worktree>] <this-file> <base> <head> [outfile]
 
 `v0.1.0` is released. The three tickets implemented just after it (69 SVG
 export, 70 fly camera, 71 mobile UI) were pushed to `main` without review
-and are being repaired now through the fix loop in `references/fix-loop.md`.
+and are being repaired now through the fix loop in `../../../references/fix-loop.md`.
 The repair rounds are tracked in the ledger
 `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md`.
 
-After the repairs merge, this plan carries the next wave: the SVG export UI
-half (69b), Windows packaging (72), and time-dependent fields (39). Ticket 38
-(plot animation) waits for ticket 37 (the scalar plot).
+The ticket-69b SVG export UI repair belongs to the current repair sequence.
+Separately, after repairs merge, the next frontier is Windows packaging (72)
+and time-dependent fields (39) in parallel. Ticket 38 (plot animation) waits
+for tickets 37 and 39.
 
 Rules every seat in this plan inherits:
 
@@ -41,8 +42,8 @@ Rules every seat in this plan inherits:
 
 ## Task 69b: SVG export — the UI half
 
-**What to build:** the review of ticket 69 split the work. The serializer half
-(69a) is merged. This task closes the two UI findings: the SVG export entry
+**What to build:** the review of ticket 69 split the work. The serializer half (69a) is merged as of commits `2bb4c5b`, `03a116b`,
+`b92fd5e` and `bdd2a4b`. This task closes the two UI findings: the SVG export entry
 must be visibly disabled in 3D, and the top bar's export affordance must be
 wired.
 
@@ -115,7 +116,7 @@ Full spec: `.scratch/field-viewport/issues/39-time-component.md`
 
 Files: `src/field.rs`, `src/sim_clock.rs`, `src/viewmodel.rs`,
 `src/sampling.rs`, `src/streamlines.rs`, `src/particles.rs`,
-`src/app/simulation.rs`, `src/app/input.rs`, `src/ui/transport.rs`, `tests/`.
+`src/app/simulation.rs`, `src/app/input.rs`, `src/ui/transport.rs`, `docs/CODEBASE.md`, `tests/`.
 
 - `FieldExpr::eval3_at(p, t)` and `FieldExpr::is_time_dependent()`. Time
   dependence is detected at parse time by tokenizing the components and
@@ -203,5 +204,5 @@ for ticket 38. Full spec: `.scratch/field-viewport/issues/37-scalar-function-plo
 
 - The ledger and the per-task briefs, reports and findings:
   `.superpowers/sdd/2026-11-05-vector-field-explorer/`.
-- The fix loop: `references/fix-loop.md`.
-- The project wiki: `docs/wiki/index.md`.
+- The fix loop: `../../../references/fix-loop.md`.
+- The project wiki: `../../../docs/wiki/index.md`.

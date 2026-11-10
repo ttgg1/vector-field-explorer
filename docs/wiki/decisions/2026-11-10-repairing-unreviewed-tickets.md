@@ -15,9 +15,10 @@ until a fix round and a scoped re-review pass.
 - `6e3929b` — ticket 69, SVG screenshot export for the 2D view
 - `b0665b4` — ticket 71, mobile compact UI polish
 
-Only three commits since the `v0.1.0` tag (`aa55470`) mention "ticket NN", and
-all three are these. Nothing else in the history claims a ticket, so a
-review-record rule is cheap to introduce with a three-commit baseline.
+As of `b0665b4` on 2026-11-10, three commits since the `v0.1.0` tag
+(`aa55470`) mentioned "ticket NN", and all three are these. Later commits
+`bf16273` and `39ce6d9` also mention ticket 70, so that count is a dated
+snapshot rather than a present-day total.
 
 Post-hoc reviews (one seat per diff, using the superpowers task-reviewer
 instructions copied to

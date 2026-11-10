@@ -73,6 +73,7 @@ Production code is under `src/`, tests under `tests/`.
   window options
 - `ui/` sidebar, presets, formula bar, style panel, menu, top bar, layout rails,
   help overlay, status bar
+- `references/` SDD fix-loop procedure and review-round guidance
 
 ## Conventions (mandatory)
 

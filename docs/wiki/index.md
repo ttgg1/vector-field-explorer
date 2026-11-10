@@ -22,7 +22,8 @@ commits, reports, review packages) are cited, never copied.
 ## Decisions
 
 - [Seat model availability (2026-11-10)](decisions/2026-11-10-seat-model-availability.md)
-  — only `opencode-go/beam-free` dispatches; every paid seat is budget-blocked.
+  — the latest 2026-11-10 ruling in `AGENTS.md` assigns controller/reviewers
+  and implementers to different seats, with effort escalated by round.
 - [Repairing the unreviewed tickets 69/70/71 (2026-11-10)](decisions/2026-11-10-repairing-unreviewed-tickets.md)
   — post-hoc reviews found real gaps, so the three commits go through a fix
   loop before they count as done.
@@ -39,4 +40,4 @@ commits, reports, review packages) are cited, never copied.
 ## Reviews
 
 - [Tickets 69/70/71 review round 1 (2026-11-10)](reviews/tickets-69-71-round-1.md)
-  — what the reviews found and where each finding stands.
+  — the round-1 findings snapshot; later dispositions are in the SDD ledger.

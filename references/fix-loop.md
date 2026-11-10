@@ -39,7 +39,7 @@ before starting a fix round; the short version is in `AGENTS.md` under
    rounds still hold, and that the round introduced no new issues. The
    re-review is scoped: it does not re-review the whole task from scratch.
 8. **Ledger.** Append one line per round:
-   `Task <n>: fix round <r>/5 (<x> addressed, <y> open — <what>; commits <a>..<b>)`
+   `Ticket <N>: fix round <R>/5 (<X> addressed, <Y> open — <finding one-liners>; commits <a>..<b>)`
    and, when approved, a completion line with the merge commit.
 9. **Merge.** Rebase the branch onto `main`, then `git merge --ff-only`. This
    repo keeps a linear history with no merge commits. Merge one branch at a
@@ -51,10 +51,10 @@ before starting a fix round; the short version is in `AGENTS.md` under
 ## Rules that keep the loop honest
 
 - **Rounds 1–3 resume the original implementer** with the same brief and the
-  updated findings file; round 4 says "a prior implementer attempted this
-  task 3 times — find a different approach"; round 5 says "this task has
-  failed 4 times — stop and escalate to the controller". Always state which
-  round it is in the brief.
+  updated findings file; Round 4 resumes with a fresh implementer on a more capable model. Round 5
+  also uses a fresh implementer on a more capable model; escalate only after
+  round 5's re-review still has open findings. Always state the round in the
+  brief (superpowers `references/fix-loop.md`, lines 1–20 and 59–76).
 - **File-disjointness.** Only run two implementer seats in parallel when their
   file sets do not overlap. A seat that needs another seat's file waits for
   it to land; rebase onto `main` first so it sees the current version.
@@ -66,9 +66,9 @@ before starting a fix round; the short version is in `AGENTS.md` under
   and hope.
 - **Record the ruling.** Every decision made during a fix round goes in the
   ledger as a `Ruling: <decision> — <why>` line, not only in a chat message.
-- **Post-mortem after five rounds.** If a task burns all five rounds, stop,
-  write up what kept failing, and change the brief or the approach before
-  trying again.
+- **After round five.** If round 5's re-review still finds open items, stop and
+  escalate to the controller; adjudicate each remaining finding (park it or
+  rule on it) before continuing, per superpowers' fix-round adjudication.
 
 ## Seat models
 

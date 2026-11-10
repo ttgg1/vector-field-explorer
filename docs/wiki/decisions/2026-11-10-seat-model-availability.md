@@ -2,6 +2,9 @@
 
 ## Update (later on 2026-11-10) — reviewer/implementer split
 
+This update supersedes the earlier single-seat rule and conditional preference
+described below.
+
 Superseding the "use beam-free for everything" guidance below, the user ruled
 that **reviewers run on `opencode-go/longcat-2.5-free`** (effort matched to
 the scope of the review: a scoped re-review is less effort than a whole-branch
@@ -11,7 +14,7 @@ seats are the only ones that dispatch here, and giving the review a different
 model from the one that wrote the code is worth more than a stronger single
 model.
 
-## The claim (first ruling on 2026-11-10)
+## The claim (first ruling on 2026-11-10; superseded)
 
 On 2026-11-10, in this workspace, `opencode-go/beam-free` is the **only**
 subagent seat model that dispatches successfully. Every paid seat fails
@@ -49,8 +52,15 @@ every dispatch a coin flip that costs a full minute to discover.
   split the task instead of escalating to another blocked model.
 - If a paid seat becomes available again, `opencode-go/deepseek-v4.1-flash`
   (`#high`) is the preferred coding seat and `opencode-go/claude-haiku-5-5#high`
-  the preferred review seat. `AGENTS.md` carries this as a conditional note so
-  the table stays honest in both states.
+  the preferred review seat. At that time, `AGENTS.md` carried this as a conditional note.
+
+## Update (latest ruling in `AGENTS.md`, 2026-11-10)
+
+The current `AGENTS.md` Models section assigns controller and reviewers to
+`openai/gpt-6.1-sol#medium`, and implementers to `openai/gpt-6-luna#low`.
+Escalate effort one variant at the second fix round and at every later round.
+This supersedes the free-seat assignments and conditional preference above;
+see `AGENTS.md` (2026-11-10).
 
 ## Cost of a blocked seat
 

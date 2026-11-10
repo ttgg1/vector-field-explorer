@@ -179,7 +179,8 @@ files total). Test names are the function names printed by
 heading.
 
 The tree evolved after the original ticket list. In particular, what the ticket
-called the single `src/app` module is now `src/app/mod.rs` plus `frame.rs`, `input.rs`,
+called the single `src/app` module is now `src/app/mod.rs` plus
+`frame.rs`, `input.rs`,
 `panels.rs`, `simulation.rs`, and `viewport.rs`; the later tickets also added
 `arrow_geometry.rs`, `arrow_style.rs`, `fly_camera.rs`, `fonts.rs`, `plane.rs`,
 `pointer_lock.rs`, `reference.rs`, `sim_clock.rs`, `render/instancer.rs`,

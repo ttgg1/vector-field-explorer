@@ -2,6 +2,9 @@
 
 ## Update (later on 2026-11-10) — ticketed and split
 
+This update supersedes the original order and scheduling claims below; see the
+2026-11-10 ruling in `AGENTS.md` and tickets 72 and 39.
+
 The two fronts became tickets on 2026-11-10: **72** (Windows packaging) and
 **39** (time-dependent fields). Ticket 39 was split — Part A (fields) is
 ticket 39 and is independent of the scalar plot; Part B (plot animation) is
@@ -21,7 +24,8 @@ Phase 2 (matter) → Phase 4 (Maxwell) → div/curl overlays → shareable prese
 
 ## Dependencies read out of the roadmap ticket
 
-From `.scratch/field-viewport/issues/55-physics-roadmap.md`:
+From `.superpowers/sdd/2026-11-05-vector-field-explorer/SESSION-HANDOFF.md`
+(2026-11-10, lines 56–66):
 
 - **Windows packaging** blocks Phase 1 (sources). It is the only platform
   still missing; Linux and macOS ship.
@@ -36,10 +40,10 @@ From `.scratch/field-viewport/issues/55-physics-roadmap.md`:
 
 ## Why packaging and ticket 39 together
 
-They are independent: packaging touches CI and packaging scripts, ticket 39
-touches the evaluator (`src/field.rs`) and its callers. Running them as two
-parallel seats removes two serial dependencies before either becomes
-critical. The risk is ticket 39, because changing how formulas are bound
+They have distinct primary implementation areas, but are not file-disjoint:
+both tickets may touch `docs/CODEBASE.md` (tickets 72 and 39). Parallel work
+requires coordination on that shared documentation file. The risk is ticket 39,
+because changing how formulas are bound
 affects every sampling, particle and streamline test — it needs its own
 review attention.
 

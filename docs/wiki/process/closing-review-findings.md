@@ -18,7 +18,8 @@ implementer says it is done.
   (`fly_toggle_key`, `src/fly_camera.rs`, called from `src/app/input.rs`).
   The bar after that: the test must fail against the pre-fix code.
 - A re-review that only reads the diff cannot catch a test that cannot fail.
-  The re-review prompt asks for the failing-before evidence.
+  The controller's ticket brief/ledger ruling (`progress.md:4179`, 2026-11-10)
+  required failing-before evidence; the re-review prompt itself did not.
 
 ## One seam per genuine need
 
@@ -49,7 +50,7 @@ A finding about user-visible behaviour is not closed by calling the seam.
 
 ## Report the honest state
 
-A re-review that returns "Approved" with minors open still merges; the
-minor then goes into the next round rather than being quietly dropped. The
-ledger line for a round states how many findings were addressed and how many
-remain open.
+The 2026-11-10 ledger records round dispositions using addressed/open counts;
+it does not establish a general rule that approval with open minors merges.
+The ledger line for a round states how many findings were addressed and how
+many remain open.

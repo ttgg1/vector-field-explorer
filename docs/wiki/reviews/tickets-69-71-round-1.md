@@ -16,7 +16,7 @@ Verdict: ❌ spec issues. I1 the ticket-mandated regression test in
 `menu::shortcut_for(MenuAction::ToggleFly)` contract. I2 `src/app/input.rs`
 ignored `Event::Key.repeat`, so holding the physical C key toggled fly
 repeatedly. Minors: the consumption check was hardcoded to logical `Key::C`
-(`src/app/input.rs:63-65`); the test at `tests/menu_test.rs:374` asserted the
+(`src/app/input.rs:54-58`); the test at `tests/menu_test.rs:374` asserted the
 opposite of its name; `src/fly_camera.rs` was in ticket scope but untouched.
 
 Fix seat: `feature/fix-ticket-70` (worktree `vfe-fix-70`).
@@ -24,7 +24,7 @@ Fix seat: `feature/fix-ticket-70` (worktree `vfe-fix-70`).
 ## Ticket 69 — SVG screenshot export (`b191a3c..6e3929b`)
 
 Verdict: ❌ spec issues, including one Critical. C1 `src/screenshot.rs`
-(~414-447) never serialised 2D particles: they live in `scene.dots`, but only
+(~509-545) never serialised 2D particles: they live in `scene.dots`, but only
 `scene.arrows`/`scene.combined` were iterated, so the `tag > 0.5` particle
 branch was dead on the 2D path — the feature's target mode. I1 the
 ticket-mandated element-count cap, user warning and size-risk documentation
@@ -49,10 +49,10 @@ Verdict: ❌ spec issues, seven Important. I1 the whole legibility half (≥44 p
 compact rows and touch targets in `src/ui/layout.rs`, `src/ui/presets.rs`,
 `src/ui/sidebar.rs`) was unimplemented. I2 `tests/responsive_test.rs` was not
 extended. I3 the sheet was a two-state `sheet_expanded: bool`
-(`src/app/mod.rs:30-32`, `src/app/panels.rs:116-119`) instead of the three
+(`src/app/mod.rs:175`, `src/app/panels.rs:339+`) instead of the three
 states the ruling specified. I4 swipe-down always closed
-(`src/app/panels.rs:166-183`): no 30% peek, no 10% viewport floor,
-`SHEET_MAX_FRACTION` still 0.55. I5 the GitHub button was plain text
+(`src/app/panels.rs:433+`): no 30% peek, no 10% viewport floor,
+`SHEET_MAX_FRACTION` in `src/ui/layout.rs:72` still 0.55. I5 the GitHub button was plain text
 (`src/ui/top_bar.rs:262-264`) where ruling Q9 requires an inline SVG texture
 with text fallback. I6 Appearance stayed a hamburger-anchored popover
 (`src/ui/top_bar.rs:279-285`) instead of moving into the sheet. I7

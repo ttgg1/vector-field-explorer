@@ -2,6 +2,9 @@
 
 ## Update (later on 2026-11-10) — the fronts are now ticketed
 
+The original claim below is superseded by this update and the subsequent
+frontier ruling recorded in `AGENTS.md` (2026-11-10).
+
 The two fronts were published as tickets on 2026-11-10: **ticket 72**
 (Windows packaging) and **ticket 39** (time-dependent fields, Part A). The
 user ruled four points that shaped them:
@@ -39,11 +42,11 @@ two parallel fronts, rather than packaging alone or the Phase 0 prerequisites.
 
 ## Why this pairing
 
-The post-v1 order in `AGENTS.md` is Windows → Phase 1 (sources) → time-dependent
-fields (39/38) → Phase 3 (induction) → Phase 5 (ODE) → Phase 2 (matter) →
-Phase 4 (Maxwell). Packaging blocks the first physics phase; ticket 39 blocks
-the time-dependent phase. Taking both now removes two serial dependencies
-before they become critical, and neither touches the other's files.
+The post-v1 order recorded in `AGENTS.md` on 2026-11-10 places tickets 72 and
+39 in parallel, then Phase 1 → Phase 3 → Phase 5 → Phase 2 → Phase 4, followed
+by overlays, shareable presets and CSV import. The tickets share
+`docs/CODEBASE.md` (tickets 72 and 39), so parallel work requires coordination
+on that file rather than assuming disjoint file sets.
 
 Ticket 39's `meval` bind-once refactor is the risky half: it changes how
 `field.rs` evaluates formulas, so every sampling, particle and streamline test
@@ -51,11 +54,10 @@ is a witness to it. It needs its own review attention, not a shared seat.
 
 ## Cost, recorded honestly
 
-Two fronts means two seats and two worktrees, and the free seat model
-(see [seat model availability](2026-11-10-seat-model-availability.md)) means
-both will need careful briefs. Parallel seats must stay file-disjoint;
-ticket 39's evaluator change touches `src/field.rs` and everything that calls
-it, so the packaging seat must avoid the evaluator entirely.
+Two fronts mean two implementer worktrees; the 2026-11-10 model in `AGENTS.md`
+assigns controller/reviewers and implementers to different seats. Ticket 39's
+evaluator change touches `src/field.rs` and its callers; both tickets also
+share `docs/CODEBASE.md`, so coordinate edits to that file.
 
 ## Related
 
