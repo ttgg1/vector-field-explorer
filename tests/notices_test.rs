@@ -73,8 +73,8 @@ fn committed_notice_bundle_matches_the_cargo_graph() {
     );
     assert_eq!(
         text.matches("NO LICENCE FILE:").count(),
-        0,
-        "no shipped target includes the BSL-1.0 crate, so no textless entry remains",
+        1,
+        "only a licence that needs no binary notice (BSL-1.0) may stay textless",
     );
     for machine_path in ["/home/", ".cargo/registry", "index.crates.io"] {
         assert!(

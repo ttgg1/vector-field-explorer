@@ -93,15 +93,12 @@ def fail(message):
 def cargo_metadata():
     try:
         result = subprocess.run(
-            ["cargo", "metadata", "--format-version", "1", "--locked",
-             "--offline",
-             "--filter-platform", "x86_64-unknown-linux-gnu",
-             "--filter-platform", "aarch64-apple-darwin",
-             "--filter-platform", "x86_64-apple-darwin"],
+            ["cargo", "metadata", "--format-version", "1", "--locked"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env={**os.environ, "CARGO_NET_OFFLINE": "false"},
         )
     except FileNotFoundError:
         fail("cargo is not installed")
