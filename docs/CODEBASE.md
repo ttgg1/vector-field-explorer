@@ -2044,6 +2044,7 @@ scripts/test.sh --incremental
 cargo clippy --all-targets -- -D warnings
 scripts/smoke-run.sh 15
 scripts/check-web-bootstrap.sh
+scripts/check-site.sh            # site HTML/text gate (delegates to scripts/check_site.py)
 scripts/test-web.sh              # wasm check + trunk build --release + dist asset checks
 cargo test -- --list             # inventory, no build of the app
 ```
@@ -2067,14 +2068,8 @@ the committed icon set.
 | [ci.yml](../.github/workflows/ci.yml) | push/PR to main, nightly cron | clippy, `scripts/test.sh`, debug build; separate smoke job (`xvfb-run` + software Vulkan); separate wasm job (`check-web-bootstrap.sh`, `test-web.sh`) |
 | [nightly.yml](../.github/workflows/nightly.yml) | daily 03:17 UTC / manual | verifies main, computes `X.Y.Z-nightly.YYYYMMDD+sha`, calls `package.yml`, moves the single `nightly` prerelease tag only after assets are attached |
 | [package.yml](../.github/workflows/package.yml) | reusable | release builds for Linux x86_64 AppImage, macOS x86_64/arm64 `.app.zip`; pinned linuxdeploy/appimagetool/runtime; excludes host GPU libraries |
+| [pages.yml](../.github/workflows/pages.yml) | push to main (paths) / manual | builds the wasm bundle and site (`trunk build --release`), runs `scripts/check-site.sh`, deploys to GitHub Pages |
 | [release.yml](../.github/workflows/release.yml) | `v*` tag / manual | tag must match `Cargo.toml` and be reachable from main; verifies, packages, publishes assets; pre-release tags get `--prerelease` |
-
-There is **no Pages workflow in this tree** at this commit. The browser build is
-produced by `scripts/test-web.sh` / `trunk build --release` (Trunk target
-`index.html`), and the documented deployment URL is
-`https://ttgg1.github.io/vector-field-explorer/`; deployment automation would
-have to be added or lives outside these files. Do not claim a Pages job exists
-until a workflow does.
 
 ### 7.3 Release and versioning
 
@@ -2147,8 +2142,9 @@ Hazards worth knowing before editing:
 
 ## 9. Module ↔ test inventory
 
-`cargo test --all-targets -- --list` at this commit reports **704 tests**: 703
-in the suite plus the isolated `config_test` target. The high-value map:
+`cargo test --all-targets -- --list` at this commit reports **716** raw `#[test]`
+lines: 715 are executed on this platform (714 in the suite plus the isolated
+`config_test` target), and one more is wasm-only. The high-value map:
 
 | Area | Test file(s) | Count |
 | --- | --- | --- |
@@ -2162,7 +2158,7 @@ in the suite plus the isolated `config_test` target. The high-value map:
 | View commands/shortcuts | `view_command_test.rs` | 22 |
 | Status bar | `status_bar_test.rs` | 19 |
 | Streamlines | `streamlines_test.rs` | 19 |
-| Screenshot | `screenshot_test.rs` | 18 |
+| Screenshot | `screenshot_test.rs` | 19 |
 | Particle playback/clock | `particle_playback_test.rs` | 17 |
 | Help overlay | `help_overlay_test.rs` | 14 |
 | Layout | `layout_test.rs` | 14 |
@@ -2203,6 +2199,10 @@ in the suite plus the isolated `config_test` target. The high-value map:
 | Config/XDG | `config_test.rs` | 1 |
 | Test layout guard | `test_layout_test.rs` | 2 |
 
+| Download link | `download_link_test.rs` | 1 |
+| Notices bundle | `notices_test.rs` | 1 |
+| Packaging notices | `packaging_notices_test.rs` | 7 |
+
 The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 `sidebar_colormap_ui_test.rs`) add the small legacy/2D-specific checks.
 
@@ -2232,8 +2232,6 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
   disk but not declared in a module, so they are not compiled.
 - **GPU behavior is not unit-tested.** `cargo test` never creates a device; the
   smoke run and CI smoke job are the only checks for shaders/pipelines/windowing.
-- **No Pages workflow** in this tree at this commit; the web build exists but
-  its deployment pipeline is not in `.github/workflows/`.
 
 ---
 

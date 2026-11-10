@@ -280,7 +280,7 @@ The top menu bar contains:
 - **Edit**: Copy formula, Reset all controls.
 - **View**: Toggle Controls, Toggle Presets, Reset layout, Reset camera,
   Appearance….
-- **Help**: Keyboard & mouse, About Vector Field Explorer.
+- **Help**: Keyboard & mouse, Download desktop app, About Vector Field Explorer.
 
 Appearance (the gear in the top bar or **View → Appearance…**) edits the theme,
 accent colour, rounding, spacing, and font size. The same popover is available
@@ -320,8 +320,8 @@ preset** is a formula definition. The distinction is defined in
 
 Corrupt or partial settings fall back to defaults or clamp to valid ranges.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
-reported rather than silently overwritten (a missing file starts with an empty
-list). On the web, eframe's browser storage is used and camera presets use
+logged and left untouched rather than silently overwritten (a missing file
+starts with an empty list). On the web, eframe's browser storage is used and camera presets use
 `localStorage`.
 
 ## Limitations

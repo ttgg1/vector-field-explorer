@@ -1,8 +1,7 @@
 # Vector Field Explorer
 
-A native and browser app for exploring vector fields typed as formulas or built
-from placed sources. This glossary names the app's view, controls, camera,
-motion, and physics concepts.
+A native and browser app for exploring vector fields typed as formulas. This
+glossary names the app's view, controls, camera, motion, and physics concepts.
 
 ## View and chrome
 
@@ -53,7 +52,7 @@ mode, where it is the sole length multiplier. The arrow length scale applies
 only to Proportional and Uniform.
 
 **Presets panel**:
-The right side panel holding camera presets.
+The right side panel holding field presets and saved camera views.
 
 **Panel rail**:
 The narrow edge strip left behind by a collapsed Controls or Presets panel;
@@ -68,8 +67,7 @@ The row above the formula bar hosting File, Edit, View, Help, the Appearance
 gear, and the screenshot action.
 
 **Formula bar**:
-The row holding the field-preset selector, the 2D/3D toggle, and the editable
-formula.
+The row holding the 2D/3D toggle and the editable formula.
 
 **Appearance popover**:
 A non-modal panel opened by `View > Appearance…` or the top-bar gear for
@@ -91,8 +89,7 @@ _Avoid_: theme preset
 ## Field and motion
 
 **Field**:
-The vector function sampled over the domain, defined either by a typed formula
-or by placed sources.
+The vector function sampled over the domain, defined by a typed formula.
 _Avoid_: vector field function, field expression
 
 **Domain**:
@@ -178,7 +175,10 @@ What a single left click in the viewport does: seed a streamline or add a
 particle burst. The two are exclusive.
 _Avoid_: click mode, click behavior
 
-## Physics
+## Physics (planned, post-v1)
+
+None of the following concepts is implemented in v0.1.0; they are
+reserved for the post-v1 physics work (ADR 0003).
 
 **Formula mode**:
 The field is defined by a formula typed in the formula bar and evaluated per
