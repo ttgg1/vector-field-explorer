@@ -19,6 +19,11 @@ presets, screenshots. Ships native and as a WebAssembly browser build.
   delete tickets.
 - **Current frontier and next order:** the ledger, not this file. This guide
   deliberately does not duplicate ticket status.
+- **Tribal knowledge:** `docs/wiki/` (tracked, `docs/wiki/index.md` lists every
+  page). Decisions with their reasoning, the working process, and the state of
+  long-running efforts. Pages are dated historical records that cite their
+  source — read the wiki before re-deriving process from scratch, and add a
+  page when you learn something durable.
 
 ## v0.1.0 target
 
@@ -170,13 +175,17 @@ Scripts and prompt templates:
 
 **Models — always pass explicitly; never inherit silently.**
 
-- Coding seats: `opencode-go/deepseek-v4.1-flash`, variant `#high` for complex
-  work, `#max` when stuck (BLOCKED/NEEDS_CONTEXT twice). No kimi k3.x seats:
-  they are usage-limit prone; re-scope or split the task instead of escalating
-  to them.
-- Review seats: `opencode-go/claude-haiku-5-5#high` (cheap, avoids usage
-  limits); `#max` for the final whole-branch review; free fallback
-  `opencode-go/beam-free`.
+- **Available seats (verified 2026-11-10):** `opencode-go/beam-free` is the
+  only seat model that runs in this workspace. Every paid seat fails at
+  dispatch with "Policy budget exceeded": `opencode-go/claude-haiku-5-5`,
+  `opencode-go/deepseek-v4.1-flash` and `opencode/claude-haiku-5-5` were all
+  confirmed failing. Use `opencode-go/beam-free#high` for coding, review and
+  re-review seats alike.
+- **If a paid seat ever becomes available again:** coding
+  `opencode-go/deepseek-v4.1-flash` (`#high` complex, `#max` when stuck twice),
+  review `opencode-go/claude-haiku-5-5#high`. Do not re-try a seat that has
+  failed with "Policy budget exceeded" — re-scope the task or split it instead
+  of escalating to another blocked model. No kimi k3.x seats.
 - **Usage limits:** when a seat's model hits its usage limit, switch that seat
   to `opencode-go/beam-free` (free) instead of waiting, retrying, or moving to
   kimi. This applies to coding and review seats alike.
