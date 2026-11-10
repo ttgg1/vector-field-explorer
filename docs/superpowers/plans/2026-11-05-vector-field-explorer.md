@@ -37,8 +37,12 @@ Rules every seat in this plan inherits:
   ticket number in the message.
 - **One worktree and one branch per seat**; file-disjoint seats only.
 - **A seat never dispatches a subagent.**
-- Reviewers run on `opencode-go/longcat-2.5-free`, implementers on
-  `opencode-go/beam-free` (higher variants for bigger tasks).
+- Controller and reviewers run on `openai/gpt-6.1-sol#medium`; implementers
+  run on `openai/gpt-6-luna#low`. At the second fix round, step the variant up
+  one level (low → medium → high), and step up again at every further round.
+  Use `opencode-go/beam-free` and `opencode-go/longcat-2.5-free` as fallbacks
+  when an `openai` seat is unavailable (2026-11-10 user ruling,
+  `progress.md:4348-4357`).
 
 ## Task 69b: SVG export — the UI half
 

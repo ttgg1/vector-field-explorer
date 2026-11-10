@@ -32,9 +32,12 @@ two parallel fronts, rather than packaging alone or the Phase 0 prerequisites.
 
 1. Windows packaging alone — the single blocking item for Phase 1 sources;
    narrow, mostly CI/toolchain work, low conflict risk with later physics work.
-2. **Windows + ticket 39** — chosen. Packaging is independent of the `t`
-   (time) / bind-once `meval` refactor, so two seats can work without touching
-   the same files.
+2. **Windows + ticket 39** — chosen. Their primary implementation work is
+   independent (packaging versus the `t` / bind-once `meval` refactor), but the
+   original assumption that their file sets do not overlap was incorrect:
+   both tickets may edit `docs/CODEBASE.md`. Parallel work therefore needs
+   coordination on that shared documentation file, as recorded in the update
+   below (tickets 72 and 39, 2026-11-10).
 3. Phase 0 prerequisites first (ticket 37 plot surface, 38 animated plots, 35
    perf harness, the 2D slice seam) — better foundation, but delays
    user-visible capability.

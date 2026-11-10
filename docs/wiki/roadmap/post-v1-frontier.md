@@ -25,7 +25,7 @@ Phase 2 (matter) → Phase 4 (Maxwell) → div/curl overlays → shareable prese
 ## Dependencies read out of the roadmap ticket
 
 From `.superpowers/sdd/2026-11-05-vector-field-explorer/SESSION-HANDOFF.md`
-(2026-11-10, lines 56–66):
+(2026-11-10, lines 56–69):
 
 - **Windows packaging** blocks Phase 1 (sources). It is the only platform
   still missing; Linux and macOS ship.

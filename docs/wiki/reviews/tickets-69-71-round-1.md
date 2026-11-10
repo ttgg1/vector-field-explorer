@@ -16,8 +16,12 @@ Verdict: ❌ spec issues. I1 the ticket-mandated regression test in
 `menu::shortcut_for(MenuAction::ToggleFly)` contract. I2 `src/app/input.rs`
 ignored `Event::Key.repeat`, so holding the physical C key toggled fly
 repeatedly. Minors: the consumption check was hardcoded to logical `Key::C`
-(`src/app/input.rs:54-58`); the test at `tests/menu_test.rs:374` asserted the
-opposite of its name; `src/fly_camera.rs` was in ticket scope but untouched.
+(`b191a3c:src/app/input.rs:58-64` matched the physical-or-logical C key;
+`b191a3c:src/app/input.rs:66-69` consumed hardcoded `Key::C`, at `:68`). In
+the current code, the event-derived predicate is `src/app/input.rs:49-55` and
+the matched key is consumed at `:56-58`; this is the fix, not the historical
+finding. The test at `tests/menu_test.rs:374` asserted the opposite of its
+name; `src/fly_camera.rs` was in ticket scope but untouched.
 
 Fix seat: `feature/fix-ticket-70` (worktree `vfe-fix-70`).
 

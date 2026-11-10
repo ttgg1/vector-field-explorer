@@ -39,7 +39,7 @@ before starting a fix round; the short version is in `AGENTS.md` under
    rounds still hold, and that the round introduced no new issues. The
    re-review is scoped: it does not re-review the whole task from scratch.
 8. **Ledger.** Append one line per round:
-   `Ticket <N>: fix round <R>/5 (<X> addressed, <Y> open — <finding one-liners>; commits <a>..<b>)`
+   `Ticket <N>: fix round <R>/5 (<X> addressed — <addressed finding one-liners>; <Y> open — <open finding one-liners>; commits <a>..<b>)`
    and, when approved, a completion line with the merge commit.
 9. **Merge.** Rebase the branch onto `main`, then `git merge --ff-only`. This
    repo keeps a linear history with no merge commits. Merge one branch at a
@@ -72,8 +72,12 @@ before starting a fix round; the short version is in `AGENTS.md` under
 
 ## Seat models
 
-The free seats are the only ones that dispatch in this workspace; paid seats
-fail with "Policy budget exceeded". Implementers run on
-`opencode-go/beam-free` (`#high`, `#xhigh`/`#max` for the bigger tasks);
-reviewers run on `opencode-go/longcat-2.5-free`, with the effort matched to
-the scope of the review.
+The current policy (user ruling recorded in `progress.md:4348-4357`,
+2026-11-10) assigns the controller and reviewers to
+`openai/gpt-6.1-sol#medium`, and implementers to `openai/gpt-6-luna#low`.
+At the second fix round, step the variant up one level (low → medium → high),
+and step up again at every later round; a repeated finding at the same effort
+signals escalation. Use the older free models (`opencode-go/beam-free`,
+`opencode-go/longcat-2.5-free`) when an `openai` seat is unavailable. Every
+`opencode-go` paid model fails with "Policy budget exceeded" (verified
+2026-11-10); do not retry a seat that failed that way.

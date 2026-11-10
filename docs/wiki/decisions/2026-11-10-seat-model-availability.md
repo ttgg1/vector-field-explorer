@@ -54,13 +54,20 @@ every dispatch a coin flip that costs a full minute to discover.
   (`#high`) is the preferred coding seat and `opencode-go/claude-haiku-5-5#high`
   the preferred review seat. At that time, `AGENTS.md` carried this as a conditional note.
 
-## Update (latest ruling in `AGENTS.md`, 2026-11-10)
+## Update (later on 2026-11-10) — current seat policy
 
-The current `AGENTS.md` Models section assigns controller and reviewers to
+This update supersedes the earlier reviewer/implementer split and all seat
+assignments and fallback advice in the preceding sections. The user ruling
+recorded in `progress.md:4348-4357` assigns the controller and reviewers to
 `openai/gpt-6.1-sol#medium`, and implementers to `openai/gpt-6-luna#low`.
-Escalate effort one variant at the second fix round and at every later round.
-This supersedes the free-seat assignments and conditional preference above;
-see `AGENTS.md` (2026-11-10).
+At the second fix round, step the variant up one level (low → medium → high),
+and step up again at every further round. A round that returns the same finding
+signals escalation rather than repeating the same seat at the same effort.
+The older free models (`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`)
+are fallbacks when an `openai` seat is unavailable. Every `opencode-go` paid
+model fails with "Policy budget exceeded" (verified 2026-11-10); do not retry
+a seat that failed that way. This is the policy recorded in `AGENTS.md` Models
+section (2026-11-10).
 
 ## Cost of a blocked seat
 
