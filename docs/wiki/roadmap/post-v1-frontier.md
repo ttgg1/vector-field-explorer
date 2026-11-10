@@ -1,5 +1,15 @@
 # Post-v1 frontier and critical path — as of 2026-11-10
 
+## Update (later on 2026-11-10) — ticketed and split
+
+The two fronts became tickets on 2026-11-10: **72** (Windows packaging) and
+**39** (time-dependent fields). Ticket 39 was split — Part A (fields) is
+ticket 39 and is independent of the scalar plot; Part B (plot animation) is
+ticket 38, blocked by 37 and 39. Windows ships as **v0.2.0**. The order in
+`AGENTS.md` now reads: Windows packaging and time-dependent fields in
+parallel → Phase 1 (sources) → Phase 3 → Phase 5 → Phase 2 → Phase 4 →
+overlays → shareable presets → CSV import.
+
 ## The claim
 
 As of 2026-11-10, `v0.1.0` (`aa55470`) was released and `main` stood at

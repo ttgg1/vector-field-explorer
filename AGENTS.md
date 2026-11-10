@@ -45,13 +45,17 @@ presets, screenshots. Ships native and as a WebAssembly browser build.
 - **Performance floors:** native 60 fps default / 30 fps on the densest preset
   at 1280×800 integrated GPU; web 30 fps default; startup <2 s native, <5 s web.
 - **Release:** SemVer; first tag `v0.1.0` only after ticket 19 is green;
-  on-demand patch/minor releases; no fixed cadence, no backports. Local ticket
-  tracker through v0.1.0; GitHub Issues/PRs accepted; no CLA.
+  on-demand patch/minor releases; no fixed cadence, no backports. Windows
+  lands as `v0.2.0` — a new supported platform is a feature, not a patch, and
+  is not backported to v0.1.0. Local ticket tracker through v0.1.0; GitHub
+  Issues/PRs accepted; no CLA.
 - **No localization in v0.1.0.** There is no locale module; keep user-facing
   strings in the `ui/` modules.
-- **Post-v1 order:** Windows → 55 Phase 1 (sources) → time-dependent fields
-  (39/38) → 55 Phase 3 (induction) → 55 Phase 5 (ODE) → 55 Phase 2 (matter) →
+- **Post-v1 order:** Windows packaging (ticket 72) and time-dependent fields
+  (ticket 39, Part A) run as two parallel fronts → 55 Phase 1 (sources) →
+  55 Phase 3 (induction) → 55 Phase 5 (ODE) → 55 Phase 2 (matter) →
   55 Phase 4 (Maxwell) → div/curl overlays → shareable presets → CSV import.
+  Ticket 38 (plot animation, Part B) follows tickets 37 and 39.
 
 ## Repo map
 

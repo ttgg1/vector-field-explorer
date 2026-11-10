@@ -1,5 +1,24 @@
 # Next frontier: Windows packaging + time-dependent fields — 2026-11-10
 
+## Update (later on 2026-11-10) — the fronts are now ticketed
+
+The two fronts were published as tickets on 2026-11-10: **ticket 72**
+(Windows packaging) and **ticket 39** (time-dependent fields, Part A). The
+user ruled four points that shaped them:
+
+- **Ticket 39 is split.** Part A (the `t` variable, clock stepping, per-frame
+  rebuild) is ticket 39 and is **not** blocked by ticket 37; Part B (plot
+  animation) reuses the existing ticket 38 and is blocked by 37 and 39.
+  The numbers stay meaningful for anyone reading the roadmap ticket.
+- **Windows artifact:** an unsigned `.zip` of the `.exe`, no installer.
+- **Windows toolchain:** MSVC on a `windows-latest` runner, not a MinGW
+  cross-build.
+- **Windows CI gate:** build + test + clippy on Windows, plus an uploaded
+  artifact. No GUI launch claim — a runner has no display.
+
+Windows ships as **v0.2.0**: a new supported platform is a feature, not a
+patch, and v0.1.0 is not touched.
+
 ## The claim
 
 On 2026-11-10 the user chose the next work wave after the current fix loop
