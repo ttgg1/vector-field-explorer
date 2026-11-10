@@ -45,20 +45,20 @@ use std::fs;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Preset {
+pub struct CameraPreset {
     pub name: String,
     pub position: [f32; 2],
     pub scale: f32,
 }
 
 /// Encode the camera-preset list in the same JSON shape the native file uses.
-pub fn presets_to_json(presets: &[Preset]) -> Result<String, serde_json::Error> {
+pub fn presets_to_json(presets: &[CameraPreset]) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(presets)
 }
 
 /// Decode a camera-preset JSON payload. Corrupt or foreign shapes are `None`;
 /// callers fall back to an empty list rather than panicking.
-pub fn presets_from_json(data: &str) -> Option<Vec<Preset>> {
+pub fn presets_from_json(data: &str) -> Option<Vec<CameraPreset>> {
     serde_json::from_str(data).ok()
 }
 
@@ -87,7 +87,7 @@ fn js_error(error: impl Into<wasm_bindgen::JsValue>) -> String {
 /// corrupt payload falls back to empty (logged) without panicking. The second
 /// value is a panel note when browser storage itself is unavailable.
 #[cfg(target_arch = "wasm32")]
-pub fn load_wasm_presets() -> (Vec<Preset>, Option<String>) {
+pub fn load_wasm_presets() -> (Vec<CameraPreset>, Option<String>) {
     let storage = match local_storage() {
         Ok(storage) => storage,
         Err(error) => {
@@ -114,7 +114,7 @@ pub fn load_wasm_presets() -> (Vec<Preset>, Option<String>) {
 /// Write the browser's camera-preset list through to localStorage. The panel
 /// keeps the in-memory list when this fails so saving still works in-session.
 #[cfg(target_arch = "wasm32")]
-pub fn save_wasm_presets(presets: &[Preset]) -> Result<(), String> {
+pub fn save_wasm_presets(presets: &[CameraPreset]) -> Result<(), String> {
     let storage = local_storage()?;
     let data = presets_to_json(presets).map_err(|error| error.to_string())?;
     storage.set_item(PRESETS_STORAGE_KEY, &data).map_err(js_error)
@@ -131,7 +131,7 @@ pub fn storage_note() -> String {
 pub fn save_preset<P: AsRef<std::path::Path>>(dir: P, name: &str, cam: &Camera) -> io::Result<()> {
     let mut presets = load_presets(&dir)?;
     presets.retain(|p| p.name != name);
-    presets.push(Preset { name: name.to_string(), position: cam.position, scale: cam.scale });
+    presets.push(CameraPreset { name: name.to_string(), position: cam.position, scale: cam.scale });
     let data = serde_json::to_string_pretty(&presets).map_err(io::Error::other)?;
     fs::create_dir_all(dir.as_ref())?;
     fs::write(dir.as_ref().join("presets.json"), data)?;
@@ -152,11 +152,11 @@ pub fn delete_preset<P: AsRef<std::path::Path>>(dir: P, name: &str) -> io::Resul
 
 /// Load all presets from the given directory.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_presets<P: AsRef<std::path::Path>>(dir: P) -> io::Result<Vec<Preset>> {
+pub fn load_presets<P: AsRef<std::path::Path>>(dir: P) -> io::Result<Vec<CameraPreset>> {
     let path = dir.as_ref().join("presets.json");
     if !path.exists() { return Ok(vec![]); }
     let data = fs::read_to_string(path)?;
-    let presets: Vec<Preset> = serde_json::from_str(&data).map_err(io::Error::other)?;
+    let presets: Vec<CameraPreset> = serde_json::from_str(&data).map_err(io::Error::other)?;
     Ok(presets)
 }
 

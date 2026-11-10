@@ -30,7 +30,7 @@ pub mod window;
 pub use app::VfApp;
 pub use colormap::Colormap;
 pub use domain::Domain;
-pub use export::Preset;
+pub use export::CameraPreset;
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::{load_presets, save_preset};
 pub use field::FieldExpr;

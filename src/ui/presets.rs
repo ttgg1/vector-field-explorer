@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use crate::export::{delete_preset, load_presets, save_preset};
 #[cfg(target_arch = "wasm32")]
 use crate::export::{load_wasm_presets, save_wasm_presets};
-use crate::export::Preset;
+use crate::export::CameraPreset;
 use crate::presets::{PresetCategory, START_HERE, presets, presets_in};
 use crate::render::Camera;
 use crate::view_command::ViewCommand;
@@ -49,7 +49,7 @@ pub struct PresetPanel {
     /// Directory where presets.json lives.
     dir: PathBuf,
     /// Cached list of presets.
-    presets: Vec<Preset>,
+    presets: Vec<CameraPreset>,
     /// Pending name for the "Save current view" name field.
     new_name: String,
     /// The preset last saved or applied; drives the row highlight.
@@ -99,7 +99,7 @@ impl PresetPanel {
         }
     }
 
-    fn from_parts(dir: PathBuf, presets: Vec<Preset>, storage_note: Option<String>) -> Self {
+    fn from_parts(dir: PathBuf, presets: Vec<CameraPreset>, storage_note: Option<String>) -> Self {
         Self {
             dir,
             presets,
@@ -147,7 +147,7 @@ impl PresetPanel {
     }
 
     /// Presets currently listed in the panel.
-    pub fn presets(&self) -> &[Preset] {
+    pub fn presets(&self) -> &[CameraPreset] {
         &self.presets
     }
 
@@ -184,7 +184,7 @@ impl PresetPanel {
         #[cfg(not(target_arch = "wasm32"))]
         save_preset(&self.dir, name, camera)?;
         self.presets.retain(|p| p.name != name);
-        self.presets.push(Preset {
+        self.presets.push(CameraPreset {
             name: name.to_owned(),
             position: camera.position,
             scale: camera.scale,

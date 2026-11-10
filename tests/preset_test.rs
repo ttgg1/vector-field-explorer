@@ -18,8 +18,8 @@ mod tests {
     #[test]
     fn preset_json_round_trips_the_shared_shape() {
         let presets = vec![
-            export::Preset { name: "front".into(), position: [1.0, -2.5], scale: 3.0 },
-            export::Preset { name: "side".into(), position: [0.0, 4.0], scale: 1.5 },
+            export::CameraPreset { name: "front".into(), position: [1.0, -2.5], scale: 3.0 },
+            export::CameraPreset { name: "side".into(), position: [0.0, 4.0], scale: 1.5 },
         ];
         let json = export::presets_to_json(&presets).expect("encode");
         assert_eq!(export::presets_from_json(&json), Some(presets));

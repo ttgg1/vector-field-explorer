@@ -196,7 +196,7 @@ to them by mistake.
 surface used by integration tests and external callers.
 
 **Public API.** `pub mod` for every module listed in the tree; re-exports
-`app::VfApp`, `colormap::Colormap`, `domain::Domain`, `export::Preset`,
+`app::VfApp`, `colormap::Colormap`, `domain::Domain`, `export::CameraPreset`,
 `field::FieldExpr`, `render::Camera`, and (native only) `export::load_presets` /
 `export::save_preset`.
 

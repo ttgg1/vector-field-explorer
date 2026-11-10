@@ -54,7 +54,7 @@ Production code is under `src/`, tests under `tests/`.
 
 - `field.rs` parse/eval via meval · `domain.rs` grid · `colormap.rs`
   Viridis/Turbo/Mono · `presets.rs` field presets (distinct from camera
-  `export::Preset`) · `sampling.rs` `sample_field`/`ArrowData`/`ViewOptions`
+  `export::CameraPreset`) · `sampling.rs` `sample_field`/`ArrowData`/`ViewOptions`
 - `viewmodel.rs` pure `State`, dirty flags, `SceneGPU` snapshot, camera-input
   seam · `view_command.rs` pure camera commands · `camera.rs` `OrbitCamera` ·
   `renderer.rs` instanced wgpu · `render.rs` 2D pan/zoom · `particles.rs`
