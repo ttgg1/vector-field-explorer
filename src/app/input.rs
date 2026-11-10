@@ -31,8 +31,48 @@ impl VfApp {
             exit_on_focus_loss(&mut self.fly, &mut self.fly_keys, &input.events);
         });
 
-        for action in menu::shortcut_actions(ctx) {
-            self.apply_menu_action(action, ctx);
+        // Ticket 70: while flying, global menu shortcuts are suppressed so a
+        // movement key (physical A/D/...) can never fire a toggle (e.g.
+        // ToggleFly on a non-QWERTY layout). Esc still exits through the
+        // existing path below.
+        if self.fly.is_none() {
+            for action in menu::shortcut_actions(ctx) {
+                self.apply_menu_action(action, ctx);
+            }
+        }
+
+        // Ticket 70: layout-aware fly toggle. Match on the physical key when
+        // the backend provides it (native), falling back to the logical key
+        // (web), mirroring `FlyKeys::apply_key`. This is what makes the
+        // toggle fire on the key physically in the C position instead of on
+        // whatever key happens to report logical C on a non-QWERTY layout.
+        if !ctx.text_edit_focused() {
+            let toggle = ctx.input(|input| {
+                input.events.iter().any(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        physical_key,
+                        pressed,
+                        modifiers,
+                        ..
+                    } => {
+                        *pressed
+                            && modifiers.is_none()
+                            && physical_key.unwrap_or(*key) == egui::Key::C
+                    }
+                    _ => false,
+                })
+            });
+            if toggle {
+                ctx.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::C);
+                });
+                crate::fly_camera::toggle_fly(
+                    &mut self.fly,
+                    &self.orbit,
+                    self.state.is_3d(),
+                );
+            }
         }
 
         // Space is the transport's play/pause (ticket 26). The helper is inert

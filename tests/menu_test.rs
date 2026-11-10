@@ -372,12 +372,13 @@ fn extra_modifiers_do_not_fire_the_plain_shortcuts() {
 
 #[test]
 fn plain_c_toggles_fly_but_modified_c_does_not() {
-    // Ticket 46: C is the fly toggle; Shift+C (boost + C), Ctrl/Cmd+C and
-    // Ctrl+Shift+C (copy formula) must never toggle fly mode.
-    assert_eq!(
-        fired_shortcuts(egui::Modifiers::NONE, egui::Key::C),
-        vec![MenuAction::ToggleFly],
-        "plain C toggles fly",
+    // Ticket 70: ToggleFly is no longer dispatched through the logical shortcut
+    // table; it is handled on the physical key (see app::input) so a non-QWERTY
+    // layout cannot exit fly while strafing. Plain C therefore produces no
+    // shortcut action here; modified C never did.
+    assert!(
+        fired_shortcuts(egui::Modifiers::NONE, egui::Key::C).is_empty(),
+        "plain C is not a logical shortcut any more (handled physically)",
     );
     assert!(
         fired_shortcuts(egui::Modifiers::SHIFT, egui::Key::C).is_empty(),

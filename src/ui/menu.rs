@@ -281,6 +281,10 @@ pub fn shortcut_actions(ctx: &egui::Context) -> Vec<MenuAction> {
             .iter()
             .filter(|shortcut| shortcut_allowed(shortcut, text_edit_focused))
             .filter(|shortcut| modifiers.matches_exact(shortcut.modifiers))
+            // Ticket 70: ToggleFly is handled on the physical key (see
+            // `app::input`), so it must not also fire on the logical key —
+            // otherwise a non-QWERTY layout (Bone) both strafes and exits fly.
+            .filter(|shortcut| shortcut.action != MenuAction::ToggleFly)
             .filter(|shortcut| input.consume_key(shortcut.modifiers, shortcut.key))
             .map(|shortcut| shortcut.action)
             .collect()
