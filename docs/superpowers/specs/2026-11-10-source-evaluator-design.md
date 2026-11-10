@@ -85,7 +85,14 @@ length units. `charge` and `current` are signed display-only strengths. Positive
 charge points electric field outward; negative charge reverses it. Positive
 current uses the right-hand rule around `axis`; negative current reverses it.
 The common proportionality constants (Coulomb `1/(4π ε₀)` and Biot–Savart
-`μ₀/(4π)`) are omitted, as are dimensional conversions. `charge` on extended
+`μ₀/(4π)`) are omitted from all geometries, as are dimensional conversions.
+This means every electric contribution uses the Coulomb kernel without its
+common prefactor and every magnetic contribution uses the Biot–Savart kernel
+without its common prefactor; relative strengths within each family are thereby
+defined. In particular, integrating the softened line kernel
+`I dℓ × r / (|r|²+a²)^(3/2)` over an infinite straight wire gives
+`2 I (axis × r_perp) / (|r_perp|²+a²)`. The factor 2 is part of the evaluator's
+relative normalization, not an optional proportionality. `charge` on extended
 electric sources is total charge uniformly distributed over the indicated
 geometry. `turns` is a turn count; current is current per turn in the teaching
 model.
@@ -121,29 +128,78 @@ silently leaking into arrows. No per-sample allocation.
 For point charge, use softened Coulomb kernel
 `q r / (|r|² + a²)^(3/2)`, `r = point - center`, `a = softening`. This is a
 softened teaching kernel, not a physical finite-size charge. For infinite
-straight wire, use softened Biot–Savart line kernel proportional to
-`I (axis × r_perp) / (|r_perp|² + a²)`, where `r_perp` is displacement
-perpendicular to axis. Its sign follows the right-hand rule.
+straight wire, use the softened integrated Biot–Savart line kernel
+`2 I (axis × r_perp) / (|r_perp|² + a²)`, where `r_perp` is displacement
+perpendicular to axis. Its sign follows the right-hand rule; the common
+`μ₀/(4π)` remains omitted as declared above.
 
-For all bounded distributions use deterministic fixed Gauss–Legendre
-quadrature, not adaptive integration: 32 nodes per line/azimuthal integral;
-disc and solid sphere use 16 radial × 32 azimuthal nodes; solenoid uses 16
-axial × 32 azimuthal nodes. Apply the same softened Coulomb kernel at each
-charge element and the softened Biot–Savart kernel at each current element;
-quadrature weights are multiplied by the normalized uniform distribution so
-`charge` is total charge, not density. Ring/loop are azimuth-only. Disc uses
-area weighting (`2ρ/R² dρ`); sphere uses volume weighting (`3ρ²/R³ dρ`) and
-uniform solid-volume charge. Finite line integrates uniformly from `-L/2` to
-`L/2`. Solenoid integrates a continuous surface current with total turn count
-distributed uniformly along its length (the finite-sheet teaching model).
+For bounded distributions, a fixed finite quadrature order is not an accuracy
+contract: a softened kernel can be arbitrarily narrow relative to source size
+over the proposed parameter envelope. Instead, propose deterministic adaptive
+quadrature with a tensor-product 8-point/16-point Gauss–Legendre pair on each
+parameter cell, local subdivision, a per-query evaluation budget, and a
+documented requested absolute/relative error target. For each cell, compare the
+two vector estimates componentwise; sum the high-order estimates and estimated
+errors over cells. Accept only when the global estimated error norm is at most
+`abs_tol + rel_tol * norm(estimate)`. Otherwise bisect the cell with the largest
+estimated error, choosing its longest side in normalized parameter coordinates
+(stable axis-order tie break), and repeat. Integrate source parameter domains
+(line; ring/loop angle; disc radius/angle; solenoid axial position/angle) with
+the corresponding normalized measures. The sphere uses the symmetry-reduced
+angular/radial integral described below and applies the same adaptive rule to
+its remaining variables. If the evaluation budget is exhausted before the
+criterion passes, return an explicit convergence/budget error, never a
+silently under-resolved field. The estimate is an error indicator, not a
+rigorous bound; satisfying it is not a mathematical guarantee. Deterministic
+cell selection and accumulation order make results reproducible. This can be
+substantially slower than fixed quadrature for narrow kernels; performance,
+absolute/relative tolerances, work budget, and any resulting validity
+restrictions require measured evidence and owner approval. Their numeric values
+are deliberately unspecified here. No numerical parameter range is claimed
+accurate by this proposal. The per-query budget bounds worst-case work, while
+failure makes that tradeoff visible rather than returning an inaccurate finite
+answer.
+
+For a uniformly volume-charged solid sphere, use spherical coordinates about
+its center, but exploit rotational symmetry rather than treating the sphere as
+concentric planar rings. Let `s` be the query displacement, `R=|s|`, `ρ` the
+source radius, and `u=cosθ` the angle cosine relative to `s`. With the softened
+kernel, the angular integral of its radial component is
+`2π ∫[-1,1] (R-ρu)/(R²+ρ²+a²-2Rρu)^(3/2) du`; the azimuthal components cancel.
+Multiply by the volume measure `ρ² dρ`, integrate `ρ` from `0` to sphere
+radius, and normalize by `3q/(4π radius³)`. The adaptive angular integral
+(or its analytic primitive, if implemented and independently checked) plus
+adaptive radial integration therefore preserves the full solid-angle measure.
+At `R=0`, symmetry gives exactly zero. This is a two-variable/reduced
+calculation, not the incorrect radial × azimuthal planar-ring rule.
+
+For other geometries apply the same softened Coulomb kernel at each charge
+element and softened Biot–Savart kernel at each current element. Normalize
+weights so `charge` is total charge. Ring/loop use azimuthal measure
+`dφ/(2π)`; disc uses area measure `2ρ/Rdisc² dρ × dφ/(2π)`; finite line
+integrates uniformly over `[-L/2,L/2]`; the solenoid integrates the continuous
+surface current with turns distributed uniformly over its length and azimuth.
+The exact adaptive cubature decomposition and cost are implementation details
+only insofar as they preserve these measures and satisfy the explicit
+convergence-or-error contract.
+
+The charged ring is not a dipole source at large distance: its net charge is
+`q`, so its leading electric field is the monopole field `q r/|r|³` (up to the
+declared common prefactor), with dipole and higher terms absent for a centered
+uniform ring. The magnetic current loop, by contrast, has a leading magnetic
+dipole along its axis, with moment proportional to `I πR² axis`. Acceptance
+tests must distinguish these asymptotics; do not require a charged ring to have
+a magnetic-loop-like dipole field.
 
 This method shares one kernel and one softening semantics across geometries,
 avoids special-function dependencies/branch singularities, and is portable to
-wasm. Its cost is a numerical approximation and potentially high source-count
-cost; document it and measure the densest source preset against ticket 35's
-budget before Phase 1 ships. If that budget fails, optimize without changing
-the public field semantics, or return for an explicit design decision. Do not
-silently lower quadrature order or parallelize native-only in this slice.
+wasm. Its cost is variable, potentially high per-query work. Measure worst-case
+and representative source presets against ticket 35's budget. If the budget is
+exceeded, report the convergence failures and cost; do not silently cap work
+and return a field, weaken the tolerance, or claim the proposed bounds are
+supported. The owner must then choose among narrower supported ratios/queries,
+a changed accuracy contract, or another algorithm. No such choice is made
+here.
 
 ## Alternatives considered
 
@@ -152,9 +208,10 @@ silently lower quadrature order or parallelize native-only in this slice.
   special-function cases. That is a disproportionate dependency/numerical
   surface for a teaching explorer. Keep the point-charge and infinite-wire
   closed forms; use bounded deterministic quadrature for the rest.
-- **Point-sample or low-order polygon approximations:** simpler but geometry
-  dependent errors and poor near-field behavior. Fixed quadrature has a stated,
-  testable order and remains deterministic.
+- **Fixed-order quadrature:** deterministic and cheap, but node count alone does
+  not establish accuracy when the softened kernel is narrower than node spacing.
+  Adaptive convergence estimates with a hard work budget make the cost/error
+  tradeoff explicit and fail rather than silently returning unresolved values.
 - **Analytic axial-only formulas:** fast but would make the evaluator invalid
   for the full 3D grid that the source model promises.
 - **Mix E and B in one vector sum:** rejected because those fields have unlike
@@ -187,17 +244,20 @@ Required groups:
    at `1e-6`). Include grid source locations and require all outputs finite.
 4. **Geometry and orientation:** each extended kind has a symmetry/axis case
    and sign/reversal case; ring and loop have axial symmetry and correct
-   far-field dipole direction; disc and sphere have expected radial symmetry;
-   finite line and solenoid are symmetric about center. Compare quadrature to
-   independent higher-order reference (at least 128 nodes / 64×128) at fixed
-   off-axis points; relative vector error `<= 2e-3` away from soft singular
-   regions. These are evaluator acceptance tests, not tests of the reference
-   quadrature implementation.
-5. **Robustness:** across the default domain grid and documented parameter
-   extremes, all eight source kinds return finite results; additive
-   superposition is order-independent within `1e-6` relative tolerance. Test
-   overflow-scale centers/strength combinations are rejected, not cast to
-   infinity.
+   far-field behavior (charged ring monopole; current-loop dipole); disc and
+   sphere have expected radial symmetry; finite line and solenoid are symmetric
+   about center. Compare quadrature to an independent, separately refined
+   reference at off-axis points; assert the requested error on cases where both
+   approximations converge, and assert explicit error on cases exceeding the
+   work budget. Tests must include narrow-kernel cases at proposed parameter
+   extremes. A higher-order answer is not an oracle until its own convergence is
+   checked. Tolerance and budget values remain proposals requiring evidence and
+   owner approval.
+5. **Robustness:** across evidence-backed cases in the proposed domain, all
+   kinds either converge within the requested estimate or return the explicit
+   budget error; additive superposition is order-independent within the
+   documented tolerance. Test overflow-scale centers/strength combinations are
+   rejected, not cast to infinity.
 
 Tolerance levels intentionally distinguish exact point math from fixed-order
 quadrature. If the independent reference fails, first inspect the formula,
@@ -213,8 +273,14 @@ Only decisions that materially alter the public model/math need owner input:
    (including whether both families need to coexist in one editable
    configuration; if yes, keep separate E/B outputs rather than summing them).
 2. Approve or revise the precise distribution meanings for sphere (solid
-   volume charge) and solenoid (finite continuous current sheet), and the
-   deterministic quadrature strategy/order as the v1 teaching approximation.
+   volume charge) and solenoid (finite continuous current sheet), plus the
+   proposed adaptive convergence/error contract. Its tolerance, work budget,
+   and supported parameter/query envelope are explicitly unsettled pending
+   numerical and performance evidence; fixed node counts are not presumed
+   accurate over the broad proposed limits.
+   In particular, what near-field / on-support behavior must remain
+   teaching-correct, and may configurations or query regions be rejected when
+   that accuracy cannot be established within the budget?
 3. Approve the numeric limits and the global softening range/default. A
    concrete default is intentionally deferred to the UI/preset ticket, which
    must choose it and document it; this evaluator contract requires callers

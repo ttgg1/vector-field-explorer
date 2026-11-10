@@ -4,7 +4,7 @@
 
 **Goal:** Add a pure, validated model and deterministic superposition evaluator for the eight Phase 1 source kinds.
 
-**Architecture:** Add one egui-free `src/sources.rs` module exposing homogeneous electric or magnetic source sets and one evaluation function. Keep calculations in f64 with a final f32/glam conversion; bounded geometries use fixed quadrature and all source terms use the single caller-supplied softening length.
+**Architecture:** Add one egui-free `src/sources.rs` module exposing the proposed source model and evaluator. Keep calculations in f64 with a final f32/glam conversion; bounded geometries use deterministic adaptive quadrature with an explicit convergence-or-error budget, and all source terms use the single caller-supplied softening length. The exact tolerances, budget, and supported numerical envelope are unapproved proposals pending evidence and owner decision.
 
 **Tech Stack:** Rust 2024, `glam::Vec3`, existing `serde` availability only if the approved model needs it; integration tests in the existing single `tests/suite.rs` harness. No new dependency is proposed.
 
@@ -27,7 +27,9 @@
 - Mixed-family source lists and invalid source parameters must fail explicitly, never silently omit a source; test each family boundary and malformed numeric input.
 - Singular query points and extreme-but-valid inputs must produce finite output or an explicit error; test point centers, default-domain grids, and f32 conversion overflow.
 - Orientation/sign mistakes can look plausible; test rotated geometry, negative charge/current, and right-hand-rule direction.
-- Quadrature can be normalized incorrectly while retaining symmetry; test total-strength normalization against an independent higher-order reference at off-axis points.
+- Quadrature can be normalized incorrectly while retaining symmetry; test measures and total-strength normalization against independently converged references. Never treat a higher node count alone as proof of convergence.
+- The charged ring has a far-field electric monopole, not dipole; the current loop has a magnetic dipole. Test those distinct asymptotics.
+- The solid sphere uses full solid-angle measure (or a derived symmetry reduction), not radial × azimuthal planar rings. Verify the measure and normalization independently.
 - Summation order can affect cancellation; test opposite-charge cancellation and order independence within the documented tolerance.
 
 ---
@@ -47,9 +49,9 @@ caller can use. The test file can be grouped by kind to keep the diff legible.
 ## Interfaces
 
 - **Consumes:** `glam::Vec3`; no app state, UI, GPU, persistence, or `FieldExpr` dependency.
-- **Produces (proposed; reconcile only through approved spec):** `FieldFamily`, `Source`, `SourceKind`, `SourceSet`, `Softening`, `SourceError`, and
+- **Produces (proposed; reconcile only through approved spec):** `FieldFamily`, `Source`, `SourceKind`, `SourceSet`, `Softening`, `SourceError` including an explicit quadrature nonconvergence/work-budget failure, and
   `evaluate_sources(&SourceSet, Vec3, Softening) -> Result<Vec3, SourceError>`.
-- Exact variant fields, bounds, kernels, and tolerance policy are in the linked spec. If the owner revises them, update this plan before implementation.
+- Exact variant fields, bounds, kernels, and tolerance policy are in the linked spec. The adaptive error estimate is an indicator, not a rigorous bound; its tolerance, budget, and accepted validity envelope must be justified with numerical/performance evidence and owner approval. If the owner revises them, update this plan before implementation.
 
 ### Task 1: Pure source model, validation, and evaluator
 
@@ -66,9 +68,9 @@ caller can use. The test file can be grouped by kind to keep the diff legible.
 - [ ] **Step 1: Write failing integration tests for the source model and point-charge seam.** Cover all eight variant constructors at valid limits, family classification/mixed-family rejection, invalid numeric values and axes, empty/zero-strength sets, and point-charge softened on/off-axis values and sign reversal.
 - [ ] **Step 2: Run `cargo test --test suite sources_test::` and verify RED for missing source model/evaluator symbols or expected validation behavior.** Confirm failures are caused by the absent behavior, not a test-registration or compile typo.
 - [ ] **Step 3: Implement public types, parameter validation, point-charge and infinite-wire kernels, common finite-result checking, and evaluator dispatch in `src/sources.rs`.** Use the proposed f64 working representation and convert to `Vec3` once.
-- [ ] **Step 4: Add failing geometry tests for finite line, charged ring, disc, solid sphere, current loop and finite solenoid.** Pin orientation, sign, symmetry, and total-strength normalization against an independent higher-order reference; use the spec's reference orders/tolerances.
-- [ ] **Step 5: Implement fixed Gauss–Legendre geometry integration.** Use 32-point line/azimuth rules, 16×32 disc/sphere rules, and 16×32 axial/azimuth rules for solenoid; ensure weights integrate the stated uniform distributions.
-- [ ] **Step 6: Add acceptance and robustness tests.** Test the softened opposite-point-charge dipole at the fixed 5×5×5 `[-1,1]^3` grid (`a=0.1`), all-kind finite results over the default domain/extreme parameters, summation-order tolerance, and f32 overflow rejection.
+- [ ] **Step 4: Add failing geometry tests for finite line, charged ring, disc, solid sphere, current loop and finite solenoid.** Pin orientation, sign, symmetry, and total-strength normalization against independently converged references; test ring monopole versus loop dipole asymptotics, sphere solid-angle measure, convergence success, and explicit budget failure.
+- [ ] **Step 5: Implement deterministic adaptive Gauss–Legendre integration with bounded work.** Compare tensor GL8/GL16 vector estimates per cell, accumulate estimated component errors, and accept only when the global error norm meets `abs_tol + rel_tol * norm(estimate)`. Otherwise bisect the largest-error cell along its longest normalized side (stable tie break); return explicit nonconvergence when the budget is exhausted. Use the sphere's derived rotational-symmetry reduction or full 3D measure, never a planar-ring substitute. Tolerances, budget, and supported envelope remain owner decisions informed by evidence.
+- [ ] **Step 6: Add acceptance and robustness tests.** Test the softened opposite-point-charge dipole at the fixed 5×5×5 `[-1,1]^3` grid (`a=0.1`), convergence-or-explicit-error over evidence-backed cases (not blanket finiteness over unverified extremes), summation-order tolerance, and f32 overflow rejection.
 - [ ] **Step 7: Run `cargo test --test suite sources_test::`, then `scripts/test.sh`, `cargo build`, and `cargo clippy --all-targets -- -D warnings`.** All must pass; this pure module does not require runtime smoke.
 - [ ] **Step 8: Self-review the diff against the approved spec, especially units/signs, family validation, quadrature weights, non-finite behavior, and no hidden UI/persistence scope. Commit as `feat: add pure source field evaluator` (without ticket marker until the controller supplies an approved ticket).**
 
