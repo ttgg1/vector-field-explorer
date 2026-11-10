@@ -35,7 +35,11 @@ mod layout_test;
 mod left_click_action_test;
 mod line_alpha_test;
 mod menu_test;
+// POSIX shell scripts: `scripts/nightly-version.sh` and
+// `scripts/generate-notices.sh` do not run on the Windows runner.
+#[cfg(unix)]
 mod nightly_version_test;
+#[cfg(unix)]
 mod notices_test;
 mod packaging_notices_test;
 mod particle_playback_test;
