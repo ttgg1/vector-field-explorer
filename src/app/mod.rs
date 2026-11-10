@@ -21,7 +21,7 @@ use crate::sim_clock::SimClock;
 use crate::streamlines::click_seed;
 use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
-use crate::ui::layout::{self, LayoutMode, LayoutState, SheetState};
+use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::menu::{self, MenuAction};
 use crate::ui::presets::PresetPanel;
 #[cfg(not(target_arch = "wasm32"))]
@@ -170,9 +170,8 @@ pub struct VfApp {
     /// The compact bottom sheet open this frame (ticket 53). Transient: the
     /// wide layout ignores it and `Reset layout` closes it without persisting.
     pub sheet: SheetState,
-    /// Transient expanded state of the compact sheet (ticket 71): false = default
-    /// height, true = expanded. Never persisted.
-    pub sheet_expanded: bool,
+    /// Transient height state of the compact sheet (ticket 71). Never persisted.
+    pub sheet_expanded: SheetSize,
     /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
     /// forget their last dragged size, letting the default widths apply.
     panel_generation: u32,
@@ -272,7 +271,7 @@ impl VfApp {
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,
             sheet: SheetState::None,
-            sheet_expanded: false,
+            sheet_expanded: SheetSize::Default,
             panel_generation: 0,
             appearance_open: false,
             about_open: false,

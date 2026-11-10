@@ -14,7 +14,7 @@ use glam::Vec2;
 
 use vector_field_explorer::app::StatusBarState;
 use vector_field_explorer::ui::layout::{
-    COMPACT_WIDTH, LayoutMode, SHEET_MAX_FRACTION, SheetState, TAB_BAR_HEIGHT, TOUCH_TARGET,
+    COMPACT_WIDTH, LayoutMode, SHEET_MAX_FRACTION, SheetSize, SheetState, TAB_BAR_HEIGHT, TOUCH_TARGET,
     VIEWPORT_CHROME_ALLOWANCE, VIEWPORT_MIN_FRACTION, compact_plan, formula_field_width,
     layout_mode, reset_sheet, sheet_height,
 };
@@ -86,11 +86,11 @@ fn sheet_height_caps_at_55_percent_and_keeps_the_viewport_floor() {
     assert_eq!(VIEWPORT_MIN_FRACTION, 0.45);
 
     // Plenty of room: the window fraction is the binding cap.
-    assert_eq!(sheet_height(640.0, 10_000.0), 352.0);
+    assert_eq!(sheet_height(640.0, 10_000.0, SheetSize::Default), 352.0);
 
     // A short window: keep 45% of the window for the viewport, plus the
     // central panel's frame allowance.
-    let short = sheet_height(640.0, 500.0);
+    let short = sheet_height(640.0, 500.0, SheetSize::Default);
     assert!(
         (short - (500.0 - (640.0 * 0.45 + VIEWPORT_CHROME_ALLOWANCE))).abs() < 1e-3,
         "got {short}"
@@ -99,7 +99,7 @@ fn sheet_height_caps_at_55_percent_and_keeps_the_viewport_floor() {
 
     // Never lets the sheet eat the whole available height, and never negative.
     for available in [0.0, 1.0, 100.0, 288.0, 500.0, 900.0] {
-        let height = sheet_height(640.0, available);
+        let height = sheet_height(640.0, available, SheetSize::Default);
         assert!(height >= 0.0, "height is never negative at {available}");
         assert!(height <= available, "the sheet fits the available {available}");
         assert!(
@@ -109,11 +109,11 @@ fn sheet_height_caps_at_55_percent_and_keeps_the_viewport_floor() {
     }
 
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        assert_eq!(sheet_height(bad, 500.0), 0.0, "bad window height {bad}");
-        assert_eq!(sheet_height(640.0, bad), 0.0, "bad available height {bad}");
+        assert_eq!(sheet_height(bad, 500.0, SheetSize::Default), 0.0, "bad window height {bad}");
+        assert_eq!(sheet_height(640.0, bad, SheetSize::Default), 0.0, "bad available height {bad}");
     }
-    assert_eq!(sheet_height(0.0, 500.0), 0.0);
-    assert_eq!(sheet_height(-10.0, 500.0), 0.0);
+    assert_eq!(sheet_height(0.0, 500.0, SheetSize::Default), 0.0);
+    assert_eq!(sheet_height(-10.0, 500.0, SheetSize::Default), 0.0);
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn compact_bottom_assembly_keeps_45_percent_viewport() {
                     .exact_size(TAB_BAR_HEIGHT)
                     .show(ui, |_| {});
                 let window_h = ui.ctx().content_rect().height();
-                let sheet = sheet_height(window_h, ui.available_height());
+                let sheet = sheet_height(window_h, ui.available_height(), SheetSize::Default);
                 egui::Panel::bottom("compact_test_sheet")
                     .exact_size(sheet)
                     .show(ui, |_| {});

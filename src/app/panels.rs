@@ -336,7 +336,7 @@ impl VfApp {
                         .clicked()
                     {
                         self.sheet.toggle(SheetState::Controls);
-                        if self.sheet.is_open() { self.sheet_expanded = false; }
+                        if self.sheet.is_open() { self.sheet_expanded = SheetSize::Default; }
                     }
                     if ui
                         .add_sized(
@@ -349,7 +349,7 @@ impl VfApp {
                         .clicked()
                     {
                         self.sheet.toggle(SheetState::Presets);
-                        if self.sheet.is_open() { self.sheet_expanded = false; }
+                        if self.sheet.is_open() { self.sheet_expanded = SheetSize::Default; }
                     }
                     if self.sheet.is_open()
                         && ui
@@ -382,10 +382,7 @@ impl VfApp {
         }
         let window_height = ui.ctx().content_rect().height();
         let available_height = ui.available_height();
-        let mut height = layout::sheet_height(window_height, available_height);
-        if self.sheet_expanded {
-            height = (window_height * 0.90).min(available_height).max(height);
-        }
+        let height = layout::sheet_height(window_height, available_height, self.sheet_expanded);
         if height < 1.0 {
             // No room above the status/tab bars: an invisible open sheet would
             // leave the tab UI claiming a panel with nothing on screen.
@@ -430,12 +427,23 @@ impl VfApp {
                         .total_drag_delta()
                         .is_some_and(|delta| delta.y < -24.0);
                 if swiped_up {
-                    self.sheet_expanded = true;
+                    self.sheet_expanded = match self.sheet_expanded {
+                        SheetSize::Collapsed => SheetSize::Default,
+                        SheetSize::Default => SheetSize::Expanded,
+                        SheetSize::Expanded => SheetSize::Expanded,
+                    };
+                    ui.ctx().request_repaint();
+                }
+                if swiped_down {
+                    match self.sheet_expanded {
+                        SheetSize::Expanded => self.sheet_expanded = SheetSize::Default,
+                        SheetSize::Default => self.sheet_expanded = SheetSize::Collapsed,
+                        SheetSize::Collapsed => close = true,
+                    }
                 }
                 if handle
                     .on_hover_text("Tap or swipe down to close")
                     .clicked()
-                    || swiped_down
                 {
                     close = true;
                 }
@@ -454,7 +462,7 @@ impl VfApp {
 
         if close {
             self.sheet.close();
-            self.sheet_expanded = false;
+            self.sheet_expanded = SheetSize::Default;
             // The sheet is gone; request the frame that grows the viewport.
             ui.ctx().request_repaint();
         }

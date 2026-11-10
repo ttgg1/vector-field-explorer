@@ -84,6 +84,22 @@ pub fn dismisses_appearance_popover(
 /// [`MENUS`] group, so the same commands stay one tap away on a phone.
 pub const HAMBURGER_LABEL: &str = "☰";
 
+/// Inline SVG path for the GitHub mark (rendered as a texture).
+pub const GITHUB_SVG_PATH: &str = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z";
+
+/// Cached GitHub mark texture.
+pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let key = "vfe-github-icon";
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique(key))) {
+        return t;
+    }
+    // Fallback: a simple solid texture (text label remains the fallback affordance).
+    let image = egui::ColorImage::new([16, 16], vec![egui::Color32::WHITE; 16 * 16]);
+    let t = ctx.load_texture(key, image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(key), t.clone()));
+    t
+}
+
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
 fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem) -> bool {
@@ -223,12 +239,12 @@ pub fn show(
 /// [`show`], and the same actions — only the arrangement changes.
 pub fn show_compact(
     ui: &mut egui::Ui,
-    style: &mut AppStyle,
+    _style: &mut AppStyle,
     screenshot: &Screenshot,
-    appearance_open: &mut bool,
+    _appearance_open: &mut bool,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
-    let mut style_changed = false;
+    let style_changed = false;
     let touch = crate::ui::layout::TOUCH_TARGET;
 
     ui.spacing_mut().interact_size.y = touch;
@@ -256,9 +272,11 @@ pub fn show_compact(
         });
         hamburger_response = Some(hamburger.0);
 
-        // GitHub link button (ticket 71).
+        // GitHub link button (ticket 71): inline SVG path rendered as a texture,
+        // with the text as fallback.
+        let github_texture = github_icon_texture(ui.ctx());
         let github = ui
-            .add_sized([touch, touch], egui::Button::new("GitHub"))
+            .add(egui::Button::image_and_text(&github_texture, "GitHub"))
             .on_hover_text("Open the repository on GitHub");
         if github.clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(
@@ -272,13 +290,6 @@ pub fn show_compact(
             }
         });
     });
-
-    // Appearance is reachable through the menu (OpenAppearance); anchor the
-    // popover to the hamburger when it is open.
-    if *appearance_open
-        && let Some(button) = hamburger_response {
-        style_changed = appearance_popover(ui, style, &button, appearance_open);
-    }
 
     (action, style_changed)
 }

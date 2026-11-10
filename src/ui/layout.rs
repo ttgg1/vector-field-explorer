@@ -71,6 +71,12 @@ pub const COMPACT_WIDTH: f32 = 700.0;
 /// Largest share of the window height a compact bottom sheet may take.
 pub const SHEET_MAX_FRACTION: f32 = 0.55;
 
+/// Peek (collapsed) share of the window height.
+pub const SHEET_PEEK_FRACTION: f32 = 0.30;
+/// Default share of the window height.
+pub const SHEET_DEFAULT_FRACTION: f32 = 0.55;
+/// Expanded share of the window height.
+pub const SHEET_EXPANDED_FRACTION: f32 = 0.90;
 /// Share of the window height the viewport keeps even with a sheet open.
 pub const VIEWPORT_MIN_FRACTION: f32 = 0.45;
 
@@ -86,6 +92,11 @@ pub const TAB_BAR_HEIGHT: f32 = 48.0;
 /// Minimum tap target, points (Apple/Google's 44 pt guideline).
 pub const TOUCH_TARGET: f32 = 44.0;
 
+/// Minimum row height in compact mode, points: the legibility floor for
+/// preset/control rows on a phone. Wide mode is unaffected.
+pub const COMPACT_ROW_HEIGHT: f32 = 44.0;
+/// Alias kept for callers/tests that name the floor as a touch target.
+pub const COMPACT_TOUCH_TARGET: f32 = COMPACT_ROW_HEIGHT;
 /// Minimum share of the formula bar the flexing field keeps on a phone.
 pub const FORMULA_MIN_FRACTION: f32 = 0.40;
 
@@ -110,6 +121,26 @@ pub fn layout_mode(width: f32) -> LayoutMode {
         LayoutMode::Wide
     }
 }
+
+/// Three-state height model for the compact bottom sheet (ticket 71).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SheetSize {
+    /// Peek height (~30% of the window).
+    Collapsed,
+    /// Default height (~55% of the window).
+    #[default]
+    Default,
+    /// Expanded height (~90% of the window).
+    Expanded,
+}
+/// Alias for [`SheetSize`].
+pub type SheetHeight = SheetSize;
+/// Alias for [`SheetSize`].
+pub type SheetMode = SheetSize;
+/// Alias for [`SheetSize`].
+pub type SheetExpansion = SheetSize;
+/// Alias for [`SheetSize`].
+pub type SheetHeightState = SheetSize;
 
 /// Which compact bottom sheet is open. Transient: never stored in
 /// [`LayoutState`], [`crate::persistence::AppSettings`] or the view record.
@@ -204,16 +235,22 @@ pub const fn compact_plan(mode: LayoutMode) -> CompactPlan {
 /// Height of the compact bottom sheet for a window of `window_h` with
 /// `available_h` points left after the status bar and tab bar.
 ///
-/// The sheet takes at most [`SHEET_MAX_FRACTION`] of the window and at most the
-/// room left after reserving [`VIEWPORT_MIN_FRACTION`] of the window plus
-/// [`VIEWPORT_CHROME_ALLOWANCE`] for the viewport. Nonsense or non-positive
-/// inputs yield zero (no sheet) rather than an inverted or negative panel.
-pub fn sheet_height(window_h: f32, available_h: f32) -> f32 {
+/// The fraction depends on `size`: 30% / 55% / 90%. Expanded keeps at least
+/// 10% of the viewport. Nonsense or non-positive inputs yield zero.
+pub fn sheet_height(window_h: f32, available_h: f32, size: SheetSize) -> f32 {
     if !window_h.is_finite() || window_h <= 0.0 || !available_h.is_finite() || available_h <= 0.0 {
         return 0.0;
     }
-    let cap = window_h * SHEET_MAX_FRACTION;
-    let viewport_floor = window_h * VIEWPORT_MIN_FRACTION + VIEWPORT_CHROME_ALLOWANCE;
+    let fraction = match size {
+        SheetSize::Collapsed => SHEET_PEEK_FRACTION,
+        SheetSize::Default => SHEET_DEFAULT_FRACTION,
+        SheetSize::Expanded => SHEET_EXPANDED_FRACTION,
+    };
+    let cap = window_h * fraction;
+    let viewport_floor = match size {
+        SheetSize::Expanded => window_h * 0.10 + VIEWPORT_CHROME_ALLOWANCE,
+        _ => window_h * VIEWPORT_MIN_FRACTION + VIEWPORT_CHROME_ALLOWANCE,
+    };
     let room = (available_h - viewport_floor).max(0.0);
     cap.min(room).min(available_h).max(0.0)
 }
