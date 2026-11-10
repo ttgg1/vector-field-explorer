@@ -23,7 +23,7 @@ name: Release
 # test tag does not become the "latest" release.
 #
 # workflow_dispatch takes the tag to release and a `publish` flag: with
-# publish=false the run still verifies and builds all three assets (useful as
+# publish=false the run still verifies and builds all four assets (useful as
 # a dry run) but skips the release job.
 #
 # Runner images: the ticket named macos-13 for x86_64, but that image was
@@ -117,7 +117,7 @@ jobs:
     name: Publish release
     needs: [verify, build]
     # Tag pushes always publish. A manual run is a dry run unless publish is
-    # true: verify and all three builds still run and upload their assets.
+    # true: verify and all four builds still run and upload their assets.
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -138,8 +138,8 @@ jobs:
 
           shopt -s nullglob
           assets=(dist/*)
-          if [ "${#assets[@]}" -ne 3 ]; then
-            echo "::error::expected 3 release assets, found ${#assets[@]}: ${assets[*]}"
+          if [ "${#assets[@]}" -ne 4 ]; then
+            echo "::error::expected 4 release assets, found ${#assets[@]}: ${assets[*]}"
             exit 1
           fi
           ls -l dist
@@ -171,6 +171,15 @@ jobs:
           If FUSE 2 is unavailable (for example Ubuntu 22.04+ without
           `libfuse2`), run it with `--appimage-extract-and-run`, or install
           `libfuse2`.
+
+          ### Windows: first launch
+
+          Download `vector-field-explorer-<version>-x86_64-pc-windows-msvc.zip`,
+          extract it, and run `vector-field-explorer.exe`. The build is
+          unsigned by design and no installer is provided. Windows SmartScreen
+          may show "Windows protected your PC": choose **More info**, then
+          **Run anyway**. The archive also contains `README.md`, `LICENSE`,
+          `THIRD_PARTY_LICENSES.md`, and `THIRD_PARTY_NOTICES.txt`.
           NOTES
 
           if gh release view "$TAG" >/dev/null 2>&1; then

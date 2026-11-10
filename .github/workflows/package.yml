@@ -6,7 +6,7 @@ name: Package
 #
 # The caller owns verification, versioning and publishing. This workflow only:
 #   * checks out the requested ref,
-#   * builds the three supported targets in release mode,
+#   * builds the four supported targets in release mode,
 #   * strips the binary, packages it (a single-file AppImage on Linux,
 #     .app.zip on macOS) and uploads one artifact per target under the target
 #     triple's name.
@@ -66,6 +66,8 @@ jobs:
             target: x86_64-apple-darwin
           - os: macos-15
             target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     # macOS minutes bill at 10x on private repos; cap a hung build.
     timeout-minutes: 45
@@ -82,6 +84,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      # MSVC resource compiler (rc.exe) is needed by winres to embed the
+      # application icon; make sure the dev environment is on PATH on Windows.
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       # Build-only deps: winit/glutin headers, X11/Wayland, GL and Vulkan.
       # file and patchelf are used by linuxdeploy to identify and rewire the
@@ -111,6 +119,7 @@ jobs:
         run: scripts/generate-notices.sh --check
 
       - name: Strip binary
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           bin="target/${{ matrix.target }}/release/vector-field-explorer"
@@ -283,6 +292,42 @@ jobs:
             fi
             rm -rf "$extract"
             file "$asset"
+            echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            bin="${bin}.exe"
+            if [ ! -s "$bin" ]; then
+              echo "::error::${bin} is missing or empty"
+              exit 1
+            fi
+            mkdir -p dist
+            cp "$bin" "dist/vector-field-explorer.exe"
+            cp README.md LICENSE THIRD_PARTY_LICENSES.md packaging/THIRD_PARTY_NOTICES.txt dist/
+            ( cd dist && python -m zipfile -c "../${name}.zip" \
+                vector-field-explorer.exe README.md LICENSE \
+                THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt )
+            asset="dist/${name}.zip"
+            if [ ! -s "$asset" ]; then
+              echo "::error::${asset} is missing or empty"
+              exit 1
+            fi
+            python - "$asset" <<'PY'
+              import sys, zipfile
+              z = zipfile.ZipFile(sys.argv[1])
+              names = set(z.namelist())
+              required = {
+                  "vector-field-explorer.exe",
+                  "README.md",
+                  "LICENSE",
+                  "THIRD_PARTY_LICENSES.md",
+                  "THIRD_PARTY_NOTICES.txt",
+              }
+              missing = required - names
+              if missing:
+                  print("::error::Windows zip is missing: " + ", ".join(sorted(missing)))
+                  sys.exit(1)
+              print("Windows zip contents: " + ", ".join(sorted(names)))
+          PY
+            ls -l "dist/vector-field-explorer.exe"
             echo "asset=${asset}" >> "$GITHUB_OUTPUT"
           else
             app="dist/vector-field-explorer.app"

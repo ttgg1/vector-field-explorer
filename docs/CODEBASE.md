@@ -2067,7 +2067,7 @@ the committed icon set.
 | --- | --- | --- |
 | [ci.yml](../.github/workflows/ci.yml) | push/PR to main, nightly cron | clippy, `scripts/test.sh`, debug build; separate smoke job (`xvfb-run` + software Vulkan); separate wasm job (`check-web-bootstrap.sh`, `test-web.sh`) |
 | [nightly.yml](../.github/workflows/nightly.yml) | daily 03:17 UTC / manual | verifies main, computes `X.Y.Z-nightly.YYYYMMDD+sha`, calls `package.yml`, moves the single `nightly` prerelease tag only after assets are attached |
-| [package.yml](../.github/workflows/package.yml) | reusable | release builds for Linux x86_64 AppImage, macOS x86_64/arm64 `.app.zip`; pinned linuxdeploy/appimagetool/runtime; excludes host GPU libraries |
+| [package.yml](../.github/workflows/package.yml) | reusable | release builds for Linux x86_64 AppImage, macOS x86_64/arm64 `.app.zip`, Windows x86_64 `.zip`; pinned linuxdeploy/appimagetool/runtime; excludes host GPU libraries |
 | [pages.yml](../.github/workflows/pages.yml) | push to main (paths) / manual | builds the wasm bundle and site (`trunk build --release`), runs `scripts/check-site.sh`, deploys to GitHub Pages |
 | [release.yml](../.github/workflows/release.yml) | `v*` tag / manual | tag must match `Cargo.toml` and be reachable from main; verifies, packages, publishes assets; pre-release tags get `--prerelease` |
 
@@ -2080,9 +2080,10 @@ the committed icon set.
 - Nightly: `scripts/nightly-version.sh <base> <YYYYMMDD> <sha>` →
   `<base>-nightly.<date>+<7-char-sha>`; the daily workflow sets
   `VFE_BUILD_VERSION`, so About and the startup log report the exact commit.
-- Assets: one Linux AppImage and two macOS `.app.zip` files. macOS builds are
-  unsigned and un-notarized; the release notes explain the first-launch approval.
-  No auto-update, signing, notarization, or telemetry.
+- Assets: one Linux AppImage, two macOS `.app.zip` files, and one Windows
+  `.zip`. macOS and Windows builds are unsigned; the release notes explain the
+  first-launch approval (macOS) and the SmartScreen path (Windows). No
+  auto-update, signing, notarization, or telemetry.
 - Licence: GPL-3.0-only (`Cargo.toml`, `LICENSE`). Dependencies must remain
   GPL-3.0-compatible; the packaging workflow ships `README.md`, `LICENSE`, and
   `THIRD_PARTY_LICENSES.md` in both archive types. The Linux AppImage also

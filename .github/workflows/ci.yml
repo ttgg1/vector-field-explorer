@@ -69,3 +69,21 @@ jobs:
         run: scripts/check-web-bootstrap.sh
       - name: Check and build the browser target
         run: scripts/test-web.sh
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build (all targets)
+        run: cargo build --all-targets
+      - name: Test
+        run: cargo test --all-targets
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings

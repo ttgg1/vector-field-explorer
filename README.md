@@ -5,8 +5,8 @@
 # Vector Field Explorer
 
 Type a vector field as a formula and explore it as arrows, streamlines, and
-particles in 2D or 3D. Runs natively on Linux and macOS, and in the browser as
-a WebAssembly build.
+particles in 2D or 3D. Runs natively on Linux, macOS, and Windows, and in the
+browser as a WebAssembly build.
 
 ![Vector Field Explorer showing a 2D vortex with arrows and streamlines](docs/images/vector-field-explorer.png)
 
@@ -66,6 +66,18 @@ The macOS builds are unsigned and not notarized. On macOS 15 (Sequoia) and
 later, the first launch is blocked; approve it in **System Settings → Privacy &
 Security**, then choose **Open Anyway**. On older macOS, right-click (or
 Control-click) the app and choose **Open**.
+
+### Windows
+
+Download `vector-field-explorer-<version>-x86_64-pc-windows-msvc.zip` from the
+[latest release](https://github.com/ttgg1/vector-field-explorer/releases/latest),
+extract it, and run `vector-field-explorer.exe`. The build is unsigned and no
+installer is provided; the archive also contains `README.md`, `LICENSE`,
+`THIRD_PARTY_LICENSES.md`, and `THIRD_PARTY_NOTICES.txt`.
+
+Windows SmartScreen may show "Windows protected your PC": choose **More info**,
+then **Run anyway**. The app uses the DX12 backend by default and needs no
+separate MSVC runtime or WebView2.
 
 ## Browser build and WebGPU
 

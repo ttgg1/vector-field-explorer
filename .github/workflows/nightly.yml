@@ -3,7 +3,7 @@ name: Nightly
 # Rolling nightly prerelease (ticket 42).
 #
 # Every day at 03:17 UTC (and on demand) this workflow verifies main, builds the
-# same three assets as the tag-driven release through the shared
+# same four assets as the tag-driven release through the shared
 # `.github/workflows/package.yml`, and moves the single `nightly` tag to the
 # built commit. It never creates a `v*` tag or release; `nightly` is always a
 # prerelease and is never marked "latest".
@@ -153,8 +153,8 @@ jobs:
 
           shopt -s nullglob
           assets=(dist/*)
-          if [ "${#assets[@]}" -ne 3 ]; then
-            echo "::error::expected 3 nightly assets, found ${#assets[@]}: ${assets[*]}"
+          if [ "${#assets[@]}" -ne 4 ]; then
+            echo "::error::expected 4 nightly assets, found ${#assets[@]}: ${assets[*]}"
             exit 1
           fi
           ls -l dist
@@ -185,6 +185,13 @@ jobs:
           If FUSE 2 is unavailable (for example Ubuntu 22.04+ without
           \`libfuse2\`), run it with \`--appimage-extract-and-run\`, or install
           \`libfuse2\`.
+
+          ### Windows: first launch
+
+          Download the Windows \`.zip\`, extract it, and run
+          \`vector-field-explorer.exe\`. The build is unsigned by design and no
+          installer is provided. Windows SmartScreen may show "Windows protected
+          your PC": choose **More info**, then **Run anyway**.
           NOTES
 
           # A first nightly is a draft: the public release (and its tag) appears
