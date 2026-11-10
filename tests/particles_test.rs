@@ -738,9 +738,9 @@ fn truncate_after_burst_realigns_positions_and_trails() {
     assert_eq!(trails.len(), before, "trails realign with positions");
     assert_eq!(stuck.len(), before, "stuck times realign");
     assert_eq!(speeds.len(), before, "speeds realign");
-    for i in 0..before {
+    for (i, trail) in trails.iter().enumerate().take(before) {
         assert_eq!(
-            trails[i].last(),
+            trail.last(),
             Some(&cloud.pos[i]),
             "each surviving trail's newest point is its particle",
         );

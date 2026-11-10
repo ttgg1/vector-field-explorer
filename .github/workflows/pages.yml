@@ -4,9 +4,17 @@ name: Pages
 # https://ttgg1.github.io/vector-field-explorer/. The push trigger is main-only;
 # a manual `workflow_dispatch` can be started from any branch, so both jobs pin
 # `github.ref == 'refs/heads/main'` and a dispatch from a feature branch skips
-# both jobs. The `v0.1.0` ordering gate is procedural in the ticket-16a deploy
-# instructions; neither this workflow nor the site checker verifies the release
-# before deploying.
+# both jobs.
+#
+# Pages is disabled by default: both jobs are additionally guarded by
+# `vars.PAGES_ENABLED == 'true'`, so the workflow stays green on `main` until
+# ticket 16b enables Pages (no `github-pages` environment exists yet). Keep
+# `workflow_dispatch` main-only; do not enable Pages or change visibility here.
+#
+# Before the artifact is uploaded, a gate step requires a non-prerelease `v*`
+# GitHub release to exist (`gh release view ... --json isPrerelease,tagName`,
+# `isPrerelease == false`), so the download CTAs never ship dead. The site
+# checker validates the rest of the artifact.
 #
 # Once the `github-pages` environment exists, restrict its deployment branches
 # and tags to `main` as defense in depth.
@@ -44,8 +52,10 @@ concurrency:
 
 jobs:
   build:
-    # A manual dispatch can select any ref; only main is deployable.
-    if: github.ref == 'refs/heads/main'
+    # A manual dispatch can select any ref; only main is deployable. Pages is
+    # additionally gated on vars.PAGES_ENABLED so the workflow stays green
+    # until ticket 16b enables Pages.
+    if: github.ref == 'refs/heads/main' && vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +84,24 @@ jobs:
             dist/screenshots/vector-field-explorer.png
       - name: Check the site artifact
         run: scripts/check-site.sh
+      - name: Require a non-prerelease v* release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release="$(gh release view --repo "$GITHUB_REPOSITORY" --json isPrerelease,tagName)"
+          printf '%s\n' "$release"
+          parsed="$(printf '%s' "$release" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(("true" if d.get("isPrerelease") else "false") + " " + str(d.get("tagName","")))' )"
+          is_prerelease="${parsed%% *}"
+          tag_name="${parsed#* }"
+          if [[ "$tag_name" != v* ]]; then
+            echo "::error::latest release '$tag_name' is not a v* release" >&2
+            exit 1
+          fi
+          if [[ "$is_prerelease" == "true" ]]; then
+            echo "::error::latest release '$tag_name' is a prerelease; refusing to ship download CTAs" >&2
+            exit 1
+          fi
       - name: Upload the Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
@@ -81,9 +109,9 @@ jobs:
 
   deploy:
     needs: build
-    # Same main-only guard as build; the environment should also be restricted
-    # to main once it exists.
-    if: github.ref == 'refs/heads/main'
+    # Same main-only and Pages-enablement guards as build; the environment
+    # should also be restricted to main once it exists.
+    if: github.ref == 'refs/heads/main' && vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
