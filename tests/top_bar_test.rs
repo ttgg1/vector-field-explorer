@@ -14,8 +14,8 @@ use vector_field_explorer::ui::menu::{
 };
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
-    self, APPEARANCE_BUTTON_LABEL, GITHUB_SVG_PATH, HAMBURGER_LABEL, dismisses_appearance_popover, github_path_points, parse_num,
-    wheel_zoom_factor,
+    self, APPEARANCE_BUTTON_LABEL, GITHUB_SVG_PATH, HAMBURGER_LABEL, dismisses_appearance_popover,
+    github_path_points, parse_num, wheel_zoom_factor,
 };
 
 /// One headless window running the real top menu bar and Appearance popover.
@@ -24,6 +24,7 @@ struct Harness {
     style: AppStyle,
     screenshot: Screenshot,
     open: bool,
+    action: Option<vector_field_explorer::ui::menu::MenuAction>,
 }
 
 impl Harness {
@@ -37,6 +38,7 @@ impl Harness {
             style: AppStyle::default(),
             screenshot: Screenshot::new(),
             open,
+            action: None,
         }
     }
 
@@ -53,9 +55,13 @@ impl Harness {
             let style = &mut self.style;
             let screenshot = &self.screenshot;
             let open = &mut self.open;
+            let action = &mut self.action;
             let output = self.ctx.run_ui(input, |ui| {
                 egui::Panel::top("top_bar").show(ui, |ui| {
-                    let _ = top_bar::show(ui, style, screenshot, open);
+                    let (picked, _) = top_bar::show(ui, style, screenshot, open, false);
+                    if picked.is_some() {
+                        *action = picked;
+                    }
                 });
             });
             (output, *open)
@@ -90,7 +96,7 @@ impl Harness {
             let open = &mut self.open;
             let output = self.ctx.run_ui(input, |ui| {
                 egui::Panel::top("compact_top_bar_test").show(ui, |ui| {
-                    let _ = top_bar::show_compact(ui, screenshot);
+                    let _ = top_bar::show_compact(ui, screenshot, false);
                 });
             });
             (output, *open)
@@ -108,6 +114,88 @@ impl Harness {
         self.compact_frame(pointer(pos, true));
         self.compact_frame(pointer(pos, false));
     }
+}
+
+#[test]
+fn wide_top_bar_svg_button_dispatches_export_in_2d() {
+    use vector_field_explorer::ui::menu::MenuAction;
+    let mut h = Harness::new(false);
+    let out = h.idle();
+    let control = labelled(&nodes(&out), egui::Role::Button, "Screenshot as SVG")
+        .expect("SVG export control is visible")
+        .rect;
+    h.click(control.center());
+    assert_eq!(h.action, Some(MenuAction::ExportScreenshotSvg));
+}
+
+#[test]
+fn svg_file_menu_entry_is_visible_but_disabled_in_3d() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let screenshot = Screenshot::new();
+    let mut style = AppStyle::default();
+    let mut open = false;
+    let draw = |ctx: &egui::Context, style: &mut AppStyle, open: &mut bool| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| {
+            egui::Panel::top("svg_file_menu_disabled").show(ui, |ui| {
+                let _ = top_bar::show(ui, style, &screenshot, open, true);
+            });
+        })
+    };
+    let mut out = draw(&ctx, &mut style, &mut open);
+    out.textures_delta.clear();
+    let file_rect = labelled(&nodes(&out), egui::Role::Button, "File")
+        .expect("File menu exists")
+        .rect;
+    let mut out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            events: pointer(file_rect.center(), true),
+            ..Default::default()
+        },
+        |ui| {
+            egui::Panel::top("svg_file_menu_disabled").show(ui, |ui| {
+                let _ = top_bar::show(ui, &mut style, &screenshot, &mut open, true);
+            });
+        },
+    );
+    out.textures_delta.clear();
+    let mut out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            events: pointer(file_rect.center(), false),
+            ..Default::default()
+        },
+        |ui| {
+            egui::Panel::top("svg_file_menu_disabled").show(ui, |ui| {
+                let _ = top_bar::show(ui, &mut style, &screenshot, &mut open, true);
+            });
+        },
+    );
+    out.textures_delta.clear();
+    let mut out = draw(&ctx, &mut style, &mut open);
+    out.textures_delta.clear();
+    let rendered_nodes = nodes(&out);
+    let svg = labelled(
+        &rendered_nodes,
+        egui::Role::Button,
+        "Export screenshot (SVG)…",
+    )
+    .expect("SVG menu entry remains visible");
+    assert!(svg.disabled, "the 3D SVG menu entry is visibly disabled");
 }
 
 fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
@@ -128,6 +216,7 @@ struct Node {
     label: Option<String>,
     value: Option<String>,
     rect: egui::Rect,
+    disabled: bool,
 }
 
 fn nodes(output: &egui::FullOutput) -> Vec<Node> {
@@ -147,6 +236,7 @@ fn nodes(output: &egui::FullOutput) -> Vec<Node> {
                     egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
                     egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
                 ),
+                disabled: node.is_disabled(),
             })
         })
         .collect()
@@ -165,9 +255,9 @@ fn gear(nodes: &[Node]) -> egui::Rect {
 }
 
 fn has_control(nodes: &[Node], text: &str) -> bool {
-    nodes.iter().any(|node| {
-        node.label.as_deref() == Some(text) || node.value.as_deref() == Some(text)
-    })
+    nodes
+        .iter()
+        .any(|node| node.label.as_deref() == Some(text) || node.value.as_deref() == Some(text))
 }
 
 fn color_well(nodes: &[Node]) -> Option<egui::Rect> {
@@ -223,7 +313,8 @@ fn compact_hamburger_lists_every_wide_command_except_sheet_appearance() {
     }
 
     for label in &button_labels {
-        if [HAMBURGER_LABEL, "Screenshot", "GitHub"].contains(&label.as_str()) {
+        if [HAMBURGER_LABEL, "Screenshot", "Screenshot as SVG", "GitHub"].contains(&label.as_str())
+        {
             continue;
         }
         assert!(
@@ -251,22 +342,34 @@ fn the_compact_bar_renders_hamburger_github_and_screenshot() {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::Panel::top("compact_top_bar").show(ui, |ui| {
-                let _ = top_bar::show_compact(ui, &screenshot);
+                let _ = top_bar::show_compact(ui, &screenshot, false);
             });
         });
         output.textures_delta.clear();
         published = nodes(&output);
     }
 
-    let logo = published.iter().find(|n| n.role == egui::Role::Image)
+    let logo = published
+        .iter()
+        .find(|n| n.role == egui::Role::Image)
         .expect("the compact bar shows its logo image");
     let hamburger_rect = labelled(&published, egui::Role::Button, HAMBURGER_LABEL)
-        .expect("hamburger is present").rect;
-    assert!(logo.rect.width() >= 43.0 && logo.rect.width() <= 45.0
-        && logo.rect.height() >= 43.0 && logo.rect.height() <= 45.0,
-        "the logo is the 44pt mark, got {:?}", logo.rect.size());
-    assert!(logo.rect.right() <= hamburger_rect.left(),
-        "the logo image is specifically the mark before the hamburger: {:?} vs {:?}", logo.rect, hamburger_rect);
+        .expect("hamburger is present")
+        .rect;
+    assert!(
+        logo.rect.width() >= 43.0
+            && logo.rect.width() <= 45.0
+            && logo.rect.height() >= 43.0
+            && logo.rect.height() <= 45.0,
+        "the logo is the 44pt mark, got {:?}",
+        logo.rect.size()
+    );
+    assert!(
+        logo.rect.right() <= hamburger_rect.left(),
+        "the logo image is specifically the mark before the hamburger: {:?} vs {:?}",
+        logo.rect,
+        hamburger_rect
+    );
     assert!(
         labelled(&published, egui::Role::Button, HAMBURGER_LABEL).is_some(),
         "the compact bar has a hamburger menu button"
@@ -291,8 +394,14 @@ fn scrolling_up_zooms_in_and_down_zooms_out() {
     let down = wheel_zoom_factor(-50.0);
     assert!(up > 1.0, "scroll up comes closer: {up}");
     assert!(down < 1.0, "scroll down pulls back: {down}");
-    assert!((up * down - 1.0).abs() < 1e-6, "the directions are reciprocal");
-    assert!(up > 1.05, "a wheel notch is a visible step, not a nudge: {up}");
+    assert!(
+        (up * down - 1.0).abs() < 1e-6,
+        "the directions are reciprocal"
+    );
+    assert!(
+        up > 1.05,
+        "a wheel notch is a visible step, not a nudge: {up}"
+    );
 }
 
 #[test]
@@ -300,7 +409,11 @@ fn nonsense_scroll_leaves_the_zoom_alone() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         assert_eq!(wheel_zoom_factor(bad), 1.0, "{bad} must not move the view");
     }
-    assert_eq!(wheel_zoom_factor(1e30), 1.0, "an overflowing factor falls back to 1");
+    assert_eq!(
+        wheel_zoom_factor(1e30),
+        1.0,
+        "an overflowing factor falls back to 1"
+    );
 }
 
 #[test]
@@ -308,13 +421,16 @@ fn clicking_the_popover_or_its_open_picker_keeps_the_popover() {
     // Ticket 41: the nested color picker is a separate foreground area, often
     // drawn beyond the popover rect. Its clicks must not count as outside.
     let popover_rect = egui::Rect::from_min_size(egui::pos2(100.0, 20.0), egui::vec2(260.0, 160.0));
-    let popover_layer =
-        egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("appearance_popover"));
+    let popover_layer = egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("appearance_popover"),
+    );
     let picker_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("popup"));
     let inside = egui::pos2(120.0, 80.0);
     let picker = egui::pos2(320.0, 300.0);
     let background = egui::pos2(900.0, 400.0);
-    let background_layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("background"));
+    let background_layer =
+        egui::LayerId::new(egui::Order::Background, egui::Id::unique("background"));
 
     assert!(
         !dismisses_appearance_popover(
@@ -548,23 +664,43 @@ fn github_path_is_not_a_circle() {
     }
     let miny = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min);
     let maxy = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max);
-    assert!((maxx - minx - 16.0).abs() < 0.1, "path width should span 16 units: {minx}..{maxx}");
+    assert!(
+        (maxx - minx - 16.0).abs() < 0.1,
+        "path width should span 16 units: {minx}..{maxx}"
+    );
     let height = maxy - miny;
-    assert!((15.5..=16.1).contains(&height), "path height should nearly span 16 units: {miny}..{maxy}");
-    assert!((maxx - minx) / height > 0.98, "mark bounds are nearly square");
-    assert!(!GITHUB_SVG_PATH.contains('A') && !GITHUB_SVG_PATH.contains('a'), "only supported path commands");
-    let area = (0..64).flat_map(|y| (0..64).map(move |x| (x,y)))
-        .filter(|&(x,y)| point_inside(&pts, (x as f32 + 0.5) / 4.0, (y as f32 + 0.5) / 4.0))
-        .count() as f32 / 16.0;
+    assert!(
+        (15.5..=16.1).contains(&height),
+        "path height should nearly span 16 units: {miny}..{maxy}"
+    );
+    assert!(
+        (maxx - minx) / height > 0.98,
+        "mark bounds are nearly square"
+    );
+    assert!(
+        !GITHUB_SVG_PATH.contains('A') && !GITHUB_SVG_PATH.contains('a'),
+        "only supported path commands"
+    );
+    let area = (0..64)
+        .flat_map(|y| (0..64).map(move |x| (x, y)))
+        .filter(|&(x, y)| point_inside(&pts, (x as f32 + 0.5) / 4.0, (y as f32 + 0.5) / 4.0))
+        .count() as f32
+        / 16.0;
     let ratio = area / 256.0;
-    assert!((0.40..0.65).contains(&ratio), "mark occupancy distinguishes silhouette from a circle (π/4): {ratio}");
+    assert!(
+        (0.40..0.65).contains(&ratio),
+        "mark occupancy distinguishes silhouette from a circle (π/4): {ratio}"
+    );
 }
 
 fn point_inside(pts: &[(f32, f32)], x: f32, y: f32) -> bool {
     let mut inside = false;
     for i in 0..pts.len() {
-        let (x1,y1) = pts[i]; let (x2,y2) = pts[(i+1)%pts.len()];
-        if (y1 > y) != (y2 > y) && x < (x2-x1)*(y-y1)/(y2-y1)+x1 { inside = !inside; }
+        let (x1, y1) = pts[i];
+        let (x2, y2) = pts[(i + 1) % pts.len()];
+        if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+            inside = !inside;
+        }
     }
     inside
 }
@@ -581,7 +717,11 @@ fn svg_number_tokenizer_handles_adjacent_decimal_and_signed_numbers() {
 fn the_logo_texture_is_the_cached_256px_mark() {
     let ctx = support::context();
     let first = branding::logo_texture(&ctx);
-    assert_eq!(first.size(), [256, 256], "the helper decodes the committed 256 px mark");
+    assert_eq!(
+        first.size(),
+        [256, 256],
+        "the helper decodes the committed 256 px mark"
+    );
 
     let second = branding::logo_texture(&ctx);
     assert_eq!(

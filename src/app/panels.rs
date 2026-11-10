@@ -69,16 +69,14 @@ impl VfApp {
         let plan = layout::compact_plan(self.layout_mode);
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = if plan.compact_top_bar {
-                top_bar::show_compact(
-                    ui,
-                    &self.screenshot,
-                )
+                top_bar::show_compact(ui, &self.screenshot, self.state.mode_3d)
             } else {
                 top_bar::show(
                     ui,
                     &mut self.style,
                     &self.screenshot,
                     &mut self.appearance_open,
+                    self.state.mode_3d,
                 )
             };
             style_changed = changed;
@@ -125,8 +123,11 @@ impl VfApp {
                 .min_size(layout::MIN_PANEL_WIDTH)
                 .max_size(layout::MAX_PANEL_WIDTH)
                 .show(ui, |ui| {
-                    collapse =
-                        layout::collapse_button(ui, layout::RailSide::Left, menu::CONTROLS_SHORTCUT);
+                    collapse = layout::collapse_button(
+                        ui,
+                        layout::RailSide::Left,
+                        menu::CONTROLS_SHORTCUT,
+                    );
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
                     });
@@ -222,8 +223,7 @@ impl VfApp {
                         menu::PRESETS_SHORTCUT,
                     );
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        camera_request =
-                            self.presets.show(ui, &mut self.camera, &mut self.state);
+                        camera_request = self.presets.show(ui, &mut self.camera, &mut self.state);
                     });
                 });
             self.layout.presets_width = layout::clamp_width(
@@ -334,7 +334,9 @@ impl VfApp {
                         .clicked()
                     {
                         self.sheet.toggle(SheetState::Controls);
-                        if self.sheet.is_open() { self.sheet_expanded = SheetSize::Default; }
+                        if self.sheet.is_open() {
+                            self.sheet_expanded = SheetSize::Default;
+                        }
                     }
                     if ui
                         .add_sized(
@@ -347,7 +349,9 @@ impl VfApp {
                         .clicked()
                     {
                         self.sheet.toggle(SheetState::Presets);
-                        if self.sheet.is_open() { self.sheet_expanded = SheetSize::Default; }
+                        if self.sheet.is_open() {
+                            self.sheet_expanded = SheetSize::Default;
+                        }
                     }
                     if self.sheet.is_open()
                         && ui
@@ -427,23 +431,29 @@ impl VfApp {
                         .is_some_and(|delta| delta.y < -24.0);
                 if swiped_up {
                     (self.sheet_expanded, _) = layout::sheet_swipe_transition(
-                        self.sheet_expanded, handle.total_drag_delta().unwrap_or_default().y);
+                        self.sheet_expanded,
+                        handle.total_drag_delta().unwrap_or_default().y,
+                    );
                     ui.ctx().request_repaint();
                 }
                 if swiped_down {
                     (self.sheet_expanded, close) = layout::sheet_swipe_transition(
-                        self.sheet_expanded, handle.total_drag_delta().unwrap_or_default().y);
+                        self.sheet_expanded,
+                        handle.total_drag_delta().unwrap_or_default().y,
+                    );
                 }
-                if handle
-                    .on_hover_text("Tap or swipe down to close")
-                    .clicked()
-                {
+                if handle.on_hover_text("Tap or swipe down to close").clicked() {
                     close = true;
                 }
 
                 egui::ScrollArea::vertical().show(ui, |ui| match sheet {
                     SheetState::Controls => {
-                        crate::ui::sidebar::show_compact(ui, &mut self.state, &mut self.sidebar, true);
+                        crate::ui::sidebar::show_compact(
+                            ui,
+                            &mut self.state,
+                            &mut self.sidebar,
+                            true,
+                        );
                         ui.separator();
                         ui.label(egui::RichText::new("Appearance").strong());
                         let controls = crate::ui::style_panel::show_controls(ui, &mut self.style);
@@ -453,7 +463,8 @@ impl VfApp {
                     }
                     SheetState::Presets => {
                         camera_request =
-                            self.presets.show_compact(ui, &mut self.camera, &mut self.state, true);
+                            self.presets
+                                .show_compact(ui, &mut self.camera, &mut self.state, true);
                     }
                     SheetState::None => {}
                 });

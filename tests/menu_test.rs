@@ -59,7 +59,10 @@ fn the_bar_carries_the_v1_menu_table() {
     assert_eq!(
         table,
         vec![
-            ("File", vec!["Export screenshot…", "Export screenshot (SVG)…", "Quit"]),
+            (
+                "File",
+                vec!["Export screenshot…", "Export screenshot (SVG)…", "Quit"]
+            ),
             ("Edit", vec!["Copy formula", "Reset all controls"]),
             (
                 "View",
@@ -85,9 +88,34 @@ fn the_bar_carries_the_v1_menu_table() {
 }
 
 #[test]
+fn svg_menu_item_enabled_only_in_2d() {
+    let file = menu::MENUS.iter().find(|m| m.title == "File").unwrap();
+    let item = file
+        .items
+        .iter()
+        .find(|i| i.action == MenuAction::ExportScreenshotSvg)
+        .unwrap();
+    assert!(
+        vector_field_explorer::screenshot::svg_export_enabled(false),
+        "SVG is enabled in 2D"
+    );
+    assert!(
+        !vector_field_explorer::screenshot::svg_export_enabled(true),
+        "SVG remains present but disabled in 3D"
+    );
+    assert_eq!(item.label, "Export screenshot (SVG)…");
+    assert_eq!(
+        file.items[0].action,
+        MenuAction::ExportScreenshot,
+        "PNG remains available"
+    );
+}
+
+#[test]
 fn every_action_maps_to_its_side_effect() {
     let expected = [
         (MenuAction::ExportScreenshot, SideEffect::Screenshot),
+        (MenuAction::ExportScreenshotSvg, SideEffect::ScreenshotSvg),
         (MenuAction::Quit, SideEffect::Quit),
         (
             MenuAction::CopyFormula,
@@ -109,7 +137,11 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::About, SideEffect::ShowAbout),
     ];
     for (action, expected) in expected {
-        assert_eq!(effect_of(action), expected, "{action:?} must report {expected:?}");
+        assert_eq!(
+            effect_of(action),
+            expected,
+            "{action:?} must report {expected:?}"
+        );
     }
 }
 
@@ -124,11 +156,25 @@ fn reset_layout_restores_expanded_panels_widths_and_help() {
         help_visible: false,
     };
     let effect = apply_action(MenuAction::ResetLayout, &mut fixture.ui());
-    assert_eq!(effect, SideEffect::ResetLayout, "the app must bump the panel ids");
-    assert_eq!(fixture.layout, LayoutState::default(), "every layout knob returns");
-    assert!(fixture.layout.controls_expanded, "reset re-expands rather than hiding");
+    assert_eq!(
+        effect,
+        SideEffect::ResetLayout,
+        "the app must bump the panel ids"
+    );
+    assert_eq!(
+        fixture.layout,
+        LayoutState::default(),
+        "every layout knob returns"
+    );
+    assert!(
+        fixture.layout.controls_expanded,
+        "reset re-expands rather than hiding"
+    );
     assert!(fixture.layout.presets_expanded);
-    assert!(fixture.layout.help_visible, "help visibility returns to its default");
+    assert!(
+        fixture.layout.help_visible,
+        "help visibility returns to its default"
+    );
 }
 
 #[test]
@@ -144,11 +190,25 @@ fn reset_camera_restores_the_default_framing() {
     fixture.fly = Some(FlyCamera::from_orbit(&fixture.orbit));
 
     let effect = apply_action(MenuAction::ResetCamera, &mut fixture.ui());
-    assert_eq!(effect, SideEffect::ResetCamera, "the app clears the preset highlight");
-    assert!(fixture.fly.is_none(), "Reset camera leaves fly mode before resetting");
-    assert_eq!(fixture.orbit, OrbitCamera::default(), "orbit framing returns");
+    assert_eq!(
+        effect,
+        SideEffect::ResetCamera,
+        "the app clears the preset highlight"
+    );
+    assert!(
+        fixture.fly.is_none(),
+        "Reset camera leaves fly mode before resetting"
+    );
+    assert_eq!(
+        fixture.orbit,
+        OrbitCamera::default(),
+        "orbit framing returns"
+    );
     let default_camera = Camera::default();
-    assert_eq!(fixture.camera.position, default_camera.position, "the 2D camera record returns");
+    assert_eq!(
+        fixture.camera.position, default_camera.position,
+        "the 2D camera record returns"
+    );
     assert_eq!(fixture.camera.scale, default_camera.scale);
 }
 
@@ -202,8 +262,14 @@ fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
         apply_action(MenuAction::ResetAllControls, &mut fixture.ui()),
         SideEffect::None,
     );
-    assert_eq!(fixture.controls.density, DEFAULT_DENSITY_2D, "the mirror returns");
-    assert_eq!(fixture.state.density, DEFAULT_DENSITY_2D, "and the state follows it");
+    assert_eq!(
+        fixture.controls.density, DEFAULT_DENSITY_2D,
+        "the mirror returns"
+    );
+    assert_eq!(
+        fixture.state.density, DEFAULT_DENSITY_2D,
+        "and the state follows it"
+    );
     assert_eq!(fixture.controls.colormap, Colormap::Viridis);
     assert_eq!(fixture.state.colormap, Colormap::Viridis);
     assert_eq!(
@@ -211,11 +277,24 @@ fn reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula() {
         ArrowLengthMode::Proportional,
         "the default length mode returns",
     );
-    assert_eq!(fixture.state.arrow_scale, 1.0, "the default arrow scale returns");
-    assert_eq!(fixture.state.magnitude_scale, 1.0, "the default magnitude scale returns");
+    assert_eq!(
+        fixture.state.arrow_scale, 1.0,
+        "the default arrow scale returns"
+    );
+    assert_eq!(
+        fixture.state.magnitude_scale, 1.0,
+        "the default magnitude scale returns"
+    );
     assert!(!fixture.state.streamlines, "traces are off at the defaults");
-    assert_eq!(fixture.state.domain.min, Vec3::splat(-1.0), "the unit cube returns");
-    assert_eq!(fixture.state.formula, "(-y, x)", "the field itself is not a control");
+    assert_eq!(
+        fixture.state.domain.min,
+        Vec3::splat(-1.0),
+        "the unit cube returns"
+    );
+    assert_eq!(
+        fixture.state.formula, "(-y, x)",
+        "the field itself is not a control"
+    );
 }
 
 #[test]
@@ -297,7 +376,11 @@ fn no_action_has_more_than_one_menu_home() {
 #[test]
 fn every_menu_item_is_backed_by_a_variant() {
     for menu in menu::MENUS {
-        assert!(!menu.items.is_empty(), "{} must not be an empty menu", menu.title);
+        assert!(
+            !menu.items.is_empty(),
+            "{} must not be an empty menu",
+            menu.title
+        );
         for item in menu.items {
             assert!(
                 MenuAction::ALL.contains(&item.action),
@@ -311,11 +394,23 @@ fn every_menu_item_is_backed_by_a_variant() {
 
 #[test]
 fn shortcuts_are_shown_from_the_one_table() {
-    assert_eq!(menu::shortcut_label(MenuAction::ToggleControls), Some("Ctrl+B"));
-    assert_eq!(menu::shortcut_label(MenuAction::TogglePresets), Some("Ctrl+P"));
-    assert_eq!(menu::shortcut_label(MenuAction::ExportScreenshot), Some("Ctrl+Shift+S"));
+    assert_eq!(
+        menu::shortcut_label(MenuAction::ToggleControls),
+        Some("Ctrl+B")
+    );
+    assert_eq!(
+        menu::shortcut_label(MenuAction::TogglePresets),
+        Some("Ctrl+P")
+    );
+    assert_eq!(
+        menu::shortcut_label(MenuAction::ExportScreenshot),
+        Some("Ctrl+Shift+S")
+    );
     assert_eq!(menu::shortcut_label(MenuAction::Quit), Some("Ctrl+Q"));
-    assert_eq!(menu::shortcut_label(MenuAction::CopyFormula), Some("Ctrl+Shift+C"));
+    assert_eq!(
+        menu::shortcut_label(MenuAction::CopyFormula),
+        Some("Ctrl+Shift+C")
+    );
     assert_eq!(menu::shortcut_label(MenuAction::ToggleHelp), Some("F1"));
     assert_eq!(menu::shortcut_label(MenuAction::ToggleFly), Some("C"));
     assert_eq!(
@@ -328,12 +423,21 @@ fn shortcuts_are_shown_from_the_one_table() {
 #[test]
 fn shortcuts_stay_out_of_text_fields_except_quit() {
     let controls = menu::shortcut_for(MenuAction::ToggleControls).expect("Ctrl+B exists");
-    assert!(menu::shortcut_allowed(controls, false), "Ctrl+B works outside a text field");
-    assert!(!menu::shortcut_allowed(controls, true), "typing B must not toggle panels");
+    assert!(
+        menu::shortcut_allowed(controls, false),
+        "Ctrl+B works outside a text field"
+    );
+    assert!(
+        !menu::shortcut_allowed(controls, true),
+        "typing B must not toggle panels"
+    );
 
     let quit = menu::shortcut_for(MenuAction::Quit).expect("Ctrl+Q exists");
     assert!(menu::shortcut_allowed(quit, false));
-    assert!(menu::shortcut_allowed(quit, true), "Ctrl+Q quits even while typing");
+    assert!(
+        menu::shortcut_allowed(quit, true),
+        "Ctrl+Q quits even while typing"
+    );
     assert!(quit.global, "quit is the one global shortcut");
 }
 
@@ -433,7 +537,10 @@ fn c_types_in_a_focused_text_field_instead_of_toggling_fly() {
         Vec::<MenuAction>::new(),
         "C must not toggle fly while a text field owns the keyboard",
     );
-    assert!(text.contains('c'), "the focused field receives the keystroke: {text:?}");
+    assert!(
+        text.contains('c'),
+        "the focused field receives the keystroke: {text:?}"
+    );
 }
 
 #[test]
@@ -524,7 +631,10 @@ fn f1_still_toggles_the_compact_overlay() {
     let mut fixture = MenuFixture::new();
     assert!(fixture.layout.help_visible, "the overlay starts visible");
     assert_eq!(apply_action(fired[0], &mut fixture.ui()), SideEffect::None);
-    assert!(!fixture.layout.help_visible, "F1 dismisses the compact overlay");
+    assert!(
+        !fixture.layout.help_visible,
+        "F1 dismisses the compact overlay"
+    );
     apply_action(fired[0], &mut fixture.ui());
     assert!(fixture.layout.help_visible, "and brings it back");
 }

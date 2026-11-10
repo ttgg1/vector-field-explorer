@@ -57,7 +57,7 @@ impl Harness {
             let mut changed = false;
             let output = self.ctx.run_ui(input, |ui| {
                 egui::Panel::top("top_bar").show(ui, |ui| {
-                    let (_, frame_changed) = top_bar::show(ui, style, screenshot, open);
+                    let (_, frame_changed) = top_bar::show(ui, style, screenshot, open, false);
                     changed = frame_changed;
                 });
             });
@@ -159,10 +159,7 @@ fn picker_widget_outside(
         .map(|(_, rect)| rect)
         .filter(|rect| !content.expand(12.0).contains(rect.center()))
         .collect();
-    candidates.sort_by(|a, b| {
-        (b.width() * b.height())
-            .total_cmp(&(a.width() * a.height()))
-    });
+    candidates.sort_by(|a, b| (b.width() * b.height()).total_cmp(&(a.width() * a.height())));
     candidates
         .into_iter()
         .next()

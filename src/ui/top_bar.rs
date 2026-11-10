@@ -12,7 +12,7 @@ use eframe::egui;
 
 use crate::screenshot::Screenshot;
 use crate::ui::branding;
-use crate::ui::menu::{self, MenuAction, MENUS};
+use crate::ui::menu::{self, MENUS, MenuAction};
 use crate::ui::style_panel::{self, AppStyle};
 
 /// The gear button that anchors the Appearance popover. Ticket 59 replaced the
@@ -45,9 +45,17 @@ pub fn wheel_zoom_factor(scroll_points: f32) -> f32 {
 pub fn wheel_zoom(ctx: &egui::Context) -> f32 {
     ctx.input(|i| {
         let pinch = i.zoom_delta();
-        let pinch = if pinch.is_finite() && pinch > 0.0 { pinch } else { 1.0 };
+        let pinch = if pinch.is_finite() && pinch > 0.0 {
+            pinch
+        } else {
+            1.0
+        };
         let factor = pinch * wheel_zoom_factor(i.smooth_scroll_delta.y);
-        if factor.is_finite() && factor > 0.0 { factor } else { 1.0 }
+        if factor.is_finite() && factor > 0.0 {
+            factor
+        } else {
+            1.0
+        }
     })
 }
 
@@ -90,27 +98,45 @@ pub const GITHUB_SVG_PATH: &str = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 
 /// Parse a number from `s` starting at `i`, advancing `i`.
 pub fn parse_num(s: &str, i: &mut usize) -> f32 {
     let bytes = s.as_bytes();
-    while *i < bytes.len() && (bytes[*i].is_ascii_whitespace() || bytes[*i] == b',') { *i += 1; }
+    while *i < bytes.len() && (bytes[*i].is_ascii_whitespace() || bytes[*i] == b',') {
+        *i += 1;
+    }
     let start = *i;
-    if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') { *i += 1; }
+    if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') {
+        *i += 1;
+    }
     let digits_before = *i;
-    while *i < bytes.len() && bytes[*i].is_ascii_digit() { *i += 1; }
+    while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+        *i += 1;
+    }
     let mut has_digits = *i > digits_before;
     if *i < bytes.len() && bytes[*i] == b'.' {
         *i += 1;
         let digits_after = *i;
-        while *i < bytes.len() && bytes[*i].is_ascii_digit() { *i += 1; }
+        while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+            *i += 1;
+        }
         has_digits |= *i > digits_after;
     }
-    if !has_digits { *i = start; return 0.0; }
+    if !has_digits {
+        *i = start;
+        return 0.0;
+    }
     let mantissa_end = *i;
     if *i < bytes.len() && matches!(bytes[*i], b'e' | b'E') {
         let exponent = *i;
         *i += 1;
-        if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') { *i += 1; }
+        if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') {
+            *i += 1;
+        }
         let exponent_digits = *i;
-        while *i < bytes.len() && bytes[*i].is_ascii_digit() { *i += 1; }
-        if *i == exponent_digits { *i = mantissa_end; let _ = exponent; }
+        while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        if *i == exponent_digits {
+            *i = mantissa_end;
+            let _ = exponent;
+        }
     }
     s[start..*i].parse().unwrap_or(0.0)
 }
@@ -127,36 +153,108 @@ pub fn github_path_points() -> Vec<(f32, f32)> {
     let mut sy = 0.0f32;
     let bytes = path.as_bytes();
     while i < bytes.len() {
-        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') { i += 1; }
-        if i >= bytes.len() { break; }
-        if bytes[i].is_ascii_alphabetic() { cmd = bytes[i] as char; i += 1; continue; }
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        if bytes[i].is_ascii_alphabetic() {
+            cmd = bytes[i] as char;
+            i += 1;
+            continue;
+        }
         match cmd {
-            'M' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx=x; cy=y; sx=cx; sy=cy; pts.push((cx,cy)); }
-            'm' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx+=x; cy+=y; sx=cx; sy=cy; pts.push((cx,cy)); }
-            'L' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx=x; cy=y; pts.push((cx,cy)); }
-            'l' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx+=x; cy+=y; pts.push((cx,cy)); }
+            'M' => {
+                let x = parse_num(path, &mut i);
+                let y = parse_num(path, &mut i);
+                cx = x;
+                cy = y;
+                sx = cx;
+                sy = cy;
+                pts.push((cx, cy));
+            }
+            'm' => {
+                let x = parse_num(path, &mut i);
+                let y = parse_num(path, &mut i);
+                cx += x;
+                cy += y;
+                sx = cx;
+                sy = cy;
+                pts.push((cx, cy));
+            }
+            'L' => {
+                let x = parse_num(path, &mut i);
+                let y = parse_num(path, &mut i);
+                cx = x;
+                cy = y;
+                pts.push((cx, cy));
+            }
+            'l' => {
+                let x = parse_num(path, &mut i);
+                let y = parse_num(path, &mut i);
+                cx += x;
+                cy += y;
+                pts.push((cx, cy));
+            }
             'C' => {
-                let x1=parse_num(path,&mut i); let y1=parse_num(path,&mut i);
-                let x2=parse_num(path,&mut i); let y2=parse_num(path,&mut i);
-                let x=parse_num(path,&mut i); let y=parse_num(path,&mut i);
-                let (ox,oy)=(cx,cy);
-                for k in 1..=16 { let t=k as f32/16.0; let u=1.0-t;
-                    pts.push((u*u*u*ox+3.0*u*u*t*x1+3.0*u*t*t*x2+t*t*t*x,
-                             u*u*u*oy+3.0*u*u*t*y1+3.0*u*t*t*y2+t*t*t*y)); }
-                cx=x; cy=y;
+                let x1 = parse_num(path, &mut i);
+                let y1 = parse_num(path, &mut i);
+                let x2 = parse_num(path, &mut i);
+                let y2 = parse_num(path, &mut i);
+                let x = parse_num(path, &mut i);
+                let y = parse_num(path, &mut i);
+                let (ox, oy) = (cx, cy);
+                for k in 1..=16 {
+                    let t = k as f32 / 16.0;
+                    let u = 1.0 - t;
+                    pts.push((
+                        u * u * u * ox
+                            + 3.0 * u * u * t * x1
+                            + 3.0 * u * t * t * x2
+                            + t * t * t * x,
+                        u * u * u * oy
+                            + 3.0 * u * u * t * y1
+                            + 3.0 * u * t * t * y2
+                            + t * t * t * y,
+                    ));
+                }
+                cx = x;
+                cy = y;
             }
             'c' => {
-                let x1=cx+parse_num(path,&mut i); let y1=cy+parse_num(path,&mut i);
-                let x2=cx+parse_num(path,&mut i); let y2=cy+parse_num(path,&mut i);
-                let x=cx+parse_num(path,&mut i); let y=cy+parse_num(path,&mut i);
-                let (ox,oy)=(cx,cy);
-                for k in 1..=16 { let t=k as f32/16.0; let u=1.0-t;
-                    pts.push((u*u*u*ox+3.0*u*u*t*x1+3.0*u*t*t*x2+t*t*t*x,
-                             u*u*u*oy+3.0*u*u*t*y1+3.0*u*t*t*y2+t*t*t*y)); }
-                cx=x; cy=y;
+                let x1 = cx + parse_num(path, &mut i);
+                let y1 = cy + parse_num(path, &mut i);
+                let x2 = cx + parse_num(path, &mut i);
+                let y2 = cy + parse_num(path, &mut i);
+                let x = cx + parse_num(path, &mut i);
+                let y = cy + parse_num(path, &mut i);
+                let (ox, oy) = (cx, cy);
+                for k in 1..=16 {
+                    let t = k as f32 / 16.0;
+                    let u = 1.0 - t;
+                    pts.push((
+                        u * u * u * ox
+                            + 3.0 * u * u * t * x1
+                            + 3.0 * u * t * t * x2
+                            + t * t * t * x,
+                        u * u * u * oy
+                            + 3.0 * u * u * t * y1
+                            + 3.0 * u * t * t * y2
+                            + t * t * t * y,
+                    ));
+                }
+                cx = x;
+                cy = y;
             }
-            'Z'|'z' => { pts.push((sx,sy)); cx=sx; cy=sy; }
-            _ => { let _=parse_num(path,&mut i); }
+            'Z' | 'z' => {
+                pts.push((sx, sy));
+                cx = sx;
+                cy = sy;
+            }
+            _ => {
+                let _ = parse_num(path, &mut i);
+            }
         }
     }
     pts
@@ -169,7 +267,8 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
         return t;
     }
     let size = 32usize;
-    let mut img = egui::ColorImage::new([size, size], vec![egui::Color32::TRANSPARENT; size * size]);
+    let mut img =
+        egui::ColorImage::new([size, size], vec![egui::Color32::TRANSPARENT; size * size]);
     let pts = github_path_points();
     let scale = size as f32 / 16.0;
     let n = pts.len();
@@ -200,17 +299,18 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
     t
 }
 
-
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
-fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem) -> bool {
+fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool) -> bool {
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
     // the sidebar Camera section.
     let mut button = egui::Button::new(item.label);
     if let Some(label) = menu::item_shortcut_label(item) {
         button = button.shortcut_text(label);
     }
-    let clicked = ui.add(button).clicked();
+    let enabled = item.action != MenuAction::ExportScreenshotSvg
+        || crate::screenshot::svg_export_enabled(mode_3d);
+    let clicked = ui.add_enabled(enabled, button).clicked();
     if clicked {
         // Every item is a one-shot command: close the dropdown so the next
         // click lands on the app, not the menu.
@@ -226,6 +326,16 @@ fn screenshot_button(ui: &mut egui::Ui, screenshot: &Screenshot) -> bool {
         None => "Save the viewport exactly as it looks now".to_string(),
     };
     let clicked = ui.button("Screenshot").on_hover_text(tooltip).clicked();
+    screenshot.toast(ui);
+    clicked
+}
+
+fn screenshot_svg_button(ui: &mut egui::Ui, screenshot: &Screenshot, mode_3d: bool) -> bool {
+    let enabled = crate::screenshot::svg_export_enabled(mode_3d);
+    let clicked = ui
+        .add_enabled(enabled, egui::Button::new("Screenshot as SVG"))
+        .on_hover_text("Save the 2D viewport as a vector SVG")
+        .clicked();
     screenshot.toast(ui);
     clicked
 }
@@ -260,12 +370,13 @@ fn appearance_popover(
     });
 
     if let Some(popover) = response {
-        let accent_open = accent_popup_id != egui::Id::NULL
-            && egui::Popup::is_id_open(ui.ctx(), accent_popup_id);
+        let accent_open =
+            accent_popup_id != egui::Id::NULL && egui::Popup::is_id_open(ui.ctx(), accent_popup_id);
         let accent_layer =
             accent_open.then(|| egui::LayerId::new(egui::Order::Foreground, accent_popup_id));
-        let (any_click, click_pos) =
-            ui.ctx().input(|input| (input.pointer.any_click(), input.pointer.interact_pos()));
+        let (any_click, click_pos) = ui
+            .ctx()
+            .input(|input| (input.pointer.any_click(), input.pointer.interact_pos()));
         let layer_under_pointer = click_pos.and_then(|pos| ui.ctx().layer_id_at(pos));
         // The gear click that opens the popover is outside its rect this
         // frame, so it must not immediately dismiss what it just opened.
@@ -293,6 +404,7 @@ pub fn show(
     style: &mut AppStyle,
     screenshot: &Screenshot,
     appearance_open: &mut bool,
+    mode_3d: bool,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
@@ -302,7 +414,7 @@ pub fn show(
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
-                    if add_menu_item(ui, item) {
+                    if add_menu_item(ui, item, mode_3d) {
                         action = Some(item.action);
                     }
                 }
@@ -325,6 +437,9 @@ pub fn show(
             if screenshot_button(ui, screenshot) {
                 action = Some(MenuAction::ExportScreenshot);
             }
+            if screenshot_svg_button(ui, screenshot, mode_3d) {
+                action = Some(MenuAction::ExportScreenshotSvg);
+            }
         });
     });
 
@@ -341,6 +456,7 @@ pub fn show(
 pub fn show_compact(
     ui: &mut egui::Ui,
     screenshot: &Screenshot,
+    mode_3d: bool,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let style_changed = false;
@@ -353,8 +469,7 @@ pub fn show_compact(
 
         // The hamburger is a menu button, so it needs the explicit 44 pt size
         // instead of the row's height alone.
-        let hamburger =
-            egui::Button::new(HAMBURGER_LABEL).min_size(egui::vec2(touch, touch));
+        let hamburger = egui::Button::new(HAMBURGER_LABEL).min_size(egui::vec2(touch, touch));
         let _hamburger = egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
             // One flat dropdown: nested submenus are awkward to hit with a
             // thumb, and every group title still labels its commands.
@@ -364,7 +479,7 @@ pub fn show_compact(
                     if item.action == MenuAction::OpenAppearance {
                         continue;
                     }
-                    if add_menu_item(ui, item) {
+                    if add_menu_item(ui, item, mode_3d) {
                         action = Some(item.action);
                     }
                 }
@@ -386,6 +501,9 @@ pub fn show_compact(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if screenshot_button(ui, screenshot) {
                 action = Some(MenuAction::ExportScreenshot);
+            }
+            if screenshot_svg_button(ui, screenshot, mode_3d) {
+                action = Some(MenuAction::ExportScreenshotSvg);
             }
         });
     });
