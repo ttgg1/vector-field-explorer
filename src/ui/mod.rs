@@ -1,4 +1,6 @@
 pub mod branding;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cas_panel;
 pub mod formula_bar;
 pub mod help_overlay;
 pub mod layout;

@@ -17,6 +17,8 @@ mod arrow_style_test;
 mod branding_assets_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cas_panel_test;
 mod camera_input_test;
 mod camera_pan_zoom_test;
 mod camera_test;
