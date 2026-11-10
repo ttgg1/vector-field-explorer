@@ -148,7 +148,7 @@ impl VfApp {
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.screenshot.request(),
             menu::SideEffect::ScreenshotSvg => {
-                if self.state.mode_3d {
+                if !crate::screenshot::svg_export_enabled(self.state.mode_3d) {
                     self.screenshot.notify(
                         "SVG export is 2D only; use PNG in 3D".to_string(),
                         true,

@@ -1,4 +1,4 @@
-use vector_field_explorer::screenshot::{default_svg_filename, scene_to_svg, svg_element_count, SVG_ELEMENT_CAP};
+use vector_field_explorer::screenshot::{default_svg_filename, scene_to_svg, svg_element_count, SVG_ELEMENT_CAP, svg_export_enabled};
 use vector_field_explorer::renderer::{SceneGPU, ArrowInstanceGPU, LineInstanceGPU};
 use vector_field_explorer::export::ensure_svg_extension;
 use std::time::SystemTime;
@@ -96,6 +96,12 @@ fn scene_to_svg_does_not_truncate_large_scene() {
     let svg = scene_to_svg(&scene, vp, 64, 48, [0.0,0.0,0.0,1.0]);
     // still contains all (no truncation): count circles? just ensure not empty and root closed
     assert!(svg.ends_with("</svg>"));
+}
+
+#[test]
+fn svg_export_rejected_in_3d() {
+    assert!(!svg_export_enabled(true));
+    assert!(svg_export_enabled(false));
 }
 
 #[test]

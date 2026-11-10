@@ -266,6 +266,7 @@ impl VfApp {
             // vector geometry. No GPU readback is needed, so this runs
             // synchronously on the frame thread.
             if self.screenshot.take_svg_request() && !self.state.mode_3d {
+                let over_cap = screenshot::exceeds_svg_element_cap(&scene);
                 let pixels_per_point = ui.ctx().pixels_per_point();
                 let (w, h) = screenshot::capture_size(
                     rect.width(),
@@ -281,6 +282,15 @@ impl VfApp {
                     f64::from(clear[3]),
                 ];
                 let svg = screenshot::scene_to_svg(&scene, view_proj, w, h, clear_f);
+                if over_cap {
+                    self.screenshot.notify(
+                        format!(
+                            "SVG export contains more than {} elements; file may be large",
+                            screenshot::SVG_ELEMENT_CAP
+                        ),
+                        true,
+                    );
+                }
                 let filename = screenshot::default_svg_filename(
                     screenshot::SystemTime::now(),
                     "2D",

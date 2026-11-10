@@ -194,15 +194,7 @@ pub fn date_stamp(now: SystemTime) -> String {
 /// testable, and the mode label is lowercased with any non-alphanumeric run
 /// folded to a single `-`, so "2D" gives the brief's
 /// `vector-field-explorer-2026-11-05-2d.png`.
-/// Maximum number of vector elements an SVG export is expected to carry
-/// before it becomes large enough to warn the user about file size / render
-/// cost. The export is never truncated: exceeding this only logs a warning so
-/// the caller can surface a toast.
-pub const SVG_ELEMENT_CAP: usize = 50_000;
-pub const MAX_SVG_ELEMENTS: usize = SVG_ELEMENT_CAP;
-pub const MAX_SVG_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
-pub const SVG_SAFE_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
-
+///
 /// SVG variant of [`default_filename`].
 pub fn default_svg_filename(now: SystemTime, mode_label: &str) -> String {
     let png = default_filename(now, mode_label);
@@ -603,6 +595,24 @@ pub fn svg_element_count(scene: &crate::renderer::SceneGPU) -> usize {
 pub fn exceeds_svg_element_cap(scene: &crate::renderer::SceneGPU) -> bool {
     svg_element_count(scene) > SVG_ELEMENT_CAP
 }
+
+/// Whether an SVG export is allowed for the current view mode. SVG export is
+/// 2D only; in 3D the entry is disabled and PNG remains the only raster
+/// export. Promoted as a single `#[doc(hidden)]` seam so the rejection rule
+/// is testable without an app harness.
+#[doc(hidden)]
+pub fn svg_export_enabled(mode_3d: bool) -> bool {
+    !mode_3d
+}
+
+/// Maximum number of vector elements an SVG export is expected to carry
+/// before it becomes large enough to warn the user about file size / render
+/// cost. The export is never truncated: exceeding this only logs a warning so
+/// the caller can surface a toast.
+pub const SVG_ELEMENT_CAP: usize = 50_000;
+pub const MAX_SVG_ELEMENTS: usize = SVG_ELEMENT_CAP;
+pub const MAX_SVG_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
+pub const SVG_SAFE_ELEMENT_COUNT: usize = SVG_ELEMENT_CAP;
 
 /// A short-lived completion message.
 struct Toast {
