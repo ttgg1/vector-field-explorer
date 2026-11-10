@@ -1,5 +1,6 @@
 target/
 dist/
+__pycache__/
 
 # Local-only working notes: SDD ledger, tickets, review packages
 .scratch/

@@ -27,6 +27,35 @@ INDEX_MD = WIKI_DIR / "index.md"
 # multi-line spans cannot create phantom paths.
 INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+
+# A URI scheme: letters, then letters/digits/`+`/`-`/`.`, then `:`.
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+_TITLE_RE = re.compile(r'^(\S+)(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^)]*\)))?\s*$')
+
+
+def _link_destination(raw: str) -> str:
+    """Extract the destination from a markdown link's parenthesised content.
+
+    Strips an optional title (`path "Title"`), unwraps an angle-bracket
+    destination (`<path with spaces.md>`), and drops any fragment/query.
+    """
+    s = raw.strip()
+    if s.startswith("<"):
+        end = s.find(">")
+        if end != -1:
+            s = s[1:end]
+        else:
+            s = s.lstrip("<")
+        s = s.strip()
+    else:
+        m = _TITLE_RE.match(s)
+        if m:
+            s = m.group(1)
+        else:
+            parts = s.split()
+            s = parts[0] if parts else s
+    s = s.split("#", 1)[0].split("?", 1)[0].strip()
+    return s
 # A backticked token that is exactly a repo-relative source/test path.
 PATH_RE = re.compile(r"^(src|tests)/[A-Za-z0-9_./-]+\.rs$")
 
@@ -77,12 +106,10 @@ def check_wiki_index_coverage() -> tuple[str, list[str]]:
     text = INDEX_MD.read_text(encoding="utf-8")
     linked: set[str] = set()
     for target in MD_LINK_RE.findall(text):
-        target = target.strip()
-        if not target:
+        clean = _link_destination(target)
+        if not clean:
             continue
-        # Strip fragment / query.
-        clean = target.split("#", 1)[0].split("?", 1)[0].strip()
-        if not clean or "://" in clean or clean.startswith("mailto:"):
+        if _SCHEME_RE.match(clean):
             continue
         if clean.startswith("/"):
             cand = ROOT / clean.lstrip("/")
@@ -108,15 +135,14 @@ def check_wiki_index_coverage() -> tuple[str, list[str]]:
 
 
 def _is_relative_link(target: str) -> bool:
-    clean = target.strip()
+    clean = _link_destination(target)
     if not clean or clean.startswith("#"):
         return False
-    clean = clean.split("#", 1)[0].split("?", 1)[0].strip()
-    if not clean or clean.startswith("#"):
+    # Anchors, any scheme (http, mailto, tel, data, ...), and absolute paths
+    # are not local files.
+    if _SCHEME_RE.match(clean):
         return False
-    # Anchors, absolute URLs, mailto links and absolute paths are not local
-    # files.
-    if "://" in clean or clean.startswith("mailto:") or clean.startswith("/"):
+    if clean.startswith("/"):
         return False
     return True
 
@@ -127,10 +153,9 @@ def check_wiki_links() -> tuple[str, list[str]]:
     for p in _wiki_md_files():
         text = p.read_text(encoding="utf-8")
         for target in MD_LINK_RE.findall(text):
-            target = target.strip()
             if not _is_relative_link(target):
                 continue
-            clean = target.split("#", 1)[0].split("?", 1)[0].strip()
+            clean = _link_destination(target)
             cand = (p.parent / clean).resolve()
             if not cand.is_file():
                 violations.append(f"{_rel(p)}: {target}")
