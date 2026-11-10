@@ -256,3 +256,61 @@ fn loading_a_duplicate_formula_preset_highlights_only_the_clicked_name() {
         "duplicate formulas are kept, not deduplicated"
     );
 }
+
+#[test]
+fn save_failure_on_corrupt_preset_file_sets_storage_note_and_keeps_name() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("presets.json"), "not json").unwrap();
+    let mut panel = panel_in(dir.path());
+    panel.set_new_name("home");
+
+    let result = panel.save_current("home", &cam_home());
+
+    assert!(result.is_err(), "a corrupt preset file must fail the save");
+    assert!(
+        panel.storage_note().is_some(),
+        "a failed save must surface a non-blocking panel note"
+    );
+    assert_eq!(
+        panel.new_name(),
+        "home",
+        "the typed name must survive a failed save"
+    );
+    assert!(
+        panel.presets().is_empty(),
+        "a failed save must not mutate the in-memory list"
+    );
+    // No-overwrite: the corrupt file is left untouched rather than clobbered.
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("presets.json")).unwrap(),
+        "not json"
+    );
+}
+
+#[test]
+fn delete_failure_on_corrupt_preset_file_sets_storage_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    panel.save_current("home", &cam_home()).expect("save");
+
+    // Corrupt the file after a successful save so the delete's reload fails.
+    std::fs::write(dir.path().join("presets.json"), "not json").unwrap();
+    panel.request_delete("home");
+
+    let result = panel.delete("home");
+
+    assert!(result.is_err(), "a corrupt preset file must fail the delete");
+    assert!(
+        panel.storage_note().is_some(),
+        "a failed delete must surface a non-blocking panel note"
+    );
+    assert!(
+        panel.presets().iter().any(|p| p.name == "home"),
+        "a failed delete must keep the preset in the list"
+    );
+    assert_eq!(
+        panel.pending_delete(),
+        Some("home"),
+        "a failed delete keeps the confirmation open"
+    );
+}

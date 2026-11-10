@@ -51,7 +51,7 @@ pub struct PresetPanel {
     /// Cached list of presets.
     presets: Vec<CameraPreset>,
     /// Pending name for the "Save current view" name field.
-    new_name: String,
+    pub new_name: String,
     /// The preset last saved or applied; drives the row highlight.
     active: Option<String>,
     /// The built-in field preset last clicked, so duplicate formulas can
@@ -63,7 +63,7 @@ pub struct PresetPanel {
     /// once so one click applies one camera.
     applied: Option<Camera>,
     /// One non-blocking note when browser storage cannot hold the list.
-    storage_note: Option<String>,
+    pub storage_note: Option<String>,
 }
 
 impl Default for PresetPanel {
@@ -166,6 +166,21 @@ impl PresetPanel {
         self.pending_delete.as_deref()
     }
 
+    /// The non-blocking storage note, if browser/native storage failed.
+    pub fn storage_note(&self) -> Option<&str> {
+        self.storage_note.as_deref()
+    }
+
+    /// The typed name currently in the "Save current view" field.
+    pub fn new_name(&self) -> &str {
+        &self.new_name
+    }
+
+    /// Replace the typed name in the "Save current view" field.
+    pub fn set_new_name(&mut self, name: impl Into<String>) {
+        self.new_name = name.into();
+    }
+
     /// The camera state applied by a `load` this frame, for the app to move
     /// the live view. Taken once per click.
     pub fn take_applied(&mut self) -> Option<Camera> {
@@ -182,7 +197,14 @@ impl PresetPanel {
     /// the saved preset becomes the highlighted row.
     pub fn save_current(&mut self, name: &str, camera: &Camera) -> io::Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
-        save_preset(&self.dir, name, camera)?;
+        {
+            if let Err(error) = save_preset(&self.dir, name, camera) {
+                warn!("preset save failed: {error}");
+                self.storage_note = Some(format!("Camera preset could not be saved: {error}"));
+                return Err(error);
+            }
+            self.storage_note = None;
+        }
         self.presets.retain(|p| p.name != name);
         self.presets.push(CameraPreset {
             name: name.to_owned(),
@@ -191,6 +213,10 @@ impl PresetPanel {
         });
         #[cfg(target_arch = "wasm32")]
         self.persist_wasm();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.storage_note = None;
+        }
         self.active = Some(name.to_owned());
         debug!("preset saved: {name}");
         Ok(())
@@ -230,7 +256,14 @@ impl PresetPanel {
     /// the pending request and the highlight when they name this preset.
     pub fn delete(&mut self, name: &str) -> io::Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
-        delete_preset(&self.dir, name)?;
+        {
+            if let Err(error) = delete_preset(&self.dir, name) {
+                warn!("preset delete failed: {error}");
+                self.storage_note = Some(format!("Camera preset could not be deleted: {error}"));
+                return Err(error);
+            }
+            self.storage_note = None;
+        }
         self.presets.retain(|p| p.name != name);
         if self.active.as_deref() == Some(name) {
             self.active = None;
@@ -240,6 +273,10 @@ impl PresetPanel {
         }
         #[cfg(target_arch = "wasm32")]
         self.persist_wasm();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.storage_note = None;
+        }
         debug!("preset deleted: {name}");
         Ok(())
     }
@@ -416,10 +453,11 @@ impl PresetPanel {
                 .on_hover_text("Save the current camera under this name (replaces an existing name)")
                 .clicked()
             {
-                if let Err(e) = self.save_current(&name, camera) {
-                    warn!("preset save failed: {e}");
+                if self.save_current(&name, camera).is_ok() {
+                    self.new_name.clear();
+                } else {
+                    warn!("preset save failed");
                 }
-                self.new_name.clear();
             }
         });
 

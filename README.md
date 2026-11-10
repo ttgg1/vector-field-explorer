@@ -321,8 +321,9 @@ preset** is a formula definition. The distinction is defined in
 Corrupt or partial settings fall back to defaults or clamp to valid ranges.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
 logged and left untouched rather than silently overwritten (a missing file
-starts with an empty list). On the web, eframe's browser storage is used and camera presets use
-`localStorage`.
+starts with an empty list), and save or delete failures surface a non-blocking
+note in the Presets panel. On the web, eframe's browser storage is used and
+camera presets use `localStorage`.
 
 ## Limitations
 
