@@ -1,5 +1,25 @@
 # Post-v1 frontier and critical path — as of 2026-11-10
 
+## Native CAS ticketing (2026-11-10; current ruling)
+
+At base `703e77e9cc983aaa4124b41b5ec0603d7e745edf`, the owner approved
+exmex-based native CAS and deferred CAS wasm support. Tickets 73 (adapter/math)
+and 75 (native panel) are proposed just-in-time slices from ticket 55, not new
+global roadmap phases. The adapter is file-disjoint from Phase 1 source work
+and may proceed alongside it after ownership checks; it is not a Phase 1 gate.
+The adapter must be complete before Phase 3 induction. The panel follows
+ticket 71's active UI follow-up to avoid file contention. Both tickets are
+blocked on independent builder review of the exact symbolic grammar/printer
+boundary. The ticket files are
+`.scratch/field-viewport/issues/73-native-cas-adapter.md` and
+`.scratch/field-viewport/issues/75-native-cas-panel.md`; see also [the
+decision record](../decisions/2026-11-10-native-cas.md).
+
+This does not reorder Windows (72) or time-dependent fields (39), both merged;
+ticket 72's release dry-run remains a separate open verification item. It also
+does not alter the accepted Phase 1 → Phase 3 → Phase 5 → Phase 2 → Phase 4
+sequence or tickets 37/38 dependencies. Ticket 71's follow-up remains active.
+
 ## Historical update (2026-11-10) — ticketed and split
 
 This dated update records the original ticketing and scheduling decision; the
