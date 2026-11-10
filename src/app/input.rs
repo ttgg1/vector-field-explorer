@@ -460,7 +460,7 @@ impl VfApp {
             && self.state.mode_3d
             && let Some(before) = undo.particles
         {
-            self.particles.pos.truncate(before);
+            self.particles.truncate(before);
         }
         if !undo.removed {
             return;

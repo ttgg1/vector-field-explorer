@@ -717,6 +717,37 @@ fn clear_empties_trails_stuck_times_and_speeds() {
 }
 
 #[test]
+fn truncate_after_burst_realigns_positions_and_trails() {
+    let domain = Domain::default();
+    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
+    let mut cloud = Particles::default();
+    spawn(&mut cloud, &domain, 4, 3);
+    let before = cloud.pos.len();
+    advect(
+        &mut cloud,
+        &field,
+        &domain,
+        AdvectSettings { dt: 0.01, trail_len: 4, ..AdvectSettings::default() },
+    );
+    let burst_center = Vec3::new(0.0, 0.0, 0.0);
+    spawn_at(&mut cloud, &domain, burst_center, CLICK_BURST_PARTICLES, 3);
+    assert!(cloud.pos.len() > before, "the burst adds particles");
+    cloud.truncate(before);
+    assert_eq!(cloud.pos.len(), before, "positions roll back to the pre-burst count");
+    let (trails, stuck, speeds) = cloud.history();
+    assert_eq!(trails.len(), before, "trails realign with positions");
+    assert_eq!(stuck.len(), before, "stuck times realign");
+    assert_eq!(speeds.len(), before, "speeds realign");
+    for i in 0..before {
+        assert_eq!(
+            trails[i].last(),
+            Some(&cloud.pos[i]),
+            "each surviving trail's newest point is its particle",
+        );
+    }
+}
+
+#[test]
 fn speed_is_displacement_over_dt() {
     let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
     let domain = Domain::default();

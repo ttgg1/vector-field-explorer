@@ -309,6 +309,16 @@ impl Particles {
             }
         }
     }
+
+    /// Truncate `pos`, `trails`, `stuck` and `speeds` together so a rollback
+    /// (e.g. undoing a click burst) cannot desynchronise the parallel vectors
+    /// and leave stale speeds or trail history behind.
+    pub fn truncate(&mut self, len: usize) {
+        self.pos.truncate(len);
+        self.trails.truncate(len);
+        self.stuck.truncate(len);
+        self.speeds.truncate(len);
+    }
 }
 
 /// How many particles a density setting offers, capped at [`MAX_PARTICLES`] so
@@ -711,9 +721,12 @@ pub fn advect(
 /// colouring auto-ranges to this each frame; an empty or all-equal cloud falls
 /// back to `0..1` so the ramp still has span.
 pub fn speed_range(particles: &Particles) -> (f32, f32) {
+    // Defensive: never read past the aligned prefix, so a desynchronised cloud
+    // (pos shorter or longer than speeds) cannot read stale speeds.
+    let n = particles.pos.len().min(particles.speeds.len());
     let mut lo = f32::INFINITY;
     let mut hi = f32::NEG_INFINITY;
-    for speed in &particles.speeds {
+    for speed in &particles.speeds[..n] {
         if speed.is_finite() {
             lo = lo.min(*speed);
             hi = hi.max(*speed);
