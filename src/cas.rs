@@ -57,7 +57,35 @@ fn finite(value: f64) -> Result<String> {
     if !value.is_finite() {
         return Err("non-finite numeric literal or result".into());
     }
-    Ok(format!("{value:?}"))
+    let text = value.to_string();
+    Ok(expand_exponent(&text))
+}
+
+// exmex's default number matcher accepts decimal digits and a dot, but not an
+// exponent. Expand Rust's shortest round-tripping spelling without changing
+// its represented f64 value before crossing that parser boundary.
+fn expand_exponent(text: &str) -> String {
+    let Some((mantissa, exponent)) = text.split_once(['e', 'E']) else {
+        return text.to_owned();
+    };
+    let exponent = exponent.parse::<i32>().expect("f64 exponent is valid");
+    let (sign, unsigned) = mantissa
+        .strip_prefix('-')
+        .map_or(("", mantissa), |unsigned| ("-", unsigned));
+    let decimal = unsigned.find('.').unwrap_or(unsigned.len()) as i32;
+    let digits: String = unsigned.chars().filter(|&ch| ch != '.').collect();
+    let point = decimal + exponent;
+    if point <= 0 {
+        format!("{sign}0.{}{digits}", "0".repeat((-point) as usize))
+    } else if point as usize >= digits.len() {
+        format!(
+            "{sign}{digits}{}",
+            "0".repeat(point as usize - digits.len())
+        )
+    } else {
+        let point = point as usize;
+        format!("{sign}{}.{}", &digits[..point], &digits[point..])
+    }
 }
 
 fn lower_input(source: &str) -> Result<(String, Vec<String>)> {
@@ -270,6 +298,12 @@ fn lex_output(text: &str) -> Result<Vec<OutToken>> {
                 i += 1;
             }
             let name = &text[start..i];
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "inf" | "infinity" | "nan"
+            ) {
+                return Err("non-finite numeric literal or result".into());
+            }
             if !approved(name) {
                 return Err(format!("unexpected engine identifier `{name}`").into());
             }

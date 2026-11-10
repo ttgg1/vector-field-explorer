@@ -173,7 +173,10 @@ fn unsupported_tokens_are_rejected_before_absent_variable_shortcuts() {
 
 #[test]
 fn non_finite_folded_results_are_rejected_without_origin_domain_probes() {
-    assert!(cas::differentiate("1e308*x^2", Variable::X).is_err());
+    let finite_large = cas::differentiate("1e308*x", Variable::X).unwrap();
+    assert_eq!(eval(&finite_large, 0.0, 0.0, 0.0, 0.0), 1e308);
+    let overflow = cas::differentiate("1e308^2*x", Variable::X).unwrap_err();
+    assert!(overflow.to_string().contains("non-finite"), "{overflow}");
     assert!(cas::differentiate("0/0*x", Variable::X).is_err());
     // A valid formula may be undefined at the origin; binding is a context check,
     // not an evaluation-based global-domain test.
@@ -217,22 +220,56 @@ fn every_coordinate_and_time_derivative_matches_meval_finite_differences() {
 
 #[test]
 fn negative_integer_powers_and_nested_output_operations_retain_values() {
+    let x3 = derivative("x^3", Variable::X, [-2.0, 0.4, 0.3, 0.2]);
+    assert!(x3.is_finite());
+    assert!((x3 - 12.0).abs() < 1e-10);
+
+    let nested_power = derivative("(x^y)^z", Variable::Y, [1.5, 2.0, 3.0, 0.2]);
+    let nested_power_numeric = {
+        let h = 1e-5;
+        (eval("(x^y)^z", 1.5, 2.0 + h, 3.0, 0.2) - eval("(x^y)^z", 1.5, 2.0 - h, 3.0, 0.2))
+            / (2.0 * h)
+    };
+    assert!(nested_power.is_finite());
+    assert!((nested_power - nested_power_numeric).abs() < 1e-5);
+
+    let nested_division = derivative("x/(y/z)", Variable::X, [1.0, 2.0, 3.0, 0.0]);
+    assert!(nested_division.is_finite());
+    assert!((nested_division - 1.5).abs() < 1e-10);
+
+    let negative_base = derivative("(-2)^3*x", Variable::X, [0.7, 0.2, 0.4, 0.0]);
+    assert!(negative_base.is_finite());
+    assert!((negative_base + 8.0).abs() < 1e-10);
+
+    let nested_subtraction = derivative("ln(x-y-z)", Variable::X, [4.0, 1.0, 1.0, 0.0]);
+    assert!(nested_subtraction.is_finite());
+    assert!((nested_subtraction - 0.5).abs() < 1e-10);
+}
+
+#[test]
+fn finite_decimal_scientific_and_subnormal_literals_cross_the_engine_boundary() {
     let cases = [
-        ("x^3", Variable::X, [-2.0, 0.4, 0.3, 0.2]),
-        ("(x^y)^z", Variable::Y, [1.5, 2.0, 3.0, 0.2]),
-        ("x/(y/z)", Variable::X, [1.0, 2.0, 3.0, 0.0]),
+        ("0.000001*x", 1e-6),
+        ("1e-6*x", 1e-6),
+        ("10000000000000000*x", 1e16),
+        ("1e16*x", 1e16),
+        ("1e308*x", 1e308),
+        ("5e-324*x", 5e-324),
     ];
-    for (formula, variable, p) in cases {
-        let d = cas::differentiate(formula, variable).unwrap();
-        let mut c = Context::new();
-        c.var("x", p[0])
-            .var("y", p[1])
-            .var("z", p[2])
-            .var("t", p[3]);
-        d.parse::<Expr>().unwrap().eval_with_context(c).unwrap();
+    for (source, expected) in cases {
+        let derivative = cas::differentiate(source, Variable::X).unwrap();
+        let actual = eval(&derivative, 0.0, 0.0, 0.0, 0.0);
+        assert!(actual.is_finite(), "{source}: {actual}");
+        assert_eq!(actual, expected, "{source}: {derivative}");
     }
-    let d = cas::differentiate("x-y-z", Variable::X).unwrap();
-    assert!((eval(&d, 0.7, 0.2, 0.4, 0.0) - 1.0).abs() < 1e-10);
+
+    let gradient = cas::gradient("0.000001*x+y", 2).unwrap();
+    assert_eq!(eval(&gradient[0], 0.0, 0.0, 0.0, 0.0), 1e-6);
+    assert_eq!(eval(&gradient[1], 0.0, 0.0, 0.0, 0.0), 1.0);
+    let divergence = cas::divergence(&["0.000001*x", "y"], 2).unwrap();
+    assert_eq!(eval(&divergence, 0.0, 0.0, 0.0, 0.0), 1.000001);
+    let curl = cas::curl(&["y", "0.000001*x"], 2).unwrap();
+    assert_eq!(eval(&curl[0], 0.0, 0.0, 0.0, 0.0), 1e-6 - 1.0);
 }
 
 #[test]
