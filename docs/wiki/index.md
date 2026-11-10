@@ -12,7 +12,8 @@ commits, reports, review packages) are cited, never copied.
 ## Process
 
 - [Dispatch, review and fix loop](process/dispatch-and-review-loop.md) — how
-  a ticket becomes a reviewed commit on `main`, and what each seat may touch.
+  a ticket becomes reviewed work, including the standing branch/PR publication
+  preference, and what each seat may touch.
 - [Test layout and gates](process/test-layout-and-gates.md) — where tests live,
   which commands gate a change, and the parts of the build that are cold.
 - [Closing a review finding](process/closing-review-findings.md) — what counts
