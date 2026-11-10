@@ -173,9 +173,15 @@ merges, and runs a fix round before moving on (read `references/fix-loop.md`). A
 whole-branch review runs once at the end.
 
 Scripts and prompt templates:
-`~/.cache/opencode/npm/git-superpowers-*/…/skills/subagent-driven-development/`
-(`implementer-prompt.md`, `task-reviewer-prompt.md`, `scripts/task-brief`,
-`scripts/review-package`). Subagents read the task brief, never the whole plan.
+`~/.cache/opencode/npm/git-superpowers-*/<version>/node_modules/superpowers/skills/subagent-driven-development/`
+(`implementer-prompt.md`, `task-reviewer-prompt.md`, `re-review-prompt.md`,
+`scripts/task-brief`, `scripts/review-package`, `scripts/sdd-repo`,
+`scripts/sdd-workspace`). Note the `<version>` segment — the package is
+nested one level deeper than a plain glob suggests. The scripts take the
+plan file as their first argument and resolve the SDD workspace from it;
+this effort's plan is
+`docs/superpowers/plans/2026-11-05-vector-field-explorer.md`. Subagents read
+the task brief, never the whole plan.
 
 **Models — always pass explicitly; never inherit silently.**
 
@@ -207,7 +213,8 @@ push, verify CI.
 ## Skills and context
 
 - Two skill families: superpowers
-  (`~/.cache/opencode/npm/git-superpowers-*/…/skills/`) and Matt Pocock
+  (`~/.cache/opencode/npm/git-superpowers-*/<version>/node_modules/superpowers/skills/`)
+  and Matt Pocock
   (`~/.agents/skills/`). Invoke a skill whenever it plausibly applies; process
   skills before implementation.
 - Feature path: `brainstorming` → `grilling` (mandatory before ticket

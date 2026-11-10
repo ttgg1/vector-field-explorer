@@ -24,11 +24,14 @@ before starting a fix round; the short version is in `AGENTS.md` under
    `cargo clippy --all-targets -- -D warnings`. After touching the renderer,
    shaders, windowing or input: `scripts/smoke-run.sh 15`.
 5. **Commit.** `fix: <what changed> (ticket <n>)`, one commit set per round.
-6. **Review package.** Generate the diff by hand:
-   `git diff <round-base>..<head> > .superpowers/sdd/<session>/review-<base>..<head>.diff`
-   where `<round-base>` is the head the previous round was reviewed at. (The
-   superpowers `review-package` helper is not installed in this environment;
-   do not wait for it.)
+6. **Review package.** Generate it with the superpowers helper, which writes
+   the commit list, the file stat and the diff into the plan's SDD workspace:
+   `bash <superpowers>/scripts/review-package <plan-file> <round-base> <head>`
+   where `<round-base>` is the head the previous round was reviewed at. Add
+   `-C <worktree>` when the branch lives in a worktree, and an explicit
+   output path to land the package in the main checkout's ledger directory.
+   The helper refuses a range whose head is not a descendant of the base, so
+   a wrong-branch head fails loudly instead of producing a bogus diff.
 7. **Scoped re-review.** A reviewer seat — a *different* model from the
    implementer — reads the findings file, the round's diff and the
    implementer's claims, and rules on each open finding: closed / open /
