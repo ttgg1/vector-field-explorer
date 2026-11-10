@@ -165,6 +165,35 @@ Files: `src/plot.rs`, `src/sim_clock.rs`, `src/viewmodel.rs`,
 
 This task does not start until both blockers are merged.
 
+## Task 74: Review-record enforcement
+
+**What to build:** make "main is reviewed work only" a mechanical check instead
+of a habit. Three tickets (69, 70, 71) were pushed to `main` without review
+before this effort's repair rounds; the rule exists in `AGENTS.md` but
+nothing enforces it.
+
+Files: `scripts/check-review-records.py` (new), `.github/workflows/ci.yml`,
+`docs/reviews/` (new directory, one file per reviewed ticket).
+
+- `docs/reviews/` holds one record per reviewed ticket — the ticket, the
+  branch, the commit range per round, the reviewer's verdict per round, the
+  findings and how each was closed. The controller writes the record as part
+  of the merge step, from the reviewer's report.
+- `scripts/check-review-records.py` scans the commit history for subjects
+  containing `(ticket NN)` and requires a record under `docs/reviews/` that
+  names each such commit hash. A commit with no record fails the check.
+  The check must be deterministic, must not modify files, and must work from
+  any directory. It needs a baseline for commits that predate the rule.
+- The check runs in CI (its own job or step, independent of the Rust jobs).
+- The rule it enforces is documented in `AGENTS.md` and the wiki.
+
+Gates: the script passes on `main` after the record for every ticket-claiming
+commit exists; a deliberately missing record fails it; the existing CI jobs
+stay green.
+
+Done when: an unreviewed ticket-claiming commit cannot reach `main` without a
+CI failure.
+
 ## Task 37: Scalar function plot
 
 **Status:** ready-for-agent, but not in this wave — it is the prerequisite
