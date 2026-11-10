@@ -26,6 +26,7 @@ pub(crate) use web_time::{Instant, SystemTime};
 
 use eframe::egui;
 use eframe::wgpu::TextureFormat;
+use glam::Mat4;
 
 /// Largest edge of a capture, pixels. A bigger viewport is scaled down on both
 /// axes so the framing (and the camera aspect) stays what the user sees.
@@ -193,6 +194,12 @@ pub fn date_stamp(now: SystemTime) -> String {
 /// testable, and the mode label is lowercased with any non-alphanumeric run
 /// folded to a single `-`, so "2D" gives the brief's
 /// `vector-field-explorer-2026-11-05-2d.png`.
+/// SVG variant of [`default_filename`].
+pub fn default_svg_filename(now: SystemTime, mode_label: &str) -> String {
+    let png = default_filename(now, mode_label);
+    png.trim_end_matches(".png").to_string() + ".svg"
+}
+
 pub fn default_filename(now: SystemTime, mode_label: &str) -> String {
     let mut mode = String::new();
     for ch in mode_label.chars() {
@@ -250,6 +257,35 @@ pub fn spawn_save(
             .save_file()
         {
             Some(path) => save_capture(&rgba, width, height, path),
+            None => SaveOutcome::Cancelled,
+        };
+        let _ = tx.send(outcome);
+        ctx.request_repaint();
+    });
+}
+
+/// Show the native save dialog on a worker thread and write the SVG there.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn_save_svg(
+    tx: Sender<SaveOutcome>,
+    ctx: egui::Context,
+    svg: String,
+    suggested: String,
+) {
+    std::thread::spawn(move || {
+        let outcome = match rfd::FileDialog::new()
+            .set_title("Save screenshot (SVG)")
+            .set_file_name(&suggested)
+            .add_filter("SVG image", &["svg"])
+            .save_file()
+        {
+            Some(path) => {
+                let path = crate::export::ensure_svg_extension(path);
+                match crate::export::save_svg(&svg, &path) {
+                    Ok(()) => SaveOutcome::Saved(path),
+                    Err(error) => SaveOutcome::Failed(error.to_string()),
+                }
+            }
             None => SaveOutcome::Cancelled,
         };
         let _ = tx.send(outcome);
@@ -322,6 +358,43 @@ fn download_png(png: &[u8], filename: &str) -> Result<(), String> {
 }
 
 #[cfg(target_arch = "wasm32")]
+pub fn download_svg(svg: &str, filename: &str) -> Result<(), String> {
+    use wasm_bindgen::JsCast as _;
+    let window = web_sys::window().ok_or_else(|| "browser window unavailable".to_string())?;
+    let document = window.document().ok_or_else(|| "browser document unavailable".to_string())?;
+    let anchor = document
+        .create_element("a")
+        .map_err(js_error)?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(js_error)?;
+    let bytes = svg.as_bytes();
+    let parts = js_sys::Array::of1(js_sys::Uint8Array::from(bytes).as_ref());
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("image/svg+xml");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(parts.as_ref(), &options)
+        .map_err(js_error)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js_error)?;
+    anchor.set_href(&url);
+    anchor.set_download(filename);
+    let Some(body) = document.body() else {
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err("browser document body unavailable".to_string());
+    };
+    if let Err(error) = body.append_child(&anchor) {
+        let _ = web_sys::Url::revoke_object_url(&url);
+        return Err(js_error(error));
+    }
+    let revoke_url = url.clone();
+    let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&revoke_url);
+    });
+    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 1_000);
+    anchor.click();
+    anchor.remove();
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
 fn save_capture(rgba: &[u8], width: u32, height: u32, filename: &str) -> SaveOutcome {
     match crate::export::encode_png(rgba, width, height) {
         Ok(png) => match download_png(&png, filename) {
@@ -353,6 +426,127 @@ pub(crate) fn finish_download(
     ctx.request_repaint();
 }
 
+/// Project a world point through `view_proj` into screen pixels for a
+/// `width`×`height` image. Returns `None` when the point is behind the
+/// camera or outside the view frustum.
+fn world_to_screen(view_proj: Mat4, point: [f32; 3], width: u32, height: u32) -> Option<(f32, f32)> {
+    let v = view_proj * glam::Vec4::new(point[0], point[1], point[2], 1.0);
+    if !v.w.is_finite() || v.w <= 0.0 {
+        return None;
+    }
+    let ndc_x = v.x / v.w;
+    let ndc_y = v.y / v.w;
+    if !ndc_x.is_finite() || !ndc_y.is_finite() {
+        return None;
+    }
+    // Allow a small margin so partially off-screen strokes still render.
+    if ndc_x < -1.5 || ndc_x > 1.5 || ndc_y < -1.5 || ndc_y > 1.5 {
+        return None;
+    }
+    let sx = (ndc_x + 1.0) * 0.5 * width as f32;
+    let sy = (1.0 - ndc_y) * 0.5 * height as f32;
+    Some((sx, sy))
+}
+
+fn color_to_hex(c: [f32; 4]) -> String {
+    let r = (c[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+    let g = (c[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+    let b = (c[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", r, g, b)
+}
+
+/// Serialize a 2D scene as an SVG document. `view_proj` is the active
+/// camera's view-projection matrix; `width`/`height` are the output pixel
+/// dimensions. Arrows, streamlines, trails and particles are emitted as
+/// vector elements with their colormap colour baked in.
+pub fn scene_to_svg(
+    scene: &crate::renderer::SceneGPU,
+    view_proj: Mat4,
+    width: u32,
+    height: u32,
+    clear: [f64; 4],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">",
+        width, height, width, height
+    ));
+    // Background
+    let bg = format!(
+        "rgb({},{},{})",
+        (clear[0] * 255.0).round() as u8,
+        (clear[1] * 255.0).round() as u8,
+        (clear[2] * 255.0).round() as u8,
+    );
+    out.push_str(&format!(
+        "<rect width=\"100%\" height=\"100%\" fill=\"{}\"/>",
+        bg
+    ));
+
+    // Arrowhead marker
+    out.push_str(
+        "<defs><marker id=\"ah\" markerWidth=\"6\" markerHeight=\"6\" \
+         refX=\"5\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L6,3 L0,6 Z\" \
+         fill=\"context-stroke\"/></marker></defs>",
+    );
+
+    // Lines (streamlines, trails, backdrop)
+    for line in scene.lines.iter().chain(scene.trails.iter()) {
+        let Some((x1, y1)) = world_to_screen(view_proj, [line.a[0], line.a[1], line.a[2]], width, height) else {
+            continue;
+        };
+        let Some((x2, y2)) = world_to_screen(view_proj, [line.b[0], line.b[1], line.b[2]], width, height) else {
+            continue;
+        };
+        let color = color_to_hex(line.color);
+        let w = line.b[3].max(0.5);
+        out.push_str(&format!(
+            "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"{}\" stroke-width=\"{:.2}\" stroke-linecap=\"round\"/>",
+            x1, y1, x2, y2, color, w
+        ));
+    }
+
+    // Arrows (2D uses scene.arrows; 3D uses combined). For SVG, draw each
+    // arrow as a shaft line with an arrowhead marker.
+    let arrow_instances = if scene.mode_3d {
+        scene.combined.as_slice()
+    } else {
+        scene.arrows.as_slice()
+    };
+    for inst in arrow_instances {
+        // inst.origin.xyz = position; dir_len.xyz = unit dir, .w = length (arrows)
+        // or radius (dots). Tag is origin.w: 1.0 arrow, 0.0 particle.
+        let tag = inst.origin[3];
+        let pos = [inst.origin[0], inst.origin[1], inst.origin[2]];
+        let Some((sx, sy)) = world_to_screen(view_proj, pos, width, height) else {
+            continue;
+        };
+        let color = color_to_hex(inst.color);
+        if tag > 0.5 {
+            let dir = [inst.dir_len[0], inst.dir_len[1], inst.dir_len[2]];
+            let len = inst.dir_len[3];
+            let end = [pos[0] + dir[0] * len, pos[1] + dir[1] * len, pos[2] + dir[2] * len];
+            if let Some((ex, ey)) = world_to_screen(view_proj, end, width, height) {
+                let sw = 1.5f32;
+                out.push_str(&format!(
+                    "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"{}\" stroke-width=\"{:.2}\" marker-end=\"url(#ah)\"/>",
+                    sx, sy, ex, ey, color, sw
+                ));
+            }
+        } else {
+            // particle dot
+            let r = inst.dir_len[3].max(1.0);
+            out.push_str(&format!(
+                "<circle cx=\"{:.2}\" cy=\"{:.2}\" r=\"{:.2}\" fill=\"{}\"/>",
+                sx, sy, r, color
+            ));
+        }
+    }
+
+    out.push_str("</svg>");
+    out
+}
+
 /// A short-lived completion message.
 struct Toast {
     text: String,
@@ -369,6 +563,7 @@ struct Toast {
 /// ignored; native keeps its previous allow-a-second-request behavior.
 pub struct Screenshot {
     pending: bool,
+    svg_pending: bool,
     capturing: bool,
     tx: Sender<SaveOutcome>,
     rx: Receiver<SaveOutcome>,
@@ -386,6 +581,7 @@ impl Screenshot {
     pub fn with_channel(tx: Sender<SaveOutcome>, rx: Receiver<SaveOutcome>) -> Self {
         Self {
             pending: false,
+            svg_pending: false,
             capturing: false,
             tx,
             rx,
@@ -397,6 +593,16 @@ impl Screenshot {
     /// frame's exact rect and camera are known.
     pub fn request(&mut self) {
         self.pending = true;
+    }
+
+    /// Request an SVG (vector) export of the current 2D view.
+    pub fn request_svg(&mut self) {
+        self.svg_pending = true;
+    }
+
+    /// Consume an SVG request; true means "export this frame".
+    pub fn take_svg_request(&mut self) -> bool {
+        std::mem::take(&mut self.svg_pending)
     }
 
     /// Consume the click; true means "capture this frame".
@@ -445,6 +651,17 @@ impl Screenshot {
     pub fn fail(&mut self, message: String) {
         self.capturing = false;
         self.set_outcome(SaveOutcome::Failed(message), Instant::now());
+    }
+
+    /// Show a toast without a save-dialog outcome (used by the SVG path and
+    /// by the 3D-not-supported notice).
+    pub fn notify(&mut self, text: String, failed: bool) {
+        let now = Instant::now();
+        self.toast = Some(Toast {
+            text,
+            failed,
+            until: now + TOAST_TTL,
+        });
     }
 
     /// Turn a report into the toast text the sidebar shows.

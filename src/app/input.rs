@@ -158,6 +158,16 @@ impl VfApp {
             // The capture itself happens in the viewport, where this frame's
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.screenshot.request(),
+            menu::SideEffect::ScreenshotSvg => {
+                if self.state.mode_3d {
+                    self.screenshot.notify(
+                        "SVG export is 2D only; use PNG in 3D".to_string(),
+                        true,
+                    );
+                } else {
+                    self.screenshot.request_svg();
+                }
+            }
             menu::SideEffect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             menu::SideEffect::CopyText(text) => ctx.copy_text(text),
             // Help > Download desktop app (ticket 16a): hand the static page to

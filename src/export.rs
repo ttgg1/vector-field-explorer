@@ -34,10 +34,18 @@ pub fn save_png(
     std::fs::write(path, encode_png(frame, width, height)?)
 }
 
-/// Placeholder for SVG export – not yet implemented.
-pub fn save_svg(_svg_data: &str, _path: &str) -> io::Result<()> {
-    // Future implementation will generate an SVG string from the vector data.
-    Err(io::Error::new(io::ErrorKind::Unsupported, "SVG export not implemented"))
+/// Save an SVG document to disk.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_svg(svg: &str, path: impl AsRef<std::path::Path>) -> io::Result<()> {
+    std::fs::write(path, svg)
+}
+
+/// Make sure a path carries an `.svg` extension.
+pub fn ensure_svg_extension(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("svg") => path,
+        _ => path.with_extension("svg"),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -59,7 +59,7 @@ fn the_bar_carries_the_v1_menu_table() {
     assert_eq!(
         table,
         vec![
-            ("File", vec!["Export screenshot…", "Quit"]),
+            ("File", vec!["Export screenshot…", "Export screenshot (SVG)…", "Quit"]),
             ("Edit", vec!["Copy formula", "Reset all controls"]),
             (
                 "View",

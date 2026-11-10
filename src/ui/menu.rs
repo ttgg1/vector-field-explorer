@@ -71,6 +71,7 @@ macro_rules! menu_actions {
 
 menu_actions! {
     ExportScreenshot,
+    ExportScreenshotSvg,
     Quit,
     CopyFormula,
     ResetAllControls,
@@ -100,6 +101,8 @@ pub enum SideEffect {
     ShowHelp,
     /// Ask the screenshot capture for one frame.
     Screenshot,
+    /// Ask for an SVG (vector) screenshot of the current 2D view.
+    ScreenshotSvg,
     /// Close the window.
     Quit,
     /// Put `text` on the clipboard.
@@ -136,6 +139,10 @@ pub const MENUS: &[Menu] = &[
             MenuItem {
                 label: "Export screenshot…",
                 action: MenuAction::ExportScreenshot,
+            },
+            MenuItem {
+                label: "Export screenshot (SVG)…",
+                action: MenuAction::ExportScreenshotSvg,
             },
             MenuItem { label: "Quit", action: MenuAction::Quit },
         ],
@@ -331,6 +338,7 @@ pub struct UiState<'a> {
 pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
     match action {
         MenuAction::ExportScreenshot => SideEffect::Screenshot,
+        MenuAction::ExportScreenshotSvg => SideEffect::ScreenshotSvg,
         MenuAction::Quit => SideEffect::Quit,
         MenuAction::CopyFormula => SideEffect::CopyText(ui.state.formula.clone()),
         MenuAction::ResetAllControls => {

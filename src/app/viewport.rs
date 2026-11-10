@@ -262,6 +262,47 @@ impl VfApp {
                 mode_3d: self.state.mode_3d,
             };
 
+            // SVG screenshot export (ticket 69): serialize the 2D scene as
+            // vector geometry. No GPU readback is needed, so this runs
+            // synchronously on the frame thread.
+            if self.screenshot.take_svg_request() && !self.state.mode_3d {
+                let pixels_per_point = ui.ctx().pixels_per_point();
+                let (w, h) = screenshot::capture_size(
+                    rect.width(),
+                    rect.height(),
+                    pixels_per_point,
+                    screenshot::MAX_CAPTURE_EDGE,
+                );
+                let clear = egui::Rgba::from(ui.visuals().panel_fill).to_array();
+                let clear_f = [
+                    f64::from(clear[0]),
+                    f64::from(clear[1]),
+                    f64::from(clear[2]),
+                    f64::from(clear[3]),
+                ];
+                let svg = screenshot::scene_to_svg(&scene, view_proj, w, h, clear_f);
+                let filename = screenshot::default_svg_filename(
+                    screenshot::SystemTime::now(),
+                    "2D",
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    screenshot::spawn_save_svg(
+                        self.screenshot.sender(),
+                        ui.ctx().clone(),
+                        svg,
+                        filename,
+                    );
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    match screenshot::download_svg(&svg, &filename) {
+                        Ok(()) => self.screenshot.notify("screenshot download started".to_string(), false),
+                        Err(e) => self.screenshot.notify(format!("screenshot failed: {e}"), true),
+                    }
+                }
+            }
+
             // Screenshot export (ticket 08): re-render this frame's scene
             // offscreen at the viewport's pixel size (capped at 4096 on the
             // long edge, both axes scaled so the framing is unchanged) and

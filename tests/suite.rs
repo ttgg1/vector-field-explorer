@@ -48,6 +48,7 @@ mod reference_lines_test;
 mod responsive_test;
 mod sampling_test;
 mod screenshot_test;
+mod svg_export_test;
 mod shortcut_test;
 mod sidebar_camera_ui_test;
 mod sidebar_colormap_ui_test;
