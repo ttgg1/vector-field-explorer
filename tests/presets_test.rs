@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use glam::{UVec3, Vec3};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
-use vector_field_explorer::presets::{PresetCategory, presets, presets_in};
+use vector_field_explorer::presets::{PresetCategory, START_HERE, presets, presets_in};
 
 const REQUIRED: [&str; 20] = [
     // Classic (pre-existing)
@@ -197,4 +197,39 @@ fn softening_covers_the_origin() {
             .unwrap_or_else(|| panic!("preset `{name}` must be finite at the origin"));
         assert!(value.is_finite(), "preset `{name}` at origin: {value:?}");
     }
+}
+#[test]
+fn start_here_entries_resolve() {
+    assert_eq!(START_HERE.len(), 3, "START_HERE must name exactly three presets");
+    let names: HashSet<&str> = presets().iter().map(|preset| preset.name).collect();
+    let mut seen = HashSet::new();
+    for name in START_HERE {
+        assert!(
+            names.contains(name),
+            "START_HERE entry `{name}` must resolve in presets()"
+        );
+        assert!(seen.insert(name), "START_HERE entries must be distinct");
+    }
+}
+
+#[test]
+fn start_here_covers_two_and_three_d() {
+    let dimensions: Vec<usize> = START_HERE
+        .iter()
+        .map(|name| {
+            presets()
+                .iter()
+                .find(|preset| preset.name == *name)
+                .unwrap_or_else(|| panic!("START_HERE entry `{name}` must resolve"))
+                .dimension
+        })
+        .collect();
+    assert!(
+        dimensions.contains(&2),
+        "START_HERE must include at least one 2D preset, got {dimensions:?}"
+    );
+    assert!(
+        dimensions.contains(&3),
+        "START_HERE must include at least one 3D preset, got {dimensions:?}"
+    );
 }
