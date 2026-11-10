@@ -183,9 +183,9 @@ fn no_scroll_is_no_zoom() {
 }
 
 /// Ticket 53 fix round: inspect the real compact hamburger dropdown instead of
-/// comparing a helper with a copied action table. Every command the wide
-/// `MENUS` table exposes must be a button in the hamburger, and the hamburger
-/// must not invent commands.
+/// comparing a helper with a copied action table. Every wide-menu command
+/// except Appearance must be a button in the hamburger, and it must not invent
+/// commands.
 #[test]
 fn compact_hamburger_lists_every_wide_command_except_sheet_appearance() {
     let mut h = Harness::new(false);

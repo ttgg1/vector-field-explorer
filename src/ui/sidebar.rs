@@ -476,7 +476,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     show_compact(ui, state, controls, false)
 }
 
-/// Compact-mode entry: applies the 44 pt row/touch-target floor, then draws.
+/// Compact-mode entry: applies the 48 pt compact row floor, then draws.
 pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
     if compact {
         ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;

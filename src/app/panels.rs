@@ -64,7 +64,7 @@ impl VfApp {
         // Top menu bar: File / Edit / View / Help, the Appearance gear, and the
         // screenshot action. The bar only reports the action; the app dispatches
         // it. Ticket 53: compact replaces the menu row with a hamburger that
-        // exposes the same actions plus the gear and Screenshot button.
+        // exposes the wide-menu commands; Appearance lives in the Controls sheet.
         let mut style_changed = false;
         let plan = layout::compact_plan(self.layout_mode);
         egui::Panel::top("top_bar").show(ui, |ui| {

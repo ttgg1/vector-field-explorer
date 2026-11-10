@@ -328,8 +328,9 @@ fn compact_row_floor_is_applied_to_real_compact_panel_widgets_only() {
         });
         output.textures_delta.clear();
     }
-    assert!(compact_height >= 44.0, "compact panel row height: {compact_height}");
-    assert!(wide_height < 44.0, "wide panel retains its ordinary row height: {wide_height}");
+    assert!(compact_height >= COMPACT_ROW_HEIGHT, "compact panel row height: {compact_height}");
+    assert!(compact_height >= TOUCH_TARGET, "compact panel row meets the touch target: {compact_height}");
+    assert!(wide_height < TOUCH_TARGET, "wide panel retains its ordinary row height: {wide_height}");
 
     let ctx = egui::Context::default();
     let mut state = vector_field_explorer::viewmodel::State::new(false);
@@ -347,8 +348,9 @@ fn compact_row_floor_is_applied_to_real_compact_panel_widgets_only() {
         });
         output.textures_delta.clear();
     }
-    assert!(preset_compact >= 44.0, "compact preset row height: {preset_compact}");
-    assert!(preset_wide < 44.0, "wide preset rows retain ordinary height: {preset_wide}");
+    assert!(preset_compact >= COMPACT_ROW_HEIGHT, "compact preset row height: {preset_compact}");
+    assert!(preset_compact >= TOUCH_TARGET, "compact preset row meets the touch target: {preset_compact}");
+    assert!(preset_wide < TOUCH_TARGET, "wide preset rows retain ordinary height: {preset_wide}");
 }
 
 #[test]
