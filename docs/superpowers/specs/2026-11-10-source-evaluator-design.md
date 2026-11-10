@@ -47,10 +47,21 @@ pub enum SourceKind {
 }
 pub struct SourceSet { pub family: FieldFamily, pub sources: Vec<Source> }
 pub struct Softening(pub f32);
-pub enum SourceError { InvalidParameter(&'static str), MixedFamilies, NonFiniteResult }
+pub enum SourceError {
+    InvalidParameter(&'static str),
+    MixedFamilies,
+    NonFiniteResult,
+    QuadratureFailure(QuadratureFailure),
+}
+pub enum QuadratureFailure { BudgetExhausted, DidNotConverge }
 pub fn evaluate_sources(set: &SourceSet, point: Vec3, softening: Softening)
     -> Result<Vec3, SourceError>;
 ```
+
+These failure variants express possible evaluator outcomes, not an approved
+budget, convergence threshold, or supported accuracy envelope. Their exact
+public representation remains proposed until builder evidence establishes the
+needed distinctions.
 
 The type spellings are proposals. `SourceSet` makes the important invariant
 explicit: a displayed vector field is electric **or** magnetic, never a numeric
@@ -148,17 +159,20 @@ estimated error, choosing its longest side in normalized parameter coordinates
 the corresponding normalized measures. The sphere uses the symmetry-reduced
 angular/radial integral described below and applies the same adaptive rule to
 its remaining variables. If the evaluation budget is exhausted before the
-criterion passes, return an explicit convergence/budget error, never a
-silently under-resolved field. The estimate is an error indicator, not a
-rigorous bound; satisfying it is not a mathematical guarantee. Deterministic
+criterion passes, return an explicit convergence/budget error. The estimate is
+an error indicator, not a rigorous bound; both rules can under-resolve a
+narrow feature and agree incorrectly. Passing the indicator is not a
+mathematical accuracy guarantee. Deterministic
 cell selection and accumulation order make results reproducible. This can be
-substantially slower than fixed quadrature for narrow kernels; performance,
+substantially slower than non-adaptive quadrature for narrow kernels; performance,
 absolute/relative tolerances, work budget, and any resulting validity
 restrictions require measured evidence and owner approval. Their numeric values
 are deliberately unspecified here. No numerical parameter range is claimed
-accurate by this proposal. The per-query budget bounds worst-case work, while
-failure makes that tradeoff visible rather than returning an inaccurate finite
-answer.
+accurate by this proposal. A bounded total query budget and source-count limit
+are prerequisites for a worst-case work bound; neither is specified yet.
+Detected exhaustion/nonconvergence can be reported rather than returning an
+inaccurate finite answer, but the estimator cannot guarantee detection of every
+unresolved result.
 
 For a uniformly volume-charged solid sphere, use spherical coordinates about
 its center, but exploit rotational symmetry rather than treating the sphere as
@@ -175,21 +189,35 @@ calculation, not the incorrect radial × azimuthal planar-ring rule.
 
 For other geometries apply the same softened Coulomb kernel at each charge
 element and softened Biot–Savart kernel at each current element. Normalize
-weights so `charge` is total charge. Ring/loop use azimuthal measure
-`dφ/(2π)`; disc uses area measure `2ρ/Rdisc² dρ × dφ/(2π)`; finite line
-integrates uniformly over `[-L/2,L/2]`; the solenoid integrates the continuous
-surface current with turns distributed uniformly over its length and azimuth.
+weights so `charge` is total charge. The charged ring uses normalized angular
+measure `dφ/(2π)`. For a current loop of radius `b`, the line element is
+`dℓ = b eφ dφ`; equivalently, an angular average requires the compensating
+factor `2πb` in its kernel weight. The disc uses area measure
+`2ρ/Rdisc² dρ × dφ/(2π)`; finite line integrates uniformly over
+`[-L/2,L/2]`. The solenoid uses the current-loop line element weighted by
+`N dz/L`, for turns `N` uniformly distributed over axial length `L`.
+Independent analytic checks must pin loop axial magnitude and solenoid
+turn/length normalization.
 The exact adaptive cubature decomposition and cost are implementation details
 only insofar as they preserve these measures and satisfy the explicit
 convergence-or-error contract.
 
 The charged ring is not a dipole source at large distance: its net charge is
 `q`, so its leading electric field is the monopole field `q r/|r|³` (up to the
-declared common prefactor), with dipole and higher terms absent for a centered
-uniform ring. The magnetic current loop, by contrast, has a leading magnetic
+declared common prefactor). Its dipole moment is zero, but its quadrupole and
+higher even multipoles are generally nonzero for a centered uniform ring. The
+magnetic current loop, by contrast, has a leading magnetic
 dipole along its axis, with moment proportional to `I πR² axis`. Acceptance
 tests must distinguish these asymptotics; do not require a charged ring to have
 a magnetic-loop-like dipole field.
+
+Builder evidence must establish the supported source count, total query budget
+across the source list, treatment of cancellation and error accumulation, and
+bounded cell-storage strategy (including reconciliation with “no per-sample
+allocation”). These are UNSET builder-evidence prerequisites, not completed
+implementation decisions. Per-source caps alone do not bound a query with an
+unrestricted source count. This does not approve any proposed parameter/query
+bounds.
 
 This method shares one kernel and one softening semantics across geometries,
 avoids special-function dependencies/branch singularities, and is portable to
@@ -208,10 +236,11 @@ here.
   special-function cases. That is a disproportionate dependency/numerical
   surface for a teaching explorer. Keep the point-charge and infinite-wire
   closed forms; use bounded deterministic quadrature for the rest.
-- **Fixed-order quadrature:** deterministic and cheap, but node count alone does
+- **Non-adaptive quadrature:** deterministic and cheap, but node count alone does
   not establish accuracy when the softened kernel is narrower than node spacing.
-  Adaptive convergence estimates with a hard work budget make the cost/error
-  tradeoff explicit and fail rather than silently returning unresolved values.
+  Adaptive convergence indicators with a proposed work budget make some
+  cost/failure tradeoffs explicit, but can miss under-resolution; they do not
+  guarantee detection or accuracy.
 - **Analytic axial-only formulas:** fast but would make the evaluator invalid
   for the full 3D grid that the source model promises.
 - **Mix E and B in one vector sum:** rejected because those fields have unlike
@@ -259,8 +288,8 @@ Required groups:
    documented tolerance. Test overflow-scale centers/strength combinations are
    rejected, not cast to infinity.
 
-Tolerance levels intentionally distinguish exact point math from fixed-order
-quadrature. If the independent reference fails, first inspect the formula,
+Tolerance levels intentionally distinguish exact point math from quadrature. If
+the independent reference fails, first inspect the formula,
 measure/weight normalization, and axis transforms; do not loosen tolerances
 without evidence and an explicit design update. Full source-preset performance
 acceptance is owned by a later end-to-end Phase 1 gate, not this model slice.
