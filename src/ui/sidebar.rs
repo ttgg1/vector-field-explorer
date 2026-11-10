@@ -473,18 +473,19 @@ use crate::ui::layout;
 
 /// Draw the sidebar and hand every edit to the viewmodel setters.
 pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
-    show_compact(ui, state, controls, false)
+    show_inner(ui, state, controls, false)
 }
 
-/// Compact-mode entry: applies the 48 pt compact row floor, then draws.
+/// Compact-mode entry: applies the compact row floor and spacing, then draws.
 pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
     if compact {
         ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
+        ui.spacing_mut().item_spacing.y = layout::COMPACT_ITEM_SPACING;
     }
-    show_inner(ui, state, controls)
+    show_inner(ui, state, controls, compact)
 }
 
-fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
     // The density ceiling keys to the dimension being sampled (the ledger
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
@@ -660,12 +661,18 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     // the real camera into `controls.fly` each frame, so C, Esc, a 2D switch,
     // Reset/Fit and presets all land here on the next frame.
     section(ui, Section::Camera, controls, None, |ui, controls| {
-        ui.add_enabled_ui(sampling_3d, |ui| {
-            ui.checkbox(&mut controls.fly, "Fly camera")
-                .on_hover_text("Free flight in the 3D view (C); Esc releases the mouse");
-        })
-        .response
-        .on_disabled_hover_text("3D only");
+        if compact {
+            controls.fly = false;
+            ui.label("Fly camera is unavailable in Compact")
+                .on_hover_text("Fly camera is available in Wide layouts only");
+        } else {
+            ui.add_enabled_ui(sampling_3d, |ui| {
+                ui.checkbox(&mut controls.fly, "Fly camera")
+                    .on_hover_text("Free flight in the 3D view (C); Esc releases the mouse");
+            })
+            .response
+            .on_disabled_hover_text("3D only");
+        }
         if controls.fly && sampling_3d {
             ui.label("Flying — Esc to release");
         }

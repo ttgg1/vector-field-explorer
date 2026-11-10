@@ -92,9 +92,11 @@ pub const TAB_BAR_HEIGHT: f32 = 48.0;
 /// Minimum tap target, points (Apple/Google's 44 pt guideline).
 pub const TOUCH_TARGET: f32 = 44.0;
 
-/// Compact control/preset row height, points: 48 pt gives text rows extra
-/// breathing room beyond the generic 44 pt touch-target minimum. Wide mode is unaffected.
-pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
+/// Compact control/preset row height, points. It remains at the 44 pt touch
+/// target floor; Wide mode is unaffected.
+pub const COMPACT_ROW_HEIGHT: f32 = 44.0;
+/// Vertical gap between compact controls, points.
+pub const COMPACT_ITEM_SPACING: f32 = 2.0;
 /// Minimum share of the formula bar the flexing field keeps on a phone.
 pub const FORMULA_MIN_FRACTION: f32 = 0.40;
 
@@ -118,6 +120,11 @@ pub fn layout_mode(width: f32) -> LayoutMode {
     } else {
         LayoutMode::Wide
     }
+}
+
+/// Whether free-flight camera mode may be entered in this layout.
+pub(crate) fn fly_allowed(mode: LayoutMode) -> bool {
+    mode == LayoutMode::Wide
 }
 
 /// Three-state height model for the compact bottom sheet (ticket 71).

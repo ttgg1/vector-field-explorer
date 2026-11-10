@@ -477,9 +477,7 @@ impl VfApp {
             ui.ctx().request_repaint();
         }
         self.finish_presets(camera_request);
-        if controls_shown {
-            // Ticket 65: a Camera-section checkbox edited in the sheet must
-            // enter/leave fly in this same frame, exactly like the wide panel.
+        if controls_shown && layout::fly_allowed(self.layout_mode) {
             sync_fly_mirror(
                 &mut self.sidebar.fly,
                 &mut self.fly,
