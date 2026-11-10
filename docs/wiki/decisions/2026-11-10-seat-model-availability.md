@@ -2,8 +2,8 @@
 
 ## Update (latest on 2026-11-10) — effort follows task difficulty
 
-This update supersedes the "step the variant up at every fix round" rule
-below.
+This is the authoritative current policy. It supersedes the dated
+round-escalation decision retained below as historical context.
 
 The user ruled that the **implementer seat's effort variant is chosen by the
 difficulty of the task**, not by the review round: `openai/gpt-6-luna#low`
@@ -71,11 +71,23 @@ every dispatch a coin flip that costs a full minute to discover.
   (`#high`) is the preferred coding seat and `opencode-go/claude-haiku-5-5#high`
   the preferred review seat. At that time, `AGENTS.md` carried this as a conditional note.
 
-## Update (latest on 2026-11-10) — current seat policy
+## Superseded decision (2026-11-10) — fixed seats and round-based escalation
 
-The latest user ruling in `progress.md` (final dated section; read the ledger's
-last 150 lines for the authoritative record) supersedes earlier seat and
-variant guidance above. The controller uses `openai/gpt-6.1-sol#medium`;
+The user ruling recorded in `progress.md:4348-4357` assigned the controller
+and reviewers to `openai/gpt-6.1-sol#medium`, and implementers to
+`openai/gpt-6-luna#low`. At the second fix round, step the variant up one
+level (low → medium → high), and step up again at every further round. A
+round that returns the same finding signals escalation rather than repeating
+the same seat at the same effort. The older free models
+(`opencode-go/beam-free`, `opencode-go/longcat-2.5-free`) were fallbacks when
+an `openai` seat was unavailable. This was the then-current policy; the later
+user ruling below supersedes its round-based effort rule.
+
+## Current seat policy — latest user ruling, 2026-11-10
+
+The named user ruling in the final dated section of `progress.md` (2026-11-10;
+policy recorded in commit `2d28e50`) supersedes the round-based effort rule
+above. The controller uses `openai/gpt-6.1-sol#medium`;
 implementers use `openai/gpt-6-luna` with effort selected by task difficulty
 (`#low` for narrow/mechanical work, `#medium` for ordinary work, `#high` for
 wide or subtle work); reviewers use `openai/gpt-6.1-sol` with effort selected
