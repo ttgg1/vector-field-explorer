@@ -325,6 +325,24 @@ fn css_brand_breakpoint(css: &str) -> f32 {
         .expect("the breakpoint is numeric")
 }
 
+fn css_hides_brand_header(css: &str, breakpoint: f32) -> bool {
+    let css = css.replace("\r\n", "\n");
+    css.contains(&format!("@media (max-width: {breakpoint:.0}px)"))
+        && css.contains("header.brand {\n    display: none;")
+}
+
+#[test]
+fn header_boundary_assertion_accepts_windows_line_endings() {
+    let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
+    // Canonicalize the checkout before constructing either source variant.
+    let css = css.replace("\r\n", "\n");
+    let crlf_source = css.replace('\n', "\r\n");
+    for (name, source) in [("LF", &css), ("CRLF", &crlf_source)] {
+        assert!(!source.contains("\r\r\n"), "{name} fixture must not contain CRCRLF");
+        assert!(css_hides_brand_header(source, 700.0), "{name} source hides the complete header");
+    }
+}
+
 #[test]
 fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases() {
     let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
@@ -332,8 +350,7 @@ fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases(
     assert_eq!(css_breakpoint, 700.0, "the approved web CSS breakpoint remains 700 CSS px");
     assert_eq!(COMPACT_WIDTH, 700.0, "the native/egui root-width breakpoint remains 700 pt");
     assert!(
-        css.contains(&format!("@media (max-width: {css_breakpoint:.0}px)"))
-            && css.contains("header.brand {\n    display: none;"),
+        css_hides_brand_header(&css, css_breakpoint),
         "the complete page header is hidden at the parsed CSS viewport boundary"
     );
 
