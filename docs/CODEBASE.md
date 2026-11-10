@@ -459,6 +459,30 @@ them at a point.
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
 
+#### `src/cas.rs` — native symbolic transform adapter
+
+**Purpose.** Differentiate scalar meval formulas and compose gradient,
+divergence, and curl results without changing ordinary field evaluation.
+
+**Public API.** Native-only `Variable::{X, Y, Z, T}`;
+`differentiate`, `gradient`, `divergence`, and `curl`; displayable `CasError`.
+
+**Invariants.** Meval defines input meaning. The adapter validates its complete
+RPN against a bounded grammar, lowers the parsed tree with explicit grouping,
+and maps exmex variables by name. Engine output is parsed as a separate bounded
+language, rewritten as fully parenthesized meval syntax, and context-bound.
+Only dimensions 2 and 3 are accepted; 2D curl returns one scalar component and
+3D curl returns x/y/z components. The exmex dependency and module are native
+only; `meval` remains the field evaluator.
+
+**Pinned by.** `tests/cas_test.rs`: approved unary-function derivatives,
+meval-semantics and precedence cases, rejected syntax, coordinate/time
+derivatives, vector identities, arity checks, deterministic output, and meval
+context binding.
+
+**Limitations.** Only the explicitly approved grammar is supported; this is not
+a general-purpose CAS, and it makes no global domain-preservation guarantee.
+
 #### `src/domain.rs` — sampling box and grid iterator
 
 **Purpose.** Axis-aligned sampling domain and the exact lattice used everywhere
