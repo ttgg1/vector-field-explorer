@@ -31,6 +31,7 @@ Pillow.
 | `packaging/icons/vector-field-explorer-256.png` | 256×256 PNG |
 | `packaging/icons/vector-field-explorer-512.png` | 512×512 PNG |
 | `packaging/icons/vector-field-explorer.icns` | Apple Icon Image, 10 elements |
+| `packaging/windows/vector-field-explorer.ico` | MS Windows icon, 7 sizes (PNG payloads) |
 | `packaging/linux/vector-field-explorer-256.png` | 256×256 PNG (stable linuxdeploy path) |
 | `web/icons/favicon-16.png` | 16×16 PNG |
 | `web/icons/favicon-32.png` | 32×32 PNG |
@@ -51,6 +52,7 @@ From the repository root, with `rsvg-convert` (or `inkscape`) installed:
 ```sh
 scripts/gen-icons.sh
 python3 scripts/make-icns.py
+python3 scripts/make-ico.py
 python3 scripts/make-og-image.py
 ```
 
@@ -61,6 +63,10 @@ sync, and renders/copies the five browser sizes.
 `scripts/make-icns.py` writes the ICNS container directly because Linux has
 neither `iconutil` nor `png2icns`. It emits `icp4`/`icp5`/`icp6` plus
 `ic07`–`ic09` and the retina aliases `ic11`–`ic14`.
+
+`scripts/make-ico.py` packs the same PNG set into an MS Windows `.ico` using
+Pillow (the only generator that needs a third-party Python package; Pillow is a
+maintainer-only dependency, not a build or CI dependency).
 
 Verification performed on Linux:
 

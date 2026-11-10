@@ -76,8 +76,9 @@ installer is provided; the archive also contains `README.md`, `LICENSE`,
 `THIRD_PARTY_LICENSES.md`, and `THIRD_PARTY_NOTICES.txt`.
 
 Windows SmartScreen may show "Windows protected your PC": choose **More info**,
-then **Run anyway**. The app uses the DX12 backend by default and needs no
-separate MSVC runtime or WebView2.
+then **Run anyway**. Rendering goes through wgpu, which uses Vulkan when
+available and falls back to DX12, so no separate MSVC runtime or WebView2 is
+needed.
 
 ## Browser build and WebGPU
 

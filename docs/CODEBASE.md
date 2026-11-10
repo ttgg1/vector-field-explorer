@@ -2085,8 +2085,9 @@ the committed icon set.
   first-launch approval (macOS) and the SmartScreen path (Windows). No
   auto-update, signing, notarization, or telemetry.
 - Licence: GPL-3.0-only (`Cargo.toml`, `LICENSE`). Dependencies must remain
-  GPL-3.0-compatible; the packaging workflow ships `README.md`, `LICENSE`, and
-  `THIRD_PARTY_LICENSES.md` in both archive types. The Linux AppImage also
+  GPL-3.0-compatible; the packaging workflow ships `README.md`, `LICENSE`,
+  `THIRD_PARTY_LICENSES.md`, and `THIRD_PARTY_NOTICES.txt` in the macOS and
+  Windows archives. The Linux AppImage also
   carries the bundled system libraries' package copyright notices under
   `usr/share/doc/vector-field-explorer/system-libraries/`.
 
