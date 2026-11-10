@@ -170,6 +170,9 @@ pub struct VfApp {
     /// The compact bottom sheet open this frame (ticket 53). Transient: the
     /// wide layout ignores it and `Reset layout` closes it without persisting.
     pub sheet: SheetState,
+    /// Transient expanded state of the compact sheet (ticket 71): false = default
+    /// height, true = expanded. Never persisted.
+    pub sheet_expanded: bool,
     /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
     /// forget their last dragged size, letting the default widths apply.
     panel_generation: u32,
@@ -269,6 +272,7 @@ impl VfApp {
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,
             sheet: SheetState::None,
+            sheet_expanded: false,
             panel_generation: 0,
             appearance_open: false,
             about_open: false,

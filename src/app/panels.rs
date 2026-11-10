@@ -336,6 +336,7 @@ impl VfApp {
                         .clicked()
                     {
                         self.sheet.toggle(SheetState::Controls);
+                        if self.sheet.is_open() { self.sheet_expanded = false; }
                     }
                     if ui
                         .add_sized(
@@ -348,6 +349,7 @@ impl VfApp {
                         .clicked()
                     {
                         self.sheet.toggle(SheetState::Presets);
+                        if self.sheet.is_open() { self.sheet_expanded = false; }
                     }
                     if self.sheet.is_open()
                         && ui
@@ -380,7 +382,10 @@ impl VfApp {
         }
         let window_height = ui.ctx().content_rect().height();
         let available_height = ui.available_height();
-        let height = layout::sheet_height(window_height, available_height);
+        let mut height = layout::sheet_height(window_height, available_height);
+        if self.sheet_expanded {
+            height = (window_height * 0.90).min(available_height).max(height);
+        }
         if height < 1.0 {
             // No room above the status/tab bars: an invisible open sheet would
             // leave the tab UI claiming a panel with nothing on screen.
@@ -403,18 +408,6 @@ impl VfApp {
                 };
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(title).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_sized(
-                                [layout::TOUCH_TARGET, layout::TOUCH_TARGET],
-                                egui::Button::new("✕"),
-                            )
-                            .on_hover_text("Close panel")
-                            .clicked()
-                        {
-                            close = true;
-                        }
-                    });
                 });
 
                 // A visible drag handle that is also a 44 pt-wide close target:
@@ -432,6 +425,13 @@ impl VfApp {
                     && handle
                         .total_drag_delta()
                         .is_some_and(|delta| delta.y > 24.0);
+                let swiped_up = handle.dragged()
+                    && handle
+                        .total_drag_delta()
+                        .is_some_and(|delta| delta.y < -24.0);
+                if swiped_up {
+                    self.sheet_expanded = true;
+                }
                 if handle
                     .on_hover_text("Tap or swipe down to close")
                     .clicked()
@@ -454,6 +454,7 @@ impl VfApp {
 
         if close {
             self.sheet.close();
+            self.sheet_expanded = false;
             // The sheet is gone; request the frame that grows the viewport.
             ui.ctx().request_repaint();
         }

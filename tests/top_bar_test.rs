@@ -220,7 +220,7 @@ fn compact_hamburger_lists_every_wide_menu_item() {
     }
 
     for label in &button_labels {
-        if [HAMBURGER_LABEL, "Screenshot", APPEARANCE_BUTTON_LABEL].contains(&label.as_str()) {
+        if [HAMBURGER_LABEL, "Screenshot", "GitHub"].contains(&label.as_str()) {
             continue;
         }
         assert!(
@@ -231,7 +231,7 @@ fn compact_hamburger_lists_every_wide_menu_item() {
 }
 
 #[test]
-fn the_compact_bar_renders_hamburger_appearance_and_screenshot() {
+fn the_compact_bar_renders_hamburger_github_and_screenshot() {
     let ctx = support::context();
     ctx.enable_accesskit();
     let mut style = AppStyle::default();
@@ -262,8 +262,8 @@ fn the_compact_bar_renders_hamburger_appearance_and_screenshot() {
         "the compact bar has a hamburger menu button"
     );
     assert!(
-        labelled(&published, egui::Role::Button, APPEARANCE_BUTTON_LABEL).is_some(),
-        "the Appearance gear survives in compact"
+        labelled(&published, egui::Role::Button, "GitHub").is_some(),
+        "the GitHub link stays one tap away"
     );
     assert!(
         labelled(&published, egui::Role::Button, "Screenshot").is_some(),

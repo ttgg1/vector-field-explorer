@@ -229,16 +229,19 @@ pub fn show_compact(
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
-    let mut appearance_button = None;
     let touch = crate::ui::layout::TOUCH_TARGET;
 
     ui.spacing_mut().interact_size.y = touch;
+    let mut hamburger_response = None;
     ui.horizontal(|ui| {
+        // Logo left of the hamburger (ticket 71).
+        ui.add(crate::ui::branding::logo_image(ui.ctx(), touch));
+
         // The hamburger is a menu button, so it needs the explicit 44 pt size
         // instead of the row's height alone.
         let hamburger =
             egui::Button::new(HAMBURGER_LABEL).min_size(egui::vec2(touch, touch));
-        egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
+        let hamburger = egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
             // One flat dropdown: nested submenus are awkward to hit with a
             // thumb, and every group title still labels its commands.
             for menu in MENUS {
@@ -251,17 +254,17 @@ pub fn show_compact(
                 ui.separator();
             }
         });
+        hamburger_response = Some(hamburger.0);
 
-        let gear = ui
-            .add_sized(
-                [touch, touch],
-                egui::Button::new(APPEARANCE_BUTTON_LABEL),
-            )
-            .on_hover_text("Appearance");
-        if gear.clicked() {
-            *appearance_open = !*appearance_open;
+        // GitHub link button (ticket 71).
+        let github = ui
+            .add_sized([touch, touch], egui::Button::new("GitHub"))
+            .on_hover_text("Open the repository on GitHub");
+        if github.clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(
+                "https://github.com/ttgg1/vector-field-explorer",
+            ));
         }
-        appearance_button = Some(gear);
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if screenshot_button(ui, screenshot) {
@@ -270,7 +273,10 @@ pub fn show_compact(
         });
     });
 
-    if let Some(button) = appearance_button {
+    // Appearance is reachable through the menu (OpenAppearance); anchor the
+    // popover to the hamburger when it is open.
+    if *appearance_open
+        && let Some(button) = hamburger_response {
         style_changed = appearance_popover(ui, style, &button, appearance_open);
     }
 

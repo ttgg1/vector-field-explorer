@@ -1,7 +1,7 @@
 use vector_field_explorer::screenshot::{default_svg_filename, scene_to_svg};
 use vector_field_explorer::renderer::SceneGPU;
 use vector_field_explorer::export::ensure_svg_extension;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 #[test]
 fn default_svg_filename_has_svg_extension() {
