@@ -266,6 +266,7 @@ impl VfApp {
             // vector geometry. No GPU readback is needed, so this runs
             // synchronously on the frame thread.
             if self.screenshot.take_svg_request() && screenshot::svg_export_enabled(self.state.mode_3d) {
+                #[cfg(not(target_arch = "wasm32"))]
                 let over_cap = screenshot::exceeds_svg_element_cap(&scene);
                 let element_count = screenshot::svg_element_count(&scene);
                 let pixels_per_point = ui.ctx().pixels_per_point();

@@ -616,7 +616,7 @@ pub fn compose_svg_export_message(element_count: usize, download_started: bool) 
             "SVG export: scene has {} elements, file may be large",
             element_count
         ),
-        (false, false) => "SVG export complete".to_string(),
+        _ => "SVG export complete".to_string(),
     }
 }
 
