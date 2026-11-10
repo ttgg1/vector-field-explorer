@@ -11,7 +11,8 @@ a WebAssembly build.
 ![Vector Field Explorer showing a 2D vortex with arrows and streamlines](docs/images/vector-field-explorer.png)
 
 Download the latest release from
-[github.com/ttgg1/vector-field-explorer/releases/latest](https://github.com/ttgg1/vector-field-explorer/releases/latest).
+[github.com/ttgg1/vector-field-explorer/releases/latest](https://github.com/ttgg1/vector-field-explorer/releases/latest),
+or [try it online](https://ttgg1.github.io/vector-field-explorer/).
 
 ## What it is
 
@@ -75,8 +76,9 @@ shows its own unsupported-browser panel with the failure reason instead of a
 blank canvas. The panel's browser guidance is the same text as
 `#webgpu-unsupported` in `index.html`.
 
-A hosted browser build is planned for the project Pages site after the release;
-it is not live yet. Build it locally with [Trunk](#browser-build-with-trunk).
+A hosted browser build is live on the project Pages site:
+[ttgg1.github.io/vector-field-explorer](https://ttgg1.github.io/vector-field-explorer/).
+Build it locally with [Trunk](#browser-build-with-trunk).
 
 ### Browser support
 
