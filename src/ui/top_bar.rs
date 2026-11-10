@@ -87,7 +87,64 @@ pub const HAMBURGER_LABEL: &str = "☰";
 /// Inline SVG path for the GitHub mark (rendered as a texture).
 pub const GITHUB_SVG_PATH: &str = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z";
 
-/// Cached GitHub mark texture, rasterised from [`GITHUB_SVG_PATH`].
+/// Parse a number from `s` starting at `i`, advancing `i`.
+pub fn parse_num(s: &str, i: &mut usize) -> f32 {
+    let bytes = s.as_bytes();
+    while *i < bytes.len() && (bytes[*i].is_ascii_whitespace() || bytes[*i] == b',') { *i += 1; }
+    let start = *i;
+    while *i < bytes.len() && (bytes[*i] == b'-' || bytes[*i] == b'.' || bytes[*i].is_ascii_digit() || bytes[*i] == b'e' || bytes[*i] == b'E' || bytes[*i] == b'+') { *i += 1; }
+    if *i == start { return 0.0; }
+    s[start..*i].parse().unwrap_or(0.0)
+}
+
+/// Rasterise [`GITHUB_SVG_PATH`] into a polygon (sampled cubic beziers).
+pub fn github_path_points() -> Vec<(f32, f32)> {
+    let path = GITHUB_SVG_PATH;
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let mut i = 0usize;
+    let mut cmd = ' ';
+    let mut cx = 0.0f32;
+    let mut cy = 0.0f32;
+    let mut sx = 0.0f32;
+    let mut sy = 0.0f32;
+    let bytes = path.as_bytes();
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') { i += 1; }
+        if i >= bytes.len() { break; }
+        if bytes[i].is_ascii_alphabetic() { cmd = bytes[i] as char; i += 1; continue; }
+        match cmd {
+            'M' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx=x; cy=y; sx=cx; sy=cy; pts.push((cx,cy)); }
+            'm' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx+=x; cy+=y; sx=cx; sy=cy; pts.push((cx,cy)); }
+            'L' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx=x; cy=y; pts.push((cx,cy)); }
+            'l' => { let x=parse_num(path,&mut i); let y=parse_num(path,&mut i); cx+=x; cy+=y; pts.push((cx,cy)); }
+            'C' => {
+                let x1=parse_num(path,&mut i); let y1=parse_num(path,&mut i);
+                let x2=parse_num(path,&mut i); let y2=parse_num(path,&mut i);
+                let x=parse_num(path,&mut i); let y=parse_num(path,&mut i);
+                let (ox,oy)=(cx,cy);
+                for k in 1..=16 { let t=k as f32/16.0; let u=1.0-t;
+                    pts.push((u*u*u*ox+3.0*u*u*t*x1+3.0*u*t*t*x2+t*t*t*x,
+                             u*u*u*oy+3.0*u*u*t*y1+3.0*u*t*t*y2+t*t*t*y)); }
+                cx=x; cy=y;
+            }
+            'c' => {
+                let x1=cx+parse_num(path,&mut i); let y1=cy+parse_num(path,&mut i);
+                let x2=cx+parse_num(path,&mut i); let y2=cy+parse_num(path,&mut i);
+                let x=cx+parse_num(path,&mut i); let y=cy+parse_num(path,&mut i);
+                let (ox,oy)=(cx,cy);
+                for k in 1..=16 { let t=k as f32/16.0; let u=1.0-t;
+                    pts.push((u*u*u*ox+3.0*u*u*t*x1+3.0*u*t*t*x2+t*t*t*x,
+                             u*u*u*oy+3.0*u*u*t*y1+3.0*u*t*t*y2+t*t*t*y)); }
+                cx=x; cy=y;
+            }
+            'Z'|'z' => { pts.push((sx,sy)); cx=sx; cy=sy; }
+            _ => { let _=parse_num(path,&mut i); }
+        }
+    }
+    pts
+}
+
+/// Cached GitHub mark texture, built from [`GITHUB_SVG_PATH`].
 pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
     let key = "vfe-github-icon";
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique(key))) {
@@ -95,83 +152,36 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
     }
     let size = 32usize;
     let mut img = egui::ColorImage::new([size, size], vec![egui::Color32::TRANSPARENT; size * size]);
-    // Build a polygon from the SVG path (sampled cubics) and fill it.
-    let pts: Vec<(f32, f32)> = Vec::new();
-    let cx = 0.0f32;
-    let cy = 0.0f32;
-    let start = (0.0f32, 0.0f32);
-    let i = 0usize;
-    let path = GITHUB_SVG_PATH;
-    // Very small SVG path parser: supports M, C, L, Z.
-    let cmds: Vec<char> = path.chars().filter(|c| c.is_alphabetic()).collect();
-    // We'll walk by re-parsing numbers with a cursor over the string.
-    let bytes = path.as_bytes();
-    let mut pos = 0usize;
-    let mut cur_cmd = ' ';
-    while pos < bytes.len() {
-        if bytes[pos].is_ascii_alphabetic() {
-            cur_cmd = bytes[pos] as char;
-            pos += 1;
-            continue;
-        }
-        if bytes[pos].is_ascii_whitespace() || bytes[pos] == b',' {
-            pos += 1;
-            continue;
-        }
-        // parse float
-        let start_num = pos;
-        while pos < bytes.len() && (bytes[pos] == b'-' || bytes[pos] == b'.' || bytes[pos].is_ascii_digit() || bytes[pos] == b'e' || bytes[pos] == b'E' || bytes[pos] == b'+') {
-            pos += 1;
-        }
-        if pos == start_num {
-            pos += 1;
-            continue;
-        }
-        let num: f32 = path[start_num..pos].parse().unwrap_or(0.0);
-        // We need command context; store in a simple state machine below is complex.
-        // Instead, handle per-command by collecting numbers first is too much; use cur_cmd.
-        match cur_cmd {
-            'M' | 'm' => {
-                // first number x, next y
-                // We'll handle pairs: if pts empty start new subpath
-                // x already parsed; need y next loop. Store pending.
-                // Simpler: push x and wait for y via a flag not tracked. Fallback: ignore.
-                let _ = num;
-            }
-            _ => {}
-        }
-        let _ = num;
-    }
-    // Fallback: if parsing produced nothing, draw a filled circle so icon isn't blank.
-    if pts.is_empty() {
-        let c = size as f32 / 2.0;
+    let pts = github_path_points();
+    let scale = size as f32 / 16.0;
+    let n = pts.len();
+    if n >= 3 {
         for y in 0..size {
-            for x in 0..size {
-                let dx = x as f32 + 0.5 - c;
-                let dy = y as f32 + 0.5 - c;
-                if dx * dx + dy * dy <= (c - 2.0) * (c - 2.0) {
-                    img[(x, y)] = egui::Color32::WHITE;
+            let mut xs: Vec<f32> = Vec::new();
+            for k in 0..n {
+                let (x1, y1) = pts[k];
+                let (x2, y2) = pts[(k + 1) % n];
+                let yf = (y as f32 + 0.5) / scale;
+                if (y1 <= yf && y2 > yf) || (y2 <= yf && y1 > yf) {
+                    let x = x1 + (yf - y1) / (y2 - y1) * (x2 - x1);
+                    xs.push(x);
                 }
             }
-        }
-    } else {
-        // (placeholder) fill not implemented; keep circle fallback
-        let c = size as f32 / 2.0;
-        for y in 0..size {
+            xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             for x in 0..size {
-                let dx = x as f32 + 0.5 - c;
-                let dy = y as f32 + 0.5 - c;
-                if dx * dx + dy * dy <= (c - 2.0) * (c - 2.0) {
+                let xf = (x as f32 + 0.5) / scale;
+                let count = xs.iter().filter(|&&ix| ix < xf).count();
+                if count % 2 == 1 {
                     img[(x, y)] = egui::Color32::WHITE;
                 }
             }
         }
     }
-    let _ = (cx, cy, start, i, cmds);
     let t = ctx.load_texture(key, img, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique(key), t.clone()));
     t
 }
+
 
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
@@ -321,7 +331,6 @@ pub fn show_compact(
     let touch = crate::ui::layout::TOUCH_TARGET;
 
     ui.spacing_mut().interact_size.y = touch;
-    let mut hamburger_response = None;
     ui.horizontal(|ui| {
         // Logo left of the hamburger (ticket 71).
         ui.add(crate::ui::branding::logo_image(ui.ctx(), touch));
@@ -330,12 +339,15 @@ pub fn show_compact(
         // instead of the row's height alone.
         let hamburger =
             egui::Button::new(HAMBURGER_LABEL).min_size(egui::vec2(touch, touch));
-        let hamburger = egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
+        let _hamburger = egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
             // One flat dropdown: nested submenus are awkward to hit with a
             // thumb, and every group title still labels its commands.
             for menu in MENUS {
                 ui.label(egui::RichText::new(menu.title).strong());
                 for item in menu.items {
+                    if item.action == MenuAction::OpenAppearance {
+                        continue;
+                    }
                     if add_menu_item(ui, item) {
                         action = Some(item.action);
                     }
@@ -343,8 +355,6 @@ pub fn show_compact(
                 ui.separator();
             }
         });
-        hamburger_response = Some(hamburger.0);
-
         // GitHub link button (ticket 71): inline SVG path rendered as a texture,
         // with the text as fallback.
         let github_texture = github_icon_texture(ui.ctx());

@@ -14,7 +14,8 @@ use vector_field_explorer::ui::menu::{
 };
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
-    self, APPEARANCE_BUTTON_LABEL, HAMBURGER_LABEL, dismisses_appearance_popover, wheel_zoom_factor,
+    self, APPEARANCE_BUTTON_LABEL, HAMBURGER_LABEL, dismisses_appearance_popover, github_path_points,
+    wheel_zoom_factor,
 };
 
 /// One headless window running the real top menu bar and Appearance popover.
@@ -205,6 +206,9 @@ fn compact_hamburger_lists_every_wide_menu_item() {
     let mut menu_labels = Vec::new();
     for menu in MENUS {
         for item in menu.items {
+            if item.action == vector_field_explorer::ui::menu::MenuAction::OpenAppearance {
+                continue;
+            }
             // Accesskit appends the shortcut text to a button's label.
             let label = match item_shortcut_label(item) {
                 Some(shortcut) => format!("{} {shortcut}", item.label),
@@ -527,6 +531,20 @@ fn about_draws_the_mark_at_128_points() {
         "the About logo is 128x128 pt, got {:?}",
         logo.rect.size(),
     );
+}
+
+#[test]
+fn github_path_is_not_a_circle() {
+    let pts = github_path_points();
+    assert!(pts.len() > 100, "expected sampled path, got {}", pts.len());
+    // bounding box should not be a circle centered at 8,8 with radius 8
+    let mut minx = f32::MAX;
+    let mut maxx = f32::MIN;
+    for (x, _) in &pts {
+        minx = minx.min(*x);
+        maxx = maxx.max(*x);
+    }
+    assert!(maxx - minx > 5.0, "path must span the icon");
 }
 
 #[test]

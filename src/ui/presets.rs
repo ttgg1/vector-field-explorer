@@ -309,6 +309,28 @@ impl PresetPanel {
         camera: &mut Camera,
         state: &mut State,
     ) -> Option<ViewCommand> {
+        self.show_compact(ui, camera, state, false)
+    }
+
+    pub fn show_compact(
+        &mut self,
+        ui: &mut egui::Ui,
+        camera: &mut Camera,
+        state: &mut State,
+        compact: bool,
+    ) -> Option<ViewCommand> {
+        if compact {
+            ui.spacing_mut().interact_size.y = crate::ui::layout::COMPACT_ROW_HEIGHT;
+        }
+        self.show_inner(ui, camera, state)
+    }
+
+    fn show_inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        camera: &mut Camera,
+        state: &mut State,
+    ) -> Option<ViewCommand> {
         ui.heading("Presets");
 
         // Camera actions (ticket 18): clickable twins of `R` and `F`, kept

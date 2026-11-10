@@ -14,9 +14,9 @@ use glam::Vec2;
 
 use vector_field_explorer::app::StatusBarState;
 use vector_field_explorer::ui::layout::{
-    COMPACT_WIDTH, LayoutMode, SHEET_MAX_FRACTION, SheetSize, SheetState, TAB_BAR_HEIGHT, TOUCH_TARGET,
-    VIEWPORT_CHROME_ALLOWANCE, VIEWPORT_MIN_FRACTION, compact_plan, formula_field_width,
-    layout_mode, reset_sheet, sheet_height,
+    COMPACT_ROW_HEIGHT, COMPACT_WIDTH, LayoutMode, SHEET_MAX_FRACTION, SheetSize, SheetState,
+    TAB_BAR_HEIGHT, TOUCH_TARGET, VIEWPORT_CHROME_ALLOWANCE, VIEWPORT_MIN_FRACTION, compact_plan,
+    formula_field_width, layout_mode, reset_sheet, sheet_height,
 };
 use vector_field_explorer::ui::status_bar::{StatsMask, format_status, visible_stats};
 use vector_field_explorer::viewmodel::two_finger_pan;
@@ -297,4 +297,27 @@ fn the_web_shell_ships_safe_area_insets_and_a_full_bleed_viewport() {
     ] {
         assert!(css.contains(token), "web/style.css must carry `{token}`");
     }
+}
+
+#[test]
+fn compact_row_height_floor_is_44() {
+    let height = COMPACT_ROW_HEIGHT;
+    assert!(height >= 44.0);
+}
+
+#[test]
+fn sheet_heights_three_states() {
+    let window = 640.0;
+    let available = 10_000.0;
+    assert!((sheet_height(window, available, SheetSize::Collapsed) - window * 0.30).abs() < 1e-3);
+    assert!((sheet_height(window, available, SheetSize::Default) - window * 0.55).abs() < 1e-3);
+    assert!((sheet_height(window, available, SheetSize::Expanded) - window * 0.90).abs() < 1e-3);
+}
+
+#[test]
+fn expanded_sheet_keeps_10_percent_viewport() {
+    let window = 640.0;
+    let available = 500.0;
+    let h = sheet_height(window, available, SheetSize::Expanded);
+    assert!(h <= available - window * 0.10);
 }

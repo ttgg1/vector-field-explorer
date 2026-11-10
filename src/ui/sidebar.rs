@@ -469,8 +469,22 @@ impl Default for Controls {
     fn default() -> Controls { Controls::new() }
 }
 
+use crate::ui::layout;
+
 /// Draw the sidebar and hand every edit to the viewmodel setters.
 pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    show_compact(ui, state, controls, false)
+}
+
+/// Compact-mode entry: applies the 44 pt row/touch-target floor, then draws.
+pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
+    if compact {
+        ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
+    }
+    show_inner(ui, state, controls)
+}
+
+fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     // The density ceiling keys to the dimension being sampled (the ledger
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();

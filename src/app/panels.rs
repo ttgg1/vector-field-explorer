@@ -451,7 +451,7 @@ impl VfApp {
 
                 egui::ScrollArea::vertical().show(ui, |ui| match sheet {
                     SheetState::Controls => {
-                        crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+                        crate::ui::sidebar::show_compact(ui, &mut self.state, &mut self.sidebar, true);
                         ui.separator();
                         ui.label(egui::RichText::new("Appearance").strong());
                         let controls = crate::ui::style_panel::show_controls(ui, &mut self.style);
@@ -461,7 +461,7 @@ impl VfApp {
                     }
                     SheetState::Presets => {
                         camera_request =
-                            self.presets.show(ui, &mut self.camera, &mut self.state);
+                            self.presets.show_compact(ui, &mut self.camera, &mut self.state, true);
                     }
                     SheetState::None => {}
                 });
