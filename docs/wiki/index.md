@@ -15,6 +15,9 @@ commits, reports, review packages) are cited, never copied.
   a ticket becomes a reviewed commit on `main`, and what each seat may touch.
 - [Test layout and gates](process/test-layout-and-gates.md) — where tests live,
   which commands gate a change, and the parts of the build that are cold.
+- [Closing a review finding](process/closing-review-findings.md) — what counts
+  as evidence, the seam budget, and why the user-visible path has to be
+  exercised.
 
 ## Decisions
 
