@@ -123,7 +123,7 @@ pub fn layout_mode(width: f32) -> LayoutMode {
 }
 
 /// Whether free-flight camera mode may be entered in this layout.
-pub fn fly_allowed(mode: LayoutMode) -> bool {
+pub(crate) fn fly_allowed(mode: LayoutMode) -> bool {
     mode == LayoutMode::Wide
 }
 

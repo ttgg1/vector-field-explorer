@@ -347,6 +347,10 @@ pub fn toggle_fly(fly: &mut Option<FlyCamera>, orbit: &OrbitCamera, is_3d: bool)
 }
 
 /// Drop fly mode and held movement keys when entering Compact.
+///
+/// Public only so the integration suite can exercise the layout-transition
+/// state change without constructing an eframe window.
+#[doc(hidden)]
 pub fn exit_fly_for_layout(
     fly: &mut Option<FlyCamera>,
     keys: &mut FlyKeys,

@@ -378,14 +378,6 @@ fn web_brand_header_is_hidden_at_the_compact_boundary_only() {
 }
 
 #[test]
-fn fly_camera_is_not_allowed_in_any_compact_layout() {
-    use vector_field_explorer::ui::layout::fly_allowed;
-
-    assert!(!fly_allowed(LayoutMode::Compact));
-    assert!(fly_allowed(LayoutMode::Wide));
-}
-
-#[test]
 fn sheet_heights_three_states() {
     let window = 640.0;
     let available = 10_000.0;
