@@ -46,7 +46,7 @@ impl VfApp {
         // (web), mirroring `FlyKeys::apply_key`. This is what makes the
         // toggle fire on the key physically in the C position instead of on
         // whatever key happens to report logical C on a non-QWERTY layout.
-        if !ctx.text_edit_focused() {
+        if !ctx.text_edit_focused() && layout::fly_allowed(self.layout_mode) {
             // Ticket 70: match on the physical key when the backend provides it
             // (native), falling back to the logical key (web). Ignore key-repeat
             // events so a held key cannot toggle fly on/off/on. Consume the
@@ -109,6 +109,9 @@ impl VfApp {
     /// Everything the seam can mutate goes in through [`menu::UiState`], so
     /// there is no second copy of the layout, camera or controls records.
     pub(super) fn apply_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
+        if action == MenuAction::ToggleFly && !layout::fly_allowed(self.layout_mode) {
+            return;
+        }
         // Ticket 53: in compact the side panels are bottom sheets, so the two
         // panel toggles must not flip the persisted wide-layout flags. Route
         // them to the transient sheet; everything else dispatches as usual.

@@ -17,7 +17,7 @@ use vector_field_explorer::fly_camera::{
     MAX_PITCH, MAX_SPEED, MIN_SPEED, WHEEL_NOTCH_POINTS, capture_commands,
     capture_exit_required, capture_transition, crosshair_segments, crosshair_visible,
     exit_on_focus_loss, fly_toggle_key, frame_look, is_command_chord, sync_fly, sync_fly_mirror,
-    toggle_fly,
+    toggle_fly, exit_fly_for_layout,
 };
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load};
 use vector_field_explorer::render::Camera;
@@ -451,6 +451,159 @@ fn c_toggles_only_in_three_d_and_switching_to_2d_exits() {
     let mut fly = Some(FlyCamera::from_orbit(&orbit));
     sync_fly(&mut fly, true);
     assert!(fly.is_some(), "staying in 3D keeps fly mode");
+}
+
+#[test]
+fn entering_compact_exits_fly_and_clears_held_movement_keys() {
+    use vector_field_explorer::ui::layout::LayoutMode;
+
+    let mut fly = Some(fly_at_origin());
+    let mut keys = FlyKeys::default();
+    keys.apply_key(egui::Key::W, None, true);
+    assert!(keys.movement_held());
+
+    exit_fly_for_layout(&mut fly, &mut keys, LayoutMode::Compact);
+    assert!(fly.is_none());
+    assert!(!keys.movement_held());
+
+    let (grabs, visible) = capture_transition(true, fly.is_some()).unwrap();
+    assert_eq!(grabs, &[egui::CursorGrab::None]);
+    assert!(visible, "leaving fly releases capture and shows the pointer");
+}
+
+#[test]
+fn wide_layout_keeps_an_active_fly_camera_and_held_keys() {
+    use vector_field_explorer::ui::layout::LayoutMode;
+
+    let mut fly = Some(fly_at_origin());
+    let mut keys = FlyKeys::default();
+    keys.apply_key(egui::Key::W, None, true);
+
+    exit_fly_for_layout(&mut fly, &mut keys, LayoutMode::Wide);
+    assert!(fly.is_some());
+    assert!(keys.movement_held());
+}
+
+fn run_app_ui_frame(
+    app: &mut vector_field_explorer::VfApp,
+    ctx: &egui::Context,
+    frame: &mut eframe::Frame,
+    width: f32,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 800.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| eframe::App::ui(app, ui, frame),
+    )
+}
+
+fn fly_toggle_event() -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn the_real_app_frame_rejects_compact_fly_key_and_keeps_wide_entry() {
+    use vector_field_explorer::ui::layout::LayoutMode;
+
+    let ctx = crate::support::context();
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut app = vector_field_explorer::VfApp::new();
+    app.state.set_formula("(-y, x, z)".to_owned());
+    app.state.set_mode(true);
+    assert!(app.state.is_3d());
+    assert!(!ctx.text_edit_focused());
+
+    let mut compact = run_app_ui_frame(&mut app, &ctx, &mut frame, 600.0, vec![fly_toggle_event()]);
+    compact.textures_delta.clear();
+    assert!(app.fly.is_none(), "C must not enter fly in the real Compact app frame");
+    assert_eq!(app.layout_mode, LayoutMode::Compact);
+
+    let released = match fly_toggle_event() {
+        egui::Event::Key { key, physical_key, modifiers, .. } => egui::Event::Key {
+            key,
+            physical_key,
+            pressed: false,
+            repeat: false,
+            modifiers,
+        },
+        _ => unreachable!(),
+    };
+    let mut key_up = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![released]);
+    key_up.textures_delta.clear();
+    let mut wide = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![fly_toggle_event()]);
+    wide.textures_delta.clear();
+    assert!(app.fly.is_some(), "the same key must still enter fly in Wide");
+    assert_eq!(app.layout_mode, LayoutMode::Wide);
+}
+
+#[test]
+fn the_real_compact_resize_frame_clears_fly_keys_and_releases_capture() {
+    let ctx = crate::support::context();
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut app = vector_field_explorer::VfApp::new();
+    app.state.set_formula("(-y, x, z)".to_owned());
+    app.state.set_mode(true);
+
+    let mut wide = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![]);
+    wide.textures_delta.clear();
+    app.fly = Some(fly_at_origin());
+    let mut capture = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![]);
+    capture.textures_delta.clear();
+
+    let held = egui::Event::Key {
+        key: egui::Key::W,
+        physical_key: Some(egui::Key::W),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut moving = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![held.clone()]);
+    moving.textures_delta.clear();
+    assert!(app.fly_keys.movement_held(), "the setup frame records held movement input");
+
+    let released = match held {
+        egui::Event::Key { key, physical_key, modifiers, .. } => egui::Event::Key {
+            key,
+            physical_key,
+            pressed: false,
+            repeat: false,
+            modifiers,
+        },
+        _ => unreachable!(),
+    };
+    let mut compact = run_app_ui_frame(&mut app, &ctx, &mut frame, 600.0, vec![released]);
+    compact.textures_delta.clear();
+    use vector_field_explorer::ui::layout::LayoutMode;
+    assert_eq!(app.layout_mode, LayoutMode::Compact);
+    assert!(app.fly.is_none(), "the real frame transition exits fly");
+    assert!(!app.fly_keys.movement_held(), "the real frame transition clears held movement input");
+
+    let commands = &compact
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .expect("the test app emits root viewport output")
+        .commands;
+    assert!(
+        commands.iter().any(|command| matches!(command, egui::ViewportCommand::CursorGrab(egui::CursorGrab::None))),
+        "the same Compact transition frame sends pointer-grab release: {commands:?}",
+    );
+    assert!(
+        commands.iter().any(|command| matches!(command, egui::ViewportCommand::CursorVisible(true))),
+        "the same Compact transition frame restores pointer visibility: {commands:?}",
+    );
 }
 
 #[test]
