@@ -1,5 +1,23 @@
 # Dispatch, review and fix loop — as practised from 2026-11-10
 
+## Standing integration preference (2026-11-10; subsequently extended)
+
+The owner first selected option 1, “push as new branch/create PR,” for future
+reviewed work. The owner subsequently clarified, “do merges on yourself as
+well, after review,” extending that standing authority to integration. The
+earlier interpretation that merge needs separate approval is superseded.
+
+Current rule: after required design approval, independent review and required
+checks/gates are green, the controller may push a feature branch, open a PR,
+merge the reviewed work, push `main`, and confirm GitHub CI and smoke are green
+without asking the integration menu again. Serialize merges; `main` remains
+reviewed work only. This standing authority does not include releases or
+destructive or security-sensitive operations, which remain separately gated.
+
+Source: sequential owner rulings dated 2026-11-10 in the main-root SDD ledger,
+`.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` (owner ruling
+and subsequent owner ruling, lines 4637–4654).
+
 ## Correction (later on 2026-11-10) — the helper IS installed
 
 The section below claims the superpowers helper scripts are not on disk. **That
@@ -79,8 +97,11 @@ bigger tasks).
    re-scoped or split.
 5. **Re-review.** A scoped re-review checks the findings list, the brief and
    the report against the new diff — not the whole task again.
-6. **Merge.** Serialized, one branch at a time, after CI is green. `main` is
-   reviewed work only; never force-push `main`.
+6. **Merge.** With the standing owner approval above, serialize integration one
+   branch at a time after review and required checks are green. Push `main`, then
+   confirm GitHub CI and smoke are green. `main` is reviewed work only; never
+   force-push it. Releases and destructive or security-sensitive actions remain
+   separately gated.
 
 ## Parallelism rules
 
