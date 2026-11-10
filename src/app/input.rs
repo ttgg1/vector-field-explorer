@@ -47,25 +47,32 @@ impl VfApp {
         // toggle fire on the key physically in the C position instead of on
         // whatever key happens to report logical C on a non-QWERTY layout.
         if !ctx.text_edit_focused() {
-            let toggle = ctx.input(|input| {
-                input.events.iter().any(|e| match e {
+            // Ticket 70: match on the physical key when the backend provides it
+            // (native), falling back to the logical key (web). Ignore key-repeat
+            // events so a held key cannot toggle fly on/off/on. Consume the
+            // logical key of the event that actually matched, not a hardcoded C.
+            let toggle_key = ctx.input(|input| {
+                input.events.iter().find_map(|e| match e {
                     egui::Event::Key {
                         key,
                         physical_key,
-                        pressed,
+                        pressed: true,
+                        repeat: false,
                         modifiers,
                         ..
                     } => {
-                        *pressed
-                            && modifiers.is_none()
-                            && physical_key.unwrap_or(*key) == egui::Key::C
+                        if modifiers.is_none() && physical_key.unwrap_or(*key) == egui::Key::C {
+                            Some(*key)
+                        } else {
+                            None
+                        }
                     }
-                    _ => false,
+                    _ => None,
                 })
             });
-            if toggle {
+            if let Some(key) = toggle_key {
                 ctx.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::C);
+                    input.consume_key(egui::Modifiers::NONE, key);
                 });
                 crate::fly_camera::toggle_fly(
                     &mut self.fly,

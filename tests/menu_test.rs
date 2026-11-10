@@ -371,7 +371,7 @@ fn extra_modifiers_do_not_fire_the_plain_shortcuts() {
 }
 
 #[test]
-fn plain_c_toggles_fly_but_modified_c_does_not() {
+fn plain_c_does_not_toggle_fly_through_logical_shortcuts() {
     // Ticket 70: ToggleFly is no longer dispatched through the logical shortcut
     // table; it is handled on the physical key (see app::input) so a non-QWERTY
     // layout cannot exit fly while strafing. Plain C therefore produces no

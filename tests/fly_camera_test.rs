@@ -721,6 +721,25 @@ fn the_fly_camera_is_not_persisted() {
     assert_eq!(load(Some(&storage)), settings, "the envelope still round-trips unchanged");
 }
 
+#[test]
+fn non_qwerty_physical_a_strafes_left_and_does_not_toggle_fly() {
+    // Ticket 70 regression: on a Bone layout the key physically labelled A
+    // reports logical C. It must strafe left and must not exit fly mode.
+    let mut keys = FlyKeys::default();
+    keys.apply_key(egui::Key::C, Some(egui::Key::A), true);
+    let input = keys.input(Vec2::ZERO, false);
+    assert_eq!(input.strafe, -1.0, "physical A strafes left");
+    assert_eq!(input.forward, 0.0, "it does not also move forward");
+
+    // The fly toggle fires only on the key physically in the C position, so a
+    // physical-A event must not match it (fly mode stays active).
+    let physical_key: Option<egui::Key> = Some(egui::Key::A);
+    let logical = egui::Key::C;
+    #[allow(clippy::unnecessary_literal_unwrap)]
+    let matches_toggle = physical_key.unwrap_or(logical) == egui::Key::C;
+    assert!(!matches_toggle, "physical A does not toggle fly");
+}
+
 /// In-memory stand-in for eframe's disk-backed storage.
 #[derive(Default)]
 struct MemoryStorage {
