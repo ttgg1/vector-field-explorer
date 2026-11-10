@@ -71,9 +71,7 @@ impl VfApp {
             let (action, changed) = if plan.compact_top_bar {
                 top_bar::show_compact(
                     ui,
-                    &mut self.style,
                     &self.screenshot,
-                    &mut self.appearance_open,
                 )
             } else {
                 top_bar::show(
@@ -428,19 +426,13 @@ impl VfApp {
                         .total_drag_delta()
                         .is_some_and(|delta| delta.y < -24.0);
                 if swiped_up {
-                    self.sheet_expanded = match self.sheet_expanded {
-                        SheetSize::Collapsed => SheetSize::Default,
-                        SheetSize::Default => SheetSize::Expanded,
-                        SheetSize::Expanded => SheetSize::Expanded,
-                    };
+                    (self.sheet_expanded, _) = layout::sheet_swipe_transition(
+                        self.sheet_expanded, handle.total_drag_delta().unwrap_or_default().y);
                     ui.ctx().request_repaint();
                 }
                 if swiped_down {
-                    match self.sheet_expanded {
-                        SheetSize::Expanded => self.sheet_expanded = SheetSize::Default,
-                        SheetSize::Default => self.sheet_expanded = SheetSize::Collapsed,
-                        SheetSize::Collapsed => close = true,
-                    }
+                    (self.sheet_expanded, close) = layout::sheet_swipe_transition(
+                        self.sheet_expanded, handle.total_drag_delta().unwrap_or_default().y);
                 }
                 if handle
                     .on_hover_text("Tap or swipe down to close")

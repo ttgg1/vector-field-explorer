@@ -92,11 +92,9 @@ pub const TAB_BAR_HEIGHT: f32 = 48.0;
 /// Minimum tap target, points (Apple/Google's 44 pt guideline).
 pub const TOUCH_TARGET: f32 = 44.0;
 
-/// Minimum row height in compact mode, points: the legibility floor for
-/// preset/control rows on a phone. Wide mode is unaffected.
-pub const COMPACT_ROW_HEIGHT: f32 = 44.0;
-/// Alias kept for callers/tests that name the floor as a touch target.
-pub const COMPACT_TOUCH_TARGET: f32 = COMPACT_ROW_HEIGHT;
+/// Compact control/preset row height, points: 48 pt gives text rows extra
+/// breathing room beyond the generic 44 pt touch-target minimum. Wide mode is unaffected.
+pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
 /// Minimum share of the formula bar the flexing field keeps on a phone.
 pub const FORMULA_MIN_FRACTION: f32 = 0.40;
 
@@ -253,6 +251,27 @@ pub fn sheet_height(window_h: f32, available_h: f32, size: SheetSize) -> f32 {
     };
     let room = (available_h - viewport_floor).max(0.0);
     cap.min(room).min(available_h).max(0.0)
+}
+
+/// Apply a vertical drag to the compact sheet. Returns the next height state
+/// and whether a downward swipe at the collapsed boundary closes the sheet.
+pub fn sheet_swipe_transition(size: SheetSize, delta_y: f32) -> (SheetSize, bool) {
+    if !delta_y.is_finite() || delta_y.abs() <= 24.0 {
+        return (size, false);
+    }
+    if delta_y < 0.0 {
+        (match size {
+            SheetSize::Collapsed => SheetSize::Default,
+            SheetSize::Default => SheetSize::Expanded,
+            SheetSize::Expanded => SheetSize::Expanded,
+        }, false)
+    } else {
+        match size {
+            SheetSize::Expanded => (SheetSize::Default, false),
+            SheetSize::Default => (SheetSize::Collapsed, false),
+            SheetSize::Collapsed => (SheetSize::Collapsed, true),
+        }
+    }
 }
 
 /// Width the flexing formula field gets in a bar of `available_width` points

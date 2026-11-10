@@ -14,7 +14,7 @@ use vector_field_explorer::ui::menu::{
 };
 use vector_field_explorer::ui::style_panel::AppStyle;
 use vector_field_explorer::ui::top_bar::{
-    self, APPEARANCE_BUTTON_LABEL, HAMBURGER_LABEL, dismisses_appearance_popover, github_path_points,
+    self, APPEARANCE_BUTTON_LABEL, GITHUB_SVG_PATH, HAMBURGER_LABEL, dismisses_appearance_popover, github_path_points, parse_num,
     wheel_zoom_factor,
 };
 
@@ -86,12 +86,11 @@ impl Harness {
             ..Default::default()
         };
         let (mut output, open) = {
-            let style = &mut self.style;
             let screenshot = &self.screenshot;
             let open = &mut self.open;
             let output = self.ctx.run_ui(input, |ui| {
                 egui::Panel::top("compact_top_bar_test").show(ui, |ui| {
-                    let _ = top_bar::show_compact(ui, style, screenshot, open);
+                    let _ = top_bar::show_compact(ui, screenshot);
                 });
             });
             (output, *open)
@@ -188,7 +187,7 @@ fn no_scroll_is_no_zoom() {
 /// `MENUS` table exposes must be a button in the hamburger, and the hamburger
 /// must not invent commands.
 #[test]
-fn compact_hamburger_lists_every_wide_menu_item() {
+fn compact_hamburger_lists_every_wide_command_except_sheet_appearance() {
     let mut h = Harness::new(false);
     let out = h.compact_idle();
     let hamburger = labelled(&nodes(&out), egui::Role::Button, HAMBURGER_LABEL)
@@ -238,9 +237,7 @@ fn compact_hamburger_lists_every_wide_menu_item() {
 fn the_compact_bar_renders_hamburger_github_and_screenshot() {
     let ctx = support::context();
     ctx.enable_accesskit();
-    let mut style = AppStyle::default();
     let screenshot = Screenshot::new();
-    let mut open = false;
     let mut published = Vec::new();
 
     // Two frames: the first publishes accesskit nodes, the second settles them.
@@ -254,17 +251,22 @@ fn the_compact_bar_renders_hamburger_github_and_screenshot() {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::Panel::top("compact_top_bar").show(ui, |ui| {
-                let _ = top_bar::show_compact(ui, &mut style, &screenshot, &mut open);
+                let _ = top_bar::show_compact(ui, &screenshot);
             });
         });
         output.textures_delta.clear();
         published = nodes(&output);
     }
 
-    assert!(
-        published.iter().any(|n| n.role == egui::Role::Image),
-        "the compact bar shows the logo"
-    );
+    let logo = published.iter().find(|n| n.role == egui::Role::Image)
+        .expect("the compact bar shows its logo image");
+    let hamburger_rect = labelled(&published, egui::Role::Button, HAMBURGER_LABEL)
+        .expect("hamburger is present").rect;
+    assert!(logo.rect.width() >= 43.0 && logo.rect.width() <= 45.0
+        && logo.rect.height() >= 43.0 && logo.rect.height() <= 45.0,
+        "the logo is the 44pt mark, got {:?}", logo.rect.size());
+    assert!(logo.rect.right() <= hamburger_rect.left(),
+        "the logo image is specifically the mark before the hamburger: {:?} vs {:?}", logo.rect, hamburger_rect);
     assert!(
         labelled(&published, egui::Role::Button, HAMBURGER_LABEL).is_some(),
         "the compact bar has a hamburger menu button"
@@ -544,7 +546,35 @@ fn github_path_is_not_a_circle() {
         minx = minx.min(*x);
         maxx = maxx.max(*x);
     }
-    assert!(maxx - minx > 5.0, "path must span the icon");
+    let miny = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min);
+    let maxy = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max);
+    assert!((maxx - minx - 16.0).abs() < 0.1, "path width should span 16 units: {minx}..{maxx}");
+    let height = maxy - miny;
+    assert!((15.5..=16.1).contains(&height), "path height should nearly span 16 units: {miny}..{maxy}");
+    assert!((maxx - minx) / height > 0.98, "mark bounds are nearly square");
+    assert!(!GITHUB_SVG_PATH.contains('A') && !GITHUB_SVG_PATH.contains('a'), "only supported path commands");
+    let area = (0..64).flat_map(|y| (0..64).map(move |x| (x,y)))
+        .filter(|&(x,y)| point_inside(&pts, (x as f32 + 0.5) / 4.0, (y as f32 + 0.5) / 4.0))
+        .count() as f32 / 16.0;
+    let ratio = area / 256.0;
+    assert!((0.40..0.65).contains(&ratio), "mark occupancy distinguishes silhouette from a circle (π/4): {ratio}");
+}
+
+fn point_inside(pts: &[(f32, f32)], x: f32, y: f32) -> bool {
+    let mut inside = false;
+    for i in 0..pts.len() {
+        let (x1,y1) = pts[i]; let (x2,y2) = pts[(i+1)%pts.len()];
+        if (y1 > y) != (y2 > y) && x < (x2-x1)*(y-y1)/(y2-y1)+x1 { inside = !inside; }
+    }
+    inside
+}
+
+#[test]
+fn svg_number_tokenizer_handles_adjacent_decimal_and_signed_numbers() {
+    let s = "7.59.4.07.55-.17.55-.38";
+    let mut i = 0;
+    let actual: Vec<_> = (0..7).map(|_| parse_num(s, &mut i)).collect();
+    assert_eq!(actual, [7.59, 0.4, 0.07, 0.55, -0.17, 0.55, -0.38]);
 }
 
 #[test]

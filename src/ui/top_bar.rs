@@ -85,15 +85,33 @@ pub fn dismisses_appearance_popover(
 pub const HAMBURGER_LABEL: &str = "☰";
 
 /// Inline SVG path for the GitHub mark (rendered as a texture).
-pub const GITHUB_SVG_PATH: &str = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z";
+pub const GITHUB_SVG_PATH: &str = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38C13.71 14.53 16 11.54 16 8c0-4.42-3.58-8-8-8z";
 
 /// Parse a number from `s` starting at `i`, advancing `i`.
 pub fn parse_num(s: &str, i: &mut usize) -> f32 {
     let bytes = s.as_bytes();
     while *i < bytes.len() && (bytes[*i].is_ascii_whitespace() || bytes[*i] == b',') { *i += 1; }
     let start = *i;
-    while *i < bytes.len() && (bytes[*i] == b'-' || bytes[*i] == b'.' || bytes[*i].is_ascii_digit() || bytes[*i] == b'e' || bytes[*i] == b'E' || bytes[*i] == b'+') { *i += 1; }
-    if *i == start { return 0.0; }
+    if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') { *i += 1; }
+    let digits_before = *i;
+    while *i < bytes.len() && bytes[*i].is_ascii_digit() { *i += 1; }
+    let mut has_digits = *i > digits_before;
+    if *i < bytes.len() && bytes[*i] == b'.' {
+        *i += 1;
+        let digits_after = *i;
+        while *i < bytes.len() && bytes[*i].is_ascii_digit() { *i += 1; }
+        has_digits |= *i > digits_after;
+    }
+    if !has_digits { *i = start; return 0.0; }
+    let mantissa_end = *i;
+    if *i < bytes.len() && matches!(bytes[*i], b'e' | b'E') {
+        let exponent = *i;
+        *i += 1;
+        if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') { *i += 1; }
+        let exponent_digits = *i;
+        while *i < bytes.len() && bytes[*i].is_ascii_digit() { *i += 1; }
+        if *i == exponent_digits { *i = mantissa_end; let _ = exponent; }
+    }
     s[start..*i].parse().unwrap_or(0.0)
 }
 
@@ -317,14 +335,12 @@ pub fn show(
     (action, style_changed)
 }
 
-/// Draw the compact (phone) bar: hamburger with every [`MENUS`] command, the
-/// Appearance gear, and the Screenshot action. Same return contract as
-/// [`show`], and the same actions — only the arrangement changes.
+/// Draw the compact bar: logo, hamburger, repository link, and Screenshot.
+/// Appearance controls live in the Controls sheet. Same action return contract
+/// as [`show`].
 pub fn show_compact(
     ui: &mut egui::Ui,
-    _style: &mut AppStyle,
     screenshot: &Screenshot,
-    _appearance_open: &mut bool,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let style_changed = false;
