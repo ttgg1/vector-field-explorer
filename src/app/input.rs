@@ -51,25 +51,7 @@ impl VfApp {
             // (native), falling back to the logical key (web). Ignore key-repeat
             // events so a held key cannot toggle fly on/off/on. Consume the
             // logical key of the event that actually matched, not a hardcoded C.
-            let toggle_key = ctx.input(|input| {
-                input.events.iter().find_map(|e| match e {
-                    egui::Event::Key {
-                        key,
-                        physical_key,
-                        pressed: true,
-                        repeat: false,
-                        modifiers,
-                        ..
-                    } => {
-                        if modifiers.is_none() && physical_key.unwrap_or(*key) == egui::Key::C {
-                            Some(*key)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-            });
+            let toggle_key = ctx.input(|input| crate::fly_camera::fly_toggle_key(&input.events));
             if let Some(key) = toggle_key {
                 ctx.input_mut(|input| {
                     input.consume_key(egui::Modifiers::NONE, key);

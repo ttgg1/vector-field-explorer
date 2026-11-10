@@ -310,6 +310,32 @@ fn axis(positive: bool, negative: bool) -> f32 {
 /// Enter/leave fly mode. Only 3D may fly; in 2D the key is ignored. Entering
 /// snapshots the current orbit eye and aim; leaving drops the fly camera and
 /// leaves the orbit record exactly as it was.
+/// Pure decision for the ticket-70 fly toggle: scan this frame's key events and
+/// return the logical key that must be consumed when a toggle fires, or `None`
+/// when nothing toggles fly. Matches on the physical key when the backend
+/// provides one (native), falling back to the logical key (web), mirroring
+/// [`FlyKeys::apply_key`]. Repeated and modified events never toggle.
+#[doc(hidden)]
+pub fn fly_toggle_key(events: &[egui::Event]) -> Option<egui::Key> {
+    events.iter().find_map(|e| match e {
+        egui::Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            repeat: false,
+            modifiers,
+            ..
+        } => {
+            if modifiers.is_none() && physical_key.unwrap_or(*key) == egui::Key::C {
+                Some(*key)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    })
+}
+
 pub fn toggle_fly(fly: &mut Option<FlyCamera>, orbit: &OrbitCamera, is_3d: bool) {
     if !is_3d {
         return;

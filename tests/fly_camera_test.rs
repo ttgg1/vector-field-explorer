@@ -16,7 +16,8 @@ use vector_field_explorer::fly_camera::{
     CROSSHAIR_ALPHA, CROSSHAIR_HALF_LENGTH, DEFAULT_SPEED, FlyCamera, FlyInput, FlyKeys,
     MAX_PITCH, MAX_SPEED, MIN_SPEED, WHEEL_NOTCH_POINTS, capture_commands,
     capture_exit_required, capture_transition, crosshair_segments, crosshair_visible,
-    exit_on_focus_loss, frame_look, is_command_chord, sync_fly, sync_fly_mirror, toggle_fly,
+    exit_on_focus_loss, fly_toggle_key, frame_look, is_command_chord, sync_fly, sync_fly_mirror,
+    toggle_fly,
 };
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load};
 use vector_field_explorer::render::Camera;
@@ -722,22 +723,90 @@ fn the_fly_camera_is_not_persisted() {
 }
 
 #[test]
-fn non_qwerty_physical_a_strafes_left_and_does_not_toggle_fly() {
+fn physical_a_on_a_non_qwerty_layout_strafes_left_and_does_not_toggle_fly() {
     // Ticket 70 regression: on a Bone layout the key physically labelled A
-    // reports logical C. It must strafe left and must not exit fly mode.
+    // reports logical C. It must strafe left and must not toggle fly.
     let mut keys = FlyKeys::default();
     keys.apply_key(egui::Key::C, Some(egui::Key::A), true);
     let input = keys.input(Vec2::ZERO, false);
     assert_eq!(input.strafe, -1.0, "physical A strafes left");
     assert_eq!(input.forward, 0.0, "it does not also move forward");
 
-    // The fly toggle fires only on the key physically in the C position, so a
-    // physical-A event must not match it (fly mode stays active).
-    let physical_key: Option<egui::Key> = Some(egui::Key::A);
-    let logical = egui::Key::C;
-    #[allow(clippy::unnecessary_literal_unwrap)]
-    let matches_toggle = physical_key.unwrap_or(logical) == egui::Key::C;
-    assert!(!matches_toggle, "physical A does not toggle fly");
+    // The production toggle decision must agree: a physical-A event does not
+    // request a toggle, so fly mode stays active.
+    let event = egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: Some(egui::Key::A),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    assert_eq!(
+        fly_toggle_key(&[event]),
+        None,
+        "physical A must not toggle fly",
+    );
+}
+
+#[test]
+fn physical_c_toggles_fly_and_consumes_its_logical_key() {
+    // The key physically in the C position toggles fly. On a layout where it
+    // reports a non-C logical key, that logical key is what must be consumed.
+    let event = egui::Event::Key {
+        key: egui::Key::X,
+        physical_key: Some(egui::Key::C),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    assert_eq!(
+        fly_toggle_key(&[event]),
+        Some(egui::Key::X),
+        "the matched event's logical key is returned for consumption",
+    );
+}
+
+#[test]
+fn fly_toggle_falls_back_to_the_logical_key_when_physical_is_missing() {
+    // Web fallback: no physical key reported, so the logical key decides.
+    let event = egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    assert_eq!(fly_toggle_key(&[event]), Some(egui::Key::C));
+
+    let not_c = egui::Event::Key {
+        key: egui::Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    assert_eq!(fly_toggle_key(&[not_c]), None);
+}
+
+#[test]
+fn fly_toggle_ignores_repeated_and_modified_events() {
+    let repeated = egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: Some(egui::Key::C),
+        pressed: true,
+        repeat: true,
+        modifiers: egui::Modifiers::NONE,
+    };
+    assert_eq!(fly_toggle_key(&[repeated]), None, "repeat must not toggle");
+
+    let modified = egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: Some(egui::Key::C),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::SHIFT,
+    };
+    assert_eq!(fly_toggle_key(&[modified]), None, "modified C must not toggle");
 }
 
 /// In-memory stand-in for eframe's disk-backed storage.
