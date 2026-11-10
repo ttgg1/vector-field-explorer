@@ -593,6 +593,52 @@ fn reset_time_keeps_loop_period_full_reset_clears() {
 }
 
 #[test]
+fn enabling_loop_wraps_current_time_immediately() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut clock = SimClock::default();
+    clock.time = 25.0;
+    let mut state = State::new(true);
+    state.set_formula("(cos(t), 0)".to_string());
+
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(960.0, 600.0));
+    let frame = |ctx: &egui::Context, clock: &mut SimClock, state: &State, events: Vec<egui::Event>| {
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
+            |ui| transport::show(ui, clock, state, false),
+        );
+        output.textures_delta.clear();
+        output
+    };
+
+    // Find the Loop checkbox rect.
+    let output = frame(&ctx, &mut clock, &state, Vec::new());
+    let nodes_list = nodes(&output);
+    let checkbox_rect = nodes_list
+        .iter()
+        .find(|n| n.label.as_deref() == Some("Loop"))
+        .map(|n| n.rect)
+        .expect("the transport exposes a Loop control");
+    let click = |pos: egui::Pos2, pressed: bool| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let _ = frame(&ctx, &mut clock, &state, click(checkbox_rect.center(), true));
+    let _ = frame(&ctx, &mut clock, &state, click(checkbox_rect.center(), false));
+
+    assert!(clock.loop_period.is_some(), "enabling the loop sets a period");
+    let period = clock.loop_period.unwrap();
+    assert!(clock.time >= 0.0 && clock.time < period, "time wrapped immediately: {}", clock.time);
+}
+
+#[test]
 fn should_animate_true_for_time_dependent_field() {
     let clock = SimClock::default();
     let mut state = State::new(true);

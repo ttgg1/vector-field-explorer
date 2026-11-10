@@ -12,6 +12,7 @@ use vector_field_explorer::renderer::{
 };
 use vector_field_explorer::sampling::ArrowData;
 use vector_field_explorer::particles::{DOT_SPACING_FRACTION, MAX_PARTICLES};
+use vector_field_explorer::sim_clock::SimClock;
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_DENSITY_3D, DEFAULT_PARTICLE_SIZE,
     DEFAULT_PROPORTIONAL_EXPONENT, FORMULA_2D, FORMULA_3D, MAX_DENSITY_2D, MAX_DENSITY_3D,
@@ -1217,6 +1218,19 @@ fn no_rebuild_when_paused_or_static() {
     let _ = state.snapshot_if_dirty();
     state.set_time(0.0);
     assert!(!state.dirty);
+}
+
+#[test]
+fn no_rebuild_when_paused() {
+    let mut clock = SimClock::default();
+    let mut state = State::new(true);
+    state.set_formula("(cos(t), 0)".to_string());
+    let _ = state.snapshot_if_dirty();
+    clock.set_playing(false);
+    // Paused clock does not advance; mirror its (unchanged) time.
+    clock.advance_for(&state, 0.05);
+    state.set_time(clock.time);
+    assert!(!state.dirty, "paused view must not mark dirty");
 }
 
 #[test]

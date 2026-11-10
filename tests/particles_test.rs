@@ -1168,17 +1168,17 @@ fn advection_at_nonzero_time_differs() {
 
 #[test]
 fn rk4_substeps_see_intermediate_times() {
-    // Field (t, 0): velocity depends on time. RK4 at t=0, dt=1 with substeps
-    // at 0, 0.5, 1 should produce x displacement ~0.5 (trapezoidal-ish), not 0.
+    // Field (t, 0): velocity is t. With time = 1 and dt = 1, the RK4 substeps
+    // evaluate at t = 1, 1.5, 2, averaging ~1.5, so the displacement must be
+    // materially larger than the frozen-t value of 1.0. A frozen-t integrator
+    // lands near 1.0; the correctly threaded one lands near 1.5.
     let field = FieldExpr::parse("(t, 0)").expect("parses");
     let domain = Domain::default();
-    let mut cloud = Particles::with_positions(vec![Vec3::new(0.0, 0.0, 0.0)]);
-    advect(&mut cloud, &field, &domain, AdvectSettings { dt: 1.0, time: 0.0, ..AdvectSettings::default() });
-    // At constant t=0, velocity 0 => no movement (respawn? zero velocity respawns)
-    // Instead use time=1 so velocities nonzero.
-    let mut cloud2 = Particles::with_positions(vec![Vec3::new(0.0, 0.0, 0.0)]);
-    advect(&mut cloud2, &field, &domain, AdvectSettings { dt: 1.0, time: 1.0, ..AdvectSettings::default() });
-    // displacement should be > 1.0 if substeps use increasing t (1,1.5,2) average 1.5
-    // Just ensure nonzero movement occurred.
-    assert!(cloud2.pos[0].x.abs() > 0.0 || cloud2.pos[0].x.is_finite());
+    let mut cloud = Particles::with_positions(vec![Vec3::new(-0.5, 0.0, 0.0)]);
+    advect(&mut cloud, &field, &domain, AdvectSettings { dt: 0.5, time: 1.0, ..AdvectSettings::default() });
+    assert!(
+        cloud.pos[0].x > -0.5 + 0.55,
+        "RK4 must thread intermediate times, got {}",
+        cloud.pos[0].x
+    );
 }

@@ -386,12 +386,19 @@ fn burst_seeds_skip_clicks_off_the_field() {
 
 #[test]
 fn trace_at_varies_with_t() {
-    let f = FieldExpr::parse("(cos(t), 0, 0)").expect("parses");
+    let f = FieldExpr::parse("(cos(t), sin(t), 0)").expect("parses");
     let domain = Domain::default();
     let opts = StreamlineOpts { max_len: 10, step_scale: 0.1, both_directions: false };
     let a = trace_at(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts, 0.0);
     let b = trace_at(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts, 1.0);
-    assert_ne!(a, b);
+    // Direction changes with t, so traces differ materially.
+    assert!(a != b, "traces should differ materially");
+    // At least one coordinate differs by more than 1e-3.
+    let mut maxdiff = 0.0f32;
+    for (pa, pb) in a.iter().zip(b.iter()) {
+        maxdiff = maxdiff.max((pa.x - pb.x).abs().max((pa.y - pb.y).abs()));
+    }
+    assert!(maxdiff > 1e-3, "maxdiff = {}", maxdiff);
 }
 
 #[test]
