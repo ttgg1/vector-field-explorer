@@ -42,7 +42,7 @@ pub fn time_label(time: f32, compact: bool) -> String {
 }
 
 /// Draw the strip and apply every edit to `clock`.
-pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, compact: bool) {
+pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: bool) {
     ui.horizontal(|ui| {
         if ui
             .button(play_label(clock.playing, compact))
@@ -75,6 +75,28 @@ pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, compact: bool) {
         let response = response.on_hover_text("How fast simulated time runs");
         if response.changed() {
             clock.set_speed(speed);
+        }
+
+        // Loop control, shown only for a time-dependent field.
+        if state.field.is_time_dependent() {
+            let mut looping = clock.loop_period.is_some();
+            if ui.checkbox(&mut looping, "Loop").changed() {
+                if looping {
+                    clock.set_loop_period(clock.loop_period.unwrap_or(10.0));
+                    if clock.loop_period.is_none() {
+                        clock.set_loop_period(10.0);
+                    }
+                } else {
+                    clock.set_loop_period(0.0);
+                }
+            }
+            if let Some(period) = clock.loop_period {
+                let mut p = period;
+                let slider = egui::Slider::new(&mut p, 0.1..=100.0).text("Period");
+                if ui.add(slider).changed() {
+                    clock.set_loop_period(p);
+                }
+            }
         }
     });
 }

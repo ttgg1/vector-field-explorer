@@ -380,10 +380,10 @@ fn inside(domain: &Domain, p: Vec3) -> bool {
         && p.z >= domain.min.z && p.z <= domain.max.z
 }
 
-/// Field flow at `p`. A missing or non-finite evaluation reads as the zero
-/// vector, which [`advect`] treats as zero velocity and respawns.
-fn flow_at(field: &FieldExpr, p: Vec3) -> Vec3 {
-    match field.eval3(p) {
+/// Field flow at `p` and time `t`. A missing or non-finite evaluation reads as
+/// the zero vector, which [`advect`] treats as zero velocity and respawns.
+fn flow_at(field: &FieldExpr, p: Vec3, t: f32) -> Vec3 {
+    match field.eval3_at(p, t) {
         Some(v) if v.is_finite() => v,
         _ => Vec3::splat(0.0),
     }
@@ -434,18 +434,18 @@ fn spawn_box(domain: &Domain) -> SpawnBox {
 /// streamline tracer's `integrate`, but with a per-frame time step rather than
 /// a fixed arc-length one. The NaN sentinel marks zero or non-finite velocity,
 /// which [`advect`] respawns.
-fn rk4_step(field: &FieldExpr, p: Vec3, h: f32) -> Vec3 {
-    let f0 = flow_at(field, p);
+fn rk4_step(field: &FieldExpr, p: Vec3, h: f32, t: f32) -> Vec3 {
+    let f0 = flow_at(field, p, t);
     let mag = f0.length();
     if mag <= 0.0 || mag.is_nan() {
         return Vec3::splat(NAN_F32);
     }
     let k1 = p + f0 * (h * 0.5);
-    let f1 = flow_at(field, k1);
+    let f1 = flow_at(field, k1, t + h * 0.5);
     let k2 = p + f1 * (h * 0.5);
-    let f2 = flow_at(field, k2);
+    let f2 = flow_at(field, k2, t + h * 0.5);
     let k3 = p + f2 * h;
-    let f3 = flow_at(field, k3);
+    let f3 = flow_at(field, k3, t + h);
     p + (f0 + f1 * 2.0 + f2 * 2.0 + f3) * (h / 6.0)
 }
 
@@ -573,6 +573,8 @@ pub fn spawn_at(
 pub struct AdvectSettings {
     /// Simulated seconds to advance. Non-finite, zero or negative is a no-op.
     pub dt: f32,
+    /// Time at which to evaluate the field. Defaults to `0.0`.
+    pub time: f32,
     /// Requested trail points, `0..=32`; `0` keeps no history.
     pub trail_len: u32,
     /// Re-spawn a particle once it has stagnated for `stagnation_seconds`.
@@ -585,6 +587,7 @@ impl Default for AdvectSettings {
     fn default() -> Self {
         Self {
             dt: 0.0,
+            time: 0.0,
             trail_len: DEFAULT_TRAIL_LEN,
             loop_on_stagnation: true,
             stagnation_seconds: DEFAULT_STAGNATION_SECONDS,
@@ -688,7 +691,7 @@ pub fn advect(
     for i in 0..particles.pos.len() {
         state = lcg_next(state);
         let p = particles.pos[i];
-        let q = if inside(domain, p) { rk4_step(field, p, dt) } else { Vec3::splat(NAN_F32) };
+        let q = if inside(domain, p) { rk4_step(field, p, dt, settings.time) } else { Vec3::splat(NAN_F32) };
         if !q.is_finite() || !inside(domain, q) {
             let point = jittered_point(region.center, region.band, state);
             particles.pos[i] = point;
@@ -748,10 +751,11 @@ fn particle_rgb(
     color_range: (f32, f32),
     speed_range: (f32, f32),
     appearance: &ParticleAppearance,
+    time: f32,
 ) -> [f32; 3] {
     match mode {
         ParticleColorMode::Magnitude => {
-            let mag = match field.eval3(point) {
+            let mag = match field.eval3_at(point, time) {
                 Some(v) if v.is_finite() => v.length(),
                 _ => 0.0,
             };
@@ -783,7 +787,7 @@ fn particle_rgb(
 /// instance layout — the dot shader reads `origin` as the center and
 /// `dir_len.w` as the radius.
 #[allow(clippy::too_many_arguments)]
-pub fn dot_instances(
+pub fn dot_instances_at(
     particles: &Particles,
     field: &FieldExpr,
     domain: &Domain,
@@ -792,6 +796,7 @@ pub fn dot_instances(
     appearance: &ParticleAppearance,
     speed_range: (f32, f32),
     radius: f32,
+    time: f32,
 ) -> Vec<ArrowInstanceGPU> {
     let appearance = appearance.sanitized();
     let alpha = appearance.opacity;
@@ -812,6 +817,7 @@ pub fn dot_instances(
             color_range,
             speed_range,
             &appearance,
+            time,
         );
         dots.push(ArrowInstanceGPU {
             origin: [p.x, p.y, p.z, PARTICLE_KIND],
@@ -829,7 +835,25 @@ pub fn dot_instances(
 /// proportionally wider trails. Trails are skipped entirely when the requested
 /// length is below two points or the cloud is empty, and the whole result is
 /// hard-capped at [`MAX_TRAIL_SEGMENTS`].
-pub fn trail_instances(
+#[allow(clippy::too_many_arguments)]
+/// Delegate to [`trail_instances_at`] at `t = 0.0`.
+pub fn dot_instances(
+    particles: &Particles,
+    field: &FieldExpr,
+    domain: &Domain,
+    colormap: Colormap,
+    color_range: (f32, f32),
+    appearance: &ParticleAppearance,
+    speed_range: (f32, f32),
+    radius: f32,
+) -> Vec<ArrowInstanceGPU> {
+    dot_instances_at(
+        particles, field, domain, colormap, color_range, appearance, speed_range, radius, 0.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn trail_instances_at(
     particles: &Particles,
     field: &FieldExpr,
     colormap: Colormap,
@@ -837,6 +861,7 @@ pub fn trail_instances(
     appearance: &ParticleAppearance,
     speed_range: (f32, f32),
     spacing: f32,
+    time: f32,
 ) -> Vec<LineInstanceGPU> {
     let appearance = appearance.sanitized();
     let effective = effective_trail_len(particles.pos.len(), appearance.trail_len);
@@ -868,6 +893,7 @@ pub fn trail_instances(
             color_range,
             speed_range,
             &appearance,
+            time,
         );
         let segments = points.len() - 1;
         for j in 0..segments {
@@ -884,6 +910,21 @@ pub fn trail_instances(
         }
     }
     trails
+}
+
+/// Delegate to [`trail_instances_at`] at `t = 0.0`.
+pub fn trail_instances(
+    particles: &Particles,
+    field: &FieldExpr,
+    colormap: Colormap,
+    color_range: (f32, f32),
+    appearance: &ParticleAppearance,
+    speed_range: (f32, f32),
+    spacing: f32,
+) -> Vec<LineInstanceGPU> {
+    trail_instances_at(
+        particles, field, colormap, color_range, appearance, speed_range, spacing, 0.0,
+    )
 }
 
 /// The billboard quad's six corners in dot-local space: a camera-facing square

@@ -46,10 +46,16 @@ pub fn magnitude_range(arrows: &[ArrowData]) -> (f32, f32) {
 
 /// Sample `field` over `domain.grid_points(grid)`, skipping degenerate
 /// arrows (non-finite field values, or nearly zero-length directions).
-pub fn sample_field(field: &FieldExpr, domain: &Domain, grid: UVec3, view: &ViewOptions) -> Vec<ArrowData> {
+pub fn sample_field_at(
+    field: &FieldExpr,
+    domain: &Domain,
+    grid: UVec3,
+    view: &ViewOptions,
+    t: f32,
+) -> Vec<ArrowData> {
     let mut sampled: Vec<(glam::Vec3, glam::Vec3, f32)> = Vec::new();
     for p in domain.grid_points(grid) {
-        let Some(v) = field.eval3(p) else { continue };
+        let Some(v) = field.eval3_at(p, t) else { continue };
         let mag = v.length();
         if mag < 1e-6 || !mag.is_finite() {
             continue;
@@ -74,5 +80,10 @@ pub fn sample_field(field: &FieldExpr, domain: &Domain, grid: UVec3, view: &View
             color: view.colormap.colormap(mag, cmin, cmax),
         })
         .collect()
+}
+
+/// Delegate to [`sample_field_at`] at `t = 0.0`.
+pub fn sample_field(field: &FieldExpr, domain: &Domain, grid: UVec3, view: &ViewOptions) -> Vec<ArrowData> {
+    sample_field_at(field, domain, grid, view, 0.0)
 }
 

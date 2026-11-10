@@ -768,6 +768,7 @@ fn exact_zero_velocity_respawns_immediately_in_both_toggle_states() {
             &domain,
             AdvectSettings {
                 dt: 0.01,
+                time: 0.0,
                 trail_len: 8,
                 loop_on_stagnation,
                 stagnation_seconds: 5.0,
@@ -795,6 +796,7 @@ fn stagnation_accumulates_and_respawns_at_the_threshold() {
     let mut cloud = Particles::with_positions(vec![start]);
     let settings = AdvectSettings {
         dt: 0.25,
+        time: 0.0,
         trail_len: 8,
         loop_on_stagnation: true,
         stagnation_seconds: 0.5,
@@ -825,6 +827,7 @@ fn stagnation_verdict_uses_speed_not_step_displacement() {
             &domain,
             AdvectSettings {
                 dt,
+                time: 0.0,
                 trail_len: 0,
                 loop_on_stagnation: false,
                 stagnation_seconds: 5.0,
@@ -845,6 +848,7 @@ fn stagnation_never_respawns_when_looping_is_off() {
     let mut cloud = Particles::with_positions(vec![start]);
     let settings = AdvectSettings {
         dt: 0.01,
+        time: 0.0,
         trail_len: 0,
         loop_on_stagnation: false,
         stagnation_seconds: 0.1,

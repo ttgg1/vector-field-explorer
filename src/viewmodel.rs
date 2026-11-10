@@ -12,8 +12,8 @@ use super::domain::Domain;
 use super::field::FieldExpr;
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
-use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field};
-use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace};
+use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at};
+use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace_at};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
@@ -268,12 +268,27 @@ pub struct State {
     /// Which sampled slice plane-by-plane mode highlights (ticket 23).
     pub plane: PlaneView,
     pub dirty: bool,
+    /// Transient simulated time mirrored from the clock. Not persisted.
+    pub time: f32,
 }
 
 impl State {
     /// Flag the state as needing a fresh scene, and report that it did.
     pub fn mark_dirty(self: &mut State) -> bool {
         self.dirty = true;
+        true
+    }
+
+    /// Mirror the clock's time into the state. Marks the state dirty only when
+    /// the field is time-dependent and `t` actually changed.
+    pub fn set_time(self: &mut State, t: f32) -> bool {
+        if self.time == t {
+            return false;
+        }
+        self.time = t;
+        if self.field.is_time_dependent() {
+            self.mark_dirty();
+        }
         true
     }
 
@@ -323,6 +338,7 @@ impl State {
             particle_appearance: ParticleAppearance::default(),
             plane: PlaneView::middle(grid),
             dirty: true,
+            time: 0.0,
         }
     }
 
@@ -737,7 +753,7 @@ impl State {
 
     /// Resample the field with this state's grid and colour settings.
     pub fn sample(self: &State) -> Vec<ArrowData> {
-        sample_field(&self.field, &self.domain, self.grid(), &self.view_options())
+        sample_field_at(&self.field, &self.domain, self.grid(), &self.view_options(), self.time)
     }
 
     /// Size of one grid cell along the tightest axis: arrow lengths are
@@ -896,11 +912,11 @@ impl State {
         range: (f32, f32),
     ) {
         let (lo, hi) = range;
-        let path = trace(&self.field, seed, &self.domain, opts);
+        let path = trace_at(&self.field, seed, &self.domain, opts, self.time);
         for i in 0..path.len().saturating_sub(1) {
             let pa = path[i];
             let pb = path[i + 1];
-            let mag = match self.field.eval3(pa) {
+            let mag = match self.field.eval3_at(pa, self.time) {
                 Some(v) => v.length(),
                 None => 0.0,
             };

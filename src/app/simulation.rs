@@ -12,6 +12,9 @@ impl VfApp {
         // cloud jump.
         self.clock
             .advance_for(&self.state, ctx.input(|input| input.stable_dt));
+        // Mirror the clock's t into the state so a time-dependent field's
+        // rebuild follows the clock automatically.
+        self.state.set_time(self.clock.time);
     }
 
     /// Frame phase: scene rebuild on a dirty state, particle advection and dot
@@ -97,6 +100,7 @@ impl VfApp {
                 &self.state.domain,
                 AdvectSettings {
                     dt: self.clock.step_dt(),
+                    time: self.state.time,
                     trail_len: appearance.trail_len,
                     loop_on_stagnation: appearance.loop_on_stagnation,
                     stagnation_seconds: appearance.stagnation_seconds,
@@ -105,7 +109,7 @@ impl VfApp {
             // The speed range is observed once per frame and shared by the dots
             // and trails, so both colour modes agree on the same cloud.
             let speeds = speed_range(&self.particles);
-            self.scene.dots = Arc::new(dot_instances(
+            self.scene.dots = Arc::new(dot_instances_at(
                 &self.particles,
                 &self.state.field,
                 &self.state.domain,
@@ -114,8 +118,9 @@ impl VfApp {
                 &appearance,
                 speeds,
                 self.state.particle_radius(spacing),
+                self.state.time,
             ));
-            self.scene.trails = Arc::new(trail_instances(
+            self.scene.trails = Arc::new(trail_instances_at(
                 &self.particles,
                 &self.state.field,
                 self.state.colormap,
@@ -123,6 +128,7 @@ impl VfApp {
                 &appearance,
                 speeds,
                 spacing,
+                self.state.time,
             ));
             log::trace!(
                 "particles: {} advected, {} dot instances, {} trail segments",

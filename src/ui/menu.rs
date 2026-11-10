@@ -355,6 +355,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             // but "Reset all controls" means a fresh session: time 0, playing,
             // 1x. The particle cloud itself is left alone.
             *ui.clock = SimClock::default();
+            ui.state.set_time(0.0);
             SideEffect::None
         }
         MenuAction::ToggleControls => {

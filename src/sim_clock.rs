@@ -33,6 +33,9 @@ pub struct SimClock {
     pub playing: bool,
     /// Time multiplier in [`MIN_SPEED`]..=[`MAX_SPEED`].
     pub speed: f32,
+    /// Optional loop period: when `Some`, `advance` wraps `time` into
+    /// `[0, period)` with a floor-modulo. `None` means no wrapping.
+    pub loop_period: Option<f32>,
     step: f32,
 }
 
@@ -42,6 +45,7 @@ impl Default for SimClock {
             time: 0.0,
             playing: true,
             speed: DEFAULT_SPEED,
+            loop_period: None,
             step: 0.0,
         }
     }
@@ -61,6 +65,13 @@ impl SimClock {
             dt.min(MAX_STEP) * sanitized_speed(self.speed)
         };
         self.time += self.step;
+        // Wrap into [0, period) with a floor-modulo when a period is set.
+        if let Some(period) = self.loop_period
+            && period.is_finite()
+            && period > 0.0
+        {
+            self.time = self.time - period * (self.time / period).floor();
+        }
     }
 
     /// Advance one frame only while [`should_animate`] holds. With no clock
@@ -99,6 +110,16 @@ impl SimClock {
         self.speed = sanitized_speed(speed);
     }
 
+    /// Set the loop period. A non-finite or non-positive value clears the loop
+    /// (sets it to `None`).
+    pub fn set_loop_period(&mut self, period: f32) {
+        self.loop_period = if period.is_finite() && period > 0.0 {
+            Some(period)
+        } else {
+            None
+        };
+    }
+
     /// Return time to zero without touching playback or speed. The particle
     /// cloud is untouched; the transport's reset-time button calls this.
     pub fn reset_time(&mut self) {
@@ -125,7 +146,7 @@ fn sanitized_speed(speed: f32) -> f32 {
 /// exists only in the 3D view. Ticket 39 extends this with time-dependent
 /// fields and ticket 38 with plots.
 pub fn has_clock_consumer(state: &State) -> bool {
-    state.particles && state.mode_3d
+    (state.particles && state.mode_3d) || state.field.is_time_dependent()
 }
 
 /// Whether the transport strip should be shown. Today that is exactly

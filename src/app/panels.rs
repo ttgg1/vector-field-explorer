@@ -109,7 +109,7 @@ impl VfApp {
             // same top panel directly under the formula row, and only while a
             // clock consumer exists (ticket 26).
             if crate::sim_clock::transport_visible(&self.state) {
-                crate::ui::transport::show(ui, &mut self.clock, false);
+                crate::ui::transport::show(ui, &mut self.clock, &self.state, false);
             }
         });
     }

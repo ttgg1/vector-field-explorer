@@ -48,8 +48,8 @@ fn inside(domain: &Domain, p: Vec3) -> bool {
 
 /// Field flow at `p`, negated for `sign < 0` (upstream tracing). Missing or
 /// non-finite evaluations read as the zero vector, which ends an integration.
-fn flow_at(field: &FieldExpr, p: Vec3, sign: f32) -> Vec3 {
-    match field.eval3(p) {
+fn flow_at(field: &FieldExpr, p: Vec3, sign: f32, t: f32) -> Vec3 {
+    match field.eval3_at(p, t) {
         Some(v) if v.is_finite() => v * sign,
         _ => Vec3::splat(0.0),
     }
@@ -62,22 +62,22 @@ fn flow_at(field: &FieldExpr, p: Vec3, sign: f32) -> Vec3 {
 /// arc length. Stops at the budget, where the flow vanishes, or on a step
 /// that leaves the domain or turns non-finite. Always returns at least
 /// `[start]`.
-fn integrate(field: &FieldExpr, start: Vec3, domain: &Domain, budget: usize, step_scale: f32, sign: f32) -> Vec<Vec3> {
+fn integrate(field: &FieldExpr, start: Vec3, domain: &Domain, budget: usize, step_scale: f32, sign: f32, t: f32) -> Vec<Vec3> {
     let mut line: Vec<Vec3> = vec![start];
     let mut p = start;
     while line.len() < budget {
-        let f0 = flow_at(field, p, sign);
+        let f0 = flow_at(field, p, sign, t);
         let mag = f0.length();
         if mag <= 0.0 {
             break;
         }
         let h = step_scale / mag;
         let k1 = p + f0 * (h * 0.5);
-        let f1 = flow_at(field, k1, sign);
+        let f1 = flow_at(field, k1, sign, t);
         let k2 = p + f1 * (h * 0.5);
-        let f2 = flow_at(field, k2, sign);
+        let f2 = flow_at(field, k2, sign, t);
         let k3 = p + f2 * h;
-        let f3 = flow_at(field, k3, sign);
+        let f3 = flow_at(field, k3, sign, t);
         let next = p + (f0 + f1 * 2.0 + f2 * 2.0 + f3) * (h / 6.0);
         if !next.is_finite() || !inside(domain, next) {
             break;
@@ -93,7 +93,7 @@ fn integrate(field: &FieldExpr, start: Vec3, domain: &Domain, budget: usize, ste
 /// zero. With `both_directions` the result is one continuous ordered path
 /// running farthest-upstream → seed → farthest-downstream: the seed is
 /// counted exactly once, so no zero-length segment can reach the renderer.
-pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineOpts) -> Vec<Vec3> {
+pub fn trace_at(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineOpts, t: f32) -> Vec<Vec3> {
     let cap = opts.max_len.min(MAX_STREAMLINE_POINTS);
     if cap == 0 || !inside(domain, start) {
         return Vec::new();
@@ -104,19 +104,24 @@ pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineO
         0.05
     };
     if !opts.both_directions {
-        return integrate(field, start, domain, cap, step_scale, 1.0);
+        return integrate(field, start, domain, cap, step_scale, 1.0, t);
     }
     // Spend the budget half upstream (rounded up), the rest downstream; the
     // seed itself is counted once, at the seam. The upstream walk runs
     // seed-outward, so reverse everything past the seed to lay the polyline
     // farthest-backward first, then append the downstream walk (which starts
     // at the seed).
-    let back = integrate(field, start, domain, cap.div_ceil(2), step_scale, -1.0);
-    let forward = integrate(field, start, domain, cap + 1 - back.len(), step_scale, 1.0);
+    let back = integrate(field, start, domain, cap.div_ceil(2), step_scale, -1.0, t);
+    let forward = integrate(field, start, domain, cap + 1 - back.len(), step_scale, 1.0, t);
     let mut line: Vec<Vec3> = Vec::new();
     line.extend(back[1..].iter().rev().copied());
     line.extend(forward);
     line
+}
+
+/// Delegate to [`trace_at`] at `t = 0.0`.
+pub fn trace(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineOpts) -> Vec<Vec3> {
+    trace_at(field, start, domain, opts, 0.0)
 }
 
 /// Seed point for a click at `ndc_xy` in the 3D view: unproject the click with

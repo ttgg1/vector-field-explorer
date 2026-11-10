@@ -56,12 +56,12 @@ use crate::particles::{
     Particles,
     advect,
     clear,
-    dot_instances,
+    dot_instances_at,
     retarget,
     spawn,
     spawn_at,
     speed_range,
-    trail_instances,
+    trail_instances_at,
     count as particle_count,
 };
 

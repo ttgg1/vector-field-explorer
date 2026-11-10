@@ -452,7 +452,7 @@ fn the_transport_strip_shows_play_reset_time_and_speed_and_toggles() {
     let frame = |ctx: &egui::Context, clock: &mut SimClock, events: Vec<egui::Event>| {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
-            |ui| transport::show(ui, clock, false),
+            |ui| transport::show(ui, clock, &State::new(true), false),
         );
         output.textures_delta.clear();
         output
