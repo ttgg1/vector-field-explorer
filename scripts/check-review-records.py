@@ -5,9 +5,10 @@ import re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# Commits at/before this rule-introduction commit are grandfathered. Enforcement
-# starts after 9d68ba0; it is a child of the records-introduction commit.
-BASELINE_COMMIT = "0e43dcc"
+# Commits at/before this records-introduction commit are grandfathered. This
+# must be an ancestor of HEAD and reachable in a fresh clone (a commit on main),
+# never a commit available only through this worktree's reflog.
+BASELINE_COMMIT = "6b52ba8149ce4d4d1b71abc18c2c665cd392388e"
 TICKET_RE = re.compile(r"\(ticket\s+(\d+)\)", re.IGNORECASE)
 HASH_RE = re.compile(r"`([0-9a-fA-F]{4,40})`")
 
