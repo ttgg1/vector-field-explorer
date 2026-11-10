@@ -534,3 +534,75 @@ fn features_reset_leaves_the_transport_clock_alone() {
     assert_eq!(clock.speed, 2.7, "speed belongs to the transport, not Features");
     assert!(!clock.playing, "and Features reset never resumes playback");
 }
+
+#[test]
+fn loop_wraps_with_floor_modulo_including_negative() {
+    let mut clock = SimClock::default();
+    clock.set_speed(3.0);
+    clock.set_loop_period(10.0);
+    clock.time = 9.9;
+    clock.advance(0.05);
+    assert!((clock.time - 0.05).abs() < 1e-6, "wrapped into [0,10): {}", clock.time);
+
+    let mut clock2 = SimClock::default();
+    clock2.set_speed(3.0);
+    clock2.set_loop_period(10.0);
+    clock2.time = -9.9;
+    clock2.advance(0.05);
+    assert!(clock2.time >= 0.0 && clock2.time < 10.0, "negative wraps upward: {}", clock2.time);
+}
+
+#[test]
+fn loop_period_clamp_rejects_non_finite_and_non_positive() {
+    let mut clock = SimClock::default();
+    clock.set_loop_period(f32::NAN);
+    assert!(clock.loop_period.is_none());
+    clock.set_loop_period(f32::INFINITY);
+    assert!(clock.loop_period.is_none());
+    clock.set_loop_period(0.0);
+    assert!(clock.loop_period.is_none());
+    clock.set_loop_period(-5.0);
+    assert!(clock.loop_period.is_none());
+    clock.set_loop_period(4.0);
+    assert_eq!(clock.loop_period, Some(4.0));
+}
+
+#[test]
+fn paused_clock_does_not_advance_or_wrap() {
+    let mut clock = SimClock::default();
+    clock.set_loop_period(5.0);
+    clock.time = 4.9;
+    clock.set_playing(false);
+    clock.advance(1.0);
+    assert_eq!(clock.time, 4.9);
+    assert_eq!(clock.step_dt(), 0.0);
+}
+
+#[test]
+fn reset_time_keeps_loop_period_full_reset_clears() {
+    let mut clock = SimClock::default();
+    clock.set_loop_period(7.0);
+    clock.advance(3.0);
+    clock.reset_time();
+    assert_eq!(clock.time, 0.0);
+    assert_eq!(clock.loop_period, Some(7.0));
+
+    clock.set_loop_period(7.0);
+    clock.reset();
+    assert_eq!(clock.loop_period, None);
+}
+
+#[test]
+fn should_animate_true_for_time_dependent_field() {
+    let clock = SimClock::default();
+    let mut state = State::new(true);
+    state.set_formula("(cos(t), 0)".to_string());
+    assert!(state.field.is_time_dependent());
+    assert!(has_clock_consumer(&state));
+    assert!(transport_visible(&state));
+    assert!(should_animate(&state, &clock));
+
+    let mut paused = SimClock::default();
+    paused.set_playing(false);
+    assert!(!should_animate(&state, &paused));
+}

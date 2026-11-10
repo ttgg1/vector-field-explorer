@@ -82,10 +82,12 @@ pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: boo
             let mut looping = clock.loop_period.is_some();
             if ui.checkbox(&mut looping, "Loop").changed() {
                 if looping {
-                    clock.set_loop_period(clock.loop_period.unwrap_or(10.0));
-                    if clock.loop_period.is_none() {
-                        clock.set_loop_period(10.0);
-                    }
+                    let period = clock.loop_period.unwrap_or(10.0);
+                    clock.set_loop_period(period);
+                    // Wrap the already-elapsed time immediately so the readout
+                    // does not lag a frame.
+                    let p = clock.loop_period.unwrap_or(period);
+                    clock.time = clock.time - p * (clock.time / p).floor();
                 } else {
                     clock.set_loop_period(0.0);
                 }

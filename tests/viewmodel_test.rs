@@ -1193,3 +1193,45 @@ fn particle_appearance_setter_sanitizes_without_dirtying_the_scene() {
         "an unchanged appearance reports false",
     );
 }
+
+#[test]
+fn rebuilds_while_playing_and_time_dependent() {
+    let mut state = State::new(true);
+    state.set_formula("(cos(t), 0)".to_string());
+    assert!(state.field.is_time_dependent());
+    let _ = state.snapshot_if_dirty();
+    state.set_time(1.0);
+    assert!(state.dirty);
+    assert!(state.snapshot_if_dirty().is_some());
+}
+
+#[test]
+fn no_rebuild_when_paused_or_static() {
+    let mut static_state = State::new(true);
+    let _ = static_state.snapshot_if_dirty();
+    static_state.set_time(1.0);
+    assert!(!static_state.dirty);
+
+    let mut state = State::new(true);
+    state.set_formula("(cos(t), 0)".to_string());
+    let _ = state.snapshot_if_dirty();
+    state.set_time(0.0);
+    assert!(!state.dirty);
+}
+
+#[test]
+fn set_time_marks_dirty_only_when_changed_and_time_dependent() {
+    let mut state = State::new(true);
+    state.set_formula("(cos(t), 0)".to_string());
+    let _ = state.snapshot_if_dirty();
+    assert!(state.set_time(0.5));
+    assert!(state.dirty);
+    let _ = state.snapshot_if_dirty();
+    assert!(!state.set_time(0.5));
+    assert!(!state.dirty);
+
+    let mut static_state = State::new(true);
+    let _ = static_state.snapshot_if_dirty();
+    assert!(static_state.set_time(0.5));
+    assert!(!static_state.dirty);
+}

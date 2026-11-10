@@ -8,7 +8,7 @@ use glam::{UVec3, Vec3};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
-use vector_field_explorer::sampling::{ViewOptions, magnitude_range, sample_field};
+use vector_field_explorer::sampling::{ViewOptions, magnitude_range, sample_field, sample_field_at};
 
 fn opts(colormap: Colormap, color_range: Option<(f32, f32)>) -> ViewOptions {
     ViewOptions { colormap, color_range }
@@ -23,6 +23,28 @@ fn constant_field_fills_grid() {
         assert!(a.dir.distance(Vec3::X) < 1e-5, "dir must be unit +X");
         assert_eq!(a.mag, 1.0);
     }
+}
+
+#[test]
+fn sample_field_at_varies_with_t() {
+    let f = FieldExpr::parse("(cos(t), 0, 0)").expect("parses");
+    let domain = Domain::default();
+    let grid = UVec3::new(4, 4, 1);
+    let view = opts(Colormap::Mono, None);
+    let a = sample_field_at(&f, &domain, grid, &view, 0.0);
+    let b = sample_field_at(&f, &domain, grid, &view, 1.0);
+    assert_ne!(a, b);
+}
+
+#[test]
+fn sample_field_equals_t_zero() {
+    let f = FieldExpr::parse("(cos(t), 0, 0)").expect("parses");
+    let domain = Domain::default();
+    let grid = UVec3::new(4, 4, 1);
+    let view = opts(Colormap::Mono, None);
+    let a = sample_field(&f, &domain, grid, &view);
+    let b = sample_field_at(&f, &domain, grid, &view, 0.0);
+    assert_eq!(a, b);
 }
 
 #[test]

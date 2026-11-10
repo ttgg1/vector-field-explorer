@@ -11,7 +11,7 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::streamlines::{
     CLICK_BURST_REACH, CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, click_seed, ray_seed,
-    seed_grid, trace,
+    seed_grid, trace, trace_at,
 };
 
 /// Inclusive axis-aligned containment (Domain has no `contains` method).
@@ -382,4 +382,24 @@ fn burst_seeds_skip_clicks_off_the_field() {
     let domain = Domain::default();
     assert!(burst_seeds(Vec3::new(5.0, 0.0, 0.0), &domain, 4, 3).is_empty(), "off the domain seeds nothing");
     assert!(burst_seeds(Vec3::ZERO, &domain, 0, 3).is_empty(), "no burst for an empty request");
+}
+
+#[test]
+fn trace_at_varies_with_t() {
+    let f = FieldExpr::parse("(cos(t), 0, 0)").expect("parses");
+    let domain = Domain::default();
+    let opts = StreamlineOpts { max_len: 10, step_scale: 0.1, both_directions: false };
+    let a = trace_at(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts, 0.0);
+    let b = trace_at(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts, 1.0);
+    assert_ne!(a, b);
+}
+
+#[test]
+fn trace_equals_t_zero() {
+    let f = FieldExpr::parse("(cos(t), 0, 0)").expect("parses");
+    let domain = Domain::default();
+    let opts = StreamlineOpts { max_len: 10, step_scale: 0.1, both_directions: false };
+    let a = trace(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts);
+    let b = trace_at(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts, 0.0);
+    assert_eq!(a, b);
 }
