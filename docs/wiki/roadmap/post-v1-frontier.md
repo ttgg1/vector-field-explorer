@@ -5,9 +5,10 @@
 At base `703e77e9cc983aaa4124b41b5ec0603d7e745edf`, the owner approved
 exmex-based native CAS and deferred CAS wasm support. Tickets 73 (adapter/math)
 and 75 (native panel) are proposed just-in-time slices from ticket 55, not new
-global roadmap phases. The adapter is file-disjoint from Phase 1 source work
-and may proceed alongside it after ownership checks; it is not a Phase 1 gate.
-The adapter must be complete before Phase 3 induction. The panel follows
+global roadmap phases. CAS math and Phase 1 source math may proceed alongside
+each other; the adapter is not a Phase 1 gate. Their `src/lib.rs` and
+`tests/suite.rs` registrations overlap and need exclusive ownership or serial
+edits. The adapter must be complete before Phase 3 induction. The panel follows
 ticket 71's active UI follow-up to avoid file contention. Both tickets are
 blocked on independent builder review of the exact symbolic grammar/printer
 boundary. The ticket files are
