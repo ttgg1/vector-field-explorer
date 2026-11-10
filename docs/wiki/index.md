@@ -22,6 +22,9 @@ commits, reports, review packages) are cited, never copied.
 
 ## Decisions
 
+- [Native CAS scope and sequencing (2026-11-10)](decisions/2026-11-10-native-cas.md)
+  — exmex is selected for native-only CAS; the panel workflow is approved,
+  while the exact symbolic grammar/printer gate remains for builder review.
 - [Seat model availability (2026-11-10)](decisions/2026-11-10-seat-model-availability.md)
   — the latest user ruling assigns controller/reviewers and implementers to
   distinct seats; implementer effort follows task difficulty, review effort
