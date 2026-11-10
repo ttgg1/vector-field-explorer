@@ -325,6 +325,19 @@ fn css_brand_breakpoint(css: &str) -> f32 {
         .expect("the breakpoint is numeric")
 }
 
+fn css_hides_brand_header(css: &str, breakpoint: f32) -> bool {
+    let css = css.replace("\r\n", "\n");
+    css.contains(&format!("@media (max-width: {breakpoint:.0}px)"))
+        && css.contains("header.brand {\n    display: none;")
+}
+
+#[test]
+fn header_boundary_assertion_accepts_windows_line_endings() {
+    let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
+    let windows_css = css.replace('\n', "\r\n");
+    assert!(css_hides_brand_header(&windows_css, 700.0));
+}
+
 #[test]
 fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases() {
     let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
@@ -332,8 +345,7 @@ fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases(
     assert_eq!(css_breakpoint, 700.0, "the approved web CSS breakpoint remains 700 CSS px");
     assert_eq!(COMPACT_WIDTH, 700.0, "the native/egui root-width breakpoint remains 700 pt");
     assert!(
-        css.contains(&format!("@media (max-width: {css_breakpoint:.0}px)"))
-            && css.contains("header.brand {\n    display: none;"),
+        css_hides_brand_header(&css, css_breakpoint),
         "the complete page header is hidden at the parsed CSS viewport boundary"
     );
 
