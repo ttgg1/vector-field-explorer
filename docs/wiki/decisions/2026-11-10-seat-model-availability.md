@@ -1,5 +1,22 @@
 # Seat model availability — 2026-11-10
 
+## Update (latest on 2026-11-10) — effort follows task difficulty
+
+This update supersedes the "step the variant up at every fix round" rule
+below.
+
+The user ruled that the **implementer seat's effort variant is chosen by the
+difficulty of the task**, not by the review round: `openai/gpt-6-luna#low`
+for a narrow mechanical change (a fix round with a clear file list, a
+documentation edit, a small well-specified slice), `#medium` for ordinary
+feature work, `#high` for a wide or subtle task. The **review seat's
+variant is chosen by the scope of the review** — a scoped re-review of a few
+findings is lighter than a whole-task review.
+
+A repeated finding no longer raises the effort automatically. What it changes
+is the *seat*: if the same finding comes back twice, resume a different,
+stronger implementer rather than repeating the same seat at the same effort.
+
 ## Update (later on 2026-11-10) — reviewer/implementer split
 
 This update supersedes the earlier single-seat rule and conditional preference

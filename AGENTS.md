@@ -189,12 +189,20 @@ the task brief, never the whole plan.
 **Models — always pass explicitly; never inherit silently.**
 
 - **Chief of staff (the controller):** `openai/gpt-6.1-sol#medium`.
-- **Implementer seats:** `openai/gpt-6-luna#low`.
-- **Review seats:** `openai/gpt-6.1-sol#medium`.
-- **Escalate the effort when a seat needs it.** At the second fix round step
-  the variant up one level (low → medium → high), and step up again at every
-  further round. A round that returns the same finding is a signal to
-  escalate, not to repeat the same seat at the same effort.
+- **Implementer seats:** `openai/gpt-6-luna`, with the **variant chosen by
+  the difficulty of the task** — `#low` for a narrow, mechanical change
+  (a fix round with a clear file list, a documentation edit, a small
+  well-specified slice); `#medium` for ordinary feature work; `#high` for a
+  wide or subtle task (a new subsystem, a rendering or input change, a
+  spec-shaped task with several interacting requirements).
+- **Review seats:** `openai/gpt-6.1-sol`, with the **variant chosen by the
+  scope of the review** — `#medium` for a scoped re-review of a few
+  findings, `#high` for a whole-task review or a whole-branch review.
+- **Do not scale effort with the review round.** A second fix round is not
+  by itself a reason to raise the implementer's effort. Scale it with the
+  task. What a repeated finding does change is the *seat*: if the same
+  finding comes back twice, resume a different, stronger seat rather than
+  repeating the same one.
 - **Fallback seats:** the older free models (`opencode-go/beam-free`,
   `opencode-go/longcat-2.5-free`) when an `openai` seat is unavailable. Every
   `opencode-go` paid model fails with "Policy budget exceeded" (verified
