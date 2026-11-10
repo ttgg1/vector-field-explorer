@@ -1,6 +1,17 @@
 # Seat model availability — 2026-11-10
 
-## The claim
+## Update (later on 2026-11-10) — reviewer/implementer split
+
+Superseding the "use beam-free for everything" guidance below, the user ruled
+that **reviewers run on `opencode-go/longcat-2.5-free`** (effort matched to
+the scope of the review: a scoped re-review is less effort than a whole-branch
+review) and **implementers run on `opencode-go/beam-free`** at `#high`, a
+higher variant (`#xhigh`, `#max`) for the bigger tasks. Reasoning: the free
+seats are the only ones that dispatch here, and giving the review a different
+model from the one that wrote the code is worth more than a stronger single
+model.
+
+## The claim (first ruling on 2026-11-10)
 
 On 2026-11-10, in this workspace, `opencode-go/beam-free` is the **only**
 subagent seat model that dispatches successfully. Every paid seat fails

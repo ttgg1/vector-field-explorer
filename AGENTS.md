@@ -175,17 +175,17 @@ Scripts and prompt templates:
 
 **Models — always pass explicitly; never inherit silently.**
 
-- **Available seats (verified 2026-11-10):** `opencode-go/beam-free` is the
-  only seat model that runs in this workspace. Every paid seat fails at
-  dispatch with "Policy budget exceeded": `opencode-go/claude-haiku-5-5`,
-  `opencode-go/deepseek-v4.1-flash` and `opencode/claude-haiku-5-5` were all
-  confirmed failing. Use `opencode-go/beam-free#high` for coding, review and
-  re-review seats alike.
-- **If a paid seat ever becomes available again:** coding
-  `opencode-go/deepseek-v4.1-flash` (`#high` complex, `#max` when stuck twice),
-  review `opencode-go/claude-haiku-5-5#high`. Do not re-try a seat that has
-  failed with "Policy budget exceeded" — re-scope the task or split it instead
-  of escalating to another blocked model. No kimi k3.x seats.
+- **Review seats:** `opencode-go/longcat-2.5-free`, with the effort level
+  matched to the scope of the review (a scoped re-review is a smaller effort
+  than a whole-branch review).
+- **Implementer seats:** `opencode-go/beam-free`, variant `#high` for ordinary
+  work and a higher variant (`#xhigh`, `#max`) for the bigger tasks.
+- **Paid seats are blocked in this workspace (verified 2026-11-10).** Every
+  paid model fails at dispatch with "Policy budget exceeded":
+  `opencode-go/claude-haiku-5-5`, `opencode-go/deepseek-v4.1-flash` and
+  `opencode/claude-haiku-5-5` were all confirmed failing. Do not re-try a
+  seat that failed that way — re-scope the task or split it instead of
+  escalating to another blocked model. No kimi k3.x seats.
 - **Usage limits:** when a seat's model hits its usage limit, switch that seat
   to `opencode-go/beam-free` (free) instead of waiting, retrying, or moving to
   kimi. This applies to coding and review seats alike.
