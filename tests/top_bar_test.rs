@@ -83,10 +83,14 @@ impl Harness {
 
     /// One headless pass running the compact bar (ticket 53).
     fn compact_frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+        self.compact_frame_at(360.0, events)
+    }
+
+    fn compact_frame_at(&mut self, width: f32, events: Vec<egui::Event>) -> egui::FullOutput {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
-                egui::vec2(360.0, 640.0),
+                egui::vec2(width, 640.0),
             )),
             events,
             ..Default::default()
@@ -126,6 +130,58 @@ fn wide_top_bar_svg_button_dispatches_export_in_2d() {
         .rect;
     h.click(control.center());
     assert_eq!(h.action, Some(MenuAction::ExportScreenshotSvg));
+}
+
+#[test]
+fn compact_bar_controls_do_not_overlap_at_phone_widths() {
+    let mut h = Harness::new(false);
+    for width in [320.0, 360.0, 390.0] {
+        let out = h.compact_frame_at(width, Vec::new());
+        let controls: Vec<_> = nodes(&out)
+            .into_iter()
+            .filter(|node| {
+                [HAMBURGER_LABEL, "GitHub", "Screenshot", "Screenshot as SVG"]
+                    .contains(&node.label.as_deref().unwrap_or_default())
+            })
+            .collect();
+        assert!(controls.iter().any(|node| node.label.as_deref() == Some(HAMBURGER_LABEL)));
+        for control in &controls {
+            assert!(
+                control.rect.left() >= 0.0 && control.rect.right() <= width,
+                "compact control clips at {width} pt: {:?} {:?}",
+                control.label,
+                control.rect,
+            );
+        }
+        for (index, control) in controls.iter().enumerate() {
+            for other in &controls[index + 1..] {
+                assert!(
+                    !control.rect.intersects(other.rect),
+                    "compact controls overlap at {width} pt: {:?} {:?} vs {:?} {:?}",
+                    control.label,
+                    control.rect,
+                    other.label,
+                    other.rect,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn screenshot_notice_is_rendered_once_per_bar() {
+    let mut h = Harness::new(false);
+    h.screenshot.notify("single screenshot notice".to_string(), false);
+    let out = h.idle();
+    let count = nodes(&out)
+        .iter()
+        .filter(|node| {
+            node.role == egui::Role::Label
+                && (node.label.as_deref() == Some("single screenshot notice")
+                    || node.value.as_deref() == Some("single screenshot notice"))
+        })
+        .count();
+    assert_eq!(count, 1, "one shared notice is painted once");
 }
 
 #[test]

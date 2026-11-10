@@ -330,14 +330,12 @@ fn screenshot_button(ui: &mut egui::Ui, screenshot: &Screenshot) -> bool {
     clicked
 }
 
-fn screenshot_svg_button(ui: &mut egui::Ui, screenshot: &Screenshot, mode_3d: bool) -> bool {
+fn screenshot_svg_button(ui: &mut egui::Ui, mode_3d: bool) -> bool {
     let enabled = crate::screenshot::svg_export_enabled(mode_3d);
-    let clicked = ui
+    ui
         .add_enabled(enabled, egui::Button::new("Screenshot as SVG"))
         .on_hover_text("Save the 2D viewport as a vector SVG")
-        .clicked();
-    screenshot.toast(ui);
-    clicked
+        .clicked()
 }
 
 /// The Appearance popover anchored to the gear, including ticket 41's
@@ -437,7 +435,7 @@ pub fn show(
             if screenshot_button(ui, screenshot) {
                 action = Some(MenuAction::ExportScreenshot);
             }
-            if screenshot_svg_button(ui, screenshot, mode_3d) {
+            if screenshot_svg_button(ui, mode_3d) {
                 action = Some(MenuAction::ExportScreenshotSvg);
             }
         });
@@ -501,9 +499,6 @@ pub fn show_compact(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if screenshot_button(ui, screenshot) {
                 action = Some(MenuAction::ExportScreenshot);
-            }
-            if screenshot_svg_button(ui, screenshot, mode_3d) {
-                action = Some(MenuAction::ExportScreenshotSvg);
             }
         });
     });
