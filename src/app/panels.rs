@@ -315,7 +315,7 @@ impl VfApp {
         egui::Panel::bottom("compact_tab_bar")
             .exact_size(layout::TAB_BAR_HEIGHT)
             .show(ui, |ui| {
-                ui.spacing_mut().interact_size.y = layout::TOUCH_TARGET;
+                ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
                 ui.horizontal(|ui| {
                     let spacing = ui.spacing().item_spacing.x;
                     let close_width = if self.sheet.is_open() {
@@ -361,6 +361,7 @@ impl VfApp {
                             .clicked()
                     {
                         self.sheet.close();
+                        self.sheet_expanded = SheetSize::Default;
                     }
                 });
             });
@@ -397,7 +398,7 @@ impl VfApp {
         egui::Panel::bottom("compact_sheet")
             .exact_size(height)
             .show(ui, |ui| {
-                ui.spacing_mut().interact_size.y = layout::TOUCH_TARGET;
+                ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
                 let title = match sheet {
                     SheetState::Controls => "Controls",
                     SheetState::Presets => "Presets",
@@ -451,6 +452,12 @@ impl VfApp {
                 egui::ScrollArea::vertical().show(ui, |ui| match sheet {
                     SheetState::Controls => {
                         crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+                        ui.separator();
+                        ui.label(egui::RichText::new("Appearance").strong());
+                        let controls = crate::ui::style_panel::show_controls(ui, &mut self.style);
+                        if controls.changed {
+                            crate::ui::style_panel::apply(ui.ctx(), &self.style);
+                        }
                     }
                     SheetState::Presets => {
                         camera_request =

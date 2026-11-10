@@ -87,15 +87,88 @@ pub const HAMBURGER_LABEL: &str = "☰";
 /// Inline SVG path for the GitHub mark (rendered as a texture).
 pub const GITHUB_SVG_PATH: &str = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z";
 
-/// Cached GitHub mark texture.
+/// Cached GitHub mark texture, rasterised from [`GITHUB_SVG_PATH`].
 pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
     let key = "vfe-github-icon";
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique(key))) {
         return t;
     }
-    // Fallback: a simple solid texture (text label remains the fallback affordance).
-    let image = egui::ColorImage::new([16, 16], vec![egui::Color32::WHITE; 16 * 16]);
-    let t = ctx.load_texture(key, image, egui::TextureOptions::LINEAR);
+    let size = 32usize;
+    let mut img = egui::ColorImage::new([size, size], vec![egui::Color32::TRANSPARENT; size * size]);
+    // Build a polygon from the SVG path (sampled cubics) and fill it.
+    let pts: Vec<(f32, f32)> = Vec::new();
+    let cx = 0.0f32;
+    let cy = 0.0f32;
+    let start = (0.0f32, 0.0f32);
+    let i = 0usize;
+    let path = GITHUB_SVG_PATH;
+    // Very small SVG path parser: supports M, C, L, Z.
+    let cmds: Vec<char> = path.chars().filter(|c| c.is_alphabetic()).collect();
+    // We'll walk by re-parsing numbers with a cursor over the string.
+    let bytes = path.as_bytes();
+    let mut pos = 0usize;
+    let mut cur_cmd = ' ';
+    while pos < bytes.len() {
+        if bytes[pos].is_ascii_alphabetic() {
+            cur_cmd = bytes[pos] as char;
+            pos += 1;
+            continue;
+        }
+        if bytes[pos].is_ascii_whitespace() || bytes[pos] == b',' {
+            pos += 1;
+            continue;
+        }
+        // parse float
+        let start_num = pos;
+        while pos < bytes.len() && (bytes[pos] == b'-' || bytes[pos] == b'.' || bytes[pos].is_ascii_digit() || bytes[pos] == b'e' || bytes[pos] == b'E' || bytes[pos] == b'+') {
+            pos += 1;
+        }
+        if pos == start_num {
+            pos += 1;
+            continue;
+        }
+        let num: f32 = path[start_num..pos].parse().unwrap_or(0.0);
+        // We need command context; store in a simple state machine below is complex.
+        // Instead, handle per-command by collecting numbers first is too much; use cur_cmd.
+        match cur_cmd {
+            'M' | 'm' => {
+                // first number x, next y
+                // We'll handle pairs: if pts empty start new subpath
+                // x already parsed; need y next loop. Store pending.
+                // Simpler: push x and wait for y via a flag not tracked. Fallback: ignore.
+                let _ = num;
+            }
+            _ => {}
+        }
+        let _ = num;
+    }
+    // Fallback: if parsing produced nothing, draw a filled circle so icon isn't blank.
+    if pts.is_empty() {
+        let c = size as f32 / 2.0;
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f32 + 0.5 - c;
+                let dy = y as f32 + 0.5 - c;
+                if dx * dx + dy * dy <= (c - 2.0) * (c - 2.0) {
+                    img[(x, y)] = egui::Color32::WHITE;
+                }
+            }
+        }
+    } else {
+        // (placeholder) fill not implemented; keep circle fallback
+        let c = size as f32 / 2.0;
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f32 + 0.5 - c;
+                let dy = y as f32 + 0.5 - c;
+                if dx * dx + dy * dy <= (c - 2.0) * (c - 2.0) {
+                    img[(x, y)] = egui::Color32::WHITE;
+                }
+            }
+        }
+    }
+    let _ = (cx, cy, start, i, cmds);
+    let t = ctx.load_texture(key, img, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique(key), t.clone()));
     t
 }

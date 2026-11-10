@@ -258,8 +258,16 @@ fn the_compact_bar_renders_hamburger_github_and_screenshot() {
     }
 
     assert!(
+        published.iter().any(|n| n.role == egui::Role::Image),
+        "the compact bar shows the logo"
+    );
+    assert!(
         labelled(&published, egui::Role::Button, HAMBURGER_LABEL).is_some(),
         "the compact bar has a hamburger menu button"
+    );
+    assert!(
+        labelled(&published, egui::Role::Button, APPEARANCE_BUTTON_LABEL).is_none(),
+        "the compact bar has no Appearance gear"
     );
     assert!(
         labelled(&published, egui::Role::Button, "GitHub").is_some(),
