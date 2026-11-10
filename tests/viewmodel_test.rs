@@ -3,6 +3,7 @@
 // parsing, the dirty flag and the scene snapshots the viewport paints.
 
 use glam::{Mat4, Vec3};
+use crate::support;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
@@ -1226,11 +1227,18 @@ fn no_rebuild_when_paused() {
     let mut state = State::new(true);
     state.set_formula("(cos(t), 0)".to_string());
     let _ = state.snapshot_if_dirty();
+    let ctx = support::context();
+    for _ in 0..3 {
+        support::run_empty_pass(&ctx);
+    }
+    assert!(!ctx.has_requested_repaint(), "baseline context must be idle");
     clock.set_playing(false);
     // Paused clock does not advance; mirror its (unchanged) time.
     clock.advance_for(&state, 0.05);
     state.set_time(clock.time);
     assert!(!state.dirty, "paused view must not mark dirty");
+    vector_field_explorer::ui::transport::request_particle_repaint(&ctx, &state, &clock);
+    assert!(!ctx.has_requested_repaint(), "paused view must not request repaint");
 }
 
 #[test]
