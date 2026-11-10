@@ -320,6 +320,8 @@ pub fn particle_count_label(count: u32) -> String {
 /// scene dirty (and the status bar counts the scene the user actually sees).
 #[derive(Debug, Clone)]
 pub struct Controls {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cas: crate::ui::cas_panel::CasPanelState,
     pub density: u32,
     pub arrow_scale: f32,
     /// Global arrow de-emphasis (ticket 36).
@@ -375,6 +377,8 @@ impl Controls {
     pub fn new() -> Controls {
         let domain = Domain::default();
         Controls {
+            #[cfg(not(target_arch = "wasm32"))]
+            cas: crate::ui::cas_panel::CasPanelState::default(),
             density: DEFAULT_DENSITY_2D,
             arrow_scale: 1.0,
             arrow_opacity: MAX_ARROW_OPACITY,
@@ -913,6 +917,9 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
             }
         },
     );
+
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::ui::cas_panel::show(ui, state, &mut controls.cas);
 
     // Hand the whole mirror to the seam (below); the rebuild that the dirty
     // flag asks for happens in app.rs right after this panel, so this frame's

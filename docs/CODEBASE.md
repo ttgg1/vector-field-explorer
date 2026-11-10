@@ -1409,10 +1409,18 @@ thread.
 
 #### `src/ui/mod.rs` — UI module list
 
-Declares `branding`, `formula_bar`, `help_overlay`, `layout`, `menu`, `presets`,
-`sidebar`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
+`layout`, `menu`, `presets`, `sidebar`, `status_bar`, `style_panel`, `top_bar`,
+`transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
+
+#### `src/ui/cas_panel.rs` — native symbolic tools
+
+Native-only Controls section for transient scalar/vector formula input,
+operation preview, copy, and explicitly applying validated vector results.
+Preview identity includes input, operation, variable, and the current app mode;
+CAS scratch is not persisted.
 
 #### `src/ui/arrows.rs` — unused placeholder (not compiled)
 
