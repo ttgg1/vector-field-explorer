@@ -39,5 +39,7 @@ commits, reports, review packages) are cited, never copied.
 
 ## Reviews
 
+- [Review records](process/review-records.md) — format, location, and CI enforcement.
+
 - [Tickets 69/70/71 review round 1 (2026-11-10)](reviews/tickets-69-71-round-1.md)
   — the round-1 findings snapshot; later dispositions are in the SDD ledger.

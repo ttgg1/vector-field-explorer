@@ -16,6 +16,15 @@ jobs:
       - name: Check documentation drift
         run: python3 scripts/check-docs.py
 
+  review-records:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check review records
+        run: python3 scripts/check-review-records.py
+
   build:
     runs-on: ubuntu-latest
     steps:

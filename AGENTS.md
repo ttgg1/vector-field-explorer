@@ -74,6 +74,7 @@ Production code is under `src/`, tests under `tests/`.
 - `ui/` sidebar, presets, formula bar, style panel, menu, top bar, layout rails,
   help overlay, status bar
 - `references/` SDD fix-loop procedure and review-round guidance
+- `docs/reviews/` reviewed ticket commit records
 
 ## Conventions (mandatory)
 
@@ -107,6 +108,7 @@ Production code is under `src/`, tests under `tests/`.
   there is no separate runner requirement.
 - **Commits:** `feat:` / `fix:` / `docs:`, one commit set per task. Never ledger
   a task without a `git rev-parse`-verifiable hash.
+- **Review enforcement:** a commit whose subject claims `(ticket NN)` must be named by a record under `docs/reviews/`, or CI fails.
 - **Ledger first:** progress and every `Ruling: <decision> — <why>` go in the SDD
   ledger, not only in todos or chat.
 - **Ticket creation from feedback:** before filing tickets from a user issue
