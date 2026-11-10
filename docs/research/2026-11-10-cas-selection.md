@@ -2,7 +2,7 @@
 
 ## Result
 
-**Recommendation: proceed to a tightly scoped in-house differentiator over `meval`'s public tokenizer/RPN, after a dedicated implementation ticket and tests. Do not select/adopt an engine from this spike.** The first candidate, `exmex` 0.21.0, differentiated real expressions, but its printed expression dialect is not `meval`-compatible: the observed derivative uses `{y}` and `{x}` while the app grammar takes bare variable identifiers. Its parser/variable behavior and extra evaluator surface also create an adapter burden contrary to the accepted one-grammar boundary. `symcas` 0.1.1 offers more algebra than the product needs, parses/prints its own “plain” grammar, and could not be proved to roundtrip to `meval` grammar here. An in-house AST/RPN rewrite can preserve `meval` as the only evaluator and tightly constrain simplification/output, but that is an engineering recommendation, not a demonstrated implementation or cost measurement.
+**Conclusion: inconclusive shortlist; no candidate is selected.** Host checks now demonstrate useful differentiation for both exmex 0.21.0 and symcas 0.1.1, including meval parsing/evaluation of their outputs on tested formulas. A narrow lexical adapter removes exmex’s braces safely for the tested identifier set; brace output alone is not a disqualifier. However, neither candidate has complete grammar, numerical, and composition coverage, no in-house prototype was built, and measured wasm size differs substantially. These results are enough to retain both as options, not enough to select either. Do not create implementation work from this spike alone.
 
 No product dependency, manifest, lockfile, or source was changed. This is a recommendation-only spike, not adoption or completion of the CAS track.
 
@@ -15,44 +15,51 @@ Ticket 55 requires x/y/z/t derivatives, gradient/divergence/curl, minimal simpli
 ### exmex
 
 - Exact crate: [`exmex` 0.21.0](https://crates.io/crates/exmex/0.21.0); upstream [repository](https://github.com/bertiqwerty/exmex/), [docs](https://docs.rs/exmex/0.21.0/). Crate metadata says `MIT OR Apache-2.0`, Rust 1.80.1; source manifest enables `partial` independently and has a direct `regex = 1.12.3` requirement (Cargo resolved regex 1.13.1 here). This dual license is compatible with GPL-3.0-only. Primary sources: crates.io metadata and the downloaded [0.21.0 manifest](https://github.com/bertiqwerty/exmex/blob/v0.21.0/Cargo.toml).
-- Actual host experiment: enabled `partial`, parsed `sin(x)*y + z^2 + t`, called `FlatEx::<f64>::partial(index)`, and compiled/ran successfully in release mode. Output for tested indices included `1.0`, `{y}*cos({x})`, `sin({x})`, `{z}*2.0`; this demonstrates differentiation, but also surfaces an output dialect mismatch. This tiny probe did not verify reliable x/y/z/t index mapping, equivalence against meval, composition, simplification policy, or identities. `Differentiate` is publicly re-exported from the prelude; the optional feature is explicitly required.
-- The upstream README describes exmex as both evaluator and differentiator; the product would need to use only its transformation facilities and evaluate emitted strings through meval. The observed braces mean output cannot be fed to meval unchanged. A robust output adapter/grammar contract would be required.
-- The accepted epic’s prior “roughly 1.5–1.7 MB regex” claim was not reproduced as binary-size evidence in this spike. A measured wasm size delta is **unavailable** (see wasm below), so do not treat that estimate as a result.
+- Host mapping probe: `x + 2*y + 3*z + 5*t` reports variables in order `["t", "x", "y", "z"]`, not the product x/y/z/t order. Looking up each name in the exposed `var_names()` then differentiating by the resulting index produced `dx=1.0`, `dy=2.0`, `dz=3.0`, `dt=5.0`; explicit lookup is reliable for this case, positional assumptions are not. `Differentiate` is publicly re-exported; feature `partial` is required.
+- Tested an adapter that strips braces only around identifiers in `{x,y,z,t}`, rejects any other braced name, and then parses/evaluates the emitted expression through meval. For `sin(x)*y + z^2 + t`, normalized derivatives `y*cos(x)`, `sin(x)`, `2.0*z`, `1.0` were accepted by meval; finite-difference checks passed for representative `sin`, `exp`, polynomial, and time-variable expressions (details below). This establishes a viable minimal adapter for the sampled output—not a full printer/grammar guarantee. A proper implementation should operate on structured identifiers or rigorously tokenize output; blind global brace replacement is not approved.
+- Equivalent tiny release cdylib harness measured a raw wasm delta of 1,543,870 bytes and gzip-9 delta of 437,161 bytes over meval-only baseline. The crate’s regex and parser code are included; this is wrapper-level evidence, not the full app release delta.
 
 ### symcas
 
 - Exact crate: [`symcas` 0.1.1](https://crates.io/crates/symcas/0.1.1); upstream [repository](https://github.com/cislunarspace/cas), [docs](https://docs.rs/symcas/0.1.1/). Crates.io reports `MIT OR Apache-2.0`, Rust 1.85. Its README’s license section confirms either MIT or Apache-2.0. The facade is split across `symcas`, `cas-domain`, `cas-expr`, `cas-print`, and `cas-parse` crates.
 - Upstream README documents `Context::diff` and deterministic `plain` formatting/roundtrip within its own parser. It also advertises exact rational arithmetic, polynomial GCD/factorization, assumptions, Taylor series, and simplification—substantially beyond the required minimal differentiation slice.
-- It has its own symbolic expression grammar and printer. Compatibility with `meval` grammar, the accepted function/operator subset, x/y/z/t composition, and evaluator equivalence were **not tested**. Treating its `plain` roundtrip as proof of meval compatibility would be incorrect. We did not build or size it.
-- It is young (0.1.1); the crate metadata’s Rust 1.85 floor satisfies the local toolchain but should be checked against project MSRV before any future consideration. No conclusion about wasm readiness was measured.
+- Host interoperability probe parsed three comparable formulas with symcas, differentiated each with respect to x/y/z/t, formatted with `plain`, then passed every derivative string through meval at a sample point. All outputs parsed/evaluated, including `y*cos(x)`, `2*z`, and absent-variable `0`; this is actual evidence for the sampled grammar subset. No finite-difference or gradient/vector-identity test was run against symcas.
+- An equivalent tiny release cdylib with symcas differentiating `sin(x)*x + x^2` and meval evaluating its printed derivative built for wasm. Raw size was 367,569 bytes (242,536-byte delta from baseline); gzip-9 was 124,622 bytes (71,637-byte delta). This proves this small configuration builds, not complete app wasm or runtime behavior. It is young (0.1.1), with reported Rust 1.85 minimum; check project MSRV before any future consideration.
 
 ### in-house over meval public tokens/RPN
 
-- The exact current evaluator crate is [`meval` 0.2.0](https://crates.io/crates/meval/0.2.0), [repository](https://github.com/rekka/meval). Its published source exposes `tokenizer::Token` and public `tokenize`; token kinds include numbers, variables, functions with arity, unary/binary operators, parentheses, and commas. This is concrete evidence for a parser/token-level seam without private internals.
-- No in-house prototype was implemented in this spike. An implementation would need to parse/tokenize into an owned expression tree (or use public RPN conversion if confirmed in the exact API), recursively differentiate, then print only validated meval syntax. It must explicitly test precedence/associativity, unary minus, function arities, implicit multiplication, constants, and unsupported functions/operators. Public tokens alone do not demonstrate that this is “easy” or correct.
+- Exact API/source confirmed: meval 0.2.0 exposes `pub mod tokenizer`, `pub fn tokenize`, `pub mod shunting_yard`, and `pub fn to_rpn` in `src/shunting_yard.rs`; `Expr` dereferences to `[Token]`, exposing stored RPN. The token enum includes numbers, variables, functions/arity, unary/binary operators and delimiters. This establishes a public RPN seam; it does not prove a differentiator would be small/correct. No in-house prototype was implemented.
 - This route avoids adding a production CAS dependency and makes grammar equivalence structurally controllable. It still entails a new parser/AST/printer and a long-term maintenance burden. Prefer a minimal rewrite rule set and fail closed for unsupported differentiation rules; do not silently fall back to numerical derivatives.
 
 ## Required composition and verification status
 
-Gradient, divergence and curl can be built by composing scalar derivatives of vector components; no candidate was wired through these operators. No finite-difference comparison, vector identity test, meval parse/evaluation equivalence test, or complete x/y/z/t variable mapping test was completed. Thus these requirements remain unproven for every candidate. Suggested follow-up acceptance includes:
+For exmex, explicit x/y/z/t mapping passed on a weighted linear expression. Meval accepted and evaluated brace-normalized derivatives for representative smooth expressions; central finite differences (step `1e-6`) agreed within `2e-6` for `sin(x)*y + z^2 + t` w.r.t. x, `exp(x*y)+cos(z)+t^2` w.r.t. y, and `x^3+y^2*z+sin(t)` w.r.t. z. A throwaway composition harness formed gradient and curl components by repeated scalar differentiation; `curl(grad f)` and `div(curl F)` evaluated to zero at two points for smooth polynomial inputs. These are limited sampled checks, not comprehensive acceptance. Symcas outputs passed meval parsing/evaluation for its comparison expressions, but were not subjected to finite differences or vector identities. Remaining acceptance includes:
 
-1. scalar partials for x/y/z/t, constants/absent variables, powers and supported unary functions;
-2. `meval::Expr` parse + evaluation of every emitted derivative, with deterministic output and finite-difference comparison on nonsingular sample points;
-3. vector gradient/divergence/curl composition and identities (e.g. curl(grad f)=0, div(curl F)=0) on smooth expressions;
-4. explicit failures for unsupported grammar/operators and numerical singularities;
-5. regression cases for meval precedence and custom context/bound functions as applicable.
+1. broad x/y/z/t mapping and derivatives across absent variables, constants, powers, supported unary/binary functions and meval precedence;
+2. randomized/deterministic derivative equivalence and finite differences for both engines;
+3. broader gradient/divergence/curl coverage and identities across nontrivial smooth fields;
+4. explicit unsupported grammar/operator behavior and custom context/bound-function policy;
+5. deterministic printer round-tripping and adversarial identifier/output tests for any adapter.
 
-## wasm and size experiment
+## wasm build and matched harness sizes
 
-- Toolchain reports Rust 1.99.1 and installed-target listing initially showed `wasm32-unknown-unknown`; however compilation failed at dependency `fnv` with `E0463: can't find crate for std` (“target may not be installed”). `rustup target add wasm32-unknown-unknown` reported the component up to date, but the subsequent wasm build failed identically. Therefore **no candidate wasm build passed**.
-- Attempted matched tiny release harnesses: baseline with `meval = 0.2` and candidate with `exmex = 0.21.0` + `partial`, both in this worktree’s isolated `target/`, `--target wasm32-unknown-unknown --release`. Baseline command failed before producing a wasm artifact; candidate wasm command was not run after baseline failure. No raw or gzip size exists. This is a blocker/limitation, not a zero delta.
-- The harness would in any case measure only a small library wrapper, not full-app release wasm. Future results should report baseline/candidate harness raw and compressed deltas and separately label any full app artifact delta; no hard threshold should be invented.
+The earlier wasm failure was an environment mismatch, not a crate failure: `/usr/bin/rustc` used `/usr` sysroot without wasm std while rustup stable had wasm std installed. The separate read-only rootcause report is `/tmp/opencode/vfe-cas-wasm-diagnosis-2026-11-10.md`. Cargo confirmation and both candidate builds succeeded using explicit rustup shims; no toolchain/global environment was changed.
+
+Matched wrapper harnesses used `cdylib`, release profile, same target/compiler/settings, same exported formula `sin(x)*x + x^2`, `wasm32-unknown-unknown`, and isolated worktree `target/`. Baseline uses meval to evaluate that formula. exmex harness differentiates it and evaluates derivative with exmex; symcas differentiates and sends printed derivative through meval. Therefore these are comparable small integration wrappers, though call paths differ by design. Sizes (raw; gzip-9):
+
+| Harness | wasm bytes | gzip-9 bytes | Delta from baseline raw / gzip |
+|---|---:|---:|---:|
+| meval-only baseline | 125,033 | 52,985 | — |
+| exmex 0.21.0 + `partial` + meval | 1,668,903 | 490,146 | +1,543,870 / +437,161 |
+| symcas 0.1.1 + meval | 367,569 | 124,622 | +242,536 / +71,637 |
+
+No wasm runtime invocation occurred. These measurements are harness costs only, not app release artifact deltas; no hard budget is implied. We did not measure an in-house implementation. All builds used `/home/paul/.cargo/bin/cargo` with command-local `RUSTC=/home/paul/.cargo/bin/rustc`, `CARGO_TARGET_DIR=$PWD/target`, and `-j 4`.
 
 ## Recommendation and risks
 
-Run the in-house direction as the next design/implementation ticket because it best matches the “same grammar, same evaluator, minimal transforms” contract while avoiding an unmeasured dependency tax. This does **not** mean that implementation is already selected for production. If a controlled in-house prototype reveals disproportionate parser complexity, revisit symcas with a narrowly defined meval-compatible printer/equivalence test before exmex; exmex’s observed braces and extra evaluator/regex cost are direct friction points. Do not decide on size from estimates alone.
+No implementation direction is recommended from this evidence alone. Both external candidates passed sampled host interoperability, and both build on wasm; symcas is substantially smaller in the matched wrapper while exmex is larger. exmex’s brace syntax is addressable by a narrow, validated identifier adapter on sampled output, so it is not a stand-alone rejection reason. In-house remains a plausible alternative because meval exposes public RPN APIs, but its implementation effort and wasm cost are unknown. Selection requires a common broader host test corpus, unsupported-grammar policy, and explicit tradeoff on size versus implementation/API risk.
 
-Key risks: the meval token API may require reproducing parsing/precedence behavior; emitted syntax can change semantics if associativity/parentheses are wrong; symbol differentiation rules and domain restrictions need explicit boundaries; dependency-free does not mean maintenance-free. The largest immediate evidence gap is the unavailable wasm target/runtime setup, followed by absent algebraic/identity tests. API risk is moderate for in-house and high for translating either external engine’s grammar. No candidate has passed the complete CAS acceptance.
+Key risks: the meval token API may require reproducing parsing/precedence behavior; emitted syntax can change semantics if associativity/parentheses are wrong; symbol differentiation rules and domain restrictions need explicit boundaries; dependency-free does not mean maintenance-free. The main evidence gaps are broader grammar/identity coverage and actual wasm runtime testing. API risk remains unmeasured for in-house; adapters are viable but not fully hardened for the external engines. No candidate has passed the complete CAS acceptance.
 
 ## Reproduction record
 
@@ -60,12 +67,14 @@ Executed from isolated worktree `/home/paul/.local/share/opencode/worktree/9d1d2
 
 - `cargo search exmex --limit 5`; `cargo search symcas --limit 5`
 - `cargo info exmex`; `cargo info symcas`; `cargo info cas-parse`; `cargo info cas-diff` (expected lookup failed: no crate named `cas-diff`)
-- `CARGO_TARGET_DIR=$PWD/target cargo run --manifest-path .scratch/cas-spike/exmex/Cargo.toml --release` (after correcting an initial private-module import; successful differentiation probe)
-- `cargo build --manifest-path .scratch/cas-spike/baseline/Cargo.toml --target wasm32-unknown-unknown --release` (failed: wasm `std` unavailable)
-- `rustup target add wasm32-unknown-unknown` (reported up to date); repeated baseline build (same failure)
-- `cargo build --manifest-path .scratch/cas-spike/exmex/Cargo.toml --target wasm32-unknown-unknown --release --lib`, size listing and gzip commands were chained after the failed baseline and therefore **did not run**.
+- `CARGO_TARGET_DIR=$PWD/target cargo run --manifest-path .scratch/cas-spike/exmex/Cargo.toml --release -j 4` (mapping, meval-adapter finite differences and polynomial identities passed; first run exposed missing-variable handling, corrected by returning zero for absent variables)
+- `CARGO_TARGET_DIR=$PWD/target cargo run --manifest-path .scratch/cas-spike/symcas/Cargo.toml --release -j 4` (symcas printed derivatives accepted and evaluated by meval for three formulas and x/y/z/t)
+- `CARGO_TARGET_DIR=$PWD/target RUSTC=/home/paul/.cargo/bin/rustc /home/paul/.cargo/bin/cargo build --manifest-path .scratch/cas-spike/baseline/Cargo.toml --target wasm32-unknown-unknown --release -j 4`
+- Same explicit cargo/rustc/target command with manifest `.scratch/cas-spike/exmex/Cargo.toml`, `--release --lib -j 4`; repeated for `.scratch/cas-spike/symcas/Cargo.toml`
+- `stat -c '%n %s' target/wasm32-unknown-unknown/release/{baseline_size,exmex_spike,symcas_spike}.wasm`; `gzip -9 -c <artifact> | wc -c` (sizes above).
+- Earlier system-cargo wasm attempts failed with E0463; rootcause diagnosis explains the sysroot mismatch. They are not evidence of candidate failure.
 
-Cargo emitted a future-incompatibility warning for transitive `nom 1.2.4` in the successful exmex host probe. No project build/test gates were run because production files were intentionally untouched.
+Cargo emitted a future-incompatibility warning for transitive `nom 1.2.4` in the successful exmex host probe. No product build/test gates or wasm runtime checks were run because production files were intentionally untouched. Each crate reported Cargo future-incompatibility warning for transitive nom 1.2.4.
 
 ## Sources
 
