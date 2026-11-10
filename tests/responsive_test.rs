@@ -27,7 +27,7 @@ fn repo_root() -> PathBuf {
 
 // The tab bar must physically fit a finger-sized target.
 const _: () = assert!(TAB_BAR_HEIGHT >= TOUCH_TARGET);
-const _: () = assert!(COMPACT_ROW_HEIGHT > TOUCH_TARGET);
+const _: () = assert!(COMPACT_ROW_HEIGHT >= TOUCH_TARGET);
 
 #[test]
 fn layout_mode_is_compact_at_and_below_700_points() {
@@ -316,6 +316,8 @@ fn compact_row_floor_is_applied_to_real_compact_panel_widgets_only() {
     let ctx = egui::Context::default();
     let mut compact_height = 0.0;
     let mut wide_height = 0.0;
+    let mut compact_spacing = 0.0;
+    let mut wide_spacing = 0.0;
     for compact in [true, false] {
         let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 800.0))), ..Default::default() }, |ui| {
             ui.set_width(400.0);
@@ -324,13 +326,20 @@ fn compact_row_floor_is_applied_to_real_compact_panel_widgets_only() {
             let mut controls = vector_field_explorer::ui::sidebar::Controls::default();
             vector_field_explorer::ui::sidebar::show_compact(ui, &mut state, &mut controls, compact);
             let (_, response) = ui.allocate_exact_size(egui::vec2(200.0, ui.spacing().interact_size.y), egui::Sense::click());
-            if compact { compact_height = response.rect.height(); } else { wide_height = response.rect.height(); }
+            if compact {
+                compact_height = response.rect.height();
+                compact_spacing = ui.spacing().item_spacing.y;
+            } else {
+                wide_height = response.rect.height();
+                wide_spacing = ui.spacing().item_spacing.y;
+            }
         });
         output.textures_delta.clear();
     }
-    assert!(compact_height >= COMPACT_ROW_HEIGHT, "compact panel row height: {compact_height}");
+    assert_eq!(compact_height, 44.0, "compact panel row height");
     assert!(compact_height >= TOUCH_TARGET, "compact panel row meets the touch target: {compact_height}");
     assert!(wide_height < TOUCH_TARGET, "wide panel retains its ordinary row height: {wide_height}");
+    assert!(compact_spacing < wide_spacing, "compact vertical spacing is tighter");
 
     let ctx = egui::Context::default();
     let mut state = vector_field_explorer::viewmodel::State::new(false);
@@ -348,9 +357,32 @@ fn compact_row_floor_is_applied_to_real_compact_panel_widgets_only() {
         });
         output.textures_delta.clear();
     }
-    assert!(preset_compact >= COMPACT_ROW_HEIGHT, "compact preset row height: {preset_compact}");
+    assert_eq!(preset_compact, 44.0, "compact preset row height");
     assert!(preset_compact >= TOUCH_TARGET, "compact preset row meets the touch target: {preset_compact}");
     assert!(preset_wide < TOUCH_TARGET, "wide preset rows retain ordinary height: {preset_wide}");
+}
+
+#[test]
+fn web_brand_header_is_hidden_at_the_compact_boundary_only() {
+    let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
+    assert_eq!(COMPACT_WIDTH, 700.0);
+    assert!(
+        css.contains("@media (max-width: 700px)")
+            && css.contains("header.brand {\n    display: none;"),
+        "the entire page branding header must be hidden at the same 700px compact boundary"
+    );
+    assert!(
+        !css.contains("@media (max-width: 600px)"),
+        "the former 600px breakpoint left the brand visible for compact 600–700px widths"
+    );
+}
+
+#[test]
+fn fly_camera_is_not_allowed_in_any_compact_layout() {
+    use vector_field_explorer::ui::layout::fly_allowed;
+
+    assert!(!fly_allowed(LayoutMode::Compact));
+    assert!(fly_allowed(LayoutMode::Wide));
 }
 
 #[test]

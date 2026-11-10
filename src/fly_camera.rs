@@ -346,6 +346,18 @@ pub fn toggle_fly(fly: &mut Option<FlyCamera>, orbit: &OrbitCamera, is_3d: bool)
     };
 }
 
+/// Drop fly mode and held movement keys when entering Compact.
+pub fn exit_fly_for_layout(
+    fly: &mut Option<FlyCamera>,
+    keys: &mut FlyKeys,
+    mode: crate::ui::layout::LayoutMode,
+) {
+    if !crate::ui::layout::fly_allowed(mode) {
+        *fly = None;
+        keys.clear();
+    }
+}
+
 /// Keep fly mode consistent with the projection: leaving 3D drops the fly
 /// camera, returning to the untouched orbit view.
 pub fn sync_fly(fly: &mut Option<FlyCamera>, is_3d: bool) {

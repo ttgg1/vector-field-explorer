@@ -18,6 +18,13 @@ impl eframe::App for VfApp {
         let mode = layout::layout_mode(ui.available_width());
         if mode != self.layout_mode {
             self.layout_mode = mode;
+            if mode == LayoutMode::Compact {
+                crate::fly_camera::exit_fly_for_layout(
+                    &mut self.fly,
+                    &mut self.fly_keys,
+                    mode,
+                );
+            }
             ui.ctx().request_repaint();
         }
         if self.layout_mode == LayoutMode::Wide {

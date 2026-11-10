@@ -227,19 +227,10 @@ body.webgpu-unsupported #loading {
   margin: 0;
 }
 
-/* Ticket 68: narrow screens keep the mark and the repository link; the
-   wordmark and tagline would crowd out the field viewport, so they go. */
-@media (max-width: 600px) {
+/* Ticket 71 follow-up: match egui's 700 pt Compact breakpoint and reclaim the
+   whole page-header row; the compact egui hamburger remains in the canvas. */
+@media (max-width: 700px) {
   header.brand {
-    padding: 0.5rem 0.75rem;
-  }
-
-  .brand-copy {
-    gap: 0;
-  }
-
-  .brand-name,
-  .brand-tagline {
     display: none;
   }
 }

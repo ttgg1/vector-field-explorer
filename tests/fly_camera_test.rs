@@ -17,7 +17,7 @@ use vector_field_explorer::fly_camera::{
     MAX_PITCH, MAX_SPEED, MIN_SPEED, WHEEL_NOTCH_POINTS, capture_commands,
     capture_exit_required, capture_transition, crosshair_segments, crosshair_visible,
     exit_on_focus_loss, fly_toggle_key, frame_look, is_command_chord, sync_fly, sync_fly_mirror,
-    toggle_fly,
+    toggle_fly, exit_fly_for_layout,
 };
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load};
 use vector_field_explorer::render::Camera;
@@ -451,6 +451,37 @@ fn c_toggles_only_in_three_d_and_switching_to_2d_exits() {
     let mut fly = Some(FlyCamera::from_orbit(&orbit));
     sync_fly(&mut fly, true);
     assert!(fly.is_some(), "staying in 3D keeps fly mode");
+}
+
+#[test]
+fn entering_compact_exits_fly_and_clears_held_movement_keys() {
+    use vector_field_explorer::ui::layout::LayoutMode;
+
+    let mut fly = Some(fly_at_origin());
+    let mut keys = FlyKeys::default();
+    keys.apply_key(egui::Key::W, None, true);
+    assert!(keys.movement_held());
+
+    exit_fly_for_layout(&mut fly, &mut keys, LayoutMode::Compact);
+    assert!(fly.is_none());
+    assert!(!keys.movement_held());
+
+    let (grabs, visible) = capture_transition(true, fly.is_some()).unwrap();
+    assert_eq!(grabs, &[egui::CursorGrab::None]);
+    assert!(visible, "leaving fly releases capture and shows the pointer");
+}
+
+#[test]
+fn wide_layout_keeps_an_active_fly_camera_and_held_keys() {
+    use vector_field_explorer::ui::layout::LayoutMode;
+
+    let mut fly = Some(fly_at_origin());
+    let mut keys = FlyKeys::default();
+    keys.apply_key(egui::Key::W, None, true);
+
+    exit_fly_for_layout(&mut fly, &mut keys, LayoutMode::Wide);
+    assert!(fly.is_some());
+    assert!(keys.movement_held());
 }
 
 #[test]

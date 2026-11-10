@@ -321,6 +321,7 @@ impl PresetPanel {
     ) -> Option<ViewCommand> {
         if compact {
             ui.spacing_mut().interact_size.y = crate::ui::layout::COMPACT_ROW_HEIGHT;
+            ui.spacing_mut().item_spacing.y = crate::ui::layout::COMPACT_ITEM_SPACING;
         }
         self.show_inner(ui, camera, state)
     }

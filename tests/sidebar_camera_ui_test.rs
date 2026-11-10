@@ -164,6 +164,31 @@ fn the_camera_section_is_open_and_checks_the_fly_toggle() {
 }
 
 #[test]
+fn compact_controls_do_not_offer_a_fly_camera_toggle() {
+    let mut sidebar = Sidebar::new(true);
+    let mut output = {
+        let state = &mut sidebar.state;
+        let controls = &mut sidebar.controls;
+        sidebar.ctx.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(600.0, 1200.0),
+            )),
+            ..Default::default()
+        }, |ui| sidebar::show_compact(ui, state, controls, true))
+    };
+    let labels: Vec<_> = nodes(&output)
+        .into_iter()
+        .filter_map(|node| node.label)
+        .collect();
+    output.textures_delta.clear();
+    assert!(
+        !labels.iter().any(|label| label.contains("Fly camera")),
+        "the Compact Controls sheet must not offer fly camera entry",
+    );
+}
+
+#[test]
 fn clicking_the_checkbox_enters_and_leaves_fly() {
     let mut s = Sidebar::new(true);
     let out = s.settle();
