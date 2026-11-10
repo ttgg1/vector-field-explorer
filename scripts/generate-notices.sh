@@ -3,7 +3,7 @@
 #
 # Output: packaging/THIRD_PARTY_NOTICES.txt
 #
-# Input: `cargo metadata --format-version 1 --locked`, so generation is
+# Input: `cargo metadata --format-version 1 --locked --offline --filter-platform ...`
 # offline and uses no new Rust dependencies. For every non-workspace package
 # the bundle records the name, version, licence expression, repository, and
 # the licence text(s) shipped with the package source or checked into
@@ -93,7 +93,11 @@ def fail(message):
 def cargo_metadata():
     try:
         result = subprocess.run(
-            ["cargo", "metadata", "--format-version", "1", "--locked"],
+            ["cargo", "metadata", "--format-version", "1", "--locked",
+             "--offline",
+             "--filter-platform", "x86_64-unknown-linux-gnu",
+             "--filter-platform", "aarch64-apple-darwin",
+             "--filter-platform", "x86_64-apple-darwin"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -104,7 +108,7 @@ def cargo_metadata():
     except subprocess.CalledProcessError as error:
         if error.stderr:
             sys.stderr.write(error.stderr)
-        fail("cargo metadata --format-version 1 --locked failed")
+        fail("cargo metadata --format-version 1 --locked (offline, shipped targets) failed")
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as error:
