@@ -11,6 +11,7 @@ use eframe::egui;
 use crate::support;
 
 use vector_field_explorer::ui::sidebar::{self, Controls};
+use vector_field_explorer::ui::layout::TOUCH_TARGET;
 use vector_field_explorer::viewmodel::State;
 
 struct Sidebar {
@@ -32,7 +33,7 @@ impl Sidebar {
         }
     }
 
-    fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame_in_layout(&mut self, events: Vec<egui::Event>, compact: bool) -> egui::FullOutput {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
@@ -48,11 +49,17 @@ impl Sidebar {
             let state = &mut self.state;
             let controls = &mut self.controls;
             self.ctx.run_ui(input, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| sidebar::show(ui, state, controls));
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    sidebar::show_compact(ui, state, controls, compact)
+                });
             })
         };
         output.textures_delta.clear();
         output
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+        self.frame_in_layout(events, false)
     }
 
     fn idle(&mut self) -> egui::FullOutput {
@@ -186,6 +193,147 @@ fn compact_controls_do_not_offer_a_fly_camera_toggle() {
         !labels.iter().any(|label| label.contains("Fly camera")),
         "the Compact Controls sheet must not offer fly camera entry",
     );
+}
+
+fn sidebar_accessible_rows(compact: bool) -> Vec<Node> {
+    let mut sidebar = Sidebar::new(true);
+    let output = sidebar.frame_in_layout(Vec::new(), compact);
+    let disclosure = nodes(&output)
+        .into_iter()
+        .find(|node| {
+            node.role == egui::Role::DisclosureTriangle
+                && node.label.as_deref() == Some("Arrow appearance")
+        })
+        .expect("the Display section exposes its nested Arrow appearance control");
+    sidebar.frame_in_layout(pointer(disclosure.rect.center(), true), compact);
+    sidebar.frame_in_layout(pointer(disclosure.rect.center(), false), compact);
+    let mut output = sidebar.frame_in_layout(Vec::new(), compact);
+    let rows = nodes(&output);
+    output.textures_delta.clear();
+    rows
+}
+
+fn interactive_gap_after(rows: &[Node], label: &str, role: egui::Role) -> f32 {
+    let parent = rows
+        .iter()
+        .find(|node| node.role == role && node.label.as_deref() == Some(label))
+        .unwrap_or_else(|| panic!("interactive AccessKit row `{label}` exists"));
+    let next_top = rows
+        .iter()
+        .filter(|node| {
+            matches!(
+                node.role,
+                egui::Role::Button
+                    | egui::Role::CheckBox
+                    | egui::Role::Slider
+                    | egui::Role::SpinButton
+                    | egui::Role::DisclosureTriangle
+            ) && node.rect.top() >= parent.rect.bottom() - 0.01
+                && node.rect.center().y > parent.rect.center().y
+        })
+        .map(|node| node.rect.top())
+        .min_by(f32::total_cmp)
+        .expect("a following interactive widget row exists");
+    next_top - parent.rect.bottom()
+}
+
+#[test]
+fn actual_compact_sidebar_widget_rows_and_nested_spacing_use_accesskit_bounds() {
+    let compact = sidebar_accessible_rows(true);
+    let wide = sidebar_accessible_rows(false);
+
+    for rows in [&compact, &wide] {
+        let nested = rows
+            .iter()
+            .find(|node| {
+                node.role == egui::Role::DisclosureTriangle
+                    && node.label.as_deref() == Some("Arrow appearance")
+            })
+            .expect("the real nested Arrow appearance disclosure is accessible");
+        let nested_child = rows
+            .iter()
+            .filter(|node| {
+                matches!(node.role, egui::Role::Button | egui::Role::CheckBox | egui::Role::Slider | egui::Role::SpinButton)
+                    && node.rect.top() >= nested.rect.bottom() - 0.01
+            })
+            .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+            .expect("an interactive child is visible under Arrow appearance");
+        let nested_gap = nested_child.rect.top() - nested.rect.bottom();
+        assert!(nested_gap >= 0.0, "nested control rows do not overlap: {nested_gap}");
+        if std::ptr::eq(rows, &compact) {
+            assert!(nested_child.rect.height() >= TOUCH_TARGET);
+        }
+    }
+
+    let compact_control = compact
+        .iter()
+        .find(|node| node.role == egui::Role::Button && node.label.as_deref() == Some("Magnitude"))
+        .unwrap();
+    let wide_control = wide
+        .iter()
+        .find(|node| node.role == egui::Role::Button && node.label.as_deref() == Some("Magnitude"))
+        .unwrap();
+    assert!(compact_control.rect.height() >= TOUCH_TARGET, "real button target: {}pt", compact_control.rect.height());
+    assert!(compact_control.rect.height() > wide_control.rect.height(), "Wide button sizing stays smaller");
+    let compact_gap = interactive_gap_after(&compact, "Magnitude", egui::Role::Button);
+    let wide_gap = interactive_gap_after(&wide, "Magnitude", egui::Role::Button);
+    assert!(compact_gap < wide_gap, "real adjacent widget gap compact={compact_gap}, wide={wide_gap}");
+
+    let compact_nested_gap = interactive_gap_after(&compact, "Arrow appearance", egui::Role::DisclosureTriangle);
+    let wide_nested_gap = interactive_gap_after(&wide, "Arrow appearance", egui::Role::DisclosureTriangle);
+    assert!(
+        compact_nested_gap < wide_nested_gap,
+        "real nested-control gap compact={compact_nested_gap}, wide={wide_nested_gap}",
+    );
+}
+
+fn preset_accessible_rows(compact: bool) -> Vec<Node> {
+    use vector_field_explorer::render::Camera;
+    use vector_field_explorer::ui::presets::PresetPanel;
+
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut state = State::new(false);
+    let mut presets = PresetPanel::default();
+    let mut camera = Camera::default();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 1200.0))),
+            ..Default::default()
+        },
+        |ui| {
+            presets.show_compact(ui, &mut camera, &mut state, compact);
+        },
+    );
+    let rows = nodes(&output);
+    output.textures_delta.clear();
+    rows
+}
+
+fn first_preset_named<'a>(rows: &'a [Node], label: &str) -> &'a Node {
+    rows.iter()
+        .filter(|node| node.role == egui::Role::Button && node.label.as_deref() == Some(label))
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .unwrap_or_else(|| panic!("real preset row `{label}` is exposed"))
+}
+
+#[test]
+fn actual_compact_preset_rows_and_spacing_use_accesskit_bounds() {
+    let compact = preset_accessible_rows(true);
+    let wide = preset_accessible_rows(false);
+    let compact_vortex = first_preset_named(&compact, "Vortex");
+    let wide_vortex = first_preset_named(&wide, "Vortex");
+    assert!(compact_vortex.rect.height() >= TOUCH_TARGET);
+    assert!(compact_vortex.rect.height() > wide_vortex.rect.height(), "Wide preset sizing remains unchanged");
+
+    let gap_after = |rows: &[Node], label: &str, next_label: &str| {
+        let current = first_preset_named(rows, label);
+        let next = first_preset_named(rows, next_label);
+        next.rect.top() - current.rect.bottom()
+    };
+    let compact_gap = gap_after(&compact, "Vortex", "3D swirl (3D)");
+    let wide_gap = gap_after(&wide, "Vortex", "3D swirl (3D)");
+    assert!(compact_gap < wide_gap, "actual preset row gap compact={compact_gap}, wide={wide_gap}");
 }
 
 #[test]

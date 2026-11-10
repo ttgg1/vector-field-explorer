@@ -311,70 +311,57 @@ fn swipe_transitions_advance_one_sheet_state_and_close_at_the_bottom() {
     assert_eq!(sheet_swipe_transition(SheetSize::Default, 24.0), (SheetSize::Default, false));
 }
 
-#[test]
-fn compact_row_floor_is_applied_to_real_compact_panel_widgets_only() {
-    let ctx = egui::Context::default();
-    let mut compact_height = 0.0;
-    let mut wide_height = 0.0;
-    let mut compact_spacing = 0.0;
-    let mut wide_spacing = 0.0;
-    for compact in [true, false] {
-        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 800.0))), ..Default::default() }, |ui| {
-            ui.set_width(400.0);
-            ui.set_height(700.0);
-            let mut state = vector_field_explorer::viewmodel::State::new(false);
-            let mut controls = vector_field_explorer::ui::sidebar::Controls::default();
-            vector_field_explorer::ui::sidebar::show_compact(ui, &mut state, &mut controls, compact);
-            let (_, response) = ui.allocate_exact_size(egui::vec2(200.0, ui.spacing().interact_size.y), egui::Sense::click());
-            if compact {
-                compact_height = response.rect.height();
-                compact_spacing = ui.spacing().item_spacing.y;
-            } else {
-                wide_height = response.rect.height();
-                wide_spacing = ui.spacing().item_spacing.y;
-            }
-        });
-        output.textures_delta.clear();
-    }
-    assert_eq!(compact_height, 44.0, "compact panel row height");
-    assert!(compact_height >= TOUCH_TARGET, "compact panel row meets the touch target: {compact_height}");
-    assert!(wide_height < TOUCH_TARGET, "wide panel retains its ordinary row height: {wide_height}");
-    assert!(compact_spacing < wide_spacing, "compact vertical spacing is tighter");
-
-    let ctx = egui::Context::default();
-    let mut state = vector_field_explorer::viewmodel::State::new(false);
-    let mut presets = vector_field_explorer::ui::presets::PresetPanel::default();
-    let mut camera = vector_field_explorer::render::Camera::default();
-    let mut preset_compact = 0.0;
-    let mut preset_wide = 0.0;
-    for compact in [true, false] {
-        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 800.0))), ..Default::default() }, |ui| {
-            ui.set_width(400.0);
-            ui.set_height(700.0);
-            let _ = presets.show_compact(ui, &mut camera, &mut state, compact);
-            let (_, response) = ui.allocate_exact_size(egui::vec2(200.0, ui.spacing().interact_size.y), egui::Sense::click());
-            if compact { preset_compact = response.rect.height(); } else { preset_wide = response.rect.height(); }
-        });
-        output.textures_delta.clear();
-    }
-    assert_eq!(preset_compact, 44.0, "compact preset row height");
-    assert!(preset_compact >= TOUCH_TARGET, "compact preset row meets the touch target: {preset_compact}");
-    assert!(preset_wide < TOUCH_TARGET, "wide preset rows retain ordinary height: {preset_wide}");
+fn css_brand_breakpoint(css: &str) -> f32 {
+    let query = css
+        .split("@media (max-width:")
+        .nth(1)
+        .expect("web stylesheet declares a max-width media query");
+    query
+        .split_once("px)")
+        .expect("the breakpoint is expressed in CSS pixels")
+        .0
+        .trim()
+        .parse()
+        .expect("the breakpoint is numeric")
 }
 
 #[test]
-fn web_brand_header_is_hidden_at_the_compact_boundary_only() {
+fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases() {
     let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
-    assert_eq!(COMPACT_WIDTH, 700.0);
+    let css_breakpoint = css_brand_breakpoint(&css);
+    assert_eq!(css_breakpoint, 700.0, "the approved web CSS breakpoint remains 700 CSS px");
+    assert_eq!(COMPACT_WIDTH, 700.0, "the native/egui root-width breakpoint remains 700 pt");
     assert!(
-        css.contains("@media (max-width: 700px)")
+        css.contains(&format!("@media (max-width: {css_breakpoint:.0}px)"))
             && css.contains("header.brand {\n    display: none;"),
-        "the entire page branding header must be hidden at the same 700px compact boundary"
+        "the complete page header is hidden at the parsed CSS viewport boundary"
     );
-    assert!(
-        !css.contains("@media (max-width: 600px)"),
-        "the former 600px breakpoint left the brand visible for compact 600–700px widths"
-    );
+
+    // CSS media queries use the browser viewport in CSS px. The egui app uses
+    // the canvas/root available width in points, after the body's safe-area
+    // padding. eframe's browser sizing divides backing pixels by device-pixel
+    // ratio and egui zoom; the table exercises physical-width cases that map
+    // to the same measured CSS viewport through those factors.
+    let cases = [
+        ("one CSS px below", 699.0, 1.0, 1.0, 0.0, 0.0, true, LayoutMode::Compact),
+        ("at CSS boundary", 700.0, 1.0, 1.0, 0.0, 0.0, true, LayoutMode::Compact),
+        ("one CSS px above", 701.0, 1.0, 1.0, 0.0, 0.0, false, LayoutMode::Wide),
+        ("2x DPR", 1400.0, 2.0, 1.0, 0.0, 0.0, true, LayoutMode::Compact),
+        ("125% page zoom", 875.0, 1.0, 1.25, 0.0, 0.0, true, LayoutMode::Compact),
+        // Source-derived divergence: CSS media uses viewport width; egui sees
+        // canvas width after horizontal safe-area padding.
+        ("40px total safe area", 720.0, 1.0, 1.0, 20.0, 20.0, false, LayoutMode::Compact),
+    ];
+    for (name, physical_width, dpr, page_zoom, inset_left, inset_right, hidden, mode) in cases {
+        let css_viewport = physical_width / (dpr * page_zoom);
+        assert_eq!(
+            css_viewport <= css_breakpoint,
+            hidden,
+            "header media-query result for {name} ({css_viewport} CSS px)",
+        );
+        let canvas_root_points = css_viewport - inset_left - inset_right;
+        assert_eq!(layout_mode(canvas_root_points), mode, "egui root seam for {name}");
+    }
 }
 
 #[test]
