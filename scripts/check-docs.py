@@ -12,7 +12,6 @@ list otherwise.
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -113,14 +112,13 @@ def _is_relative_link(target: str) -> bool:
     if not clean or clean.startswith("#"):
         return False
     clean = clean.split("#", 1)[0].split("?", 1)[0].strip()
-    if not clean or "://" in clean or clean.startswith("mailto:") or clean.startswith("/"):
+    if not clean or clean.startswith("#"):
         return False
-    if clean.startswith("./") or clean.startswith("../"):
-        return True
-    # Bare *.md sibling.
-    if "/" not in clean and clean.endswith(".md"):
-        return True
-    return False
+    # Anchors, absolute URLs, mailto links and absolute paths are not local
+    # files.
+    if "://" in clean or clean.startswith("mailto:") or clean.startswith("/"):
+        return False
+    return True
 
 
 def check_wiki_links() -> tuple[str, list[str]]:
