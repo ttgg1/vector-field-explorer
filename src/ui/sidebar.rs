@@ -553,7 +553,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
             "Opacity of the whole arrow field; 100% is fully solid. Dense fields can be \
              de-emphasised without hiding them",
         );
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.label("Length mode");
             for mode in ArrowLengthMode::ALL {
                 ui.selectable_value(&mut controls.arrow_length_mode, mode, mode.label())
@@ -585,7 +585,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
         .response
         .on_hover_text("How strongly arrow length follows magnitude; 1 = linear")
         .on_disabled_hover_text("Only Proportional arrow length follows magnitude");
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             let set = arrow_style_set(view_3d);
             ui.label(set.label());
             match set {
@@ -687,7 +687,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
             "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
         );
         ui.add_enabled_ui(seed_mode_enabled(controls.streamlines), |ui| {
-            ui.horizontal(|ui| {
+            button_row(ui, |ui| {
                 ui.label("Seed");
                 for mode in StreamlineSeedMode::ALL {
                     ui.selectable_value(&mut controls.seed_mode, mode, mode.label())
@@ -701,7 +701,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
         );
         // Ticket 60: the left click action stays visible even while its feature
         // is off; the click is then a hinted no-op rather than a dead control.
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.label("Left click");
             for action in LeftClickAction::ALL {
                 let hover = match click_action_plan(
@@ -764,7 +764,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
                         .text("Opacity"),
                     )
                     .on_hover_text("Dot and trail alpha (0.05–1.0, default 1.0)");
-                    ui.horizontal(|ui| {
+                    button_row(ui, |ui| {
                         ui.label("Colour");
                         for mode in ParticleColorMode::ALL {
                             ui.selectable_value(
@@ -781,7 +781,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
                         |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Fixed colour");
-                                ui.color_edit_button_srgb(&mut fixed)
+                                super::style_panel::color_button(ui, |ui| ui.color_edit_button_srgb(&mut fixed))
                             })
                             .inner
                         },
@@ -861,7 +861,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
     });
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.label("Colormap");
             for colormap in Colormap::ALL {
                 ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
@@ -950,7 +950,7 @@ fn plane_controls(
         return commit;
     }
 
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label("Axis");
         for axis in PlaneAxis::ALL {
             commit |= ui
@@ -1077,20 +1077,42 @@ fn section(
     }
 }
 
+/// Wrap button choices against the visible panel even when a non-button
+/// editor has requested a wider minimum for the surrounding body.
+fn button_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_wrapped(|ui| {
+        ui.set_max_width(
+            ui.available_width()
+                .min((ui.clip_rect().right() - ui.cursor().left()).max(0.0)),
+        );
+        contents(ui);
+    });
+}
+
 /// The title row every section header shares: the strong title and the
 /// generic reset button in the right-hand corner. The Domain header wraps this
 /// in a vertical layout to add its summary line.
 fn section_header_line(ui: &mut egui::Ui, section: Section, reset: &mut bool) {
     ui.label(egui::RichText::new(section.title()).strong());
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        // Full-size button, not `small_button`: the section action gets a
-        // normal click target. (In egui 0.37 `small_button` only trims
-        // vertical padding, so this is about target size, not type size.)
-        *reset = ui
-            .button("Reset")
-            .on_hover_text(format!("Reset {} to defaults", section.title()))
-            .clicked();
-    });
+    // Non-button editors can request a wider panel than its visible clip.
+    // Anchor the action to the visible remainder without resetting the parent
+    // header's cursor (which has already allocated the collapse toggle).
+    let mut rect = ui.available_rect_before_wrap();
+    rect.max.x = rect.max.x.min(ui.clip_rect().right()).max(rect.min.x);
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| {
+            // Full-size button, not `small_button`: the section action gets a
+            // normal click target. (In egui 0.37 `small_button` only trims
+            // vertical padding, so this is about target size, not type size.)
+            *reset = ui
+                .button("Reset")
+                .on_hover_text(format!("Reset {} to defaults", section.title()))
+                .clicked();
+        },
+    );
 }
 
 /// Keep a dragged extent honest before the seam sees it: NaN has no direction,

@@ -15,6 +15,7 @@ mod arrow_geometry_test;
 mod arrow_opacity_test;
 mod arrow_style_test;
 mod branding_assets_test;
+mod button_sizing_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_test;
 #[cfg(not(target_arch = "wasm32"))]

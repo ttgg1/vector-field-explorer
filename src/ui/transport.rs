@@ -43,16 +43,21 @@ pub fn time_label(time: f32, compact: bool) -> String {
 
 /// Draw the strip and apply every edit to `clock`.
 pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: bool) {
+    let min_size = if compact {
+        egui::Vec2::splat(super::layout::TOUCH_TARGET)
+    } else {
+        super::style_panel::button_min_size(ui)
+    };
     ui.horizontal(|ui| {
         if ui
-            .button(play_label(clock.playing, compact))
+            .add(egui::Button::new(play_label(clock.playing, compact)).min_size(min_size))
             .on_hover_text("Play or pause the simulation (Space)")
             .clicked()
         {
             clock.toggle_playing();
         }
         if ui
-            .button(reset_label(compact))
+            .add(egui::Button::new(reset_label(compact)).min_size(min_size))
             .on_hover_text("Reset simulation time to 0; the particle cloud stays")
             .clicked()
         {
