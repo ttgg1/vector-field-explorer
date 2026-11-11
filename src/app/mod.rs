@@ -10,7 +10,8 @@ use crate::fly_camera::{
     crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
     sync_fly, sync_fly_mirror,
 };
-use crate::reference::reference_lines;
+use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::reference::reference_lines_visible;
 use crate::render::Camera;
 use crate::renderer::{
     DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
@@ -19,7 +20,6 @@ use crate::renderer::{
 use crate::screenshot::{self, Instant, Screenshot};
 use crate::sim_clock::SimClock;
 use crate::streamlines::click_seed;
-use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::menu::{self, MenuAction};
@@ -32,37 +32,16 @@ use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
 use crate::view_command::{self, ViewCommand, ViewContext};
 use crate::viewmodel::{
-    CapturedClickOutcome,
-    ClickOutcome,
-    DragButtons,
-    DragChannel,
-    LastClickSeed,
-    LeftClickAction,
-    State,
-    ViewGesture,
-    apply_camera_input,
-    captured_click_outcome,
-    click_outcome,
-    drag_channel,
-    two_finger_pan,
-    undo_click_seed,
+    CapturedClickOutcome, ClickOutcome, DragButtons, DragChannel, LastClickSeed, LeftClickAction,
+    State, ViewGesture, apply_camera_input, captured_click_outcome, click_outcome, drag_channel,
+    two_finger_pan, undo_click_seed,
 };
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
 use crate::particles::{
-    AdvectSettings,
-    CLICK_BURST_PARTICLES,
-    Particles,
-    advect,
-    clear,
-    dot_instances_at,
-    retarget,
-    spawn,
-    spawn_at,
-    speed_range,
-    trail_instances_at,
-    count as particle_count,
+    AdvectSettings, CLICK_BURST_PARTICLES, Particles, advect, clear, count as particle_count,
+    dot_instances_at, retarget, spawn, spawn_at, speed_range, trail_instances_at,
 };
 
 mod frame;
@@ -247,7 +226,14 @@ impl VfApp {
         } else {
             orbit.recentre_on_2d(&state.domain);
         }
-        let backdrop = reference_lines(&state.domain, state.is_3d());
+        let backdrop = compose_lines(
+            &[],
+            &[],
+            &state.domain,
+            state.is_3d(),
+            state.show_grid,
+            state.show_coordinate_system,
+        );
         let arrow_style = state.arrow_style;
         let arrow_style_2d = state.arrow_style_2d;
         let arrow_params = state.arrow_params;
@@ -313,16 +299,180 @@ impl Default for VfApp {
 /// bursts into the one line collection the viewport paints. Rebuilt only on a
 /// scene rebuild or a click, so the per-frame path still clones an `Arc`. The
 /// backdrop follows the current domain and sampling dimension (ticket 23):
-/// `reference_lines` is cheap, and a rebuild is exactly when the domain may
+/// reference geometry is cheap, and a rebuild is exactly when the domain may
 /// have moved.
 fn compose_lines(
     flow: &[LineInstanceGPU],
     clicks: &[LineInstanceGPU],
     domain: &Domain,
     sampling_3d: bool,
+    show_grid: bool,
+    show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
-    let mut lines = reference_lines(domain, sampling_3d);
+    let mut lines = reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system);
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reference::{
+        AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, EDGE_COLOR, GRID_COLOR, REFERENCE_DIVISIONS,
+        reference_lines,
+    };
+
+    fn sentinel(color: [f32; 4], x: f32) -> LineInstanceGPU {
+        LineInstanceGPU {
+            a: [x, 12.0, 13.0, 1.0],
+            b: [x + 1.0, 12.0, 13.0, 0.123],
+            color,
+        }
+    }
+
+    fn same_lines(actual: &[LineInstanceGPU], expected: &[LineInstanceGPU]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.a, expected.a);
+            assert_eq!(actual.b, expected.b);
+            assert_eq!(actual.color, expected.color);
+        }
+    }
+
+    #[test]
+    fn reference_visibility_composes_selected_geometry_before_unchanged_flow_and_clicks() {
+        let domain = Domain::new(Vec3::new(-4.0, 2.0, 6.0), Vec3::new(8.0, 10.0, 14.0));
+        let flow = [sentinel(AXIS_X_COLOR, 101.0), sentinel(GRID_COLOR, 103.0)];
+        let clicks = [sentinel(GRID_COLOR, 105.0), sentinel(AXIS_X_COLOR, 107.0)];
+        for (sampling_3d, grid_count, axes) in [
+            (
+                true,
+                6 * (REFERENCE_DIVISIONS as usize + 1) + 12,
+                &[AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR][..],
+            ),
+            (
+                false,
+                2 * (REFERENCE_DIVISIONS as usize + 1),
+                &[AXIS_X_COLOR, AXIS_Y_COLOR][..],
+            ),
+        ] {
+            for (show_grid, show_coordinate_system) in
+                [(true, true), (true, false), (false, true), (false, false)]
+            {
+                let lines = compose_lines(
+                    &flow,
+                    &clicks,
+                    &domain,
+                    sampling_3d,
+                    show_grid,
+                    show_coordinate_system,
+                );
+                let reference_count = if show_grid { grid_count } else { 0 }
+                    + if show_coordinate_system {
+                        axes.len()
+                    } else {
+                        0
+                    };
+                assert_eq!(lines.len(), reference_count + flow.len() + clicks.len());
+                let reference = &lines[..reference_count];
+                same_lines(&lines[reference_count..reference_count + flow.len()], &flow);
+                same_lines(&lines[reference_count + flow.len()..], &clicks);
+                if show_grid {
+                    let grid_lines = if sampling_3d {
+                        grid_count - 12
+                    } else {
+                        grid_count
+                    };
+                    assert!(
+                        reference[..grid_lines]
+                            .iter()
+                            .all(|line| line.color == GRID_COLOR)
+                    );
+                    if sampling_3d {
+                        assert!(
+                            reference[grid_lines..grid_count]
+                                .iter()
+                                .all(|line| line.color == EDGE_COLOR)
+                        );
+                    } else {
+                        assert!(
+                            reference[..grid_count]
+                                .iter()
+                                .all(|line| line.a[2] == 10.0 && line.b[2] == 10.0)
+                        );
+                    }
+                }
+                if show_coordinate_system {
+                    for (line, color) in reference[reference_count - axes.len()..].iter().zip(axes)
+                    {
+                        assert_eq!(line.color, *color);
+                    }
+                }
+                for line in reference {
+                    for point in [line.a, line.b] {
+                        for (axis, coordinate) in point.iter().enumerate().take(3) {
+                            assert!(
+                                *coordinate >= domain.min[axis] && *coordinate <= domain.max[axis]
+                            );
+                        }
+                    }
+                }
+                if show_grid && show_coordinate_system {
+                    same_lines(reference, &reference_lines(&domain, sampling_3d));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reference_visibility_uses_effective_sampling_dimension_for_flat_formula_in_3d_mode() {
+        let mut state = State::new(true);
+        assert!(state.set_formula("(y, -x)".to_owned()));
+        assert!(state.mode_3d);
+        assert!(!state.is_3d());
+        let lines = compose_lines(&[], &[], &state.domain, state.is_3d(), true, true);
+        assert_eq!(lines.len(), 2 * (REFERENCE_DIVISIONS as usize + 1) + 2);
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.a[2] == 0.0 && line.b[2] == 0.0)
+        );
+        let mut app = VfApp::new();
+        app.state.set_mode(true);
+        app.state.set_formula("(y, -x)".to_owned());
+        app.frame_simulation(&egui::Context::default());
+        assert_eq!(app.scene.lines.len(), lines.len());
+        assert!(app.scene.lines.iter().all(|line| line.a[2] == 0.0));
+    }
+
+    #[test]
+    fn reference_visibility_rebuild_and_click_undo_keep_one_selected_scene() {
+        let mut app = VfApp::new();
+        assert_eq!(
+            app.scene.lines.len(),
+            2 * (REFERENCE_DIVISIONS as usize + 1) + 2
+        );
+        app.state.set_show_grid(false);
+        app.state.set_show_coordinate_system(false);
+        app.state.set_streamlines(true);
+        app.frame_simulation(&egui::Context::default());
+        assert_eq!(app.scene.lines.len(), app.streamline_count);
+        let baseline = app.scene.lines.len();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
+        app.seed_click(rect.center(), rect, 1.0, 1.0);
+        assert!(
+            app.scene.lines.len() > baseline,
+            "a click contributes field lines with decoration hidden"
+        );
+        assert_eq!(app.scene.lines.len(), app.streamline_count);
+        app.undo_last_click_seed(1.1);
+        assert_eq!(app.scene.lines.len(), baseline);
+        assert_eq!(app.scene.lines.len(), app.streamline_count);
+        app.state.set_show_coordinate_system(true);
+        app.frame_simulation(&egui::Context::default());
+        assert_eq!(app.scene.lines.len(), app.streamline_count + 2);
+        assert_eq!(app.scene.lines[0].color, AXIS_X_COLOR);
+        assert_eq!(app.scene.lines[1].color, AXIS_Y_COLOR);
+    }
 }

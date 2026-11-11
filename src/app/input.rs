@@ -56,11 +56,7 @@ impl VfApp {
                 ctx.input_mut(|input| {
                     input.consume_key(egui::Modifiers::NONE, key);
                 });
-                crate::fly_camera::toggle_fly(
-                    &mut self.fly,
-                    &self.orbit,
-                    self.state.is_3d(),
-                );
+                crate::fly_camera::toggle_fly(&mut self.fly, &self.orbit, self.state.is_3d());
             }
         }
 
@@ -152,10 +148,8 @@ impl VfApp {
             menu::SideEffect::Screenshot => self.screenshot.request(),
             menu::SideEffect::ScreenshotSvg => {
                 if !crate::screenshot::svg_export_enabled(self.state.mode_3d) {
-                    self.screenshot.notify(
-                        "SVG export is 2D only; use PNG in 3D".to_string(),
-                        true,
-                    );
+                    self.screenshot
+                        .notify("SVG export is 2D only; use PNG in 3D".to_string(), true);
                 } else {
                     self.screenshot.request_svg();
                 }
@@ -194,12 +188,8 @@ impl VfApp {
     /// the camera no longer matches the saved view.
     pub(super) fn apply_view_command(&mut self, command: ViewCommand) {
         let context = self.view_context();
-        self.orbit = view_command::apply_view_command_with_fly(
-            self.orbit,
-            &mut self.fly,
-            context,
-            command,
-        );
+        self.orbit =
+            view_command::apply_view_command_with_fly(self.orbit, &mut self.fly, context, command);
         if matches!(command, ViewCommand::Reset | ViewCommand::Fit) {
             self.presets.clear_active();
         }
@@ -230,7 +220,12 @@ impl VfApp {
                 for event in &input.events {
                     match event {
                         egui::Event::WindowFocused(false) => keys.clear(),
-                        egui::Event::Key { key, physical_key, pressed, .. } => {
+                        egui::Event::Key {
+                            key,
+                            physical_key,
+                            pressed,
+                            ..
+                        } => {
                             if *pressed && *key == egui::Key::Escape {
                                 exit = true;
                             }
@@ -314,9 +309,13 @@ impl VfApp {
         let flying = self.fly.is_some();
         let shortcut = ctx.input(|input| {
             input.events.iter().find_map(|event| match event {
-                egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => {
-                    view_command::seed_shortcut(*key, *modifiers, *repeat, text_focused, flying)
-                }
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    repeat,
+                    modifiers,
+                    ..
+                } => view_command::seed_shortcut(*key, *modifiers, *repeat, text_focused, flying),
                 _ => None,
             })
         });
@@ -354,13 +353,7 @@ impl VfApp {
     /// a single streamline seed or a particle burst, never both. The pure
     /// [`view_command::click_action_plan`] owns the feature gates and the
     /// one-line no-op hint; this wrapper owns the seed/burst side effects.
-    pub(super) fn seed_click(
-        &mut self,
-        pos: egui::Pos2,
-        rect: egui::Rect,
-        aspect: f32,
-        time: f64,
-    ) {
+    pub(super) fn seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
         let action = self.state.left_click_action;
         self.apply_click_action(action, pos, rect, aspect, time);
     }
@@ -400,14 +393,17 @@ impl VfApp {
                     self.click_seeds.remove(0);
                 }
                 self.click_seeds.push(seed);
-                self.click_lines =
-                    self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+                self.click_lines = self
+                    .state
+                    .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
                 self.streamline_count = self.flow_lines.len() + self.click_lines.len();
                 self.scene.lines = Arc::new(compose_lines(
                     &self.flow_lines,
                     &self.click_lines,
                     &self.state.domain,
                     self.state.is_3d(),
+                    self.state.show_grid,
+                    self.state.show_coordinate_system,
                 ));
                 log::trace!(
                     "click seed {} of {} at {seed:?}: {} click streamline segments",
@@ -463,19 +459,18 @@ impl VfApp {
     /// Map one viewport point onto the active camera to get a seed position.
     /// The pure `click_seed` seam maps the pointer to the orbit ray (3D) or the
     /// 2D plane; `None` means the point is off the domain.
-    fn click_world_seed(
-        &self,
-        pos: egui::Pos2,
-        rect: egui::Rect,
-        aspect: f32,
-    ) -> Option<Vec3> {
+    fn click_world_seed(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<Vec3> {
         let width = rect.width().max(1.0);
         let height = rect.height().max(1.0);
         let ndc = Vec2::new(
             (pos.x - rect.left()) / width * 2.0 - 1.0,
             1.0 - (pos.y - rect.top()) / height * 2.0,
         );
-        let ortho = if self.state.mode_3d { None } else { Some(self.state.plane_size()) };
+        let ortho = if self.state.mode_3d {
+            None
+        } else {
+            Some(self.state.plane_size())
+        };
         let view_camera = match &self.fly {
             Some(fly) => ViewCamera::Fly(fly),
             None => ViewCamera::Orbit(&self.orbit),
@@ -508,13 +503,17 @@ impl VfApp {
             return;
         }
         self.click_seeds = undo.seeds;
-        self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+        self.click_lines = self
+            .state
+            .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
         self.scene.lines = Arc::new(compose_lines(
             &self.flow_lines,
             &self.click_lines,
             &self.state.domain,
             self.state.is_3d(),
+            self.state.show_grid,
+            self.state.show_coordinate_system,
         ));
     }
 }
