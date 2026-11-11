@@ -337,7 +337,7 @@ impl PresetPanel {
         // Camera actions (ticket 18): clickable twins of `R` and `F`, kept
         // next to the presets so the view controls live in one place.
         let mut requested = None;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (label, command) in CAMERA_BUTTONS {
                 let tooltip = match command {
                     ViewCommand::Reset => "Restore the default view (R)",

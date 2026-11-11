@@ -432,15 +432,19 @@ pub fn show(
         appearance_button = Some(gear);
 
         // The screenshot action lives at the right end of the bar and
-        // dispatches the same ExportScreenshot action as File > Export.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if screenshot_button(ui, screenshot) {
-                action = Some(MenuAction::ExportScreenshot);
-            }
-            if screenshot_svg_button(ui, mode_3d) {
-                action = Some(MenuAction::ExportScreenshotSvg);
-            }
-        });
+        // dispatches the same ExportScreenshot action as File > Export. Wrap
+        // within the remaining space rather than painting over the menu group.
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+            |ui| {
+                if screenshot_button(ui, screenshot) {
+                    action = Some(MenuAction::ExportScreenshot);
+                }
+                if screenshot_svg_button(ui, mode_3d) {
+                    action = Some(MenuAction::ExportScreenshotSvg);
+                }
+            },
+        );
     });
 
     if let Some(button) = appearance_button {

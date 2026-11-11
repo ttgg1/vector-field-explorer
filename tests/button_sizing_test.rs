@@ -471,3 +471,122 @@ fn real_compact_app_tabs_keep_large_font_ink_inside_the_panel() {
         assert_text_fits(&out, "✕", true);
     }
 }
+
+fn app_frame(
+    app: &mut vector_field_explorer::VfApp,
+    ctx: &egui::Context,
+    width: f32,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut native_frame = eframe::Frame::_new_kittest();
+    frame_at(ctx, width, 800.0, events, |ui| {
+        eframe::App::ui(app, ui, &mut native_frame);
+    })
+}
+
+fn settled_app_frame(
+    app: &mut vector_field_explorer::VfApp,
+    ctx: &egui::Context,
+    width: f32,
+) -> egui::FullOutput {
+    for _ in 0..3 {
+        app_frame(app, ctx, width, vec![]);
+    }
+    app_frame(app, ctx, width, vec![])
+}
+
+#[test]
+fn compact_app_full_transport_labels_fit_paused_and_playing_and_keep_clock_actions() {
+    for width in [320.0, 360.0] {
+        for font in [8.0, 13.0, 24.0] {
+            for playing in [false, true] {
+                let ctx = context(font);
+                let mut app = vector_field_explorer::VfApp::new();
+                app.style.font_size = font;
+                app.layout.help_visible = false;
+                app.state.set_formula("(x+t, y)".into());
+                app.clock.playing = playing;
+                app.clock.time = 12.0;
+                app.clock.set_speed(1.5);
+
+                let out = settled_app_frame(&mut app, &ctx, width);
+                // The actual app passes compact=false to the transport: keep
+                // those full labels rather than substituting an icon fixture.
+                let play = assert_text_fits(&out, transport::play_label(playing, false), true);
+                let reset = assert_text_fits(&out, "↺ Reset time", true);
+                assert!(!play.intersects(reset));
+                assert_eq!(app.clock.playing, playing);
+                assert_eq!(app.clock.speed, 1.5);
+                assert!(app.clock.time >= 12.0);
+
+                app_frame(&mut app, &ctx, width, pointer(play.center(), true));
+                app_frame(&mut app, &ctx, width, pointer(play.center(), false));
+                assert_eq!(app.clock.playing, !playing, "actual Play/Pause click");
+                let out = settled_app_frame(&mut app, &ctx, width);
+                assert_text_fits(&out, transport::play_label(!playing, false), true);
+                let reset = assert_text_fits(&out, "↺ Reset time", true);
+                app_frame(&mut app, &ctx, width, pointer(reset.center(), true));
+                app_frame(&mut app, &ctx, width, pointer(reset.center(), false));
+                assert_eq!(app.clock.time, 0.0, "actual Reset time click");
+                assert_eq!(app.clock.playing, !playing);
+                assert_eq!(app.clock.speed, 1.5);
+                assert_eq!(app.state.formula, "(x+t, y)");
+            }
+        }
+    }
+}
+
+#[test]
+fn wide_app_menu_and_screenshot_hitboxes_do_not_overlap_at_the_breakpoint() {
+    for width in [701.0, 960.0, 1280.0] {
+        for font in [8.0, 13.0, 24.0] {
+            let ctx = context(font);
+            let mut app = vector_field_explorer::VfApp::new();
+            app.style.font_size = font;
+            app.layout.help_visible = false;
+            let out = settled_app_frame(&mut app, &ctx, width);
+            let labels = [
+                "File",
+                "Edit",
+                "View",
+                "Help",
+                top_bar::APPEARANCE_BUTTON_LABEL,
+                "Screenshot as SVG",
+                "Screenshot",
+            ];
+            let rects = labels.map(|label| assert_text_fits(&out, label, false));
+            for (index, rect) in rects.iter().enumerate() {
+                for (other_index, other) in rects.iter().enumerate().skip(index + 1) {
+                    assert!(
+                        !rect.intersects(*other),
+                        "{} {rect:?} overlaps {} {other:?} at width {width}, font {font}",
+                        labels[index],
+                        labels[other_index],
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn assembled_wide_app_presets_camera_buttons_fit_the_space_left_by_controls() {
+    for width in [701.0, 960.0, 1280.0] {
+        for font in [8.0, 13.0, 24.0] {
+            let ctx = context(font);
+            let mut app = vector_field_explorer::VfApp::new();
+            app.style.font_size = font;
+            app.layout.help_visible = false;
+            let out = settled_app_frame(&mut app, &ctx, width);
+            // Do not give Presets an isolated generous width: the real Controls
+            // panel must consume its share of the same 701-point root first.
+            let reset = assert_text_fits(&out, "Reset view", false);
+            let fit = assert_text_fits(&out, "Fit domain", false);
+            assert!(!reset.intersects(fit));
+            assert!(
+                fit.right() <= width,
+                "Fit domain must remain inside the actual app"
+            );
+        }
+    }
+}

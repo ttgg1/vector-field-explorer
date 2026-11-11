@@ -1,13 +1,13 @@
 //! The compact simulation transport strip (ticket 26).
 //!
-//! Rendered as one row directly under the formula bar, not as a new panel, and
+//! Rendered directly under the formula bar, not as a new panel, and
 //! only while the view has a clock consumer (particles on in 3D today). The
 //! strip owns no state: every control edits [`SimClock`], the app's one time
 //! source.
 //!
 //! The button and time labels take a `compact` flag so ticket 53 can switch to
 //! icon-only buttons and a shorter readout without changing this module's
-//! shape. v0.1.0 always renders the full row.
+//! shape. The app keeps full labels; narrow layouts wrap the row.
 
 use eframe::egui;
 
@@ -48,7 +48,7 @@ pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: boo
     } else {
         super::style_panel::button_min_size(ui)
     };
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add(egui::Button::new(play_label(clock.playing, compact)).min_size(min_size))
             .on_hover_text("Play or pause the simulation (Space)")

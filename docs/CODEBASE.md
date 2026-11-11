@@ -2209,7 +2209,7 @@ lines: 715 are executed on this platform (714 in the suite plus the isolated
 | Arrow opacity | `arrow_opacity_test.rs` | 13 |
 | Dot billboard | `dot_billboard_test.rs` | 12 |
 | Style panel | `ui_style_panel_test.rs` | 13 |
-| Font-responsive buttons | `button_sizing_test.rs` | 7 |
+| Font-responsive buttons | `button_sizing_test.rs` | 10 |
 | Responsive/compact | `responsive_test.rs` | 11 |
 | Plane | `plane_test.rs` | 11 |
 | Camera projections | `camera_pan_zoom_test.rs` | 11 |
