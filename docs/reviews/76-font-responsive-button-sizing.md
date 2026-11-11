@@ -37,7 +37,18 @@ screenshot, and separate painted-ink checks were explicitly waived by the
 owner; they are **waived, not passed**. Native automated geometry evidence is
 not comprehensive visual validation.
 
+After the scoped PASS, a fresh candidate run on exact product HEAD
+`44a22a515c2513c7cc5061481fca10919d092221` completed `cargo test --all-targets`
+(**802 passed, 0 failed, 0 ignored**) and isolated `cargo test --test
+config_test` (**1 passed**), using the report's persistent target/temp paths
+and explicit Rustup toolchain. This is pre-merge candidate evidence, not
+post-merge verification. The docs checker passed on this review-record change.
+
 ## Integration status
 
 `origin/main` was fetched and verified at the reviewed product base; no product
-reconciliation was needed. PR publication and merge are not claimed here.
+reconciliation was needed. The feature branch was pushed, including review
+record commit `cf92e760...`; GitHub CLI cannot authenticate (`gh auth status`
+reports the configured token is invalid), so PR publication and merge remain
+blocked and are not claimed here. Re-authenticate before opening the PR. No
+post-merge test or CI result exists yet.
