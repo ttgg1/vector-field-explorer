@@ -1,5 +1,9 @@
 # Native CAS design — 2026-11-10
 
+Accepted feature contract, retained as evidence. For execution/status use the
+[plan/spec index](../README.md) and [Workflow](../../../references/workflow.md),
+not dated builder gates or historical readiness notes in this document.
+
 ## Intent and accepted scope
 
 Provide a native-only symbolic differentiation/derived-field workflow for
@@ -163,7 +167,7 @@ blocked on 73 and ticket 71. No implementation starts under this design task.
 
 ## Sources
 
-- Owner rulings and current status: `.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md`,
+- Historical owner rulings: `.superpowers/sdd/2026-11-05-vector-field-explorer/archive/progress-through-2026-11-11.md`,
   final dated section, 2026-11-10.
 - Roadmap: `.scratch/field-viewport/issues/55-physics-roadmap.md`, CAS track.
 - Engine research: `docs/research/2026-11-10-cas-selection.md` (sampling
