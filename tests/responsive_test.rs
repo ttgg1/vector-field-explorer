@@ -135,7 +135,10 @@ fn compact_plan_hides_the_side_panels_and_shows_the_tab_bar() {
 
 #[test]
 fn touch_targets_are_finger_sized() {
-    assert_eq!(TOUCH_TARGET, 44.0, "the minimum touch target is 44 pt");
+    assert_eq!(
+        TOUCH_TARGET, 40.0,
+        "ticket 76 sets a 40 pt minimum button target"
+    );
     assert_eq!(TAB_BAR_HEIGHT, 48.0);
 }
 

@@ -27,9 +27,6 @@ pub const MAX_SPACING: f32 = 24.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 24.0;
 
-/// Edge length of one accent-preset swatch, in points.
-const ACCENT_SWATCH_SIZE: f32 = 20.0;
-
 /// One named accent colour offered above the custom picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccentPreset {
@@ -214,8 +211,14 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
         style_ctx.spacing.item_spacing =
             egui::vec2(style.spacing, style.spacing * SPACING_Y_RATIO);
 
-        // Base size for body text; headings and small text scale with it.
+        // Button widgets (including selectable labels and menu buttons) derive
+        // their natural bounds from this padding around the active text style.
+        // Scale it with the persisted font size; do not change global
+        // interaction_size, which would also enlarge sliders and drag values.
         let font_size = style.font_size.max(1.0);
+        style_ctx.spacing.button_padding = button_padding(font_size);
+
+        // Base size for body text; headings and small text scale with it.
         style_ctx
             .text_styles
             .insert(egui::TextStyle::Body, egui::FontId::proportional(font_size));
@@ -234,6 +237,51 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
             egui::FontId::proportional(font_size * 0.85),
         );
     });
+}
+
+fn button_padding(font_size: f32) -> egui::Vec2 {
+    egui::vec2((font_size * 0.6).clamp(4.0, 12.0), font_size * 0.5)
+}
+
+/// Shared sizing for custom button surfaces; ordinary egui buttons already
+/// measure their own contents and add `button_padding`.
+pub(crate) fn button_height(ui: &egui::Ui) -> f32 {
+    (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
+        .max(ui.spacing().interact_size.y)
+        .max(button_min_size(ui).y)
+}
+
+/// Small/icon/custom buttons must not bypass the compact touch floor. Use the
+/// root width, not a panel's narrow width, to distinguish the two layouts.
+pub(crate) fn button_min_size(ui: &egui::Ui) -> egui::Vec2 {
+    if super::layout::layout_mode(ui.ctx().content_rect().width())
+        == super::layout::LayoutMode::Compact
+    {
+        egui::Vec2::splat(super::layout::TOUCH_TARGET)
+    } else {
+        egui::Vec2::ZERO
+    }
+}
+
+/// egui's menu style replaces button padding with (2, 0). Restore our shared
+/// font-derived padding after that override, without altering menu visuals.
+pub(crate) fn restore_menu_button_padding(ui: &mut egui::Ui) {
+    ui.spacing_mut().button_padding = ui.ctx().global_style().spacing.button_padding;
+    ui.spacing_mut().interact_size.y = ui.spacing().interact_size.y.max(button_min_size(ui).y);
+}
+
+/// egui's color well uses only `interact_size`, ignoring button padding.
+/// Scope that override to the well so neighboring editors are not rescaled.
+pub(crate) fn color_button(
+    ui: &mut egui::Ui,
+    edit: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    let size = button_height(ui);
+    let previous = ui.spacing().interact_size;
+    ui.spacing_mut().interact_size = egui::Vec2::splat(size);
+    let response = edit(ui);
+    ui.spacing_mut().interact_size = previous;
+    response
 }
 
 /// What one [`show_controls`] pass reports back to the owning popover.
@@ -255,10 +303,9 @@ fn show_accent_presets(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
     let mut changed = false;
     ui.horizontal_wrapped(|ui| {
         for (index, preset) in ACCENT_PRESETS.iter().enumerate() {
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(ACCENT_SWATCH_SIZE, ACCENT_SWATCH_SIZE),
-                egui::Sense::click(),
-            );
+            let size = button_height(ui);
+            let (rect, response) =
+                ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
             let is_selected = selected == Some(index);
 
             let painter = ui.painter();
@@ -314,7 +361,9 @@ fn show_accent_presets(ui: &mut egui::Ui, style: &mut AppStyle) -> bool {
 /// Settings popover (ticket 14 moved them out of the sidebar).
 pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
     let mut changed = false;
+    let min_size = button_min_size(ui);
     ui.horizontal(|ui| {
+        ui.spacing_mut().interact_size.y = ui.spacing().interact_size.y.max(min_size.y);
         ui.label("Theme");
         changed |= ui
             .selectable_value(&mut style.theme_dark, false, "Light")
@@ -332,7 +381,7 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
     ui.horizontal(|ui| {
         ui.label("Accent");
         accent_popup_id = ui.auto_id_with("popup");
-        changed |= ui.color_edit_button_srgba(&mut style.accent).changed();
+        changed |= color_button(ui, |ui| ui.color_edit_button_srgba(&mut style.accent)).changed();
     });
     changed |= ui
         .add(egui::Slider::new(&mut style.rounding, MIN_ROUNDING..=MAX_ROUNDING).text("Rounding"))
@@ -348,4 +397,3 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
         accent_popup_id,
     }
 }
-
