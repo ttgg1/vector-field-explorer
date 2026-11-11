@@ -159,6 +159,13 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
         "the proportional contrast agrees",
     );
     assert_eq!(c.arrows, s.arrows, "arrows start visible");
+    assert!(c.show_grid, "the grid starts visible");
+    assert_eq!(c.show_grid, s.show_grid, "grid visibility agrees");
+    assert!(c.show_coordinate_system, "the axes start visible");
+    assert_eq!(
+        c.show_coordinate_system, s.show_coordinate_system,
+        "axes visibility agrees"
+    );
     assert_eq!(c.arrow_style, s.arrow_style, "arrow style agrees");
     assert_eq!(c.arrow_style_2d, s.arrow_style_2d, "2D arrow style agrees");
     assert_eq!(c.arrow_params, s.arrow_params, "arrow appearance agrees");
@@ -209,6 +216,14 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_magnitude_scale(c.magnitude_scale));
     assert!(!s.set_proportional_exponent(c.proportional_exponent));
     assert!(!s.set_arrows(c.arrows));
+    assert!(
+        !s.set_show_grid(c.show_grid),
+        "synced grid visibility is a no-op"
+    );
+    assert!(
+        !s.set_show_coordinate_system(c.show_coordinate_system),
+        "synced axes visibility is a no-op"
+    );
     assert!(!s.set_arrow_style(c.arrow_style));
     assert!(!s.set_arrow_style_2d(c.arrow_style_2d));
     assert!(!s.set_arrow_params(c.arrow_params));
@@ -224,6 +239,89 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_particles(c.particles));
     assert!(!s.set_domain(c.domain_min, c.domain_max), "synced extrema are a no-op");
     assert!(s.snapshot_if_dirty().is_none(), "an untouched frame rebuilds nothing");
+}
+
+#[test]
+fn reference_visibility_applies_independently_without_redirtying() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the initial scene");
+
+    c.show_grid = false;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (false, false));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (true, true)
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "grid edit rebuilds once");
+    apply(&mut s, &mut c);
+    assert!(
+        s.snapshot_if_dirty().is_none(),
+        "unchanged grid does not redirty"
+    );
+
+    c.show_coordinate_system = false;
+    apply(&mut s, &mut c);
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (false, false)
+    );
+    assert_eq!(
+        (s.show_grid, c.show_grid),
+        (false, false),
+        "axes edit leaves grid hidden"
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "axes edit rebuilds once");
+    apply(&mut s, &mut c);
+    assert!(
+        s.snapshot_if_dirty().is_none(),
+        "unchanged axes do not redirty"
+    );
+}
+
+#[test]
+fn reference_visibility_survives_modes_and_display_reset() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some());
+    c.streamlines = true;
+    c.seed_mode = StreamlineSeedMode::Click;
+    c.show_grid = false;
+    c.show_coordinate_system = false;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, s.show_coordinate_system), (false, false));
+
+    assert!(s.set_mode(true));
+    c.density = s.density;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (false, false));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (false, false)
+    );
+    assert!(s.set_mode(false));
+    c.density = s.density;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (false, false));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (false, false)
+    );
+
+    c.reset_display();
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (true, true));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (true, true)
+    );
+    assert!(
+        s.streamlines && c.streamlines,
+        "Display reset leaves streamlines on"
+    );
+    assert_eq!(s.seed_mode, StreamlineSeedMode::Click);
+    assert_eq!(c.seed_mode, StreamlineSeedMode::Click);
 }
 
 #[test]

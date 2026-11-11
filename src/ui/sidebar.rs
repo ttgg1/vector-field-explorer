@@ -336,6 +336,10 @@ pub struct Controls {
     pub proportional_exponent: f32,
     /// Show arrows (ticket 45); unchecking hides only the arrow instances.
     pub arrows: bool,
+    /// Show the plane/face grid and domain box.
+    pub show_grid: bool,
+    /// Show the colored reference axes, independently of field lines.
+    pub show_coordinate_system: bool,
     pub arrow_style: ArrowStyle,
     pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
@@ -387,6 +391,8 @@ impl Controls {
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
             arrows: true,
+            show_grid: true,
+            show_coordinate_system: true,
             arrow_style: ArrowStyle::Cone,
             arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
@@ -411,7 +417,7 @@ impl Controls {
 
     /// Restore the Display section's defaults (density, arrow length mode,
     /// both scales, arrow and off-plane opacity, the proportional contrast,
-    /// arrow visibility/style/appearance, plane-by-plane).
+    /// arrow and reference visibility/style/appearance, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
@@ -422,6 +428,8 @@ impl Controls {
         self.magnitude_scale = defaults.magnitude_scale;
         self.proportional_exponent = defaults.proportional_exponent;
         self.arrows = defaults.arrows;
+        self.show_grid = defaults.show_grid;
+        self.show_coordinate_system = defaults.show_coordinate_system;
         self.arrow_style = defaults.arrow_style;
         self.arrow_style_2d = defaults.arrow_style_2d;
         self.arrow_params = defaults.arrow_params;
@@ -515,6 +523,15 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
         });
         ui.checkbox(&mut controls.arrows, "Show arrows")
             .on_hover_text("Hide the arrow field without hiding streamlines or particles");
+        ui.checkbox(&mut controls.show_grid, "Show grid")
+            .on_hover_text("Show the plane/face grid and domain box");
+        ui.checkbox(
+            &mut controls.show_coordinate_system,
+            "Show coordinate system",
+        )
+        .on_hover_text(
+            "Show colored X/Y axes (and Z in 3D); these reference axes are not field lines",
+        );
         let arrow_scale_on = arrow_scale_enabled(controls.arrow_length_mode);
         let arrow_scale_text = if arrow_scale_on {
             "Arrow length (grid cells)"
@@ -1148,6 +1165,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
     state.set_arrows(controls.arrows);
+    state.set_show_grid(controls.show_grid);
+    state.set_show_coordinate_system(controls.show_coordinate_system);
     state.set_arrow_style(controls.arrow_style);
     state.set_arrow_style_2d(controls.arrow_style_2d);
     state.set_arrow_params(controls.arrow_params);
@@ -1184,6 +1203,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.color_min = state.color_min;
     controls.color_max = state.color_max;
     controls.arrows = state.arrows;
+    controls.show_grid = state.show_grid;
+    controls.show_coordinate_system = state.show_coordinate_system;
     controls.arrow_style = state.arrow_style;
     controls.arrow_style_2d = state.arrow_style_2d;
     controls.arrow_params = state.arrow_params;
