@@ -23,15 +23,17 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
 - Before creating tickets from feedback, use `grilling`; add `domain-modeling`
   for terminology/hard-to-reverse decisions. Group/deduplicate findings, extend
   the owning ticket for refinements, ledger rulings, and obtain confirmation of
-  the resulting ticket set. Approved scope still needs just-in-time design.
+  the resulting ticket set. Ask the whole current frontier in rounds before
+  finalizing feedback-derived tickets. Approved scope still needs just-in-time design.
 - Feature work uses brainstorming/planning then SDD + TDD; bugs use systematic
   diagnosis before fixes. Use domain-modeling for glossary/ADR changes.
 
 ## Dispatch and evidence
 
 1. Record BASE, brief, accepted scope, dependencies and exclusive file ownership.
-   One `feature/<topic>` branch/worktree per task. Parallel implementers are
-   allowed only for independent, file-disjoint work; serialize shared seams.
+   One `feature/<topic>` branch/worktree per task. Default to parallel implementers
+   for authorized independent, file-disjoint tasks, subject to ownership/build
+   limits and usage-limit/explicit-stop rules; serialize shared seams.
 2. The controller keeps the ledger and serializes integration, rather than
    writing production code during the loop. An implementer reads its brief,
    uses TDD (observe the right RED before production changes), runs applicable
