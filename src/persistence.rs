@@ -93,6 +93,13 @@ pub struct ViewRecord {
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
+    /// Display the 2D lattice or 3D grid faces. Missing in older records:
+    /// reference geometry was always visible before the toggle existed.
+    #[serde(default = "default_reference_visible")]
+    pub show_grid: bool,
+    /// Display the 2D axes or 3D domain box and axes. Independent of the grid.
+    #[serde(default = "default_reference_visible")]
+    pub show_coordinate_system: bool,
     /// Show arrows (ticket 45). Older records did not carry it, so the
     /// container default (true) keeps them showing arrows.
     #[serde(default = "default_arrows")]
@@ -179,6 +186,8 @@ impl ViewRecord {
             auto_fit: state.auto_fit,
             color_min: state.color_min,
             color_max: state.color_max,
+            show_grid: state.show_grid,
+            show_coordinate_system: state.show_coordinate_system,
             arrows: state.arrows,
             arrow_style: state.arrow_style,
             arrow_style_2d: state.arrow_style_2d,
@@ -231,6 +240,8 @@ impl ViewRecord {
         controls.auto_fit = self.auto_fit;
         controls.color_min = finite_or(self.color_min, defaults.color_min);
         controls.color_max = finite_or(self.color_max, defaults.color_max);
+        controls.show_grid = self.show_grid;
+        controls.show_coordinate_system = self.show_coordinate_system;
         controls.arrows = self.arrows;
         controls.arrow_style = self.arrow_style;
         controls.arrow_style_2d = self.arrow_style_2d;
@@ -281,6 +292,12 @@ pub fn finite_or(value: f32, fallback: f32) -> f32 {
 /// The `arrows` field's serde default: older records predate the Show arrows
 /// toggle, and arrows were always drawn then.
 fn default_arrows() -> bool {
+    true
+}
+
+/// Older records omit both reference toggles; each missing field stays visible
+/// independently (a plain bool serde default would instead hide it).
+fn default_reference_visible() -> bool {
     true
 }
 

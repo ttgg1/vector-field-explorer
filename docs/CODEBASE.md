@@ -71,8 +71,8 @@ per-frame simulation state beside it.
         │                    │
         │                    └─ Err: parse_error set; previous FieldExpr kept
         ▼
- State { formula, field, domain, density, colour, styles, toggles,
-         plane, particle knobs, dirty }
+  State { formula, field, domain, density, colour, styles, toggles,
+          show_grid, show_coordinate_system, plane, particle knobs, dirty }
         │
         │ snapshot_if_dirty()          (only when dirty; clears the flag)
         ▼
@@ -87,7 +87,8 @@ per-frame simulation state beside it.
            }
         │
         │ VfApp::rebuild_scene (app/simulation.rs)
-        │  - compose_lines(reference_lines(domain) + flow lines + click lines)
+         │  - compose_lines(reference_lines_visible(domain, is_3d,
+         │      show_grid, show_coordinate_system) + flow lines + click lines)
         │  - cache dots_range from the freshly sampled magnitudes
         │  - retrace click bursts on every dirty rebuild
         ▼
@@ -116,9 +117,11 @@ Why the seam matters:
 - `snapshot_if_dirty` is the only rebuild trigger for arrows and grid
   streamlines. Particle dots and trails are deliberately *not* in that snapshot:
   they change every frame and are rebuilt by the app from the live cloud.
-- The app owns `reference_lines` (grid/cube/axes) and clicks. The snapshot's
-  `lines` holds grid-seeded streamlines only; `compose_lines` folds all three
-  into the one line collection that gets painted.
+- The app owns reference lines (2D grid/axes or 3D face grid/box and axes)
+  and clicks. The two independent `State` flags filter reference geometry
+  before `compose_lines` appends flow and click lines; the snapshot's `lines`
+  holds grid-seeded streamlines only. The resulting `SceneGPU.lines` is shared
+  by both viewport modes and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -254,12 +257,14 @@ and the helpers that belong to no single frame phase.
 **Invariants.**
 - `new_with_storage` restores `AppSettings` through the viewmodel setters before
   the first frame; a restored non-default domain is recentred on the correct
-  camera (`recentre_on` in 3D, `recentre_on_2d` in 2D).
+  camera (`recentre_on` in 3D, `recentre_on_2d` in 2D). It passes the restored
+  reference flags into `compose_lines` for the initial private scene; dirty
+  rebuilds and click recompositions use that same composition path.
 - `MAX_CLICK_SEEDS = 6`: click seeds are oldest-first and the oldest is dropped
   when a seventh is added.
-- `compose_lines` always prepends `reference_lines` and then the cached grid and
-  click segments; the status bar's streamline count is `flow_lines +
-  click_lines`, not the full scene line count.
+- `compose_lines` prepends only the enabled reference groups and then the
+  cached flow and click segments; the status bar's streamline count is
+  `flow_lines + click_lines`, not the full scene line count.
 - `scene` is a cache; `State` remains the source of truth.
 - `camera` is the 2D preset mirror (`Camera { position, scale }`), not the live
   painting camera; `orbit` is live.
@@ -623,6 +628,7 @@ decisions that do not need a window.
   `set_arrow_scale`, `set_arrow_opacity`, `set_plane_dim_opacity`,
   `set_arrow_length_mode`, `set_magnitude_scale`, `set_proportional_exponent`,
   `set_colormap`, `set_auto_fit`, `set_color_range`, `set_arrows`,
+  `set_show_grid`, `set_show_coordinate_system`,
   `set_arrow_style`, `set_arrow_style_2d`, `set_arrow_params`,
   `set_streamlines`, `set_seed_mode`, `set_left_click_action`, `set_particles`,
   `set_particle_size`, `set_particle_count`, `set_particle_appearance`,
@@ -648,6 +654,8 @@ decisions that do not need a window.
   bounds them to `-100..=100` (NaN → 0 in the pure function; callers keep the
   previous value).
 - `snapshot_if_dirty` clears `dirty` and returns `Some` exactly once per change.
+- The independent reference toggles default true, dirty the scene when changed,
+  and leave field arrows/flow/click segments untouched.
 - `snapshot` is pure: no GPU resource; `trails`, `dots` and `combined` are empty
   because the app owns per-frame particles and sorting.
 - Arrow length: Proportional is `arrow_scale * spacing` normalised by the max
@@ -707,7 +715,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `controls_width`, `presets_width`, `help_visible` | `#[serde(default)]`; widths sanitized |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -727,7 +735,7 @@ storage key, with migration and corruption tolerance.
 8. Unknown future keys are ignored by serde; absent fields take their documented
    defaults.
 
-**Tested by.** `tests/persistence_test.rs` (37 tests):
+**Tested by.** `tests/persistence_test.rs` (39 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -737,8 +745,10 @@ storage key, with migration and corruption tolerance.
 `a_pre_ticket_64_record_decodes_old_line_to_flat_in_both_sets`,
 `an_unknown_left_click_action_loads_as_seed_streamline`,
 `compact_mode_and_sheet_are_never_written_to_storage`,
-`a_bad_formula_in_the_record_keeps_the_last_good_field`, and the restore/sanitize
-tests.
+`a_bad_formula_in_the_record_keeps_the_last_good_field`,
+`each_reference_preference_survives_storage_restore_and_constructor_independently`,
+`a_partial_reference_record_defaults_only_the_missing_coordinate_flag`, and
+the restore/sanitize tests.
 
 **Limitations.** There is no explicit schema version number; compatibility is a
 set of serde defaults and aliases that must be maintained forever. Camera state,
@@ -1095,8 +1105,8 @@ not a stable library API.
 
 #### `src/reference.rs` — domain-matched grid, cube, axes
 
-**Purpose.** App-side decoration: a wireframe domain box or a flat grid, with
-coloured axes.
+**Purpose.** App-side decoration: a 3D face grid and wireframe domain box or a
+flat 2D grid, with coloured axes.
 
 **Public API.** `REFERENCE_DIVISIONS = 10`; `EDGE_COLOR`, `GRID_COLOR`,
 `AXIS_X_COLOR`, `AXIS_Y_COLOR`, `AXIS_Z_COLOR`; `GRID_WIDTH`, `EDGE_WIDTH`,
@@ -1108,11 +1118,14 @@ coloured axes.
   under coincident edges.
 - 2D draws one grid on the domain's mid-z plane (the same plane the single z
   slice samples) plus X/Y axes; no z axis.
+- `show_grid` independently gates the 2D lattice/3D face grids;
+  `show_coordinate_system` gates 2D axes/3D box edges and axes. Both flags
+  default on, and neither filters field geometry.
 - Every line stays inside the domain bounds.
 - Reference geometry is never counted as field geometry and is not part of the
   viewmodel snapshot.
 
-**Pinned by.** `tests/reference_lines_test.rs` (7 tests):
+**Pinned by.** `tests/reference_lines_test.rs` (10 tests):
 `three_d_reference_has_twelve_box_edges_subdivided_faces_and_three_axes`,
 `three_d_reference_stays_inside_the_domain_and_draws_every_bound`,
 `face_grid_is_drawn_before_the_box_edges_and_axes_last`,
@@ -1650,6 +1663,8 @@ per-section resets, `Default`), `show`, `apply`.
 - The widgets edit `Controls`; `apply` calls the viewmodel setters and then
   refreshes the mirror from the effective state, so clamped/swapped values are
   what the next frame shows.
+- Display's Show grid / Show coordinate system checkboxes default on, apply
+  independently in both modes, and return to on with the Display reset.
 - Density range keys to the sampling dimension (`is_3d`): 4..=200 flat,
   4..=40 for n³.
 - Disabled controls are disabled for a reason: arrow scale in Magnitude,
@@ -1665,7 +1680,7 @@ per-section resets, `Default`), `show`, `apply`.
   into it before drawing and reconciles a click through
   `fly_camera::sync_fly_mirror`.
 
-**Pinned by.** `tests/sidebar_controls_test.rs` (47), including
+**Pinned by.** `tests/sidebar_controls_test.rs` (51), including
 `untouched_frame_rebuilds_nothing_through_apply`,
 `synced_controls_never_redirty_the_scene`,
 `density_clamp_keys_to_sampled_dimension_through_apply`,
@@ -2192,8 +2207,8 @@ lines: 715 are executed on this platform (714 in the suite plus the isolated
 | --- | --- | --- |
 | Viewmodel seam | `viewmodel_test.rs` | 66 |
 | Particles | `particles_test.rs` | 52 |
-| Sidebar controls | `sidebar_controls_test.rs` | 47 |
-| Persistence | `persistence_test.rs` | 37 |
+| Sidebar controls | `sidebar_controls_test.rs` | 51 |
+| Persistence | `persistence_test.rs` | 39 |
 | Fly camera | `fly_camera_test.rs` | 31 |
 | Arrow style | `arrow_style_test.rs` | 30 |
 | Menu | `menu_test.rs` | 26 |
@@ -2225,7 +2240,7 @@ lines: 715 are executed on this platform (714 in the suite plus the isolated
 | Export/PNG | `export_test.rs` | 7 |
 | Field | `field_test.rs` | 7 |
 | Line alpha/trails | `line_alpha_test.rs` | 7 |
-| Reference lines | `reference_lines_test.rs` | 7 |
+| Reference lines | `reference_lines_test.rs` | 10 |
 | Fonts | `fonts_test.rs` | 6 |
 | Pointer lock | `pointer_lock_test.rs` | 6 |
 | Window | `window_test.rs` | 6 |
