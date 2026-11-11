@@ -69,6 +69,56 @@ fn apply_is_idempotent() {
     assert_eq!(*ctx.global_style(), once);
 }
 
+#[test]
+fn rendered_button_families_grow_with_font_and_compact_buttons_keep_a_40_point_floor() {
+    fn bounds(font_size: f32, compact: bool) -> Vec<egui::Rect> {
+        let ctx = crate::support::context();
+        let style = AppStyle {
+            font_size,
+            ..AppStyle::default()
+        };
+        apply(&ctx, &style);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(500.0, 300.0),
+            )),
+            ..Default::default()
+        };
+        let mut rects = Vec::new();
+        let mut output = ctx.run_ui(input, |ui| {
+            if compact {
+                ui.spacing_mut().interact_size.y = 40.0;
+            }
+            rects = vec![
+                ui.button("Reset arrow appearance").rect,
+                ui.selectable_label(false, "3D view").rect,
+                ui.add(egui::Button::new("▶").min_size(egui::vec2(40.0, 40.0)))
+                    .rect,
+            ];
+        });
+        output.textures_delta.clear();
+        rects
+    }
+
+    for compact in [false, true] {
+        let small = bounds(8.0, compact);
+        let default = bounds(13.0, compact);
+        let large = bounds(24.0, compact);
+        for index in 0..small.len() {
+            assert!(default[index].height() >= small[index].height());
+            assert!(large[index].height() >= default[index].height());
+            if compact {
+                assert!(small[index].height() >= 40.0);
+                assert!(default[index].height() >= 40.0);
+                assert!(large[index].height() >= 40.0);
+            }
+        }
+        assert!(large[0].height() > default[0].height());
+        assert!(large[1].height() > default[1].height());
+    }
+}
+
 /// WCAG relative luminance of an opaque sRGB colour.
 fn relative_luminance(color: egui::Color32) -> f32 {
     fn linear(channel: u8) -> f32 {
@@ -342,8 +392,8 @@ fn clicking_a_preset_swatch_changes_the_accent() {
 
     let blue = preset_node(&out, "Blue");
     assert!(
-        (blue.rect.width() - 20.0).abs() < 0.01 && (blue.rect.height() - 20.0).abs() < 0.01,
-        "preset swatches are 20x20 pt, got {:?}",
+        blue.rect.width() >= 40.0 && blue.rect.height() >= 40.0,
+        "compact preset swatches retain a 40 pt hit target, got {:?}",
         blue.rect.size()
     );
 

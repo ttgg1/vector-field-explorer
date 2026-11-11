@@ -1513,7 +1513,7 @@ tab-bar/sheet plan.
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
 `MIN_PANEL_WIDTH = 180`, `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
-`VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 44`,
+`VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
 `FORMULA_MIN_FRACTION = 0.40`; `LayoutMode`, `SheetState`, `layout_mode`,
 `CompactPlan`, `compact_plan`, `sheet_height`, `formula_field_width`,
 `RailSide`, `rail_text_angle`, `rail_chevron`, `collapse_chevron`,
@@ -1534,6 +1534,8 @@ tab-bar/sheet plan.
   (both panels expanded, help visible).
 - `formula_field_width` never goes below 40 % of the bar and never returns a
   negative width.
+- Compact buttons have a 40-point floor; the tab bar grows beyond its 48-point
+  baseline when font-derived button content and frame margins require it.
 
 **Pinned by.** `tests/layout_test.rs` (14):
 `rail_paints_one_rotated_label_inside_the_real_band`,
@@ -1734,13 +1736,18 @@ persist the `AppStyle`.
   `(8, 3)` at the default.
 - The accent swatches are eight distinct, opaque Material colours; a custom
   accent selects none.
+- Button padding derives from the persisted font size (8–24). Menu overrides,
+  icon-only controls, and color wells retain that sizing; compact hit targets
+  stay at least 40 points. Non-button editors are not comprehensively rescaled.
 
-**Pinned by.** `tests/ui_style_panel_test.rs` (12):
+**Pinned by.** `tests/ui_style_panel_test.rs` (13):
 `apply_is_idempotent`, `apply_sets_the_selection_stroke_in_both_themes`,
 `selection_text_color_is_readable_on_every_accent`,
 `accent_presets_are_eight_unique_named_fully_opaque_colours`,
 `default_accent_is_the_brand_cyan`;
-`tests/accent_picker_test.rs` (popover/picker dismissal interaction).
+`tests/accent_picker_test.rs` (popover/picker dismissal interaction);
+`tests/button_sizing_test.rs` (real button hitboxes, painted ink, padding,
+font growth, compact floors, menus, swatches, presets, CAS, and tab bar).
 
 **Limitations.** One accent at a time; no custom font loading; no per-panel
 style overrides.
@@ -2201,7 +2208,8 @@ lines: 715 are executed on this platform (714 in the suite plus the isolated
 | Saved views | `ui_preset_test.rs` | 13 |
 | Arrow opacity | `arrow_opacity_test.rs` | 13 |
 | Dot billboard | `dot_billboard_test.rs` | 12 |
-| Style panel | `ui_style_panel_test.rs` | 12 |
+| Style panel | `ui_style_panel_test.rs` | 13 |
+| Font-responsive buttons | `button_sizing_test.rs` | 10 |
 | Responsive/compact | `responsive_test.rs` | 11 |
 | Plane | `plane_test.rs` | 11 |
 | Camera projections | `camera_pan_zoom_test.rs` | 11 |
