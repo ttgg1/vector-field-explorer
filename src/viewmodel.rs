@@ -241,6 +241,10 @@ pub struct State {
     pub color_min: f32,
     pub color_max: f32,
     pub arrows: bool,
+    /// Shared across 2D and 3D: show the grid and domain box.
+    pub show_grid: bool,
+    /// Shared across 2D and 3D: show the coloured world axes.
+    pub show_coordinate_system: bool,
     /// The 3D arrow family (ticket 45); it never selects the 2D arrow.
     pub arrow_style: ArrowStyle,
     /// The 2D arrow family (ticket 61); independent of [`State::arrow_style`].
@@ -326,6 +330,8 @@ impl State {
             color_min: 0.0,
             color_max: 1.0,
             arrows: true,
+            show_grid: true,
+            show_coordinate_system: true,
             arrow_style: ArrowStyle::Cone,
             arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
@@ -537,6 +543,24 @@ impl State {
             return false;
         }
         self.arrows = arrows;
+        self.mark_dirty()
+    }
+
+    /// Visibility of the grid and domain box in either view.
+    pub fn set_show_grid(self: &mut State, show: bool) -> bool {
+        if self.show_grid == show {
+            return false;
+        }
+        self.show_grid = show;
+        self.mark_dirty()
+    }
+
+    /// Visibility of the coloured world axes in either view.
+    pub fn set_show_coordinate_system(self: &mut State, show: bool) -> bool {
+        if self.show_coordinate_system == show {
+            return false;
+        }
+        self.show_coordinate_system = show;
         self.mark_dirty()
     }
 

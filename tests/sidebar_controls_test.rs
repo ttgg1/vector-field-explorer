@@ -25,6 +25,123 @@ use vector_field_explorer::viewmodel::{
 use glam::Vec3;
 
 #[test]
+fn reference_visibility_defaults_and_setters_are_independent() {
+    for mode_3d in [false, true] {
+        let mut state = State::new(mode_3d);
+        assert!(state.show_grid, "the grid starts visible in either mode");
+        assert!(
+            state.show_coordinate_system,
+            "the axes start visible in either mode"
+        );
+        assert!(
+            state.snapshot_if_dirty().is_some(),
+            "consume the initial scene"
+        );
+
+        assert!(
+            !state.set_show_grid(true),
+            "repeating the grid default is a no-op"
+        );
+        assert!(
+            !state.set_show_coordinate_system(true),
+            "repeating the axes default is a no-op"
+        );
+        assert!(!state.dirty);
+        assert!(state.snapshot_if_dirty().is_none());
+
+        assert!(state.set_show_grid(false));
+        assert!(!state.show_grid);
+        assert!(
+            state.show_coordinate_system,
+            "grid visibility does not change axes"
+        );
+        assert!(state.dirty);
+        assert!(
+            state.snapshot_if_dirty().is_some(),
+            "grid change rebuilds once"
+        );
+        assert!(state.snapshot_if_dirty().is_none());
+        assert!(!state.set_show_grid(false));
+        assert!(!state.dirty, "a repeated grid choice does not rebuild");
+
+        assert!(state.set_show_coordinate_system(false));
+        assert!(!state.show_grid, "axes visibility does not change grid");
+        assert!(!state.show_coordinate_system);
+        assert!(state.dirty);
+        assert!(
+            state.snapshot_if_dirty().is_some(),
+            "axes change rebuilds once"
+        );
+        assert!(state.snapshot_if_dirty().is_none());
+        assert!(!state.set_show_coordinate_system(false));
+        assert!(!state.dirty, "a repeated axes choice does not rebuild");
+
+        assert!(state.set_show_grid(true));
+        assert!(
+            !state.show_coordinate_system,
+            "restoring grid does not restore axes"
+        );
+        assert!(state.snapshot_if_dirty().is_some());
+        assert!(state.set_show_coordinate_system(true));
+        assert!(state.show_grid, "restoring axes does not hide grid");
+        assert!(state.snapshot_if_dirty().is_some());
+    }
+}
+
+#[test]
+fn reference_visibility_is_shared_across_mode_switches() {
+    let mut state = State::new(false);
+    assert!(state.set_density(4), "keep the sampling comparison small");
+    let options_before = state.view_options();
+    let arrows_before = state.sample();
+    assert!(!arrows_before.is_empty(), "compare actual field samples");
+
+    assert!(state.set_show_grid(false));
+    assert!(state.set_show_coordinate_system(false));
+    assert_eq!(
+        state.view_options(),
+        options_before,
+        "visibility never changes sampling options"
+    );
+    assert_eq!(
+        state.sample(),
+        arrows_before,
+        "visibility never changes sampled arrows"
+    );
+
+    assert!(state.set_formula("(x, y, z)".into()));
+    assert!(state.set_mode(true));
+    assert!(state.is_3d());
+    assert!(!state.show_grid);
+    assert!(!state.show_coordinate_system);
+
+    let options_3d = state.view_options();
+    let arrows_3d = state.sample();
+    assert!(!arrows_3d.is_empty());
+    assert!(state.set_show_grid(true));
+    assert_eq!(state.view_options(), options_3d);
+    assert_eq!(
+        state.sample(),
+        arrows_3d,
+        "grid visibility cannot change 3D samples"
+    );
+    assert!(state.set_show_coordinate_system(true));
+    assert_eq!(state.view_options(), options_3d);
+    assert_eq!(
+        state.sample(),
+        arrows_3d,
+        "axes visibility cannot change 3D samples"
+    );
+
+    assert!(state.set_mode(false));
+    assert!(state.show_grid, "the 3D grid choice persists in 2D");
+    assert!(
+        state.show_coordinate_system,
+        "the 3D axes choice persists in 2D"
+    );
+}
+
+#[test]
 fn sidebar_defaults_mirror_the_seam_defaults() {
     let c = Controls::new();
     let s = State::new(false);
