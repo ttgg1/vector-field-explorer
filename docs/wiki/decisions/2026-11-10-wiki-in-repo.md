@@ -21,14 +21,11 @@ visible as an old date, not as a silent lie.
 
 ## The rules
 
-- `docs/wiki/index.md` lists every page, grouped by category, with a one-line
-  summary. New pages are added to the index in the same change.
-- Each page covers one thing: a decision, a recurring problem, a subsystem, a
-  user preference.
-- Claims carry a date and cite their source (commit, ticket, ledger entry,
-  report file). Sources are cited, never copied or edited.
-- Pages are never rewritten to change history; a superseding claim is a new
-  dated line, and the old line is marked superseded.
+The original convention used dated, source-cited pages and superseding notes
+rather than changing history. On 2026-11-11 the owner requested lean agent
+resources: redundant policy bodies may be pruned while unique decision history,
+citations and source evidence remain. The [index](../index.md) owns the brief
+wiki conventions; [Workflow](../../../references/workflow.md) owns live policy.
 
 ## Related
 

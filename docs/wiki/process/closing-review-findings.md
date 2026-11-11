@@ -18,8 +18,9 @@ implementer says it is done.
   (`fly_toggle_key`, `src/fly_camera.rs`, called from `src/app/input.rs`).
   The bar after that: the test must fail against the pre-fix code.
 - A re-review that only reads the diff cannot catch a test that cannot fail.
-  The controller's ticket-70 brief/ledger ruling (`progress.md:4162-4165`,
-  2026-11-10)
+  The controller's ticket-70 brief/ledger ruling (2026-11-10, original lines
+  4162–4165 in main-root
+  `.superpowers/sdd/2026-11-05-vector-field-explorer/archive/progress-through-2026-11-11.md`)
   required failing-before evidence; the re-review prompt itself did not.
 
 ## One seam per genuine need

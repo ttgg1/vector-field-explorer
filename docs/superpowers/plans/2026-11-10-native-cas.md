@@ -1,6 +1,9 @@
 # Native CAS Implementation Plan
 
-> **For agentic workers:** use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement task-by-task. Do not start until the independent builder review resolves the gates in the spec and tickets.
+> **Historical implementation plan.** Preserve the task contracts below, but
+> do not treat unchecked steps as outstanding work. Use [Workflow](../../../references/workflow.md)
+> for execution policy/current-state pointers and the [plan index](../README.md)
+> for evidence entrypoints; this file still resolves the native-CAS SDD workspace.
 
 **Goal:** Add native-only symbolic differentiation and derived vector-field operations, then expose them in a transient CAS panel.
 
