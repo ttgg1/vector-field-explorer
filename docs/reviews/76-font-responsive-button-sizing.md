@@ -48,7 +48,7 @@ post-merge verification. The docs checker passed on this review-record change.
 
 `origin/main` was fetched and verified at the reviewed product base; no product
 reconciliation was needed. The feature branch was pushed, including review
-record commit `cf92e760...`; GitHub CLI cannot authenticate (`gh auth status`
-reports the configured token is invalid), so PR publication and merge remain
-blocked and are not claimed here. Re-authenticate before opening the PR. No
-post-merge test or CI result exists yet.
+record commit `cf92e76fb019e471e90417c0ad11f542622eb451`; GitHub CLI cannot
+authenticate (`gh auth status` reports the configured token is invalid), so PR
+publication and merge remain blocked and are not claimed here. Re-authenticate
+before opening the PR. No post-merge test or CI result exists yet.
