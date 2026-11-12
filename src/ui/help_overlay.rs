@@ -262,16 +262,19 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
                 .corner_radius(egui::CornerRadius::same(6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // The help table can be wider than a phone. Keep its
+                        // dismiss button on-screen without rescaling that table.
+                        ui.set_max_width((ui.ctx().content_rect().width() - 16.0).max(0.0));
                         ui.label(title_text("Mouse & keyboard", OVERLAY_HEADING_COLOR));
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                dismissed = ui
-                                    .small_button("×")
-                                    .on_hover_text("Hide the help overlay (F1)")
-                                    .clicked();
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            dismissed = ui
+                                .add(
+                                    egui::Button::new("×")
+                                        .min_size(super::style_panel::button_min_size(ui)),
+                                )
+                                .on_hover_text("Hide the help overlay (F1)")
+                                .clicked();
+                        });
                     });
                     let sections = sections_for(mode_3d);
                     table(ui, &sections, OVERLAY_HEADING_COLOR);

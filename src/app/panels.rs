@@ -305,13 +305,16 @@ impl VfApp {
         }
     }
 
-    /// Compact bottom tab bar: one Controls/Presets tab each, with a 44 pt
-    /// target and a close affordance while a sheet is open. Tapping the active
+    /// Compact bottom tab bar: font-responsive Controls/Presets targets and a
+    /// close affordance while a sheet is open. Tapping the active
     /// tab closes its sheet; tapping the other switches.
     fn show_compact_tab_bar(&mut self, ui: &mut egui::Ui) {
         let sheet_before = self.sheet;
+        let row_height = style_panel::button_height(ui);
+        let frame = egui::Frame::side_top_panel(ui.style());
+        let bar_height = (row_height + frame.total_margin().sum().y).max(layout::TAB_BAR_HEIGHT);
         egui::Panel::bottom("compact_tab_bar")
-            .exact_size(layout::TAB_BAR_HEIGHT)
+            .exact_size(bar_height)
             .show(ui, |ui| {
                 ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
                 ui.horizontal(|ui| {
@@ -325,7 +328,7 @@ impl VfApp {
                         .max(layout::TOUCH_TARGET);
                     if ui
                         .add_sized(
-                            [tab_width, layout::TOUCH_TARGET],
+                            [tab_width, row_height],
                             egui::Button::selectable(
                                 self.sheet.shows(SheetState::Controls),
                                 "Controls",
@@ -340,7 +343,7 @@ impl VfApp {
                     }
                     if ui
                         .add_sized(
-                            [tab_width, layout::TOUCH_TARGET],
+                            [tab_width, row_height],
                             egui::Button::selectable(
                                 self.sheet.shows(SheetState::Presets),
                                 "Presets",
@@ -355,10 +358,7 @@ impl VfApp {
                     }
                     if self.sheet.is_open()
                         && ui
-                            .add_sized(
-                                [layout::TOUCH_TARGET, layout::TOUCH_TARGET],
-                                egui::Button::new("✕"),
-                            )
+                            .add_sized([layout::TOUCH_TARGET, row_height], egui::Button::new("✕"))
                             .on_hover_text("Close panel")
                             .clicked()
                     {

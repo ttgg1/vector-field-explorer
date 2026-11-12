@@ -14,6 +14,7 @@ fn eval_scalar(source: &str, x: f64, y: f64) -> f64 {
 
 struct PanelOutput {
     platform_output: egui::PlatformOutput,
+    shapes: Vec<egui::epaint::ClippedShape>,
     panel_rect: egui::Rect,
     clip_rect: egui::Rect,
 }
@@ -53,6 +54,7 @@ fn panel_frame(
     output.textures_delta.clear();
     PanelOutput {
         platform_output: output.platform_output,
+        shapes: output.shapes,
         panel_rect,
         clip_rect,
     }
@@ -173,7 +175,7 @@ fn operation_choices_are_visible_and_clickable_at_supported_widths_and_font_size
             );
             click_panel(&ctx, width, combo_rect.center(), &mut app_state, &mut panel);
             output = panel_frame(&ctx, width, vec![], &mut app_state, &mut panel);
-            let option_rect = output
+            let mut option_rect = output
                 .platform_output
                 .accesskit_update
                 .as_ref()
@@ -194,6 +196,82 @@ fn operation_choices_are_visible_and_clickable_at_supported_widths_and_font_size
                 .unwrap_or_else(|| {
                     panic!("{label} option is not visible in the selector at width {width}")
                 });
+            // AccessKit bounds are not clipped to the combo's scroll viewport.
+            // Large-font wrapped options can exceed egui's 200-point menu cap;
+            // scroll the real popup before clicking, as a user must do.
+            let option_clip = |output: &PanelOutput, rect: egui::Rect| {
+                output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == label
+                            && rect.intersects(text.visual_bounding_rect()) =>
+                    {
+                        Some(shape.clip_rect)
+                    }
+                    _ => None,
+                })
+            };
+            let clip = option_clip(&output, option_rect).expect("option paint clip");
+            if !clip.contains_rect(option_rect) {
+                let pos = option_rect.intersect(clip).center();
+                panel_frame(
+                    &ctx,
+                    width,
+                    vec![egui::Event::PointerMoved(pos)],
+                    &mut app_state,
+                    &mut panel,
+                );
+                output = panel_frame(
+                    &ctx,
+                    width,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -300.0),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Wheel,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    &mut app_state,
+                    &mut panel,
+                );
+                for _ in 0..3 {
+                    output = panel_frame(&ctx, width, vec![], &mut app_state, &mut panel);
+                }
+                option_rect =
+                    labeled_bounds(&output.platform_output, label).expect("scrolled option");
+            }
+            assert!(
+                option_clip(&output, option_rect)
+                    .unwrap()
+                    .contains_rect(option_rect),
+                "{label} must be fully visible before clicking at width {width}, font {font_size}: rect {option_rect:?}, clip {:?}",
+                option_clip(&output, option_rect)
+            );
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == label
+                            && option_rect.intersects(text.visual_bounding_rect()) =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .expect("painted option");
+            assert!(
+                option_rect
+                    .expand(1.0)
+                    .contains_rect(text.visual_bounding_rect()),
+                "{label} ink must fit its real option hitbox"
+            );
+            assert!(
+                option_rect.height() >= text.galley.size().y + 2.0,
+                "{label} needs vertical padding around its rendered content"
+            );
             assert_eq!(
                 option_rect.intersect(output.panel_rect),
                 option_rect,

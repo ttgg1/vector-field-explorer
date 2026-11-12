@@ -1,9 +1,7 @@
-# Test layout and gates — as practised from 2026-11-10
+# Test layout and profile
 
-## The claim
-
-Tests live in `tests/`, one file per module, registered in `tests/suite.rs`.
-`src/` carries no `#[cfg(test)]` modules. Three commands gate every change.
+Technical reference; [Workflow](../../../references/workflow.md) owns current
+gate commands, toolchain, concurrency limits and verification waivers.
 
 ## Test layout
 
@@ -20,20 +18,12 @@ Tests live in `tests/`, one file per module, registered in `tests/suite.rs`.
   reappears in `src/`, if a test file is unregistered, or if a test is
   `#[ignore]`d.
 - Integration tests import `vector_field_explorer::{…}` — `crate::` and
-  `use super::*` do not resolve, and they see only `pub` items. A helper a test
-  genuinely needs is promoted to a single `#[doc(hidden)] pub` seam with the
-  reason in the commit body and the ledger; the API is never widened further.
-
-## Gates
-
-```
-cargo build
-CARGO_BUILD_JOBS=4 scripts/test.sh     # runs cargo test --all-targets and prunes stale test binaries
-cargo clippy --all-targets -- -D warnings
-```
-
-`scripts/test.sh` honours `KEEP_TEST_ARTIFACTS=1` to skip cleanup. Clippy
-needs the `--` separator.
+  `use super::*` do not resolve, and tests see only `pub` items. Consult
+  [engineering notes](../../../references/rust.md) before adding a test seam.
+- Filter suite modules/names (`cargo test particles_test::`); only the isolated
+  config target uses `cargo test --test config_test`.
+- `scripts/test.sh` runs the full suite and prunes stale test binaries;
+  `KEEP_TEST_ARTIFACTS=1` skips cleanup. Keep the all-targets runner.
 
 ## Build cost
 
@@ -44,15 +34,5 @@ warm suite from ~3.98 s to ~0.72 s median. Accepted cost: the cold
 opt-level 0 (2.45×), paid once per dependency/profile change; the incremental
 edit loop improved from 5.6 s to ~1.3 s.
 
-## Runtime smoke
-
-Build and test create no wgpu device. After touching `src/renderer.rs`,
-shaders, windowing or input, run `scripts/smoke-run.sh 15`; it fails on
-panics and wgpu validation errors. CI runs it headlessly. A UI-only change
-that touches neither renderer nor windowing does not need it — the ticket 69
-and 71 implementations on 2026-11-10 skipped it for that reason and were
-not faulted for it.
-
-## Related
-
-- [Dispatch, review and fix loop](dispatch-and-review-loop.md)
+Historical source: ticket 21 benchmark/accepted profile tradeoff in
+`.superpowers/sdd/2026-11-05-vector-field-explorer/archive/progress-through-2026-11-11.md`.

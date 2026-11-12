@@ -1,50 +1,23 @@
-# Vector Field Explorer — wiki
+# Wiki — reference and history
 
-Tribal knowledge for this project: decisions with their reasoning, the working
-process, and the state of long-running efforts. Every page is a historical
-record — claims carry a date and cite the commit, ledger entry, ticket or
-report they came from. Nothing here describes "how things are now" without
-that evidence.
+For current execution policy read [Workflow](../../references/workflow.md).
+For current state read the main-root ledger/handoff and queue named there.
+Historical pages preserve dated reasoning, not dispatch instructions. Cite
+sources rather than copying reports; add each new page to this index.
 
-Conventions: one page per thing; pages link to each other; sources (tickets,
-commits, reports, review packages) are cited, never copied.
+## Task references
 
-## Process
+- [Test layout/profile](process/test-layout-and-gates.md)
+- [Review-record format/enforcement](process/review-records.md)
+- [Finding closure examples](process/closing-review-findings.md)
 
-- [Dispatch, review and fix loop](process/dispatch-and-review-loop.md) — how
-  a ticket becomes reviewed work, including the standing branch/PR publication
-  preference, and what each seat may touch.
-- [Test layout and gates](process/test-layout-and-gates.md) — where tests live,
-  which commands gate a change, and the parts of the build that are cold.
-- [Closing a review finding](process/closing-review-findings.md) — what counts
-  as evidence, the seam budget, and why the user-visible path has to be
-  exercised.
+## Historical process and decisions
 
-## Decisions
-
-- [Native CAS scope and sequencing (2026-11-10)](decisions/2026-11-10-native-cas.md)
-  — exmex is selected for native-only CAS; the panel workflow is approved,
-  while the exact symbolic grammar/printer gate remains for builder review.
-- [Seat model availability (2026-11-10)](decisions/2026-11-10-seat-model-availability.md)
-  — the latest user ruling assigns controller/reviewers and implementers to
-  distinct seats; implementer effort follows task difficulty, review effort
-  follows review scope, and repeated findings twice change the implementer seat.
-- [Repairing the unreviewed tickets 69/70/71 (2026-11-10)](decisions/2026-11-10-repairing-unreviewed-tickets.md)
-  — post-hoc reviews found real gaps, so the three commits go through a fix
-  loop before they count as done.
-- [Wiki lives in-repo (2026-11-10)](decisions/2026-11-10-wiki-in-repo.md) —
-  `docs/wiki/` is tracked; the user chose this over a local or external wiki.
-- [Next frontier: Windows + time-dependent fields (2026-11-10)](decisions/2026-11-10-next-frontier.md)
-  — two parallel fronts once the current fix loop merges.
-
-## Roadmap
-
-- [Post-v1 frontier and critical path](roadmap/post-v1-frontier.md) — which
-  ticket unblocks which, and what the physics phases depend on.
-
-## Reviews
-
-- [Review records](process/review-records.md) — format, location, and CI enforcement.
-
-- [Tickets 69/70/71 review round 1 (2026-11-10)](reviews/tickets-69-71-round-1.md)
-  — the round-1 findings snapshot; later dispositions are in the SDD ledger.
+- [Dispatch/review lessons](process/dispatch-and-review-loop.md) — helper-path correction and integration authority provenance.
+- [Seat availability](decisions/2026-11-10-seat-model-availability.md) — dispatch failures and superseded model policies.
+- [Unreviewed 69/70/71 repair](decisions/2026-11-10-repairing-unreviewed-tickets.md)
+- [69/70/71 round-1 findings](reviews/tickets-69-71-round-1.md)
+- [In-repo wiki choice](decisions/2026-11-10-wiki-in-repo.md)
+- [Windows/time-field frontier](decisions/2026-11-10-next-frontier.md)
+- [Native CAS scope/sequencing](decisions/2026-11-10-native-cas.md)
+- [Post-v1 roadmap provenance](roadmap/post-v1-frontier.md)

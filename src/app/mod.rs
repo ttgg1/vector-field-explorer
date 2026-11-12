@@ -10,7 +10,8 @@ use crate::fly_camera::{
     crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
     sync_fly, sync_fly_mirror,
 };
-use crate::reference::reference_lines;
+use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::reference::reference_lines_visible;
 use crate::render::Camera;
 use crate::renderer::{
     DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
@@ -19,7 +20,6 @@ use crate::renderer::{
 use crate::screenshot::{self, Instant, Screenshot};
 use crate::sim_clock::SimClock;
 use crate::streamlines::click_seed;
-use crate::persistence::{self, AppSettings, ViewRecord};
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::menu::{self, MenuAction};
@@ -32,37 +32,16 @@ use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
 use crate::view_command::{self, ViewCommand, ViewContext};
 use crate::viewmodel::{
-    CapturedClickOutcome,
-    ClickOutcome,
-    DragButtons,
-    DragChannel,
-    LastClickSeed,
-    LeftClickAction,
-    State,
-    ViewGesture,
-    apply_camera_input,
-    captured_click_outcome,
-    click_outcome,
-    drag_channel,
-    two_finger_pan,
-    undo_click_seed,
+    CapturedClickOutcome, ClickOutcome, DragButtons, DragChannel, LastClickSeed, LeftClickAction,
+    State, ViewGesture, apply_camera_input, captured_click_outcome, click_outcome, drag_channel,
+    two_finger_pan, undo_click_seed,
 };
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
 use crate::particles::{
-    AdvectSettings,
-    CLICK_BURST_PARTICLES,
-    Particles,
-    advect,
-    clear,
-    dot_instances_at,
-    retarget,
-    spawn,
-    spawn_at,
-    speed_range,
-    trail_instances_at,
-    count as particle_count,
+    AdvectSettings, CLICK_BURST_PARTICLES, Particles, advect, clear, count as particle_count,
+    dot_instances_at, retarget, spawn, spawn_at, speed_range, trail_instances_at,
 };
 
 mod frame;
@@ -247,7 +226,14 @@ impl VfApp {
         } else {
             orbit.recentre_on_2d(&state.domain);
         }
-        let backdrop = reference_lines(&state.domain, state.is_3d());
+        let backdrop = compose_lines(
+            &[],
+            &[],
+            &state.domain,
+            state.is_3d(),
+            state.show_grid,
+            state.show_coordinate_system,
+        );
         let arrow_style = state.arrow_style;
         let arrow_style_2d = state.arrow_style_2d;
         let arrow_params = state.arrow_params;
@@ -313,15 +299,18 @@ impl Default for VfApp {
 /// bursts into the one line collection the viewport paints. Rebuilt only on a
 /// scene rebuild or a click, so the per-frame path still clones an `Arc`. The
 /// backdrop follows the current domain and sampling dimension (ticket 23):
-/// `reference_lines` is cheap, and a rebuild is exactly when the domain may
+/// reference geometry is cheap, and a rebuild is exactly when the domain may
 /// have moved.
-fn compose_lines(
+#[doc(hidden)]
+pub fn compose_lines(
     flow: &[LineInstanceGPU],
     clicks: &[LineInstanceGPU],
     domain: &Domain,
     sampling_3d: bool,
+    show_grid: bool,
+    show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
-    let mut lines = reference_lines(domain, sampling_3d);
+    let mut lines = reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system);
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
     lines

@@ -1,5 +1,10 @@
 # Native CAS scope and sequencing — 2026-11-10
 
+**Historical planning snapshot.** The blocked/next descriptions below are not
+live status. Use [Workflow](../../../references/workflow.md) and its main-root
+ledger/handoff pointers for execution; accepted semantics remain in the
+[CAS spec](../../superpowers/specs/2026-11-10-native-cas-design.md).
+
 The owner selected exmex 0.21.0 with `partial`, deferred CAS wasm support, and
 approved a native CAS panel with scalar/vector input, operation selection,
 result preview/copy, and explicit Apply for vector results only. Failed
@@ -19,8 +24,8 @@ builder rereview of the exact symbolic semantics; ticket 75 depends on 73 and
 71. CAS wasm support and its size/runtime acceptance are deferred, not
 silently accepted.
 
-Source: owner rulings in the final dated section of
-`.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md`; research
+Source: owner rulings dated 2026-11-10 in
+`.superpowers/sdd/2026-11-05-vector-field-explorer/archive/progress-through-2026-11-11.md`; research
 baseline `703e77e9cc983aaa4124b41b5ec0603d7e745edf`; design
 `docs/superpowers/specs/2026-11-10-native-cas-design.md` and plan
 `docs/superpowers/plans/2026-11-10-native-cas.md`.

@@ -1,68 +1,31 @@
-# Next frontier: Windows packaging + time-dependent fields — 2026-11-10
+# Windows + time-dependent fields — decision, 2026-11-10
 
-## Update (later on 2026-11-10) — the fronts are now ticketed
+**Historical scheduling choice, not the current frontier.** See the live
+resources in [Workflow](../../../references/workflow.md) for disposition/order.
+Source: main-root `.superpowers/sdd/2026-11-05-vector-field-explorer/archive/progress-through-2026-11-11.md`,
+2026-11-10 owner frontier/ticketing rulings.
 
-The original claim below is superseded by this update and the subsequent
-frontier ruling recorded in `AGENTS.md` (2026-11-10).
+## Choice and alternatives
 
-The two fronts were published as tickets on 2026-11-10: **ticket 72**
-(Windows packaging) and **ticket 39** (time-dependent fields, Part A). The
-user ruled four points that shaped them:
+The owner chose Windows packaging + ticket 39 in parallel, rather than packaging
+alone, Phase 0 prerequisites (37/38/35/2D slice), or Wave-A cleanup. This advanced
+platform support and user-visible time behavior together. Ticket 39's bind-once
+meval refactor was the riskier half: it changed formula evaluation and needed
+sampling/particle/streamline regression evidence and its own review.
 
-- **Ticket 39 is split.** Part A (the `t` variable, clock stepping, per-frame
-  rebuild) is ticket 39 and is **not** blocked by ticket 37; Part B (plot
-  animation) reuses the existing ticket 38 and is blocked by 37 and 39.
-  The numbers stay meaningful for anyone reading the roadmap ticket.
-- **Windows artifact:** an unsigned `.zip` of the `.exe`, no installer.
-- **Windows toolchain:** MSVC on a `windows-latest` runner, not a MinGW
-  cross-build.
-- **Windows CI gate:** build + test + clippy on Windows, plus an uploaded
-  artifact. No GUI launch claim — a runner has no display.
+The initial “file-disjoint” assumption was wrong: both fronts touched
+`docs/CODEBASE.md`, requiring coordinated ownership despite distinct primary
+implementation areas and isolated worktrees.
 
-Windows ships as **v0.2.0**: a new supported platform is a feature, not a
-patch, and v0.1.0 is not touched.
+## Ticketing decisions retained
 
-## The claim
+- Time support Part A became 39, independent of scalar plot 37. Plot animation
+  Part B retained ticket 38, dependent on 37 and 39.
+- Windows artifact: unsigned `.zip` of the `.exe`, no installer; MSVC on
+  `windows-latest`, not MinGW cross-build.
+- Windows CI: build/test/clippy and uploaded artifact; no GUI launch claim on
+  a displayless runner.
+- Windows is a v0.2.0 feature, not a v0.1.0 patch/backport.
 
-On 2026-11-10 the user chose the next work wave after the current fix loop
-merges: **Windows packaging** and **ticket 39 (time-dependent fields)** run as
-two parallel fronts, rather than packaging alone or the Phase 0 prerequisites.
-
-## The options considered
-
-1. Windows packaging alone — the single blocking item for Phase 1 sources;
-   narrow, mostly CI/toolchain work, low conflict risk with later physics work.
-2. **Windows + ticket 39** — chosen. Their primary implementation work is
-   independent (packaging versus the `t` / bind-once `meval` refactor), but the
-   original assumption that their file sets do not overlap was incorrect:
-   both tickets may edit `docs/CODEBASE.md`. Parallel work therefore needs
-   coordination on that shared documentation file, as recorded in the update
-   below (tickets 72 and 39, 2026-11-10).
-3. Phase 0 prerequisites first (ticket 37 plot surface, 38 animated plots, 35
-   perf harness, the 2D slice seam) — better foundation, but delays
-   user-visible capability.
-4. Wave-A quality cleanup — no new capability and no roadmap movement.
-
-## Why this pairing
-
-The post-v1 order recorded in `AGENTS.md` on 2026-11-10 places tickets 72 and
-39 in parallel, then Phase 1 → Phase 3 → Phase 5 → Phase 2 → Phase 4, followed
-by overlays, shareable presets and CSV import. The tickets share
-`docs/CODEBASE.md` (tickets 72 and 39), so parallel work requires coordination
-on that file rather than assuming disjoint file sets.
-
-Ticket 39's `meval` bind-once refactor is the risky half: it changes how
-`field.rs` evaluates formulas, so every sampling, particle and streamline test
-is a witness to it. It needs its own review attention, not a shared seat.
-
-## Cost, recorded honestly
-
-Two fronts mean two implementer worktrees; the 2026-11-10 model in `AGENTS.md`
-assigns controller/reviewers and implementers to different seats. Ticket 39's
-evaluator change touches `src/field.rs` and its callers; both tickets also
-share `docs/CODEBASE.md`, so coordinate edits to that file.
-
-## Related
-
-- [Post-v1 frontier and critical path](../roadmap/post-v1-frontier.md)
-- [Dispatch, review and fix loop](../process/dispatch-and-review-loop.md)
+Later dispositions and the distinction between implementation and release
+verification debt are in [roadmap provenance](../roadmap/post-v1-frontier.md).

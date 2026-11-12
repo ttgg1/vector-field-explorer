@@ -302,6 +302,7 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
 fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool) -> bool {
+    style_panel::restore_menu_button_padding(ui);
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
     // the sidebar Camera section.
     let mut button = egui::Button::new(item.label);
@@ -409,6 +410,7 @@ pub fn show(
     let mut appearance_button = None;
 
     egui::MenuBar::new().ui(ui, |ui| {
+        style_panel::restore_menu_button_padding(ui);
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
@@ -430,15 +432,19 @@ pub fn show(
         appearance_button = Some(gear);
 
         // The screenshot action lives at the right end of the bar and
-        // dispatches the same ExportScreenshot action as File > Export.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if screenshot_button(ui, screenshot) {
-                action = Some(MenuAction::ExportScreenshot);
-            }
-            if screenshot_svg_button(ui, mode_3d) {
-                action = Some(MenuAction::ExportScreenshotSvg);
-            }
-        });
+        // dispatches the same ExportScreenshot action as File > Export. Wrap
+        // within the remaining space rather than painting over the menu group.
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+            |ui| {
+                if screenshot_button(ui, screenshot) {
+                    action = Some(MenuAction::ExportScreenshot);
+                }
+                if screenshot_svg_button(ui, mode_3d) {
+                    action = Some(MenuAction::ExportScreenshotSvg);
+                }
+            },
+        );
     });
 
     if let Some(button) = appearance_button {
@@ -461,12 +467,12 @@ pub fn show_compact(
     let touch = crate::ui::layout::TOUCH_TARGET;
 
     ui.spacing_mut().interact_size.y = touch;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         // Logo left of the hamburger (ticket 71).
-        ui.add(crate::ui::branding::logo_image(ui.ctx(), touch));
+        ui.add(crate::ui::branding::logo_image(ui.ctx(), 44.0));
 
-        // The hamburger is a menu button, so it needs the explicit 44 pt size
-        // instead of the row's height alone.
+        // The menu button needs the explicit compact hit target instead of the
+        // row's height alone.
         let hamburger = egui::Button::new(HAMBURGER_LABEL).min_size(egui::vec2(touch, touch));
         let _hamburger = egui::menu::MenuButton::from_button(hamburger).ui(ui, |ui| {
             // One flat dropdown: nested submenus are awkward to hit with a
@@ -496,11 +502,9 @@ pub fn show_compact(
             ));
         }
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if screenshot_button(ui, screenshot) {
-                action = Some(MenuAction::ExportScreenshot);
-            }
-        });
+        if screenshot_button(ui, screenshot) {
+            action = Some(MenuAction::ExportScreenshot);
+        }
     });
 
     (action, style_changed)

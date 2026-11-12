@@ -1,5 +1,9 @@
 # Repairing the unreviewed tickets 69/70/71 — 2026-11-10
 
+**Historical incident.** The open/closed descriptions below are dated findings,
+not the current frontier; later dispositions are in `docs/reviews/` and Git.
+Current execution policy: [Workflow](../../../references/workflow.md).
+
 ## The claim
 
 On 2026-11-10, tickets 69, 70 and 71 were implemented and pushed straight to
@@ -33,14 +37,6 @@ The work itself is sound in shape and passes the gates; what is missing is
 conformance to the ticket text and the ledger rulings — a missing regression
 test, a dead code path, an unimplemented half of a feature. That is a
 fix-round workload, not a re-implementation workload.
-
-## The rule
-
-- A ticket is done when its brief is satisfied, its tests exist and fail
-  without the fix, its gates pass, and a reviewer has signed off on the diff.
-- The ledger records the fix loop: `Task <N>: fix round <R>/5 (<X> addressed,
-  <Y> open — …; commits <a>..<b>)`.
-- Branches merge into `main` only after the re-review is clean, one at a time.
 
 ## Related
 

@@ -89,12 +89,12 @@ pub const VIEWPORT_CHROME_ALLOWANCE: f32 = 20.0;
 /// bottom panel's frame margins.
 pub const TAB_BAR_HEIGHT: f32 = 48.0;
 
-/// Minimum tap target, points (Apple/Google's 44 pt guideline).
-pub const TOUCH_TARGET: f32 = 44.0;
+/// Minimum compact button hit target, points (ticket 76 owner-approved floor).
+pub const TOUCH_TARGET: f32 = 40.0;
 
-/// Compact control/preset row height, points. It remains at the 44 pt touch
-/// target floor; Wide mode is unaffected.
-pub const COMPACT_ROW_HEIGHT: f32 = 44.0;
+/// Minimum compact control/preset row height, points. Font-derived content can
+/// make individual buttons taller; Wide mode is unaffected.
+pub const COMPACT_ROW_HEIGHT: f32 = 40.0;
 /// Vertical gap between compact controls, points.
 pub const COMPACT_ITEM_SPACING: f32 = 2.0;
 /// Minimum share of the formula bar the flexing field keeps on a phone.
@@ -555,11 +555,8 @@ pub fn rail_panel(
 /// collapses the panel back to its rail — the symmetric affordance to the
 /// rail's expand click, alongside Ctrl+B / Ctrl+P.
 ///
-/// `small_button` is deliberate: in egui 0.37 it does **not** shrink the type
-/// (it only trims 2 pt of vertical padding), so the chevron glyph already
-/// paints at the body/button size. Keeping the compact padding leaves the
-/// panel header slim; the chevron's horizontal button padding still gives it a
-/// comfortable click target and its tooltip is unchanged.
+/// Use ordinary font-derived button padding: egui's `small_button` removes
+/// vertical padding entirely, including at the largest supported font size.
 pub fn collapse_button(ui: &mut egui::Ui, side: RailSide, shortcut: &str) -> bool {
     let tooltip = match side {
         RailSide::Left => format!("Collapse Controls ({shortcut})"),
@@ -568,7 +565,10 @@ pub fn collapse_button(ui: &mut egui::Ui, side: RailSide, shortcut: &str) -> boo
     let mut clicked = false;
     ui.horizontal(|ui| {
         clicked = ui
-            .small_button(collapse_chevron(side))
+            .add(
+                egui::Button::new(collapse_chevron(side))
+                    .min_size(super::style_panel::button_min_size(ui)),
+            )
             .on_hover_text(tooltip)
             .clicked();
     });

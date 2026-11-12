@@ -337,7 +337,7 @@ impl PresetPanel {
         // Camera actions (ticket 18): clickable twins of `R` and `F`, kept
         // next to the presets so the view controls live in one place.
         let mut requested = None;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (label, command) in CAMERA_BUTTONS {
                 let tooltip = match command {
                     ViewCommand::Reset => "Restore the default view (R)",
@@ -422,7 +422,7 @@ impl PresetPanel {
         let names: Vec<String> = self.presets.iter().map(|p| p.name.clone()).collect();
         for name in &names {
             let is_active = self.active.as_deref() == Some(name.as_str());
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui
                     .selectable_label(is_active, name)
                     .on_hover_text("Apply this saved view")
@@ -442,7 +442,7 @@ impl PresetPanel {
                 }
             });
             if self.pending_delete.as_deref() == Some(name.as_str()) {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.colored_label(
                         egui::Color32::from_rgb(230, 70, 70),
                         format!("Delete \"{name}\"?"),
@@ -464,7 +464,7 @@ impl PresetPanel {
         // to be unique.
         ui.separator();
         ui.label("Save current view");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.new_name)
                     .hint_text("Preset name")

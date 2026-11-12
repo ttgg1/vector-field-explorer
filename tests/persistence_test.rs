@@ -259,6 +259,8 @@ fn configured() -> (State, Controls) {
     controls.left_click_action = LeftClickAction::AddParticles;
     controls.particles = true;
     controls.arrows = false;
+    controls.show_grid = false;
+    controls.show_coordinate_system = false;
     controls.arrow_style = ArrowStyle::Cylinder;
     controls.arrow_style_2d = ArrowStyle2D::Streamline;
     controls.arrow_params = ArrowParams {
@@ -297,9 +299,123 @@ fn sample_settings() -> AppSettings {
 #[test]
 fn settings_round_trip_through_eframe_storage() {
     let settings = sample_settings();
+    assert!(!settings.view.show_grid, "capture keeps the disabled grid");
+    assert!(
+        !settings.view.show_coordinate_system,
+        "capture keeps the disabled axes"
+    );
     let mut storage = MemoryStorage::default();
     save(&mut storage, &settings);
+    let raw = storage
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
+    assert!(
+        raw.contains("show_grid:false"),
+        "the grid preference is written:\n{raw}"
+    );
+    assert!(
+        raw.contains("show_coordinate_system:false"),
+        "the axes preference is written:\n{raw}"
+    );
     assert_eq!(load(Some(&storage)), settings);
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        (app.state.show_grid, app.state.show_coordinate_system),
+        (false, false)
+    );
+    assert_eq!(
+        (app.sidebar.show_grid, app.sidebar.show_coordinate_system),
+        (false, false)
+    );
+}
+
+#[test]
+fn each_reference_preference_survives_storage_restore_and_constructor_independently() {
+    for (grid, coordinate_system) in [(false, true), (true, false)] {
+        let mut state = State::new(false);
+        assert_eq!(state.set_show_grid(grid), !grid);
+        assert_eq!(
+            state.set_show_coordinate_system(coordinate_system),
+            !coordinate_system
+        );
+        let settings = AppSettings {
+            view: ViewRecord::capture(&state),
+            ..AppSettings::default()
+        };
+        let mut storage = MemoryStorage::default();
+        save(&mut storage, &settings);
+        let loaded = load(Some(&storage));
+        assert_eq!(
+            loaded.view.show_grid, grid,
+            "grid record must not swap flags"
+        );
+        assert_eq!(
+            loaded.view.show_coordinate_system, coordinate_system,
+            "axes record must not swap flags"
+        );
+
+        let mut restored = State::new(false);
+        let mut controls = Controls::new();
+        loaded.view.restore(&mut restored, &mut controls);
+        assert_eq!(
+            (restored.show_grid, restored.show_coordinate_system),
+            (grid, coordinate_system)
+        );
+        assert_eq!(
+            (controls.show_grid, controls.show_coordinate_system),
+            (grid, coordinate_system)
+        );
+
+        let app = VfApp::new_with_storage(Some(&storage));
+        assert_eq!(
+            (app.state.show_grid, app.state.show_coordinate_system),
+            (grid, coordinate_system)
+        );
+        assert_eq!(
+            (app.sidebar.show_grid, app.sidebar.show_coordinate_system),
+            (grid, coordinate_system)
+        );
+    }
+}
+
+#[test]
+fn a_partial_reference_record_defaults_only_the_missing_coordinate_flag() {
+    #[derive(serde::Serialize)]
+    struct PartialView {
+        show_grid: bool,
+    }
+    #[derive(serde::Serialize)]
+    struct PartialSettings {
+        style: AppStyle,
+        view: PartialView,
+    }
+
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(
+        &mut storage,
+        eframe::APP_KEY,
+        &PartialSettings {
+            style: AppStyle::default(),
+            view: PartialView { show_grid: false },
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert!(!loaded.view.show_grid);
+    assert!(
+        loaded.view.show_coordinate_system,
+        "a missing bool must default to true, not false"
+    );
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+    assert_eq!(
+        (state.show_grid, state.show_coordinate_system),
+        (false, true)
+    );
+    assert_eq!(
+        (controls.show_grid, controls.show_coordinate_system),
+        (false, true)
+    );
 }
 
 /// Ticket 53: compact mode and the bottom-sheet state are transient. The one
@@ -337,6 +453,11 @@ fn a_legacy_normalize_true_migrates_to_uniform_without_fail_fast() {
 #[test]
 fn a_legacy_normalize_false_migrates_to_proportional() {
     let settings = load_legacy(false);
+    assert!(settings.view.show_grid, "legacy records omit the grid flag");
+    assert!(
+        settings.view.show_coordinate_system,
+        "legacy records omit the axes flag"
+    );
     let mut state = State::new(false);
     let mut controls = Controls::new();
     settings.view.restore(&mut state, &mut controls);
@@ -347,6 +468,14 @@ fn a_legacy_normalize_false_migrates_to_proportional() {
     );
     assert_eq!(state.magnitude_scale, 1.0);
     assert_eq!(controls.arrow_length_mode, ArrowLengthMode::Proportional);
+    assert_eq!(
+        (state.show_grid, state.show_coordinate_system),
+        (true, true)
+    );
+    assert_eq!(
+        (controls.show_grid, controls.show_coordinate_system),
+        (true, true)
+    );
 }
 
 #[test]
@@ -577,6 +706,9 @@ fn corrupt_storage_falls_back_to_defaults() {
     let mut storage = MemoryStorage::default();
     storage.set_string(eframe::APP_KEY, "this is not ron".to_owned());
     assert_eq!(load(Some(&storage)), AppSettings::default());
+    let loaded = load(Some(&storage));
+    assert!(loaded.view.show_grid);
+    assert!(loaded.view.show_coordinate_system);
 }
 
 #[test]
@@ -643,6 +775,10 @@ fn corrupt_style_values_are_clamped_on_load() {
 fn every_view_value_round_trips() {
     let (state, controls) = configured();
     let record = ViewRecord::capture(&state);
+    assert_eq!(
+        (record.show_grid, record.show_coordinate_system),
+        (false, false)
+    );
     let mut restored_state = State::new(false);
     let mut restored_controls = Controls::new();
     record.restore(&mut restored_state, &mut restored_controls);
@@ -679,6 +815,20 @@ fn every_view_value_round_trips() {
         "left-click action",
     );
     assert_eq!(restored_state.particles, state.particles, "particles");
+    assert_eq!(
+        (
+            restored_state.show_grid,
+            restored_state.show_coordinate_system
+        ),
+        (false, false)
+    );
+    assert_eq!(
+        (
+            restored_controls.show_grid,
+            restored_controls.show_coordinate_system
+        ),
+        (false, false)
+    );
     assert!(!restored_state.arrows, "the Show arrows toggle");
     assert_eq!(restored_state.arrow_style, ArrowStyle::Cylinder, "arrow style");
     assert_eq!(restored_state.arrow_style_2d, ArrowStyle2D::Streamline, "2D arrow style");
@@ -725,6 +875,8 @@ fn default_record_matches_a_fresh_two_d_state() {
     assert_eq!(ViewRecord::capture(&state), ViewRecord::default());
     assert_eq!(ViewRecord::default().formula, "(x, y)");
     assert!(!ViewRecord::default().mode_3d);
+    assert!(ViewRecord::default().show_grid);
+    assert!(ViewRecord::default().show_coordinate_system);
     assert_eq!(
         ViewRecord::default().seed_mode,
         StreamlineSeedMode::Auto,
