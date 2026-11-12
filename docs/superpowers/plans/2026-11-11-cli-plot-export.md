@@ -36,11 +36,11 @@
 
 ## File Structure
 
-- `src/cli.rs`: native args, exact config types, overlay, validation, dispatch/error reporting; declare as a native-only library module for the binary and integration tests.
+- `src/cli.rs`: native args, exact config types, overlay, validation, eventual dispatch/error reporting; declare as a native-only library module for the binary and integration tests. As each backend file arrives, declare it with `#[path = "cli_scene.rs"] mod cli_scene;` (and analogous paths for `cli_svg.rs` / `cli_gpu.rs`) and re-export the listed public API from `cli`.
 - `src/cli_scene.rs`: `OutputFrame`, effective state construction, fixed-time simulation, complete renderer-ready scene and stable sorting. One owner for final scene.
 - `src/cli_svg.rs`: pure CPU 2D SVG field geometry and serialization, without changing existing screenshot callers unexpectedly.
 - `src/cli_gpu.rs`: direct wgpu 30.0.1 adapter/device, offscreen target, error scopes/readback; receives finalized scene/frame only.
-- `src/main.rs`: native argument dispatch before window options; wasm untouched.
+- `src/main.rs`: native argument dispatch after all backends exist and before window options; wasm untouched.
 - `src/lib.rs`: add `#[cfg(not(target_arch = "wasm32"))] pub mod cli;` as the real native CLI module interface, not a test-only API.
 - `Cargo.toml`: add clap and pollster 0.4 only in native dependency table; confirm GPL-3.0-only compatibility.
 - `src/particles.rs`: additive explicit initial seed seam, preserving GUI default.
@@ -58,10 +58,10 @@ pub struct CliConfig { /* strict JSON schema from spec */ }
 pub struct CliFlags { /* parsed Option-valued flag counterparts for every config field */ }
 pub struct CliOptions { pub output: PathBuf, pub width: u32, pub height: u32, /* all resolved schema settings */ }
 pub struct OutputFrame {
-    width: u32, height: u32, aspect: f32,
-    view: glam::Mat4, projection: glam::Mat4, view_proj: glam::Mat4,
-    eye: glam::Vec3, target: glam::Vec3,
-    background_srgb: [u8; 4], background_linear: [f64; 4],
+    pub width: u32, pub height: u32, pub aspect: f32,
+    pub view: glam::Mat4, pub projection: glam::Mat4, pub view_proj: glam::Mat4,
+    pub eye: glam::Vec3, pub target: glam::Vec3,
+    pub background_srgb: [u8; 4], pub background_linear: [f64; 4],
 }
 pub struct PreparedScene { pub scene: renderer::SceneGPU, pub frame: OutputFrame }
 pub fn parse_config(json: &str) -> Result<CliConfig, CliError>;
@@ -89,28 +89,28 @@ types; config missing means inherit, JSON null means `Auto`; no `auto_fit` alias
 
 ### Task 1: Freeze and implement CLI/config contract
 
-**Files:** `src/cli.rs`, `src/main.rs`, `Cargo.toml`, `src/lib.rs`;
+**Files:** `src/cli.rs`, `Cargo.toml`, `src/lib.rs`;
 `tests/cli_test.rs`, merged `tests/suite.rs` registration.
 
-**Produces:** exact config/flag types and APIs above; no optional/unresolved
-schema fields. Mode is resolved before constructing `State::new(mode)`.
+**Produces:** exact config/flag types, parsing, overlay and validation APIs
+above; no optional/unresolved schema fields. Mode is resolved before
+constructing `State::new(mode)`. `run_from` and `run_export` are Task 6 APIs.
 
-- [ ] **Step 1: Add parser/config contract tests.** Test help/version/no args; JSON/flag output+dimensions; every spec table field has config and flag round-trip; explicit false wins; nested partial object leaves other values intact; nested unknown keys reject; `color_range` missing versus null/auto versus fixed range; no duplicate `seed_mode` alias; invalid config still fails when overridden by CLI; output extension/path errors; 2D config density 100 overridden to final mode 3D with final two-component formula stays valid (flat sampling), while the same density with a final three-component 3D formula fails; 2D rejects fly/perspective fields, 3D orbit rejects fly position, and 3D fly rejects orbit fields.
-- [ ] **Step 2: Register native-gated CLI test modules in the merged `tests/suite.rs` and run focused tests**; confirm expected failures and coordinate any concurrent registration edits.
+- [ ] **Step 1: Add parser/config contract tests.** Test clap help/version/no-args parse behavior (the binary's no-argument GUI routing is Task 6); JSON/flag output+dimensions; every spec table field has config and flag round-trip; explicit false wins; nested partial object leaves other values intact; nested unknown keys reject; `color_range` missing versus null/auto versus fixed range; no duplicate `seed_mode` alias; invalid config still fails when overridden by CLI; output extension/path errors; 2D config density 100 overridden to final mode 3D with final two-component formula stays valid (flat sampling), while the same density with a final three-component 3D formula fails; 2D rejects fly/perspective fields, 3D orbit rejects fly position, and 3D fly rejects orbit fields.
+- [ ] **Step 2: Register only `cli_test` in the merged `tests/suite.rs` and run focused tests**; register later modules only when their files are created. Confirm expected failures and coordinate any concurrent registration edits.
 - [ ] **Step 3: Add clap and pollster 0.4 native-only and implement strict nested serde schema/flags.** Confirm dependency licenses compatible with GPL-3.0-only. Enum types use only table spellings. All settings use Option presence; nested structs merge leaf-by-leaf. Deserialize `color_range` with a three-state `Missing | Null | Value([f32;2])` patch so explicit null is distinct from omission; null is accepted only here.
 - [ ] **Step 4: Implement intrinsic pre-overlay validation.** Validate JSON type/unknown keys, tuple lengths, finite/range constraints, enums and formula parse/name binding for every provided value, even if later overridden.
 - [ ] **Step 5: Implement effective validation and application order.** Resolve mode and final formula; construct `State::new(mode)`; parse/bind and apply formula before validating/applying density, then apply domain, plane, remaining controls, time and camera. Validate domain −100..=100 strict ordered bounds; density intrinsic 4..=200 then maximum 40 only when final `State::is_3d()` (otherwise 200); plane index against final grid; camera target/position finite, pitch/distance/FOV/zoom ranges and mode applicability from spec, and finite nonsingular matrices. Require start+duration <=3600. Reject unknown free formula names/functions while accepting valid zero/singular formulas. Do not rely on setter clamping.
-- [ ] **Step 6: Dispatch from native main** after logger setup and before `window_options`; no args use existing GUI route. `--help`/`--version` exit before any window creation. Do not touch wasm `start()`.
-- [ ] **Step 7: Re-run tests** for every field, override/null/validation ordering and no-args dispatch; commit `feat: parse native plot export options` (no ticket marker).
+- [ ] **Step 6: Re-run tests** for every field, override/null/validation ordering and parser help/version behavior; commit `feat: parse native plot export options` (no ticket marker).
 
 ### Task 2: Shared output frame and deterministic camera geometry
 
-**Files:** `src/cli_scene.rs`, `tests/cli_scene_test.rs`.
+**Files:** `src/cli_scene.rs`, `src/cli.rs` (module declaration/re-exports), `tests/cli_scene_test.rs`, `tests/suite.rs` (register only this new test module).
 
 **Produces:** `output_frame(&CliOptions) -> Result<OutputFrame, CliError>`.
 
-- [ ] **Step 1: Add failing projection tests.** Use an asymmetric off-origin domain, a flat domain with z=40..42, portrait/landscape and 1-pixel edge dimensions. Assert finite matrices, orbit/fly pose and mode-specific errors, target at domain center or 2D mid-z, each 2D domain corner projects within framing margin, aspect is width/height, and the same `OutputFrame` values are consumed by SVG/PNG. Test explicit camera component precedence and irrelevant 2D/3D fields.
-- [ ] **Step 2: Implement default frame.** Initialize `OrbitCamera::default()` (yaw .8, pitch .9, distance 3.2, FOV 55° radians, ortho zoom 1); recenter 3D on domain center and 2D on `(center.x,center.y,mid_z)`. 2D plane height `max(extent_x/aspect,extent_y)*1.35`; orbit 3D retains app default distance, not `ViewCommand::Fit`, and large domains can crop at max distance 20. Fly starts with `FlyCamera::from_orbit` from that orbit pose, with fixed 55° FOV, then explicit position/yaw/pitch overrides. Explicit mode-inapplicable camera options fail. Reject nonfinite/singular output transforms.
+- [ ] **Step 1: Add failing projection tests.** Use an asymmetric off-origin domain, a flat domain with z=40..42, portrait/landscape and 1-pixel edge dimensions. Assert finite matrices, orbit/fly pose and mode-specific errors, target at domain center or 2D mid-z, each 2D domain corner projects within framing margin, aspect is width/height. Test explicit camera component precedence and irrelevant 2D/3D fields; assert backend consumption of this frame in Tasks 4 and 5.
+- [ ] **Step 2: Declare `cli_scene.rs` from `cli.rs` and implement default frame.** Re-export `OutputFrame`, `PreparedScene` and `output_frame`; define `PreparedScene` as the declared scene/frame carrier even though Task 3 populates it. Initialize `OrbitCamera::default()` (yaw .8, pitch .9, distance 3.2, FOV 55° radians, ortho zoom 1); recenter 3D on domain center and 2D on `(center.x,center.y,mid_z)`. 2D plane height `max(extent_x/aspect,extent_y)*1.35`; orbit 3D retains app default distance, not `ViewCommand::Fit`, and large domains can crop at max distance 20. Fly starts with `FlyCamera::from_orbit` from that orbit pose, with fixed 55° FOV, then explicit position/yaw/pitch overrides. Explicit mode-inapplicable camera options fail. Reject nonfinite/singular output transforms.
 - [ ] **Step 3: Implement background transform** from panel-fill sRGB RGBA8 (gray 27 opaque default) to linear clear values; SVG stores same sRGB bytes and alpha. Preserve straight alpha. Test round-trip expected channel conversion.
 - [ ] **Step 4: Re-run geometry tests** and commit `feat: define deterministic CLI output frame` (no ticket marker).
 
@@ -128,7 +128,7 @@ once and preserve existing flow order; the CLI passes no click lines. The public
 Do not retrace via a second `streamlines_snapshot` call or expose
 `reference_lines_visible` (crate-private) to integration tests.
 
-- [ ] **Step 1: Test scheduling helper red.** Pin indexed f64 boundaries/count for zero, exact multiple and fractional remainder. For `start=0, duration=0.05, fixed_step=1/60`, assert three accepted calls, their `AdvectSettings.time` as independently rounded start boundaries and `dt` as rounded f64 interval differences; show the third actual f32 `t+dt` differs from independently rounded `0.05` and still succeeds. Check f32 `t`, `t+dt*0.5`, `t+dt` are strictly increasing and finite, and final `State.time` is the rounded requested endpoint. Reject tiny duration with f32 boundary stagnation or zero-progress RK4 midpoint, nonfinite/underflow, f64 boundary or count overflow, endpoint >3600, and >100,000 steps before spawn/advection. Confirm duration 3600/step 1e-4 rejects by step cap, not runtime promise.
+- [ ] **Step 1: Test scheduling through `prepare_scene` red.** Compare particle positions to an independently indexed f64 schedule and repeated existing RK4 `advect` calls for zero, exact multiple and fractional remainder. For `start=0, duration=0.05, fixed_step=1/60`, assert success with three reference intervals and matching particle positions at independently rounded f32 start boundaries and f32 interval differences; the last actual f32 `t+dt` differs from independently rounded `0.05` but succeeds. Assert final time-dependent scene samples the rounded requested endpoint. Reject tiny duration with f32 boundary stagnation or zero-progress RK4 midpoint, nonfinite/underflow, f64 boundary or count overflow, endpoint >3600, and >100,000 steps before spawn/advection. Confirm duration 3600/step 1e-4 rejects by step cap, not runtime promise; keep the schedule helper private.
 - [ ] **Step 2: Add time-dependent behavior tests.** For field `(t, x+t, 0)` start 2 s, compare particle positions against repeated `advect` with `AdvectSettings.time` at each step start and RK4 intermediate stages. With particles off, assert arrows/streamline sample and final color range use `State.time=start+duration`; also test zero-duration snapshot uses start time.
 - [ ] **Step 3: Add explicit particle RNG seed constructor** and test default `0x123456789ABCDEF0` reproduces the existing GUI stream, zero is accepted and a different seed changes positions. Keep `Particles::default()` behavior unchanged; seed is a u64 state for particle RNG only.
 - [ ] **Step 4: Implement simulation loop** with preflight of at most 100,000 indexed f64 boundary intervals, f32-positive/finite dt, advancing boundaries and RK4 stage times. Pass each independently converted f64 start and interval difference as f32 `AdvectSettings.time`/`dt`; never enforce exact equality of actual f32 RK4 end with the independently rounded next boundary or accumulate f32 times. Spawn at start time, use full steps plus one shortened remainder, call existing `particles::advect` at each step start, and set final `State.time` to the f32-converted requested endpoint before all final scene sampling/instance/color builds, including with particles off or zero duration. Do not use wall-clock/transport speed.
@@ -138,19 +138,19 @@ Do not retrace via a second `streamlines_snapshot` call or expose
 
 ### Task 4: CPU vector SVG matching supported 2D controls
 
-**Files:** `src/cli_svg.rs`, `tests/cli_svg_test.rs`. Do not modify the existing `screenshot::scene_to_svg` contract; the CLI serializer owns the required 2D-style mapping.
+**Files:** `src/cli_svg.rs`, `src/cli.rs` (module declaration/re-export), `tests/cli_svg_test.rs`, `tests/suite.rs` (register only this new test module). Do not modify the existing `screenshot::scene_to_svg` contract; the CLI serializer owns the required 2D-style mapping.
 
 **Produces:** `scene_to_cli_svg(&PreparedScene) -> Result<String, CliError>`;
 reject 3D before serialization and never initialize wgpu.
 
 - [ ] **Step 1: Write mapping tests.** Require field-arrow primitives separately from backdrop; assert Flat emits a filled head, Streamline emits headless geometry; changing head length/width changes shape; opacity changes alpha; projected world width responds to view scale; alpha/color maps to the sRGB display values; particle/trail widths/fades map; clipping wholly/partially offscreen geometry works; hidden references vanish; portrait/landscape frame corners fit. Assert SVG has no `<image>`.
 - [ ] **Step 2: Implement the separate pure CLI geometry serializer.** Match `arrow2d.wgsl`: normalize XY direction (fallback +Y when length <1e-5), shaft endpoint `(1-head_length)*length`, shaft half-width `shaft_radius*length`, head half-width `head_width*length`; Streamline is headless and full-length. Project every world vertex through shared `view_proj`; convert linear RGB to sRGB and preserve alpha; clip line/polygon geometry to output rectangle. Keep `screenshot::scene_to_svg` caller behavior unchanged.
-- [ ] **Step 3: Test deterministic SVG and 3D rejection** and assert adapter-request seam count stays zero; verify field primitive exists when reference geometry is empty.
+- [ ] **Step 3: Test deterministic SVG and 3D rejection** through the pure serializer, verifying field primitives exist when reference geometry is empty; Task 6 checks that the wired SVG CLI works without an adapter.
 - [ ] **Step 4: Re-run SVG tests** and commit `feat: export styled native vector plots` (no ticket marker).
 
 ### Task 5: Headless wgpu PNG backend
 
-**Files:** `src/cli_gpu.rs`, `tests/cli_gpu_test.rs` or isolated runtime script.
+**Files:** `src/cli_gpu.rs`, `src/cli.rs` (module declaration/re-export), `tests/cli_gpu_test.rs` or isolated runtime script; register a new suite module in `tests/suite.rs` only when its test file exists.
 
 **Produces:** `render_offscreen(&PreparedScene) -> Result<Vec<u8>, CliError>`;
 packed RGBA8 frame with same frame/color/background semantics as SVG.
@@ -163,13 +163,15 @@ packed RGBA8 frame with same frame/color/background semantics as SVG.
 
 ### Task 6: User docs and complete verification
 
-**Files:** `README.md` or `docs/cli.md` (choose one discoverable location); task tests as needed.
+**Files:** `src/cli.rs` (`run_from`/`run_export`), `src/main.rs` (native dispatch), `README.md` or `docs/cli.md` (choose one discoverable location); task tests as needed.
 
-- [ ] **Step 1: Document exact schema/flags and examples:** 2D SVG, 3D PNG, full flag/config parity, null/overlay precedence, modes/defaults, camera/time units, step limits, color/background semantics, GPU-only PNG, no dialogs/persistence, no-args GUI.
-- [ ] **Step 2: Exercise native CLI manually.** Generate SVG and inspect actual field vector geometry; generate displayless PNG where supported and inspect non-background pixels/dimensions; test malformed input, 3D SVG, adapter absence, unwritable and non-UTF8 paths; verify no persistence changes and ordinary GUI no-args smoke.
-- [ ] **Step 3: Run gates:** `cargo build`; `scripts/test.sh`; `cargo clippy --all-targets -- -D warnings`; `scripts/smoke-run.sh 15` after renderer changes; wasm build and web bootstrap check. Keep runtime checks distinct from compile/test evidence.
-- [ ] **Step 4: Self-review** against ticket 78, spec, merged ticket-77 names, all review findings 1–8, and AGENTS. Check merged suite registration and ensure no ignored test, no CAS/physics, no future/transient controls.
-- [ ] **Step 5: Commit** docs/fixes with `docs:`/`fix:` subject without ticket marker; provide gate/runtime evidence.
+- [ ] **Step 1: Write failing native dispatch tests.** Assert no arguments retain GUI route, help/version exit without a window, SVG/PNG choose the correct backend, and each error yields contextual stderr and a nonzero status; exercise CLI-vs-config dispatch and absence of persistence/dialog writes.
+- [ ] **Step 2: Implement `run_from` and `run_export` in `src/cli.rs` and native dispatch in `src/main.rs`.** After logger setup and before `window_options`, choose export only when arguments request it; preserve no-args GUI and wasm `start()` unchanged. Route final scene to pure SVG or GPU PNG and save to the explicit output path.
+- [ ] **Step 3: Document exact schema/flags and examples:** 2D SVG, 3D PNG, full flag/config parity, null/overlay precedence, modes/defaults, camera/time units, step limits, color/background semantics, GPU-only PNG, no dialogs/persistence, no-args GUI.
+- [ ] **Step 4: Exercise native CLI manually.** Generate SVG and inspect actual field vector geometry; generate displayless PNG where supported and inspect non-background pixels/dimensions; test malformed input, 3D SVG, adapter absence, unwritable and non-UTF8 paths; verify no persistence changes and ordinary GUI no-args smoke.
+- [ ] **Step 5: Run gates:** `cargo build`; `scripts/test.sh`; `cargo clippy --all-targets -- -D warnings`; `scripts/smoke-run.sh 15` for runtime/renderer path. Dedicated wasm/browser checks are owner-waived, not passed. Keep runtime checks distinct from compile/test evidence.
+- [ ] **Step 6: Self-review** against ticket 78, spec, merged ticket-77 names, all review findings 1–8, and AGENTS. Check merged suite registration and ensure no ignored test, no CAS/physics, no future/transient controls.
+- [ ] **Step 7: Commit** docs/fixes with `feat:`/`docs:`/`fix:` subject without ticket marker; provide gate/runtime evidence.
 
 ## Review-Finding Coverage
 
