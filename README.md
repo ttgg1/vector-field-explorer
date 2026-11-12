@@ -26,7 +26,7 @@ instanced GPU scene:
 - animated particles with trails and speed or magnitude colouring;
 - a 2D orthographic view and a 3D orbit camera, plus a free-fly camera;
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
-  plane-by-plane inspection;
+  plane-by-plane inspection, with independent grid and coordinate guides;
 - native PNG screenshots and persisted view, layout, and appearance settings.
 
 It is a teaching-grade explorer, not a numerical solver: there is no
@@ -289,6 +289,14 @@ again. `Ctrl+B` toggles Controls and `Ctrl+P` toggles Presets (`Cmd+B` and
 700 points of window width or less the app switches to a compact tab bar and
 bottom sheet.
 
+Under **Controls → Display**, **Show grid** and **Show coordinate system** are
+independent checkboxes, both on by default. In 2D, the first shows the flat
+domain grid and the second shows the coloured X/Y axes. In 3D, the first shows
+the domain's face grids and wireframe box; the second shows only the coloured
+X/Y/Z axes. They use the same settings in both modes; hiding either guide does
+not hide arrows, streamlines, or click-seeded lines. The Display section's
+**Reset** button restores both guides to visible.
+
 The top menu bar contains:
 
 - **File**: Export screenshot…, Quit.
@@ -323,7 +331,8 @@ The app writes one settings envelope under eframe's app key. The following
 survive a restart:
 
 - the view state: formula or loaded preset, 2D/3D mode, domain, density, arrow
-  settings, colouring, streamline and particle settings;
+  settings, colouring, streamline and particle settings, and the Show grid /
+  Show coordinate system preferences (remembered across both modes);
 - the layout: panel visibility, panel widths, and help-overlay visibility;
 - the appearance: theme, accent, rounding, spacing, and font size.
 
@@ -333,7 +342,8 @@ Camera presets are named 2D camera records (target position and zoom); a **field
 preset** is a formula definition. The distinction is defined in
 [GLOSSARY.md](GLOSSARY.md).
 
-Corrupt or partial settings fall back to defaults or clamp to valid ranges.
+Corrupt or partial settings fall back to defaults or clamp to valid ranges;
+older saved views without the guide preferences show both guides by default.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
 logged and left untouched rather than silently overwritten (a missing file
 starts with an empty list), and save or delete failures surface a non-blocking

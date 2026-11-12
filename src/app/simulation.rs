@@ -51,13 +51,17 @@ impl VfApp {
             // Click bursts outlive the rebuild: they are anchored on the field,
             // not on the sampling grid, so retrace them against the new
             // domain/formula rather than dropping the user's picks.
-            self.click_lines = self.state.click_streamlines_snapshot(self.dots_range, &self.click_seeds);
+            self.click_lines = self
+                .state
+                .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
             self.scene.lines = Arc::new(compose_lines(
                 &self.flow_lines,
                 &self.click_lines,
                 &self.state.domain,
                 self.state.is_3d(),
+                self.state.show_grid,
+                self.state.show_coordinate_system,
             ));
             log::trace!(
                 "scene rebuilt: {} arrows, {} streamline segments, {} dots",
