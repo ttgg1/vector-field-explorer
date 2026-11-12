@@ -20,8 +20,8 @@
 - Seed is u64 and affects the existing particle RNG state only; zero is valid and default is `0x123456789ABCDEF0`, preserving the GUI stream. Time is simulated seconds, start at configured `start_time_seconds`, advect at start-of-step times, snapshot at endpoint.
 - Preserve `effective_trail_len`: request max 32 points; 100,000 total stored-point cap means 25 points for 4000 particles.
 - Shared output frame must drive SVG and PNG. Same-build/platform deterministic state/SVG; no cross-platform bit-identical GPU-byte promise.
-- Reference controls are ticket 77 semantics: coupled grid+domain-box visibility and independent world axes, both visible. Only exact Rust wiring waits for 77 merge.
-- Tests live in `tests/`; coordinate suite registration with 76/77; no inline source tests, ignored tests, or broad test-only API.
+- Reference controls use merged ticket 77's `State::show_grid` and `State::show_coordinate_system` bools (both default `true`), with the corresponding `set_show_grid` / `set_show_coordinate_system` setters. `show_grid` controls the 3D face grid and box together; JSON/flag names stay as specified.
+- Tests live in `tests/`; `tests/suite.rs` ownership is released after the 76/77 merge, so register CLI modules there while coordinating any concurrent edits. No inline source tests, ignored tests, or broad test-only API.
 - Required gates: `cargo build`, `scripts/test.sh`, `cargo clippy --all-targets -- -D warnings`, GUI smoke, wasm build/bootstrap check; renderer changes also `scripts/smoke-run.sh 15`; displayless PNG runtime evidence on release platforms is required implementation evidence.
 
 ## Review Focus
@@ -44,9 +44,9 @@
 - `src/lib.rs`: add `#[cfg(not(target_arch = "wasm32"))] pub mod cli;` as the real native CLI module interface, not a test-only API.
 - `Cargo.toml`: add clap and pollster 0.4 only in native dependency table; confirm GPL-3.0-only compatibility.
 - `src/particles.rs`: additive explicit initial seed seam, preserving GUI default.
-- `src/reference.rs`: wire existing lines to ticket 77's merged two-control interface; do not add ticket 77 functionality.
+- `src/reference.rs`: no edit planned; `reference_lines_visible` is `pub(crate)`. Use public `app::compose_lines` for CLI reference composition without widening visibility.
 - `tests/cli_test.rs`, `tests/cli_scene_test.rs`, `tests/cli_svg_test.rs`: tests; `tests/cli_gpu_test.rs` or isolated subprocess/runtime script for displayless GPU.
-- `tests/suite.rs`: register test modules only after ticket 76/77 release exclusive ownership.
+- `tests/suite.rs`: register native-gated CLI test modules; ticket 76/77 ownership has been released by merge.
 - `src/renderer.rs`: use existing `DrawState::new` and native `render_offscreen`; no renderer edit is planned.
 
 ## Interfaces
@@ -90,13 +90,13 @@ types; config missing means inherit, JSON null means `Auto`; no `auto_fit` alias
 ### Task 1: Freeze and implement CLI/config contract
 
 **Files:** `src/cli.rs`, `src/main.rs`, `Cargo.toml`, `src/lib.rs`;
-`tests/cli_test.rs`; suite registration after ownership release.
+`tests/cli_test.rs`, merged `tests/suite.rs` registration.
 
 **Produces:** exact config/flag types and APIs above; no optional/unresolved
 schema fields. Mode is resolved before constructing `State::new(mode)`.
 
 - [ ] **Step 1: Add parser/config contract tests.** Test help/version/no args; JSON/flag output+dimensions; every spec table field has config and flag round-trip; explicit false wins; nested partial object leaves other values intact; nested unknown keys reject; `color_range` missing versus null/auto versus fixed range; no duplicate `seed_mode` alias; invalid config still fails when overridden by CLI; output extension/path errors; 2D config density 100 overridden to final mode 3D with final two-component formula stays valid (flat sampling), while the same density with a final three-component 3D formula fails; 2D rejects fly/perspective fields, 3D orbit rejects fly position, and 3D fly rejects orbit fields.
-- [ ] **Step 2: Run focused tests** after suite registration ownership is released; confirm expected failures. Until then keep new tests unregistered in this worktree and coordinate registration serially.
+- [ ] **Step 2: Register native-gated CLI test modules in the merged `tests/suite.rs` and run focused tests**; confirm expected failures and coordinate any concurrent registration edits.
 - [ ] **Step 3: Add clap and pollster 0.4 native-only and implement strict nested serde schema/flags.** Confirm dependency licenses compatible with GPL-3.0-only. Enum types use only table spellings. All settings use Option presence; nested structs merge leaf-by-leaf. Deserialize `color_range` with a three-state `Missing | Null | Value([f32;2])` patch so explicit null is distinct from omission; null is accepted only here.
 - [ ] **Step 4: Implement intrinsic pre-overlay validation.** Validate JSON type/unknown keys, tuple lengths, finite/range constraints, enums and formula parse/name binding for every provided value, even if later overridden.
 - [ ] **Step 5: Implement effective validation and application order.** Resolve mode and final formula; construct `State::new(mode)`; parse/bind and apply formula before validating/applying density, then apply domain, plane, remaining controls, time and camera. Validate domain −100..=100 strict ordered bounds; density intrinsic 4..=200 then maximum 40 only when final `State::is_3d()` (otherwise 200); plane index against final grid; camera target/position finite, pitch/distance/FOV/zoom ranges and mode applicability from spec, and finite nonsingular matrices. Require start+duration <=3600. Reject unknown free formula names/functions while accepting valid zero/singular formulas. Do not rely on setter clamping.
@@ -116,19 +116,24 @@ schema fields. Mode is resolved before constructing `State::new(mode)`.
 
 ### Task 3: Seeded time-aware simulation and complete final scene
 
-**Files:** `src/cli_scene.rs`, `src/particles.rs`, ticket-77 `src/reference.rs` call site after merge; `tests/cli_scene_test.rs`.
+**Files:** `src/cli_scene.rs`, `src/particles.rs`, `tests/cli_scene_test.rs`; use the merged `src/app/mod.rs` composition seam without changing `src/reference.rs`.
 
 **Produces:** `prepare_scene(options, frame) -> Result<PreparedScene, CliError>`.
 This is the single owner of all final scene assembly. It calls `State::snapshot`
-once; snapshot includes grid streamlines. It adds reference lines once, and does
-not retrace via a second `streamlines_snapshot` call.
+once; snapshot includes grid streamlines. Replace its line collection via
+`app::compose_lines(scene.lines.as_ref(), &[], &state.domain, state.is_3d(),
+state.show_grid, state.show_coordinate_system)` to prepend references exactly
+once and preserve existing flow order; the CLI passes no click lines. The public
+`#[doc(hidden)]` seam preserves flow-then-click order when clicks are supplied.
+Do not retrace via a second `streamlines_snapshot` call or expose
+`reference_lines_visible` (crate-private) to integration tests.
 
 - [ ] **Step 1: Test scheduling helper red.** Pin indexed f64 boundaries/count for zero, exact multiple and fractional remainder. For `start=0, duration=0.05, fixed_step=1/60`, assert three accepted calls, their `AdvectSettings.time` as independently rounded start boundaries and `dt` as rounded f64 interval differences; show the third actual f32 `t+dt` differs from independently rounded `0.05` and still succeeds. Check f32 `t`, `t+dt*0.5`, `t+dt` are strictly increasing and finite, and final `State.time` is the rounded requested endpoint. Reject tiny duration with f32 boundary stagnation or zero-progress RK4 midpoint, nonfinite/underflow, f64 boundary or count overflow, endpoint >3600, and >100,000 steps before spawn/advection. Confirm duration 3600/step 1e-4 rejects by step cap, not runtime promise.
 - [ ] **Step 2: Add time-dependent behavior tests.** For field `(t, x+t, 0)` start 2 s, compare particle positions against repeated `advect` with `AdvectSettings.time` at each step start and RK4 intermediate stages. With particles off, assert arrows/streamline sample and final color range use `State.time=start+duration`; also test zero-duration snapshot uses start time.
 - [ ] **Step 3: Add explicit particle RNG seed constructor** and test default `0x123456789ABCDEF0` reproduces the existing GUI stream, zero is accepted and a different seed changes positions. Keep `Particles::default()` behavior unchanged; seed is a u64 state for particle RNG only.
 - [ ] **Step 4: Implement simulation loop** with preflight of at most 100,000 indexed f64 boundary intervals, f32-positive/finite dt, advancing boundaries and RK4 stage times. Pass each independently converted f64 start and interval difference as f32 `AdvectSettings.time`/`dt`; never enforce exact equality of actual f32 RK4 end with the independently rounded next boundary or accumulate f32 times. Spawn at start time, use full steps plus one shortened remainder, call existing `particles::advect` at each step start, and set final `State.time` to the f32-converted requested endpoint before all final scene sampling/instance/color builds, including with particles off or zero duration. Do not use wall-clock/transport speed.
 - [ ] **Step 5: Add scene assembly tests.** Assert snapshot streamlines once, reference lines once; 2D no particles; particle-only 3D; 2D formula in 3D mode; combined arrow+dot tags/counts; stable far-to-near equal-depth order and trail order. Assert 4000 particles/requested trail 32 accepted and effective trail length 25.
-- [ ] **Step 6: Implement complete renderer-ready scene.** Honor `particle_target`; use existing dots/trails and reference composition. Ticket 77 handoff is only exact visibility type/method wiring; preserve two choices and defaults without adding domain-box toggle. 3D uses `combined_instances` and stable camera-depth sort; 2D sorts arrows and leaves combined unused.
+- [ ] **Step 6: Implement complete renderer-ready scene.** Honor `particle_target`; use existing dots/trails and public `app::compose_lines` with both merged state visibility bools, supplying snapshot flow lines and empty clicks so reference lines appear once ahead of flow. No new reference API or domain-box toggle. 3D uses `combined_instances` and stable camera-depth sort; 2D sorts arrows and leaves combined unused.
 - [ ] **Step 7: Re-run all pure tests** and commit `feat: prepare deterministic CLI plot scene` (no ticket marker).
 
 ### Task 4: CPU vector SVG matching supported 2D controls
@@ -163,15 +168,15 @@ packed RGBA8 frame with same frame/color/background semantics as SVG.
 - [ ] **Step 1: Document exact schema/flags and examples:** 2D SVG, 3D PNG, full flag/config parity, null/overlay precedence, modes/defaults, camera/time units, step limits, color/background semantics, GPU-only PNG, no dialogs/persistence, no-args GUI.
 - [ ] **Step 2: Exercise native CLI manually.** Generate SVG and inspect actual field vector geometry; generate displayless PNG where supported and inspect non-background pixels/dimensions; test malformed input, 3D SVG, adapter absence, unwritable and non-UTF8 paths; verify no persistence changes and ordinary GUI no-args smoke.
 - [ ] **Step 3: Run gates:** `cargo build`; `scripts/test.sh`; `cargo clippy --all-targets -- -D warnings`; `scripts/smoke-run.sh 15` after renderer changes; wasm build and web bootstrap check. Keep runtime checks distinct from compile/test evidence.
-- [ ] **Step 4: Self-review** against ticket 78, spec, merged ticket-77 names, all review findings 1–8, and AGENTS. Check test registration ownership and ensure no ignored test, no CAS/physics, no future/transient controls.
+- [ ] **Step 4: Self-review** against ticket 78, spec, merged ticket-77 names, all review findings 1–8, and AGENTS. Check merged suite registration and ensure no ignored test, no CAS/physics, no future/transient controls.
 - [ ] **Step 5: Commit** docs/fixes with `docs:`/`fix:` subject without ticket marker; provide gate/runtime evidence.
 
 ## Review-Finding Coverage
 
 1. Existing t-aware fields and start-step/final snapshot semantics: Task 3.
 2. Full explicit flag + config parity for every current control: Task 1.
-3. Frozen canonical defaults/types/enums/null/nested rules; two reference choices
-   with only ticket-77 Rust wiring deferred: Task 1 and spec schema.
+3. Frozen canonical defaults/types/enums/null/nested rules; two merged reference
+   choices wired through `State` and `app::compose_lines`: Task 1 and spec schema.
 4. Intrinsic versus merged validation, variable binding, singular fields, mode,
    domain, plane and camera rules: Task 1.
 5. Step bound/precision/progress and effective trail cap semantics: Task 3.

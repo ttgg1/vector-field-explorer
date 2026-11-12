@@ -98,8 +98,8 @@ not one-shot render settings.
 | `camera.distance` | `--camera-distance N` | finite 0.5..=20; orbit only | 3.2 |
 | `camera.fov_y_degrees` | `--camera-fov-deg DEG` | finite (0,180), converted to radians; orbit only | 55 degrees; fly uses fixed `FlyCamera::FOV_Y` 55° |
 | `camera.ortho_zoom` | `--camera-ortho-zoom N` | finite 0.05..=50; 2D only | 1 |
-| `references.grid_and_domain_box` | `--references-grid-and-box BOOL` | bool; one coupled control | true |
-| `references.world_axes` | `--references-world-axes BOOL` | bool | true |
+| `references.grid_and_domain_box` | `--references-grid-and-box BOOL` | bool; one coupled control, mapped to `State::show_grid` | true (`State::new`) |
+| `references.world_axes` | `--references-world-axes BOOL` | bool; mapped to `State::show_coordinate_system` | true (`State::new`) |
 | `background` | `--background-rgba R,G,B,A` | RGBA8 straight-alpha; converted explicitly per backend | egui dark panel fill gray 27, opaque; not hard-coded RGB 18,20,26 |
 | `seed` | `--seed N` | unsigned 64-bit LCG state; zero is valid | `SPAWN_SEED = 0x123456789ABCDEF0` (preserves current GUI stream) |
 | `start_time_seconds` | `--start-time SECONDS` | finite 0..=3600; endpoint plus duration must remain <=3600 | 0 |
@@ -125,10 +125,14 @@ The CLI's three-byte `fixed_color` input maps to the existing four-byte
 `ParticleAppearance.fixed_color` as `[r,g,b,255]`; alpha remains controlled only
 by `particle_appearance.opacity`.
 
-Reference controls are exactly ticket 77's approved two choices: grid plus
-domain box as one switch, and world axes independently; both default visible.
-The pending ticket-77 Rust type/method spelling and composition call site are
-the only deferred interface detail. Do not add a third domain-box toggle.
+Reference controls are exactly ticket 77's merged two choices: grid plus
+domain box as one switch (`State::show_grid` / `State::set_show_grid`), and
+world axes independently (`State::show_coordinate_system` /
+`State::set_show_coordinate_system`); both bools default to `true` in
+`State::new` and `Controls::new`. The JSON/flag names above remain the CLI
+schema, not Rust field names. Do not add a third domain-box toggle.
+`reference::reference_lines_visible` is `pub(crate)`; the CLI scene owner uses
+the existing public `app::compose_lines` rather than widening reference APIs.
 
 ## Validation and effective state
 
@@ -248,10 +252,17 @@ returns display-encoded channels matching the configured background bytes.
 Convert linear scene-instance RGB to sRGB for SVG and preserve alpha in both
 formats. Confirm clear/blend/readback behavior with an exact-color test.
 
-Single scene owner (Task 2) builds final renderer-ready `SceneGPU`, not a partial
+Single scene owner (Task 3) builds final renderer-ready `SceneGPU`, not a partial
 snapshot: set final state time, call `State::snapshot()` once (its `lines`
-already contain grid-seeded streamlines), add reference lines once, and do not
-call `streamlines_snapshot()` again. Construct particle cloud only if
+already contain grid-seeded streamlines), then replace its lines with
+`app::compose_lines(scene.lines.as_ref(), &[], &state.domain, state.is_3d(),
+state.show_grid, state.show_coordinate_system)`. This `#[doc(hidden)] pub` seam
+is reachable through the public `app` module from the native CLI and integration
+tests; it prepends selected reference lines once, then retains the supplied
+flow lines followed by click lines. The CLI has no click history, so pass an
+empty click slice; do not retrace via `streamlines_snapshot()` or call the
+crate-private `reference_lines_visible` from an integration test. `show_grid`
+owns the 3D face grid **and** domain box together. Construct particle cloud only if
 `particle_target()` is `Some`; build dots/trails with existing at-time builders.
 For 3D, combine arrow+dot instances with `combined_instances`, stable-sort by
 descending positive camera-space depth (far-to-near) using the shared output
@@ -337,8 +348,9 @@ Use module-private implementation helpers. These are functional native CLI
 interfaces, not test-only widened renderer APIs; integration tests may call the
 pure config/frame/scene/SVG seams and exercise PNG through runtime/process tests.
 
-Tests live in integration `tests/*_test.rs`; coordinate `tests/suite.rs` with
-ticket 76/77 owner, do not edit registration in conflict. Assertions must cover:
+Tests live in integration `tests/*_test.rs`; `tests/suite.rs` is merged and
+available for CLI test-module registration (coordinate any new concurrent edits).
+Assertions must cover:
 
 1. Parser help/version/no args, output extension/path errors, config output and
    dimensions, every flag-to-config field equivalence, explicit false override,
@@ -388,11 +400,11 @@ wasm build/web bootstrap check, and `scripts/smoke-run.sh 15` for renderer
 changes. Runtime adapter/platform evidence remains a future implementation
 gate; it is not claimed by this design-only task.
 
-## Non-goals and ticket-77 handoff
+## Non-goals and merged reference wiring
 
 No GUI transient click history, click-seed actions, movement keys, transport
 playback/speed, CAS, physics, future controls, general framework, or numerical
-performance promise. Ticket 77 owns the implementation of its two reference
-visibility choices. This design freezes their semantic/config/flag contract
-now; after 77 merges, reconcile only exact Rust type/method names and insertion
-point. Neither the existing controls nor the CLI contract wait on those names.
+performance promise. Ticket 77's two reference visibility choices are merged:
+use the existing state bools/setters and `app::compose_lines` as specified
+above. The CLI schema remains unchanged; do not expose another public API just
+for integration tests.
