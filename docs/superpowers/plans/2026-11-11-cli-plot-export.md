@@ -31,7 +31,7 @@
 - **Validation before/after merge:** assert unknown names rejected while singular/zero fields remain valid; invalid supplied config fails before override; density limits use final formula plus mode via `State::is_3d()`; plane/camera constraints are checked on final state (Task 1).
 - **Bounded computation:** tiny steps and overflow/nonprogress reject before simulation; ordinary default nonintegral durations, exact/fractional times and valid 4000×32 requested trails preserve effective semantics (Task 3).
 - **Visual/backend drift:** tests pin projected geometry, shared frame/color mapping, complete sorted 3D scene, exact GPU clear/blend/readback colors and non-background PNG content (Tasks 2–5).
-- **GPU error contract:** inject map/poll/readback failure independently of physical adapter availability and assert an actionable contextual error (Task 5).
+- **GPU error contract:** inject a map callback failure through the native renderer's production helper without an adapter; assert its typed cause/stage and production CLI `Readback` conversion (Task 5).
 
 ---
 
@@ -40,7 +40,7 @@
 - `src/cli.rs`: native args, exact config types, overlay, validation, eventual dispatch/error reporting; declare as a native-only library module for the binary and integration tests. As each backend file arrives, declare it with `#[path = "cli_scene.rs"] mod cli_scene;` (and analogous paths for `cli_svg.rs` / `cli_gpu.rs`) and re-export the listed public API from `cli`.
 - `src/cli_scene.rs`: `OutputFrame`, effective state construction, fixed-time simulation, complete renderer-ready scene and stable sorting. One owner for final scene.
 - `src/cli_svg.rs`: pure CPU 2D SVG field geometry and serialization, without changing existing screenshot callers unexpectedly.
-- `src/cli_gpu.rs`: direct wgpu 30.0.1 adapter/device, offscreen target, error scopes/readback; receives finalized scene/frame only.
+- `src/cli_gpu.rs`: direct wgpu 30.0.1 adapter/device, offscreen target, error scopes/readback; receives finalized scene/frame only; uses the native typed renderer result and production CLI conversion.
 - `src/main.rs`: native argument dispatch after all backends exist and before window options; wasm untouched.
 - `src/lib.rs`: add `#[cfg(not(target_arch = "wasm32"))] pub mod cli;` as the real native CLI module interface, not a test-only API.
 - `Cargo.toml`: add clap and pollster 0.4 only in native dependency table; confirm GPL-3.0-only compatibility.
@@ -48,7 +48,8 @@
 - `src/reference.rs`: no edit planned; `reference_lines_visible` is `pub(crate)`. Use public `app::compose_lines` for CLI reference composition without widening visibility.
 - `tests/cli_test.rs`, `tests/cli_scene_test.rs`, `tests/cli_svg_test.rs`: tests; `tests/cli_gpu_test.rs` or isolated subprocess/runtime script for displayless GPU.
 - `tests/suite.rs`: register native-gated CLI test modules; ticket 76/77 ownership has been released by merge.
-- `src/renderer.rs`: use existing `DrawState::new` and native `render_offscreen`; no renderer edit is planned.
+- `src/renderer.rs`: retain existing offscreen behavior but give native `DrawState::render_offscreen` a typed result and route its actual map callback through one public, doc-hidden native status helper; wasm async remains unchanged.
+- `src/app/viewport.rs`: adapt the sole native GUI offscreen caller to `screenshot.fail(error.to_string())`; preserve screenshot behavior.
 
 ## Interfaces
 
@@ -76,7 +77,27 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
 pub fn scene_to_cli_svg(prepared: &PreparedScene) -> Result<String, CliError>;
 pub fn render_offscreen(prepared: &PreparedScene) -> Result<Vec<u8>, CliError>; // packed RGBA8
 pub fn run_export(options: CliOptions) -> Result<(), CliError>;
+#[doc(hidden)] pub fn offscreen_error_to_cli(error: renderer::OffscreenError) -> CliError;
 ```
+
+Native renderer production contract (Task 5):
+
+```rust
+pub enum OffscreenError { Setup(String), Readback(ReadbackError) }
+pub enum ReadbackError {
+    Map(wgpu::BufferAsyncError), Poll(wgpu::PollError),
+    CallbackLost(std::sync::mpsc::RecvError), Range(wgpu::MapRangeError), Decode(String),
+}
+#[doc(hidden)] pub fn readback_map_status(
+    status: Result<(), wgpu::BufferAsyncError>,
+) -> Result<(), ReadbackError>;
+// Native DrawState::render_offscreen(... unchanged inputs ...) -> Result<Vec<u8>, OffscreenError>
+```
+
+`readback_map_status` handles the real renderer callback status, not a duplicate
+test-only callback. The CLI uses `offscreen_error_to_cli` on the actual renderer
+result: `Setup` -> contextual `CliError::Render`, `Readback` -> contextual
+`CliError::Readback`. Preserve stage and underlying cause in error display.
 
 `CliConfig` includes `output`, dimensions, mode/formula/domain/density; every
 State control; complete particle appearance; all camera fields; two reference
@@ -151,15 +172,15 @@ reject 3D before serialization and never initialize wgpu.
 
 ### Task 5: Headless wgpu PNG backend
 
-**Files:** `src/cli_gpu.rs`, `src/cli.rs` (module declaration/re-export), `tests/cli_gpu_test.rs` or isolated runtime script; register a new suite module in `tests/suite.rs` only when its test file exists.
+**Files:** `src/cli_gpu.rs`, `src/cli.rs` (module declaration/re-export), `src/renderer.rs`, `src/app/viewport.rs`, `tests/cli_gpu_test.rs` plus isolated runtime script if needed; register a new suite module in `tests/suite.rs` only when its test file exists.
 
 **Produces:** `render_offscreen(&PreparedScene) -> Result<Vec<u8>, CliError>`;
 packed RGBA8 frame with same frame/color/background semantics as SVG.
 
-- [ ] **Step 1: Add pure limit/error tests** for requested dimensions, pixel bytes, texture dimensions, storage-buffer sizes, adapter limits and injected no-adapter/device failure. Add a deterministic injected map/poll/readback failure test, independent of any physical adapter, asserting `CliError::Readback` with actionable stage/cause context. Exercise the same production error-handling seam used by real readback (module-private helpers are fine), without adding a public test-only API; no test changes process `DISPLAY`/`WAYLAND_DISPLAY` in shared suite.
+- [ ] **Step 1: Add pure limit/error tests** for requested dimensions, pixel bytes, texture dimensions, storage-buffer sizes, adapter limits and injected no-adapter/device failure. In `tests/cli_gpu_test.rs` import `eframe::wgpu` and register a native suite test that calls `renderer::readback_map_status(Err(wgpu::BufferAsyncError))`, matches `ReadbackError::Map`, wraps that actual error in `OffscreenError::Readback`, then calls `cli::offscreen_error_to_cli` and matches `CliError::Readback` with map stage/cause text. The test must fail before Task 5 implements these production seams; do not synthesize a `CliError` or introduce a second test-only helper. Keep poll/receive/range/decode stage classification in the typed production path; this deterministic test specifically injects the actual map callback failure without an adapter. No test changes process `DISPLAY`/`WAYLAND_DISPLAY` in shared suite.
 - [ ] **Step 2: Implement wgpu 30.0.1 request path** with `pollster::block_on(Instance::request_adapter(...))` then `pollster::block_on(adapter.request_device(...))`, no surface/window. Request only renderer-required features/adapter-bounded limits. Require `Rgba8UnormSrgb` render-attachment format capability; fail clearly rather than use another format. Validate output sizes before allocation.
-- [ ] **Step 3: Reuse exact existing offscreen renderer/readback.** Call `DrawState::new(&device, TextureFormat::Rgba8UnormSrgb)` and `render_offscreen(device, queue, scene, view_proj, camera_pos, width, height, clear)`. Existing path maps, polls, strips row padding, unmaps and converts RGBA. Add validation error scopes around creation/submission plus uncaptured-error/device-loss reporting; propagate actionable no-adapter/device/OOM/validation/map/readback/write errors through the production error seam tested in Step 1. Never fallback to CPU and do not modify `renderer.rs`.
-- [ ] **Step 4: Run isolated displayless adapter subprocess/runtime check and GPU color test.** Where an adapter is available, decode packed RGBA8/readback (or encoded PNG) and assert exact expected display-encoded channel bytes at a known uncovered pixel for a configured clear with nontrivial sRGB/alpha values, and at a known fully covered interior pixel for a representative alpha-blended scene primitive over it; derive the expected blend channels from linear clear/instance color, pipeline blend factors and the target's sRGB encoding. This exercises actual clear, blend and readback, not just the Task 2 pure conversion round-trip or a nonblank-pixel check. Also decode output dimensions and assert non-background field pixels. Keep conditional adapter availability separate from deterministic injected no-adapter/device/readback failures: report unavailable real adapters honestly, never treat a skipped runtime test as passed, and do not ignore tests. Runtime GPU color proof is an implementation gate, not evidence already obtained by this plan.
+- [ ] **Step 3: Adapt the native renderer and GUI, then reuse the offscreen path.** In `src/renderer.rs`, change native `DrawState::render_offscreen` to `Result<Vec<u8>, OffscreenError>` with `Setup(String)` for submission/setup and `Readback(ReadbackError)` for poll, callback receive/map, mapped range and RGBA conversion; call `readback_map_status` on the real callback status after receive. Preserve typed `wgpu::BufferAsyncError`, `wgpu::PollError`, `std::sync::mpsc::RecvError` and `wgpu::MapRangeError` in their variants, with stage/cause display. Keep native map/poll, row-padding stripping and unmapping intact; leave wasm `render_offscreen_async` and its String result alone. Change the only native GUI caller in `src/app/viewport.rs` to `screenshot.fail(error.to_string())` so GUI screenshot failure remains a string. In CLI call `DrawState::new(&device, TextureFormat::Rgba8UnormSrgb)` and the typed native `render_offscreen(device, queue, scene, view_proj, camera_pos, width, height, clear)`, mapping its result through `offscreen_error_to_cli` (the same function called by Step 1). Add validation error scopes around creation/submission plus uncaptured-error/device-loss reporting; propagate actionable no-adapter/device/OOM/validation/map/readback/write errors. No CPU fallback.
+- [ ] **Step 4: Run native smoke and isolated displayless adapter subprocess/runtime check and GPU color test.** Run `scripts/smoke-run.sh 15` for the renderer change and verify GUI screenshot success/failure behavior. Where an adapter is available, decode packed RGBA8/readback (or encoded PNG) and assert exact expected display-encoded channel bytes at a known uncovered pixel for a configured clear with nontrivial sRGB/alpha values, and at a known fully covered interior pixel for a representative alpha-blended scene primitive over it; derive the expected blend channels from linear clear/instance color, pipeline blend factors and the target's sRGB encoding. This exercises actual clear, blend and readback, not just the Task 2 pure conversion round-trip or a nonblank-pixel check. Also decode output dimensions and assert non-background field pixels. Keep conditional adapter availability separate from deterministic injected no-adapter/device/map callback failures: report unavailable real adapters honestly, never treat a skipped runtime test as passed, and do not ignore tests. Runtime GPU color proof is an implementation gate, not evidence already obtained by this plan.
 - [ ] **Step 5: Commit** `feat: render native CLI PNG offscreen` (no ticket marker).
 
 ### Task 6: User docs and complete verification
@@ -186,4 +207,4 @@ packed RGBA8 frame with same frame/color/background semantics as SVG.
 6. SVG 2D styles/head params/opacity/projected width/clipping: Task 4.
 7. Shared frame/camera/aspect/mid-z/background color contract: Task 2 and Task 4/5; Task 5 asserts exact actual GPU clear/blend/readback bytes where an adapter is available.
 8. Single owner of final camera-dependent combined/sorted scene and nonblank PNG:
-   Task 3 and Task 5; Task 5 independently injects map/poll/readback failure and asserts contextual errors.
+   Task 3 and Task 5; Task 5 injects a map callback failure through the actual native renderer helper and production CLI conversion, asserting typed stage/cause without an adapter.

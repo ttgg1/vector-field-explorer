@@ -300,8 +300,25 @@ using `pollster::block_on(Instance::request_adapter(...))` and then
 Use only renderer-required features and request limits bounded by adapter
 capabilities. Reuse `DrawState::new(&device, TextureFormat::Rgba8UnormSrgb)` and
 `DrawState::render_offscreen(&mut self, device, queue, scene, view_proj,
-camera_pos, width, height, clear)`: the existing path already maps/readbacks,
-polls, strips padding, unmaps and converts RGBA. Require the adapter to report
+camera_pos, width, height, clear)`: retain the existing mapping, polling, row
+padding removal, unmapping and RGBA conversion, but make its native result
+`Result<Vec<u8>, renderer::OffscreenError>`. Define native
+`OffscreenError::{Setup(String), Readback(ReadbackError)}` and native
+`ReadbackError::{Map(wgpu::BufferAsyncError), Poll(wgpu::PollError),
+CallbackLost(std::sync::mpsc::RecvError), Range(wgpu::MapRangeError),
+Decode(String)}`. Preserve the underlying typed cause in each readback variant
+and display the stage and cause. Route the real `map_async` callback result
+through `#[doc(hidden)] pub fn renderer::readback_map_status(status:
+Result<(), wgpu::BufferAsyncError>) -> Result<(), renderer::ReadbackError>`;
+this native-only production helper is callable from integration tests, not a
+second test-only path. Classify submission/setup failures as `Setup` and
+poll/receive/map/range/conversion failures as `Readback`; convert the typed
+offscreen error into contextual `CliError::Render` or `CliError::Readback` via
+the native production `#[doc(hidden)] pub fn cli::offscreen_error_to_cli(error:
+renderer::OffscreenError) -> CliError`, also used directly by CLI PNG rendering.
+Keep the sole native GUI caller in `src/app/viewport.rs` working with
+`screenshot.fail(error.to_string())`; leave wasm async readback and its String
+result unchanged. Require the adapter to report
 `Rgba8UnormSrgb` as render-attachment-capable; if unavailable, return an
 actionable error rather than silently changing color semantics. Create target
 only after checking width/height, pixel bytes, texture dimensions, storage
@@ -342,11 +359,15 @@ pub fn scene_to_cli_svg(prepared: &PreparedScene) -> Result<String, CliError>;
 pub fn render_offscreen(prepared: &PreparedScene) -> Result<Vec<u8>, CliError>;
 pub fn run_export(options: CliOptions) -> Result<(), CliError>;
 pub fn run_from(args: impl IntoIterator<Item = OsString>) -> Result<(), CliError>;
+#[doc(hidden)] pub fn offscreen_error_to_cli(error: renderer::OffscreenError) -> CliError;
 ```
 
 Use module-private implementation helpers. These are functional native CLI
 interfaces, not test-only widened renderer APIs; integration tests may call the
 pure config/frame/scene/SVG seams and exercise PNG through runtime/process tests.
+The native renderer readback-status helper and native CLI error conversion above
+are functional production interfaces shared by the renderer, CLI and integration
+tests, not separate test-only APIs.
 
 Tests live in integration `tests/*_test.rs`; `tests/suite.rs` is merged and
 available for CLI test-module registration (coordinate any new concurrent edits).
@@ -386,7 +407,15 @@ Assertions must cover:
    projected width correctly, clipping, hidden references, deterministic
    bytes, and rejects 3D without adapter creation.
 8. PNG decodes to requested dimensions and has non-background field content;
-   injected adapter absence/device/readback failures are actionable. Exercise a
+   injected adapter absence/device failures and an injected map callback failure
+   are actionable. In `tests/cli_gpu_test.rs` import `eframe::wgpu` and call the same
+   `renderer::readback_map_status(Err(wgpu::BufferAsyncError))` used by the
+   actual native renderer callback; wrap its real `ReadbackError` in
+   `OffscreenError::Readback` and pass it through the same
+   `cli::offscreen_error_to_cli` used by CLI PNG rendering. Assert the typed
+   `ReadbackError::Map` cause, `CliError::Readback` type and map stage/cause
+   text; constructing `CliError` directly or testing a private/string-only
+   translator is not injected renderer-path coverage. Exercise a
    real displayless software adapter where available via subprocess/runtime
    script or isolated process; do not mutate DISPLAY/WAYLAND_DISPLAY in shared
    test process and do not use ignored tests.
@@ -397,8 +426,9 @@ Required implementation gates: `cargo build`, `scripts/test.sh`,
 `cargo clippy --all-targets -- -D warnings`, ordinary GUI smoke, displayless
 PNG runtime exercise on release platforms where adapter support is available,
 wasm build/web bootstrap check, and `scripts/smoke-run.sh 15` for renderer
-changes. Runtime adapter/platform evidence remains a future implementation
-gate; it is not claimed by this design-only task.
+changes (including this native readback seam). Runtime adapter/platform
+evidence remains a future implementation gate; it is not claimed by this
+design-only task.
 
 ## Non-goals and merged reference wiring
 
@@ -407,4 +437,5 @@ playback/speed, CAS, physics, future controls, general framework, or numerical
 performance promise. Ticket 77's two reference visibility choices are merged:
 use the existing state bools/setters and `app::compose_lines` as specified
 above. The CLI schema remains unchanged; do not expose another public API just
-for integration tests.
+for integration tests. The native readback helper and offscreen error converter
+above serve production paths; no second test-only helper or inline source tests.
