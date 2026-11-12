@@ -4,6 +4,8 @@ pub mod arrow_style;
 pub mod camera;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cas;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod colormap;
 pub mod domain;
 pub mod export;

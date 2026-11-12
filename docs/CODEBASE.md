@@ -177,8 +177,7 @@ the ordering of the Rust gate.
 
 ## 3. Module reference
 
-Every file under `src/` is covered: 47 Rust files plus four WGSL shaders (51
-files total). Test names are the function names printed by
+Every file under `src/` is covered, including the WGSL shaders. Test names are the function names printed by
 `cargo test --all-targets -- --list`; a module's test file is named in the
 heading.
 
@@ -202,8 +201,8 @@ surface used by integration tests and external callers.
 
 **Public API.** `pub mod` for every module listed in the tree; re-exports
 `app::VfApp`, `colormap::Colormap`, `domain::Domain`, `export::CameraPreset`,
-`field::FieldExpr`, `render::Camera`, and (native only) `export::load_presets` /
-`export::save_preset`.
+  `field::FieldExpr`, `render::Camera`, and (native only) `export::load_presets` /
+  `export::save_preset`.
 
 **Invariants / notes.** There is no inline test module here;
 `tests/test_layout_test.rs::src_carries_no_inline_test_modules` fails the suite
@@ -238,6 +237,28 @@ including the pre-start WebGPU gate and the static fallback UI.
 **Limitations.** The browser matrix is manual; the gate only proves that
 `navigator.gpu` and an adapter exist, not that every WebGPU feature the app uses
 is available.
+
+#### `src/cli.rs` — native plot export configuration
+
+**Purpose.** Parse one-shot export flags and strict JSON, overlay config with
+explicit flags, and validate the resolved settings without opening a window.
+
+**Public API.** Native-only `CliConfig`, `CliFlags`, `CliOptions`, `CliError`,
+`parse_config`, `parse_flags`, `resolve_config`, `validate_intrinsic_config`,
+and `validate_effective`. See the [CLI export spec](superpowers/specs/2026-11-11-cli-plot-export-design.md)
+for the complete JSON/flag mapping.
+
+**Invariants.** Unknown JSON members are rejected, including nested members;
+only `color_range` accepts null. Supplied values are intrinsically validated
+before flags can override them. Final mode and formula determine density and
+grid bounds; `CliOptions` carries resolved settings and explicit camera-member
+markers for mode applicability. Clap and pollster are native-only dependencies.
+
+**Pinned by.** `tests/cli_test.rs`, registered in the native suite.
+
+**Current boundary.** Scene preparation, output backends, CLI dispatch and
+`src/main.rs` wiring are later tasks; the existing no-argument GUI path is
+unchanged.
 
 #### `src/app/mod.rs` — application root and shared state
 
