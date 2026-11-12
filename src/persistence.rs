@@ -93,11 +93,12 @@ pub struct ViewRecord {
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
-    /// Display the 2D lattice or 3D grid faces. Missing in older records:
-    /// reference geometry was always visible before the toggle existed.
+    /// Display the 2D lattice or 3D face grids and wireframe domain box.
+    /// Missing in older records: reference geometry was always visible.
     #[serde(default = "default_reference_visible")]
     pub show_grid: bool,
-    /// Display the 2D axes or 3D domain box and axes. Independent of the grid.
+    /// Display only the coloured X/Y (2D) or X/Y/Z (3D) axes.
+    /// Independent of the grid and domain box.
     #[serde(default = "default_reference_visible")]
     pub show_coordinate_system: bool,
     /// Show arrows (ticket 45). Older records did not carry it, so the

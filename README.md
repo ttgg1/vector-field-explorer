@@ -292,7 +292,7 @@ bottom sheet.
 Under **Controls → Display**, **Show grid** and **Show coordinate system** are
 independent checkboxes, both on by default. In 2D, the first shows the flat
 domain grid and the second shows the coloured X/Y axes. In 3D, the first shows
-the domain's face grids and the second shows the wireframe box and coloured
+the domain's face grids and wireframe box; the second shows only the coloured
 X/Y/Z axes. They use the same settings in both modes; hiding either guide does
 not hide arrows, streamlines, or click-seeded lines. The Display section's
 **Reset** button restores both guides to visible.

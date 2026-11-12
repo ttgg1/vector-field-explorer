@@ -117,11 +117,12 @@ Why the seam matters:
 - `snapshot_if_dirty` is the only rebuild trigger for arrows and grid
   streamlines. Particle dots and trails are deliberately *not* in that snapshot:
   they change every frame and are rebuilt by the app from the live cloud.
-- The app owns reference lines (2D grid/axes or 3D face grid/box and axes)
-  and clicks. The two independent `State` flags filter reference geometry
-  before `compose_lines` appends flow and click lines; the snapshot's `lines`
-  holds grid-seeded streamlines only. The resulting `SceneGPU.lines` is shared
-  by both viewport modes and screenshot capture.
+- The app owns reference lines (2D grid and axes or 3D face grids, box and axes)
+  and clicks. `show_grid` selects the grid and 3D box; `show_coordinate_system`
+  selects only the coloured axes. The two independent `State` flags filter
+  reference geometry before `compose_lines` appends flow and click lines; the
+  snapshot's `lines` holds grid-seeded streamlines only. The resulting
+  `SceneGPU.lines` is shared by both viewport modes and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -1118,8 +1119,8 @@ flat 2D grid, with coloured axes.
   under coincident edges.
 - 2D draws one grid on the domain's mid-z plane (the same plane the single z
   slice samples) plus X/Y axes; no z axis.
-- `show_grid` independently gates the 2D lattice/3D face grids;
-  `show_coordinate_system` gates 2D axes/3D box edges and axes. Both flags
+- `show_grid` independently gates the 2D lattice or 3D face grids and wireframe
+  box; `show_coordinate_system` gates only the coloured 2D/3D axes. Both flags
   default on, and neither filters field geometry.
 - Every line stays inside the domain bounds.
 - Reference geometry is never counted as field geometry and is not part of the
