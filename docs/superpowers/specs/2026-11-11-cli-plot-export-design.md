@@ -60,7 +60,7 @@ not one-shot render settings.
 | `mode` | `--mode 2d\|3d` | enum | 2d (mode chosen before `State::new`) |
 | `formula` | `--formula EXPR` | string parsed/bound by meval | `State::new(mode)`: `(x, y)` / `(x, y, z)` |
 | `domain.min`, `domain.max` | `--domain-min X,Y,Z`, `--domain-max X,Y,Z` | finite triples, each coordinate in −100..=100, min < max per axis | `Domain::default()` `[-1,1]³` |
-| `density` | `--density N` | integer intrinsic range 4..=200; final effective 3D sampling max is 40 | `State::new(mode)`: 24 / 16 |
+| `density` | `--density N` | integer intrinsic range 4..=200; final `State::is_3d()` sampling max is 40, otherwise 200 | `State::new(mode)`: 24 / 16 |
 | `arrows`, `streamlines`, `particles` | `--arrows BOOL`, `--streamlines BOOL`, `--particles BOOL` | bool | true / false / false from `State::new` |
 | `arrow_scale` | `--arrow-scale N` | finite 0.1..=4 | 1.0 |
 | `arrow_opacity` | `--arrow-opacity N` | finite 0.05..=1 | 1.0 |
@@ -135,12 +135,14 @@ the only deferred interface detail. Do not add a third domain-box toggle.
 Perform intrinsic validation on every supplied config member before overlay:
 JSON types/shape, unknown keys, enum membership, finite/range checks, tuple
 arity, and formula parse/name binding. Density's intrinsic integer envelope is
-4..=200; the final merged mode's effective maximum is checked afterward (40 for
-3D, 200 for 2D). For example, density 100 in a 2D config overridden to 3D is a
-valid supplied value but fails final effective validation. Merge, select mode,
-parse formula, construct `State::new(mode)`, apply domain and density, then plane, remaining
-state controls, time, and camera/output checks. Never rely on setters to clamp,
-swap, or retain old values.
+4..=200; after merging mode and formula, the maximum is 40 when the resulting
+`State::is_3d()` is true and 200 otherwise. For example, a 2D config with
+density 100 overridden to `mode=3d` remains valid if the final formula has two
+components (flat sampling), but fails if the final formula has three components.
+Merge, select mode, parse/bind the final formula, construct `State::new(mode)`,
+apply that formula before validating/applying density (then domain, plane,
+remaining state controls, time, and camera/output checks). Never rely on setters
+to clamp, swap, or retain old values.
 
 Formula validation must bind all referenced free names to `x,y,z,t` (function
 names remain the evaluator's recognized meval functions) without demanding
@@ -180,13 +182,29 @@ one shortened remainder step reaches the endpoint. Set `State.time` to
 trail, and color construction, even if particles are disabled. Zero duration
 does no advection but still makes the final snapshot at start time. This is
 start-of-step integration, not the GUI's post-clock frame convention. Use f64
-for schedule arithmetic and checked integer step count; convert each step/time
-to f32 only at existing APIs. Before any advection require finite, positive f32
-`dt`, a strictly increasing f32 start/midpoint/end for every RK4 step, and
-`(t_start_f32 + dt_f32) == t_end_f32`; reject if f32 rounding would stall or
-miss a scheduled boundary. Set final `State.time` to the same f32 conversion of
-the requested endpoint. Reject unrepresentable conversions, non-progress, or
-more than 100,000 steps before work. The duration/step combination could
+for schedule arithmetic and a checked integer step count. Compute the requested
+endpoint in f64, then schedule full boundaries by indexed
+`start_time + i * fixed_step` (not repeated f32 addition), stopping at the
+endpoint; the last interval is shortened if necessary. For each interval
+`[boundary_i, boundary_(i+1)]`, compute its f64 difference and hand
+`AdvectSettings.time = boundary_i as f32` and
+`AdvectSettings.dt = (boundary_(i+1) - boundary_i) as f32` to the existing RK4
+path. Its actual stage times use f32 operations on those two arguments:
+`t`, `t + dt*0.5`, `t + dt*0.5`, `t + dt`. Preflight the whole schedule before
+spawn/advection: require finite f64 arithmetic and strictly advancing f64
+boundaries; finite positive f32 `dt` and finite f32 boundaries; and strictly
+increasing finite f32 `t < t + dt*0.5 < t + dt` for each step. Reject f32
+boundary stagnation (`boundary_(i+1) as f32 <= boundary_i as f32`), even if
+the actual RK4 end advances. Check indexed multiplication/addition and step
+count for overflow; reject more than 100,000 steps. Do **not** require the
+actual f32 RK4 end to equal the independently rounded f64 next boundary:
+ordinary `duration=0.05, fixed_step=1/60` has three valid steps but its
+third f32 sum differs from `0.05 as f32`. Each next step takes its own
+scheduled boundary as `time`; this is not f32 accumulation. Set final
+`State.time` to `(start_time + duration) as f32` (also preflight finite), even
+when the last RK4 end differs by rounding. Thus the requested f64 endpoint
+selects the snapshot time, not a promise that f32 RK4 lands numerically exactly
+on that boundary. The duration/step combination could
 otherwise request up to 36,000,000 steps; reject any pair exceeding the 100,000
 cap. This is an operational work bound, not an accuracy or runtime
 guarantee. Seed is only the existing particle LCG's spawn/respawn state; zero is
@@ -327,16 +345,22 @@ ticket 76/77 owner, do not edit registration in conflict. Assertions must cover:
    nested partial merge, nested unknown keys, explicit null range, config
    invalid-before-override, and absence of conflicting duplicate aliases.
 2. Every field/default/enum/range table entry; mode selected before baseline;
-   invalid intrinsic values, invalid mode-overridden values policy, and final
-   mode/domain/density/plane index validation ordering.
+   invalid intrinsic values, final `State::is_3d`/domain/density/plane index
+   validation ordering; density 100 with final mode 3D and two-component
+   formula succeeds, while the same density with a three-component 3D formula
+   fails.
 3. Formula binding: unknown free variable/function rejected; valid zero field
    and valid singular field accepted and sampled with existing skip behavior.
 4. Time-dependent field at nonzero start: particle RK4 trajectory uses
    `AdvectSettings.time` start-of-step and its intermediate times; final
    particle-free arrows/streamlines/color snapshot uses endpoint `State.time`.
-   Test zero duration, exact multiple, fractional remainder, f64 scheduling,
-   f32 underflow/nonprogress, step cap rejection before work, and seeded initial
-   state. Compare particles to repeated existing `advect` calls.
+   Test zero duration, exact multiple, fractional remainder, and the default
+   nonintegral `duration=0.05, fixed_step=1/60` (three accepted steps despite
+   last actual f32 RK4 end differing from independently rounded endpoint);
+   assert f64 indexed boundaries, f32 start/dt and stage times, final snapshot
+   at the rounded requested endpoint, tiny/zero-progress rejection before
+   work, step cap rejection before work, and seeded initial state. Compare
+   particles to repeated existing `advect` calls.
 5. `effective_trail_len(4000,32)==25`; no CLI rejection of the valid requested
    pair. Exact output frame tests for asymmetric off-origin boxes, nonzero
    mid-z 2D domain, portrait/landscape, 1-pixel edges, finite matrices, camera
