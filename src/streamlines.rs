@@ -41,9 +41,12 @@ pub const CLICK_BURST_REACH: f32 = 0.08;
 
 /// Inclusive axis-aligned containment (the `Domain` type has no `contains`).
 fn inside(domain: &Domain, p: Vec3) -> bool {
-    p.x >= domain.min.x && p.x <= domain.max.x
-        && p.y >= domain.min.y && p.y <= domain.max.y
-        && p.z >= domain.min.z && p.z <= domain.max.z
+    p.x >= domain.min.x
+        && p.x <= domain.max.x
+        && p.y >= domain.min.y
+        && p.y <= domain.max.y
+        && p.z >= domain.min.z
+        && p.z <= domain.max.z
 }
 
 /// Field flow at `p`, negated for `sign < 0` (upstream tracing). Missing or
@@ -62,7 +65,15 @@ fn flow_at(field: &FieldExpr, p: Vec3, sign: f32, t: f32) -> Vec3 {
 /// arc length. Stops at the budget, where the flow vanishes, or on a step
 /// that leaves the domain or turns non-finite. Always returns at least
 /// `[start]`.
-fn integrate(field: &FieldExpr, start: Vec3, domain: &Domain, budget: usize, step_scale: f32, sign: f32, t: f32) -> Vec<Vec3> {
+fn integrate(
+    field: &FieldExpr,
+    start: Vec3,
+    domain: &Domain,
+    budget: usize,
+    step_scale: f32,
+    sign: f32,
+    t: f32,
+) -> Vec<Vec3> {
     let mut line: Vec<Vec3> = vec![start];
     let mut p = start;
     while line.len() < budget {
@@ -93,7 +104,13 @@ fn integrate(field: &FieldExpr, start: Vec3, domain: &Domain, budget: usize, ste
 /// zero. With `both_directions` the result is one continuous ordered path
 /// running farthest-upstream → seed → farthest-downstream: the seed is
 /// counted exactly once, so no zero-length segment can reach the renderer.
-pub fn trace_at(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &StreamlineOpts, t: f32) -> Vec<Vec3> {
+pub fn trace_at(
+    field: &FieldExpr,
+    start: Vec3,
+    domain: &Domain,
+    opts: &StreamlineOpts,
+    t: f32,
+) -> Vec<Vec3> {
     let cap = opts.max_len.min(MAX_STREAMLINE_POINTS);
     if cap == 0 || !inside(domain, start) {
         return Vec::new();
@@ -112,7 +129,15 @@ pub fn trace_at(field: &FieldExpr, start: Vec3, domain: &Domain, opts: &Streamli
     // farthest-backward first, then append the downstream walk (which starts
     // at the seed).
     let back = integrate(field, start, domain, cap.div_ceil(2), step_scale, -1.0, t);
-    let forward = integrate(field, start, domain, cap + 1 - back.len(), step_scale, 1.0, t);
+    let forward = integrate(
+        field,
+        start,
+        domain,
+        cap + 1 - back.len(),
+        step_scale,
+        1.0,
+        t,
+    );
     let mut line: Vec<Vec3> = Vec::new();
     line.extend(back[1..].iter().rev().copied());
     line.extend(forward);
@@ -146,7 +171,11 @@ pub fn ray_seed(
     aspect: f32,
     ndc_xy: Vec2,
 ) -> Option<Vec3> {
-    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        1.0
+    };
     let (origin, direction) = camera.ndc_ray(aspect, ndc_xy);
     let span = direction.length();
     if !(origin.is_finite() && direction.is_finite()) || !span.is_finite() || span <= 0.0 {
@@ -176,7 +205,11 @@ pub fn ray_seed(
         // usable point. A centre click lands exactly on the focus.
         let axis = (focus - origin).normalize_or_zero();
         let denom = view.dot(axis);
-        let t_world = if denom.abs() < 1e-6 { 0.0 } else { (focus - origin).dot(axis) / denom };
+        let t_world = if denom.abs() < 1e-6 {
+            0.0
+        } else {
+            (focus - origin).dot(axis) / denom
+        };
         let t_focal = t_world / span;
         return Some(origin + direction * t_focal.clamp(t_in, t_out));
     }
@@ -224,11 +257,19 @@ pub fn click_seed(
     ndc_xy: Vec2,
     ortho_plane_size: Option<f32>,
 ) -> Option<Vec3> {
-    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        1.0
+    };
     let Some(plane_size) = ortho_plane_size else {
         return ray_seed(camera, domain, aspect, ndc_xy);
     };
-    let plane_size = if plane_size.is_finite() && plane_size > 0.0 { plane_size } else { 1.0 };
+    let plane_size = if plane_size.is_finite() && plane_size > 0.0 {
+        plane_size
+    } else {
+        1.0
+    };
     let inv_vp = camera.vp_matrix(aspect, Some(plane_size)).inverse();
     if !inv_vp.is_finite() {
         return None;
@@ -271,7 +312,11 @@ pub fn burst_seeds(center: Vec3, domain: &Domain, count: usize, dimension: usize
         .into_iter()
         .filter(|extent| *extent > 0.0)
         .fold(f32::INFINITY, f32::min);
-    let reach = if smallest.is_finite() { CLICK_BURST_REACH * smallest } else { 0.0 };
+    let reach = if smallest.is_finite() {
+        CLICK_BURST_REACH * smallest
+    } else {
+        0.0
+    };
     let salt = (center.x.to_bits() as u64)
         ^ ((center.y.to_bits() as u64) << 21)
         ^ ((center.z.to_bits() as u64) << 42);
@@ -329,23 +374,66 @@ pub fn seed_grid(domain: &Domain, per_axis: u32, jitter: f32, salt: u64) -> Vec<
         return Vec::new();
     }
     // Jitter past 0.5 x cell per axis would let lattice neighbours cross.
-    let jitter = if jitter.is_finite() { jitter.clamp(0.0, 0.45) } else { 0.0 };
+    let jitter = if jitter.is_finite() {
+        jitter.clamp(0.0, 0.45)
+    } else {
+        0.0
+    };
     let size = domain.domain_size();
-    let cell_x = if per_axis == 1 { 0.0 } else { size.x / (per_axis - 1) as f32 };
-    let cell_y = if per_axis == 1 { 0.0 } else { size.y / (per_axis - 1) as f32 };
-    let z = (domain.min.z + domain.max.z) * 0.5;
+    let cell_x = if per_axis == 1 {
+        0.0
+    } else {
+        size.x / (per_axis - 1) as f32
+    };
+
+    let cell_y = if per_axis == 1 {
+        0.0
+    } else {
+        size.y / (per_axis - 1) as f32
+    };
+
+    let cell_z = if per_axis == 1 {
+        0.0
+    } else {
+        size.z / (per_axis - 1) as f32
+    };
+
     let mut seeds = Vec::new();
     for iy in 0..per_axis {
         for ix in 0..per_axis {
-            let index = (iy * per_axis + ix) as u64;
-            let (ux, uy) = unit_pair(rand_stream(salt, index));
-            let bx = if per_axis == 1 { domain.min.x + size.x * 0.5 } else { domain.min.x + ix as f32 * cell_x };
-            let by = if per_axis == 1 { domain.min.y + size.y * 0.5 } else { domain.min.y + iy as f32 * cell_y };
-            let x = (bx + ux * jitter * cell_x).max(domain.min.x).min(domain.max.x);
-            let y = (by + uy * jitter * cell_y).max(domain.min.y).min(domain.max.y);
-            seeds.push(Vec3::new(x, y, z));
+            for iz in 0..per_axis {
+                let index = (iy * per_axis + ix * per_axis + iz) as u64;
+                let (ux, uy, uz) = unit_triple(rand_stream(salt, index));
+                let bx = if per_axis == 1 {
+                    domain.min.x + size.x * 0.5
+                } else {
+                    domain.min.x + ix as f32 * cell_x
+                };
+
+                let by = if per_axis == 1 {
+                    domain.min.y + size.y * 0.5
+                } else {
+                    domain.min.y + iy as f32 * cell_y
+                };
+
+                let bz = if per_axis == 1 {
+                    domain.min.z + size.z * 0.5
+                } else {
+                    domain.min.z + iz as f32 * cell_z
+                };
+
+                let x = (bx + ux * jitter * cell_x)
+                    .max(domain.min.x)
+                    .min(domain.max.x);
+                let y = (by + uy * jitter * cell_y)
+                    .max(domain.min.y)
+                    .min(domain.max.y);
+                let z = (bz + uz * jitter * cell_z)
+                    .max(domain.min.z)
+                    .min(domain.max.z);
+                seeds.push(Vec3::new(x, y, z));
+            }
         }
     }
     seeds
 }
-
