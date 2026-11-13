@@ -54,7 +54,9 @@ impl PresetCategory {
             PresetCategory::Electrostatics => {
                 "Coulomb-like fields from static point charges (softened at the source)"
             }
-            PresetCategory::Magnetostatics => "Fields around steady currents: wires, dipoles, solenoids",
+            PresetCategory::Magnetostatics => {
+                "Fields around steady currents: wires, dipoles, solenoids"
+            }
             PresetCategory::Electrodynamics => {
                 "Static spatial sinusoids: the field oscillates in space (no time variable in v1)"
             }
@@ -79,7 +81,11 @@ const SOURCE_AND_SINK: &str = "((x+0.5)/((x+0.5)^2+(y-0.1)^2+0.05) - (x-0.5)/((x
 /// Dipole: source at (0.5, 0.1) minus the mirrored charge at (-0.5, 0.1).
 const DIPOLE: &str = "((x-0.5)/((x-0.5)^2+(y-0.1)^2+0.05) - (x+0.5)/((x+0.5)^2+(y-0.1)^2+0.05),\
  (y-0.1)/((x-0.5)^2+(y-0.1)^2+0.05) - (y-0.1)/((x+0.5)^2+(y-0.1)^2+0.05))";
-
+const DIPOLE_3D: &str = "(
+    (x-0.5)/((x-0.5)^2+(y-0.1)^2+z^2+0.05) - (x+0.5)/((x+0.5)^2+(y-0.1)^2+z^2+0.05),\
+    (y-0.1)/((x-0.5)^2+(y-0.1)^2+z^2+0.05) - (y-0.1)/((x+0.5)^2+(y-0.1)^2+z^2+0.05),\
+    z/((x-0.5)^2+(y-0.1)^2+z^2+0.05) - z/((x+0.5)^2+(y-0.1)^2+z^2+0.05)
+)";
 /// Two equal positive charges at (-0.5, 0) and (+0.5, 0): the superposition
 /// of two softened radial outflows, so field lines leave both centres and
 /// bend away from the midpoint between them.
@@ -156,6 +162,12 @@ pub fn presets() -> &'static [Preset] {
             name: "Dipole",
             formula: DIPOLE,
             dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        Preset {
+            name: "Dipole",
+            formula: DIPOLE_3D,
+            dimension: 3,
             category: PresetCategory::Electrostatics,
         },
         Preset {

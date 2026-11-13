@@ -100,10 +100,13 @@ pub fn motion_delta(ctx: &egui::Context) -> Vec2 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let raw = ctx.input(|input| {
-            input.events.iter().fold(Vec2::ZERO, |sum, event| match event {
-                egui::Event::MouseMoved(delta) => sum + Vec2::new(delta.x, delta.y),
-                _ => sum,
-            })
+            input
+                .events
+                .iter()
+                .fold(Vec2::ZERO, |sum, event| match event {
+                    egui::Event::MouseMoved(delta) => sum + Vec2::new(-delta.x, delta.y),
+                    _ => sum,
+                })
         });
         let pixels_per_point = ctx.pixels_per_point();
         let points = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
