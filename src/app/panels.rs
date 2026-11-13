@@ -25,7 +25,7 @@ impl VfApp {
         // before it draws, so C/Esc, a 2D switch, Reset/Fit and presets are all
         // reflected on this frame. A user edit is reconciled after the panel
         // through the one `sync_fly_mirror` seam.
-        self.sidebar.fly = self.fly.is_some();
+        self.controls.fly = self.fly.is_some();
 
         // Ticket 53: one plan decides the real assembly. Compact hides both
         // side panels/rails and moves Controls/Presets into the bottom sheet,
@@ -37,10 +37,11 @@ impl VfApp {
             // Ticket 65: a click on the Camera section's checkbox edits only the
             // mirror; apply it through the same fly seam C uses, then resync.
             sync_fly_mirror(
-                &mut self.sidebar.fly,
+                &mut self.controls.fly,
                 &mut self.fly,
                 &self.orbit,
                 self.state.is_3d(),
+                self.controls.sensitivity,
             );
         }
 
@@ -129,7 +130,7 @@ impl VfApp {
                         menu::CONTROLS_SHORTCUT,
                     );
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        crate::ui::sidebar::show(ui, &mut self.state, &mut self.sidebar);
+                        crate::ui::sidebar::show(ui, &mut self.state, &mut self.controls);
                     });
                 });
             self.layout.controls_width = layout::clamp_width(
@@ -451,7 +452,7 @@ impl VfApp {
                         crate::ui::sidebar::show_compact(
                             ui,
                             &mut self.state,
-                            &mut self.sidebar,
+                            &mut self.controls,
                             true,
                         );
                         ui.separator();
@@ -479,10 +480,11 @@ impl VfApp {
         self.finish_presets(camera_request);
         if controls_shown && layout::fly_allowed(self.layout_mode) {
             sync_fly_mirror(
-                &mut self.sidebar.fly,
+                &mut self.controls.fly,
                 &mut self.fly,
                 &self.orbit,
                 self.state.is_3d(),
+                self.controls.sensitivity,
             );
         }
         // A preset (or the sheet's camera toggle) can leave fly; release the

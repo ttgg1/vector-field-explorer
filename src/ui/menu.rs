@@ -144,13 +144,19 @@ pub const MENUS: &[Menu] = &[
                 label: "Export screenshot (SVG)…",
                 action: MenuAction::ExportScreenshotSvg,
             },
-            MenuItem { label: "Quit", action: MenuAction::Quit },
+            MenuItem {
+                label: "Quit",
+                action: MenuAction::Quit,
+            },
         ],
     },
     Menu {
         title: "Edit",
         items: &[
-            MenuItem { label: "Copy formula", action: MenuAction::CopyFormula },
+            MenuItem {
+                label: "Copy formula",
+                action: MenuAction::CopyFormula,
+            },
             MenuItem {
                 label: "Reset all controls",
                 action: MenuAction::ResetAllControls,
@@ -160,24 +166,48 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "View",
         items: &[
-            MenuItem { label: "Toggle Controls", action: MenuAction::ToggleControls },
-            MenuItem { label: "Toggle Presets", action: MenuAction::TogglePresets },
+            MenuItem {
+                label: "Toggle Controls",
+                action: MenuAction::ToggleControls,
+            },
+            MenuItem {
+                label: "Toggle Presets",
+                action: MenuAction::TogglePresets,
+            },
             // Ticket 65: the sidebar Camera section is the one visible fly
             // control; C keeps dispatching `ToggleFly` through this table.
-            MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
-            MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
+            MenuItem {
+                label: "Reset layout",
+                action: MenuAction::ResetLayout,
+            },
+            MenuItem {
+                label: "Reset camera",
+                action: MenuAction::ResetCamera,
+            },
             // The user reported looking for color controls under View (ticket
             // 41). Ticket 59 removed the duplicate Settings entry, so this is
             // the one menu command that opens the Appearance popover.
-            MenuItem { label: "Appearance…", action: MenuAction::OpenAppearance },
+            MenuItem {
+                label: "Appearance…",
+                action: MenuAction::OpenAppearance,
+            },
         ],
     },
     Menu {
         title: "Help",
         items: &[
-            MenuItem { label: "Keyboard & mouse", action: MenuAction::ShowHelpTable },
-            MenuItem { label: "Download desktop app", action: MenuAction::OpenDownloadPage },
-            MenuItem { label: "About Vector Field Explorer", action: MenuAction::About },
+            MenuItem {
+                label: "Keyboard & mouse",
+                action: MenuAction::ShowHelpTable,
+            },
+            MenuItem {
+                label: "Download desktop app",
+                action: MenuAction::OpenDownloadPage,
+            },
+            MenuItem {
+                label: "About Vector Field Explorer",
+                action: MenuAction::About,
+            },
         ],
     },
 ];
@@ -368,7 +398,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         }
         MenuAction::ToggleFly => {
             // Free flight is 3D-only; `toggle_fly` ignores the key in 2D.
-            toggle_fly(ui.fly, ui.orbit, ui.state.is_3d());
+            toggle_fly(ui.fly, ui.orbit, ui.state.is_3d(), ui.controls.sensitivity);
             SideEffect::None
         }
         MenuAction::ResetLayout => {

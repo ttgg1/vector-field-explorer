@@ -56,7 +56,12 @@ impl VfApp {
                 ctx.input_mut(|input| {
                     input.consume_key(egui::Modifiers::NONE, key);
                 });
-                crate::fly_camera::toggle_fly(&mut self.fly, &self.orbit, self.state.is_3d());
+                crate::fly_camera::toggle_fly(
+                    &mut self.fly,
+                    &self.orbit,
+                    self.state.is_3d(),
+                    self.controls.sensitivity,
+                );
             }
         }
 
@@ -134,7 +139,7 @@ impl VfApp {
                 fly: &mut self.fly,
                 camera: &mut self.camera,
                 state: &mut self.state,
-                controls: &mut self.sidebar,
+                controls: &mut self.controls,
                 clock: &mut self.clock,
             },
         );

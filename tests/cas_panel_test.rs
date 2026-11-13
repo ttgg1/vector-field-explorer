@@ -681,7 +681,7 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let mut app = vector_field_explorer::VfApp::new();
     app.layout.controls_width = 460.0;
-    app.sidebar.cas = vector_panel(2);
+    app.controls.cas = vector_panel(2);
     let original = app.state.formula.clone();
     let mut output = app_frame(&mut app, &ctx, vec![]);
     for _ in 0..3 {
@@ -768,12 +768,12 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
         app.bar.text, applied_formula,
         "next-frame formula-bar synchronization"
     );
-    assert_eq!(app.sidebar.cas.input, "x*y+z^2+t*x");
+    assert_eq!(app.controls.cas.input, "x*y+z^2+t*x");
 
-    app.sidebar.cas.variable = Variable::T;
-    app.sidebar.cas.input = "abs(x)".into();
-    app.sidebar.cas.refresh(2);
-    assert!(app.sidebar.cas.error.is_some());
+    app.controls.cas.variable = Variable::T;
+    app.controls.cas.input = "abs(x)".into();
+    app.controls.cas.refresh(2);
+    assert!(app.controls.cas.error.is_some());
 
     // Save/reload uses the real app envelope; ordinary applied field persists,
     // while scratch input/operation/preview/error never does.
@@ -795,11 +795,11 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
     eframe::App::save(&mut app, &mut storage);
     let loaded = vector_field_explorer::VfApp::new_with_storage(Some(&storage));
     assert_eq!(loaded.state.formula, app.state.formula);
-    assert_eq!(loaded.sidebar.cas.input, "x");
-    assert_eq!(loaded.sidebar.cas.operation, Operation::Differentiate);
-    assert_eq!(loaded.sidebar.cas.variable, Variable::X);
-    assert!(loaded.sidebar.cas.preview.is_none());
-    assert!(loaded.sidebar.cas.error.is_none());
+    assert_eq!(loaded.controls.cas.input, "x");
+    assert_eq!(loaded.controls.cas.operation, Operation::Differentiate);
+    assert_eq!(loaded.controls.cas.variable, Variable::X);
+    assert!(loaded.controls.cas.preview.is_none());
+    assert!(loaded.controls.cas.error.is_none());
 }
 
 #[test]

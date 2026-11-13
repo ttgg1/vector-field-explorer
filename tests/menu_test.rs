@@ -187,7 +187,7 @@ fn reset_camera_restores_the_default_framing() {
     fixture.orbit.ortho_zoom = 7.0;
     fixture.camera.position = [5.0, 6.0];
     fixture.camera.scale = 3.0;
-    fixture.fly = Some(FlyCamera::from_orbit(&fixture.orbit));
+    fixture.fly = Some(FlyCamera::from_orbit(&fixture.orbit, 1.0));
 
     let effect = apply_action(MenuAction::ResetCamera, &mut fixture.ui());
     assert_eq!(
