@@ -335,12 +335,6 @@ pub fn burst_seeds(center: Vec3, domain: &Domain, count: usize, dimension: usize
     seeds
 }
 
-/// Jittered grid of seeds over the domain's xy plane at the plane's z midpoint:
-/// `per_axis × per_axis` lattice points spanning the domain extents (endpoints
-/// included for `per_axis > 1`, like `Domain::grid_points`), each displaced by
-/// at most `jitter × cell size` in a seeded, deterministic pseudo-random
-/// direction (splitmix64 keyed on `salt` and lattice index), clamped back into
-/// the domain.
 /// Splitmix64 stream value for `(salt, index)` — deterministic across
 /// rebuilds and machines, no dependency on `rand`. All u64 ops wrap
 /// (debug-build overflow panics otherwise).
@@ -349,13 +343,6 @@ fn rand_stream(salt: u64, index: u64) -> u64 {
     let z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
     let z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
-}
-
-/// Two independent 24-bit slices of a splitmix64 output mapped onto [-1, 1).
-fn unit_pair(z: u64) -> (f32, f32) {
-    let a = ((z >> 32) & 0xFFFFFF) as u32 as f32;
-    let b = (z & 0xFFFFFF) as u32 as f32;
-    (a * (2.0 / 16777216.0) - 1.0, b * (2.0 / 16777216.0) - 1.0)
 }
 
 /// Three independent 21-bit slices of a splitmix64 output mapped onto [-1, 1):
@@ -369,6 +356,11 @@ fn unit_triple(z: u64) -> (f32, f32, f32) {
     (a * SCALE - 1.0, b * SCALE - 1.0, c * SCALE - 1.0)
 }
 
+/// Jittered volume lattice, with one layer on each zero-extent axis.
+/// A flat XY domain therefore retains a 2D grid without duplicate layers.
+/// Endpoints are included for `per_axis > 1`. Each point is displaced by at
+/// most `jitter × cell size` per axis, deterministically keyed on salt and
+/// lattice index, then clamped into the domain.
 pub fn seed_grid(domain: &Domain, per_axis: u32, jitter: f32, salt: u64) -> Vec<Vec3> {
     if per_axis == 0 {
         return Vec::new();
@@ -399,10 +391,14 @@ pub fn seed_grid(domain: &Domain, per_axis: u32, jitter: f32, salt: u64) -> Vec<
     };
 
     let mut seeds = Vec::new();
-    for iy in 0..per_axis {
-        for ix in 0..per_axis {
-            for iz in 0..per_axis {
-                let index = (iy * per_axis + ix * per_axis + iz) as u64;
+    let nx = if size.x == 0.0 { 1 } else { per_axis };
+    let ny = if size.y == 0.0 { 1 } else { per_axis };
+    let nz = if size.z == 0.0 { 1 } else { per_axis };
+    for iy in 0..ny {
+        for ix in 0..nx {
+            for iz in 0..nz {
+                let index =
+                    (u64::from(iy) * u64::from(nx) + u64::from(ix)) * u64::from(nz) + u64::from(iz);
                 let (ux, uy, uz) = unit_triple(rand_stream(salt, index));
                 let bx = if per_axis == 1 {
                     domain.min.x + size.x * 0.5

@@ -23,6 +23,7 @@ One Rust crate, `vector-field-explorer`, built two ways:
 | Target | Entry point | UI/GPU runtime | Storage |
 | --- | --- | --- | --- |
 | Native desktop | `src/main.rs::main` | `eframe::run_native`, wgpu | eframe app storage (RON under `eframe::APP_KEY`) |
+| Native CLI | `src/main.rs::main` → `cli::run_from` | CPU SVG / displayless wgpu PNG | explicit output file only; no GUI persistence |
 | Browser | `src/main.rs::start` (`#[wasm_bindgen(start)]`) | `eframe::WebRunner`, wgpu/WebGPU | eframe's browser storage + `localStorage` for camera presets |
 
 The crate is both `cdylib` and `rlib` ([Cargo.toml](../Cargo.toml)), so the wasm
@@ -57,6 +58,19 @@ The field is formula-driven:
 ## 2. Architecture and data flow
 
 ### 2.1 The one screen state and the one scene seam
+
+Native `cli` configuration exposes the pure `output_frame` seam implemented in
+`src/cli_scene.rs`. Its `OutputFrame` owns output dimensions, camera transforms,
+and straight-alpha sRGB/linear background values for both export backends;
+`PreparedScene` pairs that frame with renderer-ready `SceneGPU`. Geometry,
+camera applicability and background conversion are covered by
+`tests/cli_scene_test.rs`. The same module's `prepare_scene` preflights an indexed
+f64 time schedule before seeded particle spawn/advection, then samples the final
+f32 endpoint once through `State::snapshot`, composes references onto its flow
+lines, and builds/sorts particle trails and the 3D combined arrow/dot stream.
+Only CLI start/duration/fixed-step settings retain f64 input precision; existing
+state and RK4 arguments stay f32. `Particles::with_seed` accepts an explicit RNG
+state (including zero) without changing the GUI's default stream.
 
 `viewmodel::State` is the single source of truth for what the viewport shows.
 Every user edit goes through one of its setters, which owns parsing, clamping,
@@ -153,7 +167,7 @@ The one seam is `cfg(target_arch = "wasm32")`, not a second app.
 
 | Concern | Native | Browser |
 | --- | --- | --- |
-| Startup | `main` → `eframe::run_native` | `start` → `ensure_webgpu` → `WebRunner::start` |
+| Startup | `main` → CLI when arguments supplied, otherwise `eframe::run_native` | `start` → `ensure_webgpu` → `WebRunner::start` |
 | Window options | `window.rs::window_options` | eframe `WebOptions` |
 | Logging | `env_logger` to stderr, default `info` | `console_log` at `Info` |
 | Time | `std::time` | `web-time` |
@@ -177,8 +191,7 @@ the ordering of the Rust gate.
 
 ## 3. Module reference
 
-Every file under `src/` is covered: 47 Rust files plus four WGSL shaders (51
-files total). Test names are the function names printed by
+Every file under `src/` is covered, including the WGSL shaders. Test names are the function names printed by
 `cargo test --all-targets -- --list`; a module's test file is named in the
 heading.
 
@@ -202,8 +215,8 @@ surface used by integration tests and external callers.
 
 **Public API.** `pub mod` for every module listed in the tree; re-exports
 `app::VfApp`, `colormap::Colormap`, `domain::Domain`, `export::CameraPreset`,
-`field::FieldExpr`, `render::Camera`, and (native only) `export::load_presets` /
-`export::save_preset`.
+  `field::FieldExpr`, `render::Camera`, and (native only) `export::load_presets` /
+  `export::save_preset`.
 
 **Invariants / notes.** There is no inline test module here;
 `tests/test_layout_test.rs::src_carries_no_inline_test_modules` fails the suite
@@ -223,11 +236,14 @@ including the pre-start WebGPU gate and the static fallback UI.
 **Invariants.**
 - Native initializes `env_logger`, logs the version from `version::VERSION`, and
   never runs on wasm.
+- After logging setup, arguments dispatch to `cli::run_from` before window options
+  or app construction; help/version succeed without a window or GPU. No arguments
+  retain the ordinary GUI path and its startup log.
 - Wasm initializes `console_log`, checks `navigator.gpu` and awaits
   `requestAdapter()` before `WebRunner::new()`, reveals `#webgpu-unsupported`
   with the reason on failure, hides the panel on success, and removes `#loading`
   only after the runner starts.
-- Both paths install `fonts::install` and construct
+- Both GUI paths install `fonts::install` and construct
   `VfApp::new_with_storage(cc.storage)`.
 - `show_startup_error` changes the loading overlay text rather than panicking.
 
@@ -238,6 +254,79 @@ including the pre-start WebGPU gate and the static fallback UI.
 **Limitations.** The browser matrix is manual; the gate only proves that
 `navigator.gpu` and an adapter exist, not that every WebGPU feature the app uses
 is available.
+
+#### `src/cli.rs` — native plot export configuration and dispatch
+
+**Purpose.** Parse one-shot export flags and strict JSON, overlay config with
+explicit flags, and validate the resolved settings without opening a window.
+
+**Public API.** Native-only `CliConfig`, `CliFlags`, `CliOptions`, `CliError`,
+`parse_config`, `parse_flags`, `resolve_config`, `validate_intrinsic_config`,
+`validate_effective`, `run_from` and `run_export`. See the [user CLI guide](cli.md)
+for the complete JSON/flag mapping.
+
+**Invariants.** Unknown JSON members are rejected, including nested members;
+only `color_range` accepts null. Supplied values are intrinsically validated
+before flags can override them. Final mode and formula determine density and
+grid bounds; `CliOptions` carries resolved settings and explicit camera-member
+markers for mode applicability. Clap and pollster are native-only dependencies.
+
+**Pinned by.** `tests/cli_test.rs`, registered in the native suite.
+
+**Dispatch.** `run_from` handles clap help/version, reads an optional strict JSON
+config, resolves flags and calls `run_export`. The latter validates and prepares
+one scene, selects CPU SVG or offscreen RGBA8 + PNG encoding by output extension,
+and writes the explicit path with contextual errors. Neither constructs `VfApp`,
+uses storage, nor opens dialogs. No-argument GUI and wasm startup are unchanged.
+`tests/cli_test.rs` exercises the actual executable with child-only environments;
+`scripts/test-cli-dispatch.sh` separately runs real displayless 2D/3D PNG decoding,
+non-background field checks and persistence sentinels through the wired binary.
+
+#### `src/cli_svg.rs` — native CPU vector export
+
+**Purpose / API.** `cli::scene_to_cli_svg(&PreparedScene)` returns a 2D SVG or
+rejects 3D before serialization, without creating a GPU adapter or device.
+
+**Invariants.** Uses the prepared frame and instance order. Flat arrow shaft/head
+and headless Streamline geometry follow `shaders.arrow2d.wgsl`; line/trail widths
+and particle radii remain world-space quantities. Every polygon is projected
+through the shared view-projection and clipped to the WebGPU frustum before
+pixel conversion. Instance linear RGB becomes display sRGB; straight alpha is
+preserved, including the configured background. Existing screenshot SVG behavior
+is unchanged. Particle discs use a 64-sided vector approximation, not GPU
+lighting/antialiasing; normal prepared 2D CLI scenes have no eligible particles.
+
+**Pinned by.** `tests/cli_svg_test.rs`: shader geometry, style/parameter/opacity
+mapping, display color, world widths/radii, clipping, reference visibility,
+portrait/landscape fit, deterministic bytes, no raster image, and 3D rejection.
+
+#### `src/cli_gpu.rs` — native surface-free GPU export
+
+**Purpose / API.** `cli::render_offscreen(&PreparedScene)` requests a headless
+wgpu adapter/device and returns packed RGBA8. It does not create a surface,
+window, app or persistence state. PNG encoding/writing belongs to CLI dispatch.
+
+**Invariants.** Dimensions, packed/padded pixel bytes, storage sizes, vertex
+counts and adapter/device limits are checked before resource allocation. No
+optional device features are requested. The target must support rendering,
+blending and copying `Rgba8UnormSrgb`; no format or CPU/noop fallback is allowed.
+The existing `DrawState` paints the prepared frame with its linear clear color;
+readback is display-encoded sRGB. GPU validation/internal/OOM scopes, uncaptured
+errors and device loss become actionable CLI errors. The doc-hidden production
+`offscreen_error_to_cli` preserves render versus typed readback classification.
+Two further doc-hidden production seams support GPU-free failure checks:
+`validate_gpu_limits` delegates to the same private resource-size validator used
+for rendering, and `acquire_device_with` invokes the actual device request once
+and preserves its original cause in a contextual `CliError::Device`.
+
+**Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions, reduced texture,
+readback/storage/binding limits, injected device-request failure, exactly-once
+acquisition success/failure, and actual map callback failure.
+`scripts/test-cli-gpu.sh` runs isolated displayless workers for
+injected adapter absence, real 2D/3D dimensions/field content, PNG decoding, exact
+clear/linear-alpha-blend channel bytes, and software Vulkan when installed.
+The shared suite never mutates display environment; ordinary worker returns
+without GPU execution are not runtime proof.
 
 #### `src/app/mod.rs` — application root and shared state
 
@@ -1164,6 +1253,11 @@ sorting, and the offscreen screenshot pass.
   (`sort_scene_back_to_front`, `sort_lines_back_to_front`,
   `sorted_lines_back_to_front`, `sorted_arrows_back_to_front`,
   `sort_back_to_front`).
+- Native `OffscreenError::{Setup, Readback}` and `ReadbackError::{Map, Poll,
+  CallbackLost, Range, Decode}` retain stage and typed causes. The doc-hidden
+  production `readback_map_status` classifies the actual map callback. Native
+  GUI capture stringifies only at `Screenshot::fail`; wasm async capture keeps
+  its existing `String` result.
 
 **Pipeline contract.**
 - One bind-group layout: binding 0 = `Globals` uniform (vertex+fragment),
