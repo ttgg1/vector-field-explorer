@@ -19,6 +19,24 @@ struct ResourceSizes {
     storage: u64,
 }
 
+/// Check the renderer's actual resource requirements without allocating a GPU.
+#[doc(hidden)]
+pub fn validate_gpu_limits(
+    prepared: &PreparedScene,
+    limits: &wgpu::Limits,
+) -> Result<(), CliError> {
+    validate_sizes(prepared, limits).map(|_| ())
+}
+
+/// Invoke device acquisition once and retain its original diagnostic context.
+#[doc(hidden)]
+pub fn acquire_device_with<T, E: std::fmt::Display>(
+    request: impl FnOnce() -> Result<T, E>,
+) -> Result<T, CliError> {
+    request()
+        .map_err(|error| CliError::Device(format!("headless PNG device request failed: {error}")))
+}
+
 fn validate_sizes(
     prepared: &PreparedScene,
     limits: &wgpu::Limits,
@@ -107,7 +125,7 @@ fn validate_sizes(
 pub fn render_offscreen(prepared: &PreparedScene) -> Result<Vec<u8>, CliError> {
     // Reject invalid requests even when no GPU exists. Adapter limits are checked
     // again before requesting a device and before creating renderer resources.
-    validate_sizes(prepared, &wgpu::Limits::unlimited())?;
+    validate_gpu_limits(prepared, &wgpu::Limits::unlimited())?;
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     // Even if explicitly enabled in wgpu's environment, noop cannot produce
     // image content and is not a rendering fallback.
@@ -182,19 +200,16 @@ pub fn render_offscreen(prepared: &PreparedScene) -> Result<Vec<u8>, CliError> {
             unsupported.join("; ")
         )));
     }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("vfe CLI PNG device"),
-        required_features: wgpu::Features::empty(),
-        required_limits,
-        ..Default::default()
-    }))
-    .map_err(|e| {
-        CliError::Device(format!(
-            "headless PNG device request failed on {}: {e}",
-            info.name
-        ))
+    let (device, queue) = acquire_device_with(|| {
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("vfe CLI PNG device"),
+            required_features: wgpu::Features::empty(),
+            required_limits,
+            ..Default::default()
+        }))
+        .map_err(|error| format!("adapter '{}': {error}", info.name))
     })?;
-    validate_sizes(prepared, &device.limits())?;
+    validate_gpu_limits(prepared, &device.limits())?;
     let failures = Arc::new(Mutex::new(Vec::new()));
     let errors = failures.clone();
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {

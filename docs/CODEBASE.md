@@ -306,9 +306,15 @@ The existing `DrawState` paints the prepared frame with its linear clear color;
 readback is display-encoded sRGB. GPU validation/internal/OOM scopes, uncaptured
 errors and device loss become actionable CLI errors. The doc-hidden production
 `offscreen_error_to_cli` preserves render versus typed readback classification.
+Two further doc-hidden production seams support GPU-free failure checks:
+`validate_gpu_limits` delegates to the same private resource-size validator used
+for rendering, and `acquire_device_with` invokes the actual device request once
+and preserves its original cause in a contextual `CliError::Device`.
 
-**Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions and actual map
-callback failure. `scripts/test-cli-gpu.sh` runs isolated displayless workers for
+**Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions, reduced texture,
+readback/storage/binding limits, injected device-request failure, exactly-once
+acquisition success/failure, and actual map callback failure.
+`scripts/test-cli-gpu.sh` runs isolated displayless workers for
 injected adapter absence, real 2D/3D dimensions/field content, PNG decoding, exact
 clear/linear-alpha-blend channel bytes, and software Vulkan when installed.
 The shared suite never mutates display environment; ordinary worker returns

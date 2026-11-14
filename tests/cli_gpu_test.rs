@@ -95,6 +95,164 @@ fn invalid_output_dimensions_fail_before_adapter_or_allocation() {
     }
 }
 
+#[test]
+fn gpu_limit_validation_checks_texture_and_padded_pixel_bytes_without_gpu() {
+    let scene = prepared();
+    let mut limits = wgpu::Limits::default();
+    cli::validate_gpu_limits(&scene, &limits).unwrap();
+    limits.max_texture_dimension_2d = 128;
+    let error = cli::validate_gpu_limits(&scene, &limits).unwrap_err();
+    assert!(matches!(error, cli::CliError::Device(_)));
+    assert!(error.to_string().contains("texture limit 128"));
+
+    limits = wgpu::Limits::default();
+    let padded_bytes = u64::from(vector_field_explorer::screenshot::padded_row_bytes(129)) * 97;
+    limits.max_buffer_size = padded_bytes;
+    cli::validate_gpu_limits(&scene, &limits).unwrap();
+    limits.max_buffer_size -= 1;
+    let error = cli::validate_gpu_limits(&scene, &limits).unwrap_err();
+    assert!(matches!(error, cli::CliError::Device(_)));
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("readback needs {padded_bytes} bytes"))
+    );
+
+    let mut edge = scene;
+    for (width, height) in [(1, 1), (4096, 4096)] {
+        edge.frame.width = width;
+        edge.frame.height = height;
+        cli::validate_gpu_limits(&edge, &wgpu::Limits::default()).unwrap();
+    }
+    for (width, height) in [(0, 1), (1, 0), (4097, 4096), (u32::MAX, u32::MAX)] {
+        edge.frame.width = width;
+        edge.frame.height = height;
+        assert!(matches!(
+            cli::validate_gpu_limits(&edge, &wgpu::Limits::default()),
+            Err(cli::CliError::Validation(_))
+        ));
+    }
+}
+
+#[test]
+fn gpu_limit_validation_checks_each_actual_storage_collection_without_gpu() {
+    let arrow = renderer::ArrowInstanceGPU {
+        origin: [0.0, 0.0, 0.0, renderer::ARROW_KIND],
+        dir_len: [1.0, 0.0, 0.0, 1.0],
+        color: [1.0; 4],
+    };
+    let line = renderer::LineInstanceGPU {
+        a: [0.0; 4],
+        b: [1.0; 4],
+        color: [1.0; 4],
+    };
+    for collection in ["arrows", "combined", "lines", "trails", "dots"] {
+        let mut scene = prepared();
+        scene.scene = renderer::SceneGPU {
+            mode_3d: collection == "combined",
+            ..Default::default()
+        };
+        match collection {
+            "arrows" => scene.scene.arrows = std::sync::Arc::new(vec![arrow; 2]),
+            "combined" => scene.scene.combined = std::sync::Arc::new(vec![arrow; 2]),
+            "lines" => scene.scene.lines = std::sync::Arc::new(vec![line; 2]),
+            "trails" => scene.scene.trails = std::sync::Arc::new(vec![line; 2]),
+            "dots" => scene.scene.dots = std::sync::Arc::new(vec![arrow; 2]),
+            _ => unreachable!(),
+        }
+        let bytes = 2 * size_of::<renderer::ArrowInstanceGPU>() as u64;
+        let mut limits = wgpu::Limits {
+            max_storage_buffer_binding_size: bytes,
+            ..Default::default()
+        };
+        cli::validate_gpu_limits(&scene, &limits).unwrap();
+        limits.max_storage_buffer_binding_size -= 1;
+        let error = cli::validate_gpu_limits(&scene, &limits).unwrap_err();
+        assert!(matches!(error, cli::CliError::Device(_)));
+        let label = if matches!(collection, "arrows" | "combined") {
+            "arrows/combined"
+        } else {
+            collection
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{label} storage buffer")),
+            "{error}"
+        );
+    }
+
+    // Distinguish the storage max-buffer bound from the earlier readback bound:
+    // a 1x1 frame needs 256 readback bytes, but these arrows need 768 bytes.
+    let mut scene = prepared();
+    scene.frame.width = 1;
+    scene.frame.height = 1;
+    let bytes = (scene.scene.arrows.len() * size_of::<renderer::ArrowInstanceGPU>()) as u64;
+    assert!(bytes > 256);
+    let limits = wgpu::Limits {
+        max_buffer_size: bytes - 1,
+        ..Default::default()
+    };
+    let error = cli::validate_gpu_limits(&scene, &limits).unwrap_err();
+    assert!(matches!(error, cli::CliError::Device(_)));
+    assert!(error.to_string().contains("arrows/combined storage buffer"));
+}
+
+#[test]
+fn gpu_limit_validation_checks_storage_and_uniform_binding_limits_without_gpu() {
+    for limits in [
+        wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 0,
+            ..Default::default()
+        },
+        wgpu::Limits {
+            max_uniform_buffers_per_shader_stage: 0,
+            ..Default::default()
+        },
+        wgpu::Limits {
+            max_uniform_buffer_binding_size: size_of::<renderer::Globals>() as u64 - 1,
+            ..Default::default()
+        },
+    ] {
+        let error = cli::validate_gpu_limits(&prepared(), &limits).unwrap_err();
+        assert!(matches!(error, cli::CliError::Device(_)));
+        assert!(error.to_string().contains("storage/uniform binding limits"));
+    }
+}
+
+#[test]
+fn device_acquisition_invokes_request_once_and_preserves_original_failure() {
+    let calls = std::cell::Cell::new(0);
+    let error = cli::acquire_device_with(|| {
+        calls.set(calls.get() + 1);
+        Err::<(), _>(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "driver device initialization denied",
+        ))
+    })
+    .unwrap_err();
+    assert_eq!(calls.get(), 1);
+    assert!(matches!(error, cli::CliError::Device(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("headless PNG device request failed")
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("driver device initialization denied")
+    );
+
+    let device = cli::acquire_device_with(|| {
+        calls.set(calls.get() + 1);
+        Ok::<_, std::io::Error>(37)
+    })
+    .unwrap();
+    assert_eq!(device, 37);
+    assert_eq!(calls.get(), 2, "success must invoke exactly once too");
+}
+
 // The outer process never mutates shared environment. The shell script selects
 // this worker with display variables removed and explicitly requires GPU proof.
 #[test]

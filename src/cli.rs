@@ -14,7 +14,7 @@ pub use svg::scene_to_cli_svg;
 
 #[path = "cli_gpu.rs"]
 mod gpu;
-pub use gpu::{offscreen_error_to_cli, render_offscreen};
+pub use gpu::{acquire_device_with, offscreen_error_to_cli, render_offscreen, validate_gpu_limits};
 
 use crate::{
     arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D},
