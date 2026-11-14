@@ -276,7 +276,7 @@ pub struct CliFlags {
     pub proportional_exponent: Option<f32>,
     #[arg(long)]
     pub colormap: Option<Map>,
-    #[arg(long, value_parser = cli_range)]
+    #[arg(long, allow_hyphen_values = true, value_parser = cli_range)]
     pub color_range: Option<ColorRangePatch>,
     #[arg(long)]
     pub arrow_style_3d: Option<Style3d>,
@@ -318,15 +318,15 @@ pub struct CliFlags {
     pub loop_on_stagnation: Option<bool>,
     #[arg(long)]
     pub stagnation_seconds: Option<f32>,
-    #[arg(long, value_parser = comma_array::<f32, 3>)]
+    #[arg(long, allow_hyphen_values = true, value_parser = comma_array::<f32, 3>)]
     pub camera_target: Option<[f32; 3]>,
     #[arg(long)]
     pub camera_kind: Option<CameraKind>,
-    #[arg(long, value_parser = comma_array::<f32, 3>)]
+    #[arg(long, allow_hyphen_values = true, value_parser = comma_array::<f32, 3>)]
     pub camera_position: Option<[f32; 3]>,
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     pub camera_yaw: Option<f32>,
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     pub camera_pitch: Option<f32>,
     #[arg(long)]
     pub camera_distance: Option<f32>,
@@ -772,7 +772,7 @@ fn resolved_camera(patch: CameraPatch, domain: Domain) -> CameraOptions {
         target: domain.center(),
         ..OrbitCamera::default()
     };
-    let fly = FlyCamera::from_orbit(&orbit);
+    let fly = FlyCamera::from_orbit(&orbit, FlyCamera::default().sensitivity);
     let kind = patch.kind.unwrap_or(CameraKind::Orbit);
     let specified = CameraSpecified {
         target: patch.target.is_some(),

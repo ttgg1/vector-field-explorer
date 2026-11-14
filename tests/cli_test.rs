@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 
-use vector_field_explorer::cli::{CliError, parse_config, parse_flags, resolve_config};
+use vector_field_explorer::cli::{
+    CliError, parse_config, parse_flags, resolve_config, validate_intrinsic_config,
+};
+use vector_field_explorer::{camera::OrbitCamera, fly_camera::FlyCamera, viewmodel::State};
 
 fn flags(args: &[&str]) -> vector_field_explorer::cli::CliFlags {
     parse_flags(std::iter::once(OsString::from("vfe")).chain(args.iter().map(OsString::from)))
@@ -288,4 +291,238 @@ fn intrinsic_checks_reject_bad_inputs_even_when_overridden() {
             "{json}"
         );
     }
+}
+
+#[test]
+fn signed_separate_token_camera_and_color_flags_match_json() {
+    for (json, args) in [
+        (r#"{"color_range":[-1,1]}"#, vec!["--color-range", "-1,1"]),
+        (
+            r#"{"camera":{"target":[-1,0,0]}}"#,
+            vec!["--camera-target", "-1,0,0"],
+        ),
+        (r#"{"camera":{"yaw":-0.2}}"#, vec!["--camera-yaw", "-0.2"]),
+        (
+            r#"{"camera":{"pitch":-0.2}}"#,
+            vec!["--camera-pitch", "-0.2"],
+        ),
+        (
+            r#"{"camera":{"kind":"fly","position":[-1,0,0]}}"#,
+            vec!["--camera-kind", "fly", "--camera-position", "-1,0,0"],
+        ),
+    ] {
+        let base = format!(
+            r#"{{"output":"x.png","mode":"3d",{}}}"#,
+            &json[1..json.len() - 1]
+        );
+        let json = resolve_config(Some(parse_config(&base).unwrap()), flags(&[])).unwrap();
+        let mut argv = vec!["-o", "x.png", "--mode", "3d"];
+        argv.extend(args);
+        let cli = resolve_config(None, flags(&argv)).unwrap();
+        assert_eq!(format!("{json:?}"), format!("{cli:?}"), "{base}");
+    }
+}
+
+#[test]
+fn defaults_follow_mode_state_and_orbit_derived_fly_pose() {
+    let orbit = OrbitCamera::default();
+    for (mode, density, formula) in [("2d", 24, "(x, y)"), ("3d", 16, "(x, y, z)")] {
+        let options = resolve_config(None, flags(&["-o", "x.png", "--mode", mode])).unwrap();
+        let state = State::new(mode == "3d");
+        assert_eq!(
+            (options.width, options.height, options.density),
+            (1280, 800, density)
+        );
+        assert_eq!(options.formula, formula);
+        assert_eq!(options.arrows, state.arrows);
+        assert_eq!(options.streamlines, state.streamlines);
+        assert_eq!(options.particles, state.particles);
+        assert_eq!(options.arrow_params, state.arrow_params);
+        assert_eq!(options.particle_appearance, state.particle_appearance);
+        assert_eq!(options.camera.yaw, orbit.yaw);
+        assert_eq!(options.camera.fov_y_degrees, 55.0);
+        assert_eq!(options.camera.target, [0.0; 3]);
+        assert_eq!(options.seed, 0x123456789ABCDEF0);
+        assert!(options.references.grid_and_domain_box && options.references.world_axes);
+    }
+    let fly = FlyCamera::from_orbit(&orbit, FlyCamera::default().sensitivity);
+    let options = resolve_config(
+        None,
+        flags(&["-o", "x.png", "--mode", "3d", "--camera-kind", "fly"]),
+    )
+    .unwrap();
+    assert_eq!(options.camera.position, fly.position.to_array());
+    assert_eq!(
+        (options.camera.yaw, options.camera.pitch),
+        (fly.yaw, fly.pitch)
+    );
+}
+
+#[test]
+fn orbit_and_front_camera_flags_match_json_without_cross_mode_leakage() {
+    for (mode, camera, args) in [
+        (
+            "3d",
+            r#"{"target":[-1,2,3],"yaw":-0.2,"pitch":-1.55,"distance":20,"fov_y_degrees":179}"#,
+            vec![
+                "--camera-target",
+                "-1,2,3",
+                "--camera-yaw",
+                "-0.2",
+                "--camera-pitch",
+                "-1.55",
+                "--camera-distance",
+                "20",
+                "--camera-fov-deg",
+                "179",
+            ],
+        ),
+        (
+            "2d",
+            r#"{"target":[-1,2,3],"ortho_zoom":0.05}"#,
+            vec!["--camera-target", "-1,2,3", "--camera-ortho-zoom", "0.05"],
+        ),
+    ] {
+        let json = format!(r#"{{"output":"x.png","mode":"{mode}","camera":{camera}}}"#);
+        let expected = resolve_config(Some(parse_config(&json).unwrap()), flags(&[])).unwrap();
+        let mut argv = vec!["-o", "x.png", "--mode", mode];
+        argv.extend(args);
+        let actual = resolve_config(None, flags(&argv)).unwrap();
+        assert_eq!(format!("{expected:?}"), format!("{actual:?}"));
+    }
+}
+
+#[test]
+fn numeric_bounds_are_validated_for_each_supplied_schema_member() {
+    // Each row checks both inclusive ends and both neighbours; camera applicability
+    // is a separate effective-state check in camera_rejects_inapplicable_explicit_members.
+    let rows = [
+        ("width", "1", "4096", "0", "4097"),
+        ("height", "1", "4096", "0", "4097"),
+        ("density", "4", "200", "3", "201"),
+        ("arrow_scale", "0.1", "4", "0.09", "4.01"),
+        ("arrow_opacity", "0.05", "1", "0.04", "1.01"),
+        ("plane_dim_opacity", "0", "1", "-0.01", "1.01"),
+        ("magnitude_scale", "0.01", "10", "0", "10.01"),
+        ("proportional_exponent", "0.25", "4", "0.24", "4.01"),
+        ("particle_count", "0", "4000", "-1", "4001"),
+        ("particle_size", "0.25", "3", "0.24", "3.01"),
+        ("arrow_params.head_length", "0.1", "0.5", "0.09", "0.51"),
+        ("arrow_params.head_width", "0.02", "0.3", "0.01", "0.31"),
+        ("arrow_params.shaft_radius", "0.01", "0.12", "0", "0.13"),
+        ("arrow_params.sides", "4", "16", "3", "17"),
+        ("particle_appearance.opacity", "0.05", "1", "0.04", "1.01"),
+        ("particle_appearance.trail_len", "0", "32", "-1", "33"),
+        ("particle_appearance.trail_fade", "0", "1", "-0.01", "1.01"),
+        (
+            "particle_appearance.trail_width",
+            "0.05",
+            "2",
+            "0.04",
+            "2.01",
+        ),
+        (
+            "particle_appearance.stagnation_seconds",
+            "0.1",
+            "5",
+            "0.09",
+            "5.01",
+        ),
+        ("camera.pitch", "-1.55", "1.55", "-1.56", "1.56"),
+        ("camera.distance", "0.5", "20", "0.49", "20.01"),
+        ("camera.ortho_zoom", "0.05", "50", "0.04", "50.01"),
+        ("start_time_seconds", "0", "3600", "-0.01", "3600.01"),
+        ("duration_seconds", "0", "3600", "-0.01", "3600.01"),
+        ("fixed_step_seconds", "0.0001", "0.25", "0.00009", "0.26"),
+    ];
+    for (key, min, max, below, above) in rows {
+        for (value, accepted) in [(min, true), (max, true), (below, false), (above, false)] {
+            let parts: Vec<_> = key.split('.').collect();
+            let json = if parts.len() == 1 {
+                format!(r#"{{"{key}":{value}}}"#)
+            } else {
+                format!(r#"{{"{}":{{"{}":{value}}}}}"#, parts[0], parts[1])
+            };
+            let valid = parse_config(&json)
+                .and_then(|c| validate_intrinsic_config(&c))
+                .is_ok();
+            assert_eq!(valid, accepted, "{key}={value}");
+        }
+    }
+    for fov in [0.001, 179.999] {
+        assert!(
+            validate_intrinsic_config(
+                &parse_config(&format!(r#"{{"camera":{{"fov_y_degrees":{fov}}}}}"#)).unwrap()
+            )
+            .is_ok()
+        );
+    }
+    for fov in ["0", "180"] {
+        assert!(
+            validate_intrinsic_config(
+                &parse_config(&format!(r#"{{"camera":{{"fov_y_degrees":{fov}}}}}"#)).unwrap()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn enums_tuples_range_patch_and_forbidden_null_keep_strict_schema() {
+    for (key, values) in [
+        ("mode", "2d,3d"),
+        ("arrow_length_mode", "proportional,uniform,magnitude"),
+        ("colormap", "viridis,turbo,mono"),
+        ("arrow_style_3d", "cone,cylinder,flat,streamline"),
+        ("arrow_style_2d", "flat,streamline"),
+        ("streamline_seed_mode", "auto,click"),
+        ("plane.axis", "x,y,z"),
+        ("particle_appearance.color_mode", "magnitude,speed,fixed"),
+        ("camera.kind", "orbit,fly"),
+    ] {
+        for value in values.split(',').chain(["INVALID"]) {
+            let parts: Vec<_> = key.split('.').collect();
+            let json = if parts.len() == 1 {
+                format!(r#"{{"{key}":"{value}"}}"#)
+            } else {
+                format!(r#"{{"{}":{{"{}":"{value}"}}}}"#, parts[0], parts[1])
+            };
+            assert_eq!(parse_config(&json).is_ok(), value != "INVALID", "{json}");
+        }
+    }
+    for json in [
+        r#"{"output":null}"#,
+        r#"{"domain":{"min":null}}"#,
+        r#"{"camera":{"yaw":null}}"#,
+        r#"{"plane":null}"#,
+        r#"{"particle_appearance":{"fixed_color":null}}"#,
+        r#"{"color_range":[0,null]}"#,
+        r#"{"color_range":[0]}"#,
+        r#"{"background":[0,0,0]}"#,
+        r#"{"domain":{"min":[0,0]}}"#,
+    ] {
+        assert!(parse_config(json).is_err(), "{json}");
+    }
+    let config = parse_config(r#"{"output":"x.png","color_range":[-1,2]}"#).unwrap();
+    assert_eq!(
+        resolve_config(Some(config.clone()), flags(&[]))
+            .unwrap()
+            .color_range,
+        Some([-1.0, 2.0])
+    );
+    assert_eq!(
+        resolve_config(Some(config), flags(&["--width", "10"]))
+            .unwrap()
+            .color_range,
+        Some([-1.0, 2.0])
+    );
+    assert_eq!(
+        resolve_config(
+            Some(parse_config(r#"{"output":"x.png","color_range":null}"#).unwrap()),
+            flags(&["--color-range", "-1,2"])
+        )
+        .unwrap()
+        .color_range,
+        Some([-1.0, 2.0])
+    );
 }
