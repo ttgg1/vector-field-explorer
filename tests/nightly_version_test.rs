@@ -212,3 +212,77 @@ fn the_nightly_date_is_read_once() {
     );
     assert!(step.contains("display_date="));
 }
+
+#[test]
+fn windows_package_creates_the_reported_archive_with_required_members() {
+    // Execute the real Package step, including its Windows branch and output
+    // validation. Moving the ZIP outside dist must fail without building an EXE.
+    let workflow = fs::read_to_string(repo_root().join(".github/workflows/package.yml"))
+        .expect("read packaging workflow");
+    let step = workflow
+        .split_once("      - name: Package\n")
+        .expect("Package step")
+        .1
+        .split_once("        run: |\n")
+        .expect("Package shell script")
+        .1
+        .split_once("\n      - name: Upload archive")
+        .expect("upload follows packaging")
+        .0;
+    let script = step
+        .lines()
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fixture = tempfile::tempdir().expect("fixture directory");
+    let root = fixture.path();
+    let binary = root.join("target/x86_64-pc-windows-msvc/release");
+    fs::create_dir_all(&binary).unwrap();
+    fs::create_dir(root.join("packaging")).unwrap();
+    fs::write(binary.join("vector-field-explorer.exe"), "fixture binary").unwrap();
+    for path in [
+        "README.md",
+        "LICENSE",
+        "THIRD_PARTY_LICENSES.md",
+        "packaging/THIRD_PARTY_NOTICES.txt",
+    ] {
+        fs::write(root.join(path), format!("fixture {path}\n")).unwrap();
+    }
+    let output_path = root.join("github-output");
+    let out = Command::new("bash")
+        .args(["-c", &script])
+        .current_dir(root)
+        .env("RUNNER_OS", "Windows")
+        .env("VERSION", "0.1.0-nightly.20261114+19af6d9")
+        .env("TARGET", "x86_64-pc-windows-msvc")
+        .env("GITHUB_OUTPUT", &output_path)
+        .output()
+        .expect("run Windows packaging with fixtures");
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+    let asset =
+        "dist/vector-field-explorer-0.1.0-nightly.20261114+19af6d9-x86_64-pc-windows-msvc.zip";
+    assert_eq!(
+        fs::read_to_string(output_path).unwrap().trim(),
+        format!("asset={asset}")
+    );
+    assert!(fs::metadata(root.join(asset)).unwrap().len() > 0);
+    let members = Command::new("python")
+        .args([
+            "-c",
+            "import sys, zipfile; print('\\n'.join(sorted(zipfile.ZipFile(sys.argv[1]).namelist())))",
+            asset,
+        ])
+        .current_dir(root)
+        .output()
+        .expect("inspect Windows ZIP");
+    assert!(members.status.success(), "{}", stderr(&members));
+    assert_eq!(
+        stdout(&members),
+        "LICENSE\nREADME.md\nTHIRD_PARTY_LICENSES.md\nTHIRD_PARTY_NOTICES.txt\nvector-field-explorer.exe"
+    );
+}
