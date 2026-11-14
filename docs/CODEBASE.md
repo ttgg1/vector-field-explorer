@@ -269,9 +269,27 @@ markers for mode applicability. Clap and pollster are native-only dependencies.
 
 **Pinned by.** `tests/cli_test.rs`, registered in the native suite.
 
-**Current boundary.** Scene preparation, output backends, CLI dispatch and
-`src/main.rs` wiring are later tasks; the existing no-argument GUI path is
-unchanged.
+**Current boundary.** Scene preparation and CPU SVG serialization are available
+through this module; PNG, CLI dispatch and `src/main.rs` wiring are later tasks.
+The existing no-argument GUI path is unchanged.
+
+#### `src/cli_svg.rs` — native CPU vector export
+
+**Purpose / API.** `cli::scene_to_cli_svg(&PreparedScene)` returns a 2D SVG or
+rejects 3D before serialization, without creating a GPU adapter or device.
+
+**Invariants.** Uses the prepared frame and instance order. Flat arrow shaft/head
+and headless Streamline geometry follow `shaders.arrow2d.wgsl`; line/trail widths
+and particle radii remain world-space quantities. Every polygon is projected
+through the shared view-projection and clipped to the WebGPU frustum before
+pixel conversion. Instance linear RGB becomes display sRGB; straight alpha is
+preserved, including the configured background. Existing screenshot SVG behavior
+is unchanged. Particle discs use a 64-sided vector approximation, not GPU
+lighting/antialiasing; normal prepared 2D CLI scenes have no eligible particles.
+
+**Pinned by.** `tests/cli_svg_test.rs`: shader geometry, style/parameter/opacity
+mapping, display color, world widths/radii, clipping, reference visibility,
+portrait/landscape fit, deterministic bytes, no raster image, and 3D rejection.
 
 #### `src/app/mod.rs` — application root and shared state
 

@@ -8,6 +8,10 @@ use serde::Deserialize;
 mod scene;
 pub use scene::{OutputFrame, PreparedScene, output_frame, prepare_scene};
 
+#[path = "cli_svg.rs"]
+mod svg;
+pub use svg::scene_to_cli_svg;
+
 use crate::{
     arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D},
     camera::OrbitCamera,
