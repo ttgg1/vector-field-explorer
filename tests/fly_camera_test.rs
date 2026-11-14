@@ -13,21 +13,23 @@ use glam::{Vec2, Vec3};
 use vector_field_explorer::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::fly_camera::{
-    CROSSHAIR_ALPHA, CROSSHAIR_HALF_LENGTH, DEFAULT_SPEED, FlyCamera, FlyInput, FlyKeys,
-    MAX_PITCH, MAX_SPEED, MIN_SPEED, WHEEL_NOTCH_POINTS, capture_commands,
-    capture_exit_required, capture_transition, crosshair_segments, crosshair_visible,
+    CROSSHAIR_ALPHA, CROSSHAIR_HALF_LENGTH, DEFAULT_SPEED, FlyCamera, FlyInput, FlyKeys, MAX_PITCH,
+    MAX_SPEED, MIN_SPEED, WHEEL_NOTCH_POINTS, capture_commands, capture_exit_required,
+    capture_transition, crosshair_segments, crosshair_visible, exit_fly_for_layout,
     exit_on_focus_loss, fly_toggle_key, frame_look, is_command_chord, sync_fly, sync_fly_mirror,
-    toggle_fly, exit_fly_for_layout,
+    toggle_fly,
 };
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load};
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::ui::help_overlay::{FLY_HELP_ACTION, FLY_HELP_INPUT, rows_for};
 use vector_field_explorer::ui::menu::{self, MenuAction};
 use vector_field_explorer::view_command::{
-    ViewCommand, ViewContext, apply_view_command, apply_view_command_with_fly,
-    domain_center, domain_centre_delta,
+    ViewCommand, ViewContext, apply_view_command, apply_view_command_with_fly, domain_center,
+    domain_centre_delta,
 };
 use vector_field_explorer::viewmodel::State;
+
+const SENSITIVITY: f32 = 1.0;
 
 fn assert_close(a: Vec3, b: Vec3, what: &str) {
     let d = (a - b).length();
@@ -40,6 +42,7 @@ fn fly_at_origin() -> FlyCamera {
         yaw: 0.0,
         pitch: 0.0,
         speed: 2.0,
+        sensitivity: 1.0,
     }
 }
 
@@ -56,14 +59,21 @@ fn from_orbit_reproduces_the_orbit_eye_and_look_direction() {
     orbit.pan(0.35, -0.2);
     orbit.zoom(0.7);
 
-    let fly = FlyCamera::from_orbit(&orbit);
-    assert_close(fly.position, orbit.position(), "the fly eye starts at the orbit eye");
+    let fly = FlyCamera::from_orbit(&orbit, SENSITIVITY);
+    assert_close(
+        fly.position,
+        orbit.position(),
+        "the fly eye starts at the orbit eye",
+    );
     assert_close(
         fly.look_dir(),
         (orbit.target - orbit.position()).normalize(),
         "the fly look direction starts at the orbit aim",
     );
-    assert_eq!(fly.speed, DEFAULT_SPEED, "a fresh fly camera starts at the default speed");
+    assert_eq!(
+        fly.speed, DEFAULT_SPEED,
+        "a fresh fly camera starts at the default speed"
+    );
 }
 
 #[test]
@@ -74,9 +84,13 @@ fn entering_and_exiting_restores_the_untouched_orbit() {
     let untouched = orbit;
     let mut fly = None;
 
-    toggle_fly(&mut fly, &orbit, true);
+    toggle_fly(&mut fly, &orbit, true, SENSITIVITY);
     let entered = fly.expect("3D enters fly mode");
-    assert_close(entered.position, orbit.position(), "entering starts at the current viewpoint");
+    assert_close(
+        entered.position,
+        orbit.position(),
+        "entering starts at the current viewpoint",
+    );
 
     // The fly camera can move freely; the orbit record must not follow it.
     let mut fly = Some(entered);
@@ -89,11 +103,17 @@ fn entering_and_exiting_restores_the_untouched_orbit() {
             0.1,
         );
     }
-    assert_eq!(orbit, untouched, "moving in fly mode never mutates the orbit record");
+    assert_eq!(
+        orbit, untouched,
+        "moving in fly mode never mutates the orbit record"
+    );
 
-    toggle_fly(&mut fly, &orbit, true);
+    toggle_fly(&mut fly, &orbit, true, SENSITIVITY);
     assert!(fly.is_none(), "a second C leaves fly mode");
-    assert_eq!(orbit, untouched, "exiting restores the untouched orbit view");
+    assert_eq!(
+        orbit, untouched,
+        "exiting restores the untouched orbit view"
+    );
 }
 
 #[test]
@@ -156,7 +176,10 @@ fn diagonal_movement_is_not_faster() {
         0.1,
     )
     .length();
-    assert!((diagonal_len - straight).abs() < 1e-5, "normalising keeps diagonals the same speed");
+    assert!(
+        (diagonal_len - straight).abs() < 1e-5,
+        "normalising keeps diagonals the same speed"
+    );
 }
 
 #[test]
@@ -217,7 +240,10 @@ fn look_updates_the_angles_and_pitch_clamps_at_the_poles() {
         },
         0.016,
     );
-    assert!((fly.yaw + 0.5).abs() < 1e-5, "look.x turns yaw by 0.005 rad/point, unwrapped");
+    assert!(
+        (fly.yaw + 0.5).abs() < 1e-5,
+        "look.x turns yaw by 0.005 rad/point, unwrapped"
+    );
 
     let mut fly = fly_at_origin();
     fly.step(
@@ -227,7 +253,11 @@ fn look_updates_the_angles_and_pitch_clamps_at_the_poles() {
         },
         0.016,
     );
-    assert!((fly.pitch - MAX_PITCH).abs() < 1e-6, "pitch clamps at the top: {}", fly.pitch);
+    assert!(
+        (fly.pitch - MAX_PITCH).abs() < 1e-6,
+        "pitch clamps at the top: {}",
+        fly.pitch
+    );
 
     fly.step(
         FlyInput {
@@ -236,7 +266,11 @@ fn look_updates_the_angles_and_pitch_clamps_at_the_poles() {
         },
         0.016,
     );
-    assert!((fly.pitch + MAX_PITCH).abs() < 1e-6, "pitch clamps at the bottom: {}", fly.pitch);
+    assert!(
+        (fly.pitch + MAX_PITCH).abs() < 1e-6,
+        "pitch clamps at the bottom: {}",
+        fly.pitch
+    );
 }
 
 #[test]
@@ -253,7 +287,11 @@ fn yaw_wraps_freely_past_a_full_turn() {
         );
     }
     assert!(fly.yaw.is_finite(), "yaw has no clamp: {}", fly.yaw);
-    assert!((fly.yaw + 60.0).abs() < 1e-3, "every look point turns yaw: {}", fly.yaw);
+    assert!(
+        (fly.yaw + 60.0).abs() < 1e-3,
+        "every look point turns yaw: {}",
+        fly.yaw
+    );
     let direction = fly.look_dir();
     assert!(
         (direction.length() - 1.0).abs() < 1e-5,
@@ -265,13 +303,17 @@ fn yaw_wraps_freely_past_a_full_turn() {
 fn translate_moves_the_eye_without_turning_or_changing_speed() {
     let mut orbit = OrbitCamera::default();
     orbit.orbit(0.7, -0.2);
-    let mut fly = FlyCamera::from_orbit(&orbit);
+    let mut fly = FlyCamera::from_orbit(&orbit, SENSITIVITY);
     let before = fly;
     let delta = Vec3::new(1.5, -2.0, 0.25);
 
     fly.translate(delta);
 
-    assert_close(fly.position, before.position + delta, "translate shifts the eye");
+    assert_close(
+        fly.position,
+        before.position + delta,
+        "translate shifts the eye",
+    );
     assert_eq!(fly.yaw, before.yaw, "translate keeps yaw");
     assert_eq!(fly.pitch, before.pitch, "translate keeps pitch");
     assert_eq!(fly.speed, before.speed, "translate keeps speed");
@@ -298,8 +340,14 @@ fn translating_by_the_domain_centre_delta_keeps_the_free_camera_relative_to_the_
         "the free camera keeps its position relative to the new domain centre",
     );
     assert_eq!(fly.yaw, before.yaw, "translating with the domain keeps yaw");
-    assert_eq!(fly.pitch, before.pitch, "translating with the domain keeps pitch");
-    assert_eq!(fly.speed, before.speed, "translating with the domain keeps speed");
+    assert_eq!(
+        fly.pitch, before.pitch,
+        "translating with the domain keeps pitch"
+    );
+    assert_eq!(
+        fly.speed, before.speed,
+        "translating with the domain keeps speed"
+    );
 }
 
 #[test]
@@ -320,7 +368,10 @@ fn wheel_scroll_scales_speed_and_clamps() {
 
     let mut junk = fly_at_origin();
     junk.adjust_speed(f32::NAN);
-    assert_eq!(junk.speed, DEFAULT_SPEED, "a non-finite scroll leaves the speed alone");
+    assert_eq!(
+        junk.speed, DEFAULT_SPEED,
+        "a non-finite scroll leaves the speed alone"
+    );
 }
 
 #[test]
@@ -330,11 +381,17 @@ fn physical_key_positions_win_over_the_logical_key() {
     // still walk forward: the physical QWERTY position is what games use.
     keys.apply_key(egui::Key::D, Some(egui::Key::W), true);
     let input = keys.input(Vec2::ZERO, false);
-    assert_eq!(input.forward, 1.0, "physical W is forward regardless of the logical D");
+    assert_eq!(
+        input.forward, 1.0,
+        "physical W is forward regardless of the logical D"
+    );
     assert_eq!(input.strafe, 0.0, "the logical D must not also strafe");
 
     keys.apply_key(egui::Key::D, Some(egui::Key::W), false);
-    assert!(!keys.movement_held(), "releasing the physical W stops the movement");
+    assert!(
+        !keys.movement_held(),
+        "releasing the physical W stops the movement"
+    );
 }
 
 #[test]
@@ -351,17 +408,57 @@ fn a_missing_physical_key_falls_back_to_the_logical_key() {
 #[test]
 fn every_movement_key_maps_correctly() {
     let cases = [
-        (egui::Key::W, FlyInput { forward: 1.0, ..FlyInput::default() }),
-        (egui::Key::S, FlyInput { forward: -1.0, ..FlyInput::default() }),
-        (egui::Key::A, FlyInput { strafe: -1.0, ..FlyInput::default() }),
-        (egui::Key::D, FlyInput { strafe: 1.0, ..FlyInput::default() }),
-        (egui::Key::Q, FlyInput { vertical: -1.0, ..FlyInput::default() }),
-        (egui::Key::E, FlyInput { vertical: 1.0, ..FlyInput::default() }),
+        (
+            egui::Key::W,
+            FlyInput {
+                forward: 1.0,
+                ..FlyInput::default()
+            },
+        ),
+        (
+            egui::Key::S,
+            FlyInput {
+                forward: -1.0,
+                ..FlyInput::default()
+            },
+        ),
+        (
+            egui::Key::A,
+            FlyInput {
+                strafe: -1.0,
+                ..FlyInput::default()
+            },
+        ),
+        (
+            egui::Key::D,
+            FlyInput {
+                strafe: 1.0,
+                ..FlyInput::default()
+            },
+        ),
+        (
+            egui::Key::Q,
+            FlyInput {
+                vertical: -1.0,
+                ..FlyInput::default()
+            },
+        ),
+        (
+            egui::Key::E,
+            FlyInput {
+                vertical: 1.0,
+                ..FlyInput::default()
+            },
+        ),
     ];
     for (key, expected) in cases {
         let mut keys = FlyKeys::default();
         keys.apply_key(key, None, true);
-        assert_eq!(keys.input(Vec2::ZERO, false), expected, "{key:?} maps to {expected:?}");
+        assert_eq!(
+            keys.input(Vec2::ZERO, false),
+            expected,
+            "{key:?} maps to {expected:?}"
+        );
         assert!(keys.movement_held(), "{key:?} counts as a movement key");
     }
 }
@@ -374,9 +471,15 @@ fn boost_comes_from_the_frame_modifiers_not_key_events() {
     for shift in [egui::Key::ShiftLeft, egui::Key::ShiftRight] {
         keys.apply_key(shift, None, true);
         assert!(!keys.movement_held(), "{shift:?} is not a movement key");
-        assert!(!keys.input(Vec2::ZERO, false).boost, "a key event does not set boost");
+        assert!(
+            !keys.input(Vec2::ZERO, false).boost,
+            "a key event does not set boost"
+        );
     }
-    assert!(keys.input(Vec2::ZERO, true).boost, "the frame modifier sets boost");
+    assert!(
+        keys.input(Vec2::ZERO, true).boost,
+        "the frame modifier sets boost"
+    );
     keys.clear();
     assert_eq!(
         keys.input(Vec2::ZERO, false),
@@ -396,11 +499,15 @@ fn boost_comes_from_the_frame_modifiers_not_key_events() {
 #[test]
 fn view_camera_rays_through_the_centre_match_the_view_direction() {
     let orbit = OrbitCamera::default();
-    let fly = FlyCamera::from_orbit(&orbit);
+    let fly = FlyCamera::from_orbit(&orbit, SENSITIVITY);
 
     let orbit_camera = ViewCamera::Orbit(&orbit);
     let (origin, direction) = orbit_camera.ndc_ray(1.4, Vec2::ZERO);
-    assert_close(origin, orbit.position(), "the orbit ray starts at the orbit eye");
+    assert_close(
+        origin,
+        orbit.position(),
+        "the orbit ray starts at the orbit eye",
+    );
     assert_close(
         direction.normalize(),
         (orbit.target - orbit.position()).normalize(),
@@ -410,13 +517,17 @@ fn view_camera_rays_through_the_centre_match_the_view_direction() {
     let fly_camera = ViewCamera::Fly(&fly);
     let (origin, direction) = fly_camera.ndc_ray(1.4, Vec2::ZERO);
     assert_close(origin, fly.position, "the fly ray starts at the fly eye");
-    assert_close(direction.normalize(), fly.look_dir(), "a fly centre ray looks along look_dir");
+    assert_close(
+        direction.normalize(),
+        fly.look_dir(),
+        "a fly centre ray looks along look_dir",
+    );
 }
 
 #[test]
 fn view_camera_vp_matrix_is_the_one_the_viewport_and_screenshot_share() {
     let orbit = OrbitCamera::default();
-    let fly = FlyCamera::from_orbit(&orbit);
+    let fly = FlyCamera::from_orbit(&orbit, SENSITIVITY);
     let aspect = 1.7;
 
     assert_eq!(
@@ -438,17 +549,17 @@ fn c_toggles_only_in_three_d_and_switching_to_2d_exits() {
     let orbit = OrbitCamera::default();
     let mut fly = None;
 
-    toggle_fly(&mut fly, &orbit, false);
+    toggle_fly(&mut fly, &orbit, false, SENSITIVITY);
     assert!(fly.is_none(), "2D ignores C");
 
-    toggle_fly(&mut fly, &orbit, true);
+    toggle_fly(&mut fly, &orbit, true, SENSITIVITY);
     assert!(fly.is_some(), "3D enters fly mode");
 
     // Leaving 3D for 2D drops the fly camera.
     sync_fly(&mut fly, false);
     assert!(fly.is_none(), "switching to 2D exits fly");
 
-    let mut fly = Some(FlyCamera::from_orbit(&orbit));
+    let mut fly = Some(FlyCamera::from_orbit(&orbit, SENSITIVITY));
     sync_fly(&mut fly, true);
     assert!(fly.is_some(), "staying in 3D keeps fly mode");
 }
@@ -468,7 +579,10 @@ fn entering_compact_exits_fly_and_clears_held_movement_keys() {
 
     let (grabs, visible) = capture_transition(true, fly.is_some()).unwrap();
     assert_eq!(grabs, &[egui::CursorGrab::None]);
-    assert!(visible, "leaving fly releases capture and shows the pointer");
+    assert!(
+        visible,
+        "leaving fly releases capture and shows the pointer"
+    );
 }
 
 #[test]
@@ -528,11 +642,19 @@ fn the_real_app_frame_rejects_compact_fly_key_and_keeps_wide_entry() {
 
     let mut compact = run_app_ui_frame(&mut app, &ctx, &mut frame, 600.0, vec![fly_toggle_event()]);
     compact.textures_delta.clear();
-    assert!(app.fly.is_none(), "C must not enter fly in the real Compact app frame");
+    assert!(
+        app.fly.is_none(),
+        "C must not enter fly in the real Compact app frame"
+    );
     assert_eq!(app.layout_mode, LayoutMode::Compact);
 
     let released = match fly_toggle_event() {
-        egui::Event::Key { key, physical_key, modifiers, .. } => egui::Event::Key {
+        egui::Event::Key {
+            key,
+            physical_key,
+            modifiers,
+            ..
+        } => egui::Event::Key {
             key,
             physical_key,
             pressed: false,
@@ -545,7 +667,10 @@ fn the_real_app_frame_rejects_compact_fly_key_and_keeps_wide_entry() {
     key_up.textures_delta.clear();
     let mut wide = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![fly_toggle_event()]);
     wide.textures_delta.clear();
-    assert!(app.fly.is_some(), "the same key must still enter fly in Wide");
+    assert!(
+        app.fly.is_some(),
+        "the same key must still enter fly in Wide"
+    );
     assert_eq!(app.layout_mode, LayoutMode::Wide);
 }
 
@@ -572,10 +697,18 @@ fn the_real_compact_resize_frame_clears_fly_keys_and_releases_capture() {
     };
     let mut moving = run_app_ui_frame(&mut app, &ctx, &mut frame, 900.0, vec![held.clone()]);
     moving.textures_delta.clear();
-    assert!(app.fly_keys.movement_held(), "the setup frame records held movement input");
+    assert!(
+        app.fly_keys.movement_held(),
+        "the setup frame records held movement input"
+    );
 
     let released = match held {
-        egui::Event::Key { key, physical_key, modifiers, .. } => egui::Event::Key {
+        egui::Event::Key {
+            key,
+            physical_key,
+            modifiers,
+            ..
+        } => egui::Event::Key {
             key,
             physical_key,
             pressed: false,
@@ -589,7 +722,10 @@ fn the_real_compact_resize_frame_clears_fly_keys_and_releases_capture() {
     use vector_field_explorer::ui::layout::LayoutMode;
     assert_eq!(app.layout_mode, LayoutMode::Compact);
     assert!(app.fly.is_none(), "the real frame transition exits fly");
-    assert!(!app.fly_keys.movement_held(), "the real frame transition clears held movement input");
+    assert!(
+        !app.fly_keys.movement_held(),
+        "the real frame transition clears held movement input"
+    );
 
     let commands = &compact
         .viewport_output
@@ -597,11 +733,16 @@ fn the_real_compact_resize_frame_clears_fly_keys_and_releases_capture() {
         .expect("the test app emits root viewport output")
         .commands;
     assert!(
-        commands.iter().any(|command| matches!(command, egui::ViewportCommand::CursorGrab(egui::CursorGrab::None))),
+        commands.iter().any(|command| matches!(
+            command,
+            egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)
+        )),
         "the same Compact transition frame sends pointer-grab release: {commands:?}",
     );
     assert!(
-        commands.iter().any(|command| matches!(command, egui::ViewportCommand::CursorVisible(true))),
+        commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::CursorVisible(true))),
         "the same Compact transition frame restores pointer visibility: {commands:?}",
     );
 }
@@ -614,18 +755,21 @@ fn reset_and_fit_exit_fly_and_match_the_same_command_without_fly() {
     let view = ViewContext::new(true, Domain::default(), 1.6);
 
     for command in [ViewCommand::Reset, ViewCommand::Fit] {
-        let mut fly = Some(FlyCamera::from_orbit(&orbit));
+        let mut fly = Some(FlyCamera::from_orbit(&orbit, SENSITIVITY));
         let with_fly = apply_view_command_with_fly(orbit, &mut fly, view, command);
         let without_fly = apply_view_command(orbit, view, command);
         assert!(fly.is_none(), "{command:?} leaves fly mode");
-        assert_eq!(with_fly, without_fly, "{command:?} acts on the untouched orbit camera");
+        assert_eq!(
+            with_fly, without_fly,
+            "{command:?} acts on the untouched orbit camera"
+        );
     }
 }
 
 #[test]
 fn orbit_and_pan_commands_are_inert_while_flying() {
     let orbit = OrbitCamera::default();
-    let mut fly = Some(FlyCamera::from_orbit(&orbit));
+    let mut fly = Some(FlyCamera::from_orbit(&orbit, SENSITIVITY));
     let view = ViewContext::new(true, Domain::default(), 1.6);
 
     let after = apply_view_command_with_fly(
@@ -634,7 +778,10 @@ fn orbit_and_pan_commands_are_inert_while_flying() {
         view,
         ViewCommand::Orbit { dx: 1.0, dy: 1.0 },
     );
-    assert_eq!(after, orbit, "orbit commands must not move the hidden orbit camera");
+    assert_eq!(
+        after, orbit,
+        "orbit commands must not move the hidden orbit camera"
+    );
     assert!(fly.is_some(), "an orbit command does not exit fly mode");
 }
 
@@ -649,7 +796,7 @@ fn applying_a_camera_preset_exits_fly_and_matches_the_no_fly_result() {
     };
 
     let mut with_fly = orbit;
-    let mut fly = Some(FlyCamera::from_orbit(&orbit));
+    let mut fly = Some(FlyCamera::from_orbit(&orbit, SENSITIVITY));
     apply_camera_record(&record, &mut with_fly, &mut fly);
 
     let mut without_fly = orbit;
@@ -657,7 +804,10 @@ fn applying_a_camera_preset_exits_fly_and_matches_the_no_fly_result() {
     apply_camera_record(&record, &mut without_fly, &mut no_fly);
 
     assert!(fly.is_none(), "applying an orbit preset leaves fly mode");
-    assert_eq!(with_fly, without_fly, "the resulting orbit camera is the same as without fly");
+    assert_eq!(
+        with_fly, without_fly,
+        "the resulting orbit camera is the same as without fly"
+    );
     assert_eq!(with_fly.target.x, record.position[0]);
     assert_eq!(with_fly.target.y, record.position[1]);
     assert_eq!(with_fly.ortho_zoom, record.scale);
@@ -672,7 +822,10 @@ fn fly_has_one_visible_entry_and_keeps_the_c_shortcut() {
         .find(|menu| menu.title == "View")
         .expect("the View menu exists");
     assert!(
-        !view.items.iter().any(|item| item.action == MenuAction::ToggleFly),
+        !view
+            .items
+            .iter()
+            .any(|item| item.action == MenuAction::ToggleFly),
         "View > Fly camera was removed in favour of the sidebar Camera section",
     );
     assert!(
@@ -687,7 +840,8 @@ fn fly_has_one_visible_entry_and_keeps_the_c_shortcut() {
 
     let rows = rows_for(true);
     assert!(
-        rows.iter().any(|row| row.input == FLY_HELP_INPUT && row.action == FLY_HELP_ACTION),
+        rows.iter()
+            .any(|row| row.input == FLY_HELP_INPUT && row.action == FLY_HELP_ACTION),
         "the 3D help group documents the fly keys",
     );
     assert_eq!(
@@ -776,8 +930,16 @@ fn frame_look_prefers_raw_motion_only_while_captured() {
     let drag = Vec2::new(8.0, -3.0);
     let raw = Vec2::new(-12.0, 5.0);
 
-    assert_eq!(frame_look(false, raw, drag), drag, "orbit/drag-look ignores raw motion");
-    assert_eq!(frame_look(true, raw, drag), raw, "captured look uses raw motion");
+    assert_eq!(
+        frame_look(false, raw, drag),
+        drag,
+        "orbit/drag-look ignores raw motion"
+    );
+    assert_eq!(
+        frame_look(true, raw, drag),
+        raw,
+        "captured look uses raw motion"
+    );
     assert_eq!(
         frame_look(true, Vec2::ZERO, drag),
         drag,
@@ -799,8 +961,16 @@ fn a_raw_mouse_delta_changes_yaw_and_pitch_once() {
         ..FlyInput::default()
     };
     fly.step(input, 0.016);
-    assert!((fly.yaw + 0.1).abs() < 1e-5, "raw x turns yaw by 0.005 rad/point: {}", fly.yaw);
-    assert!((fly.pitch - 0.05).abs() < 1e-5, "raw y pitches by 0.005 rad/point: {}", fly.pitch);
+    assert!(
+        (fly.yaw + 0.1).abs() < 1e-5,
+        "raw x turns yaw by 0.005 rad/point: {}",
+        fly.yaw
+    );
+    assert!(
+        (fly.pitch - 0.05).abs() < 1e-5,
+        "raw y pitches by 0.005 rad/point: {}",
+        fly.pitch
+    );
 }
 
 #[test]
@@ -814,8 +984,14 @@ fn focus_loss_exits_fly_and_clears_the_keys() {
     assert!(keys.movement_held(), "unrelated events keep the held keys");
 
     exit_on_focus_loss(&mut fly, &mut keys, &[egui::Event::WindowFocused(false)]);
-    assert!(fly.is_none(), "focus loss leaves fly so a hidden cursor cannot be stranded");
-    assert!(!keys.movement_held(), "focus loss clears the held movement keys");
+    assert!(
+        fly.is_none(),
+        "focus loss leaves fly so a hidden cursor cannot be stranded"
+    );
+    assert!(
+        !keys.movement_held(),
+        "focus loss clears the held movement keys"
+    );
 }
 
 #[test]
@@ -824,26 +1000,29 @@ fn the_sidebar_mirror_enters_fly_through_the_one_toggle_seam() {
     let mut fly = None;
     let mut mirror = true;
 
-    sync_fly_mirror(&mut mirror, &mut fly, &orbit, true);
+    sync_fly_mirror(&mut mirror, &mut fly, &orbit, true, SENSITIVITY);
     assert!(fly.is_some(), "checking Fly camera in 3D enters fly");
     assert!(mirror, "the mirror follows the new state");
 
     let mut mirror = false;
-    sync_fly_mirror(&mut mirror, &mut fly, &orbit, true);
+    sync_fly_mirror(&mut mirror, &mut fly, &orbit, true, SENSITIVITY);
     assert!(fly.is_none(), "unchecking Fly camera leaves fly");
     assert!(!mirror);
 
     // 2D is inert: the checkbox cannot force fly mode on.
     let mut fly = None;
     let mut mirror = true;
-    sync_fly_mirror(&mut mirror, &mut fly, &orbit, false);
+    sync_fly_mirror(&mut mirror, &mut fly, &orbit, false, SENSITIVITY);
     assert!(fly.is_none(), "2D ignores the checkbox");
     assert!(!mirror, "the mirror is resynced to the inert state");
 }
 
 #[test]
 fn the_crosshair_is_two_twelve_pixel_lines_centred_on_the_viewport() {
-    assert_eq!(CROSSHAIR_HALF_LENGTH, 6.0, "the full crosshair arm is 12 px");
+    assert_eq!(
+        CROSSHAIR_HALF_LENGTH, 6.0,
+        "the full crosshair arm is 12 px"
+    );
     assert_eq!(CROSSHAIR_ALPHA, 153, "60% alpha white");
     let center = egui::pos2(400.0, 300.0);
     let [(left, right), (top, bottom)] = crosshair_segments(center);
@@ -852,7 +1031,10 @@ fn the_crosshair_is_two_twelve_pixel_lines_centred_on_the_viewport() {
     assert_eq!(top, egui::pos2(400.0, 294.0));
     assert_eq!(bottom, egui::pos2(400.0, 306.0));
 
-    assert!(crosshair_visible(true, true), "the crosshair shows while flying captured");
+    assert!(
+        crosshair_visible(true, true),
+        "the crosshair shows while flying captured"
+    );
     assert!(!crosshair_visible(false, true), "no fly, no crosshair");
     assert!(!crosshair_visible(true, false), "no capture, no crosshair");
     assert!(!crosshair_visible(false, false));
@@ -867,12 +1049,18 @@ fn the_fly_camera_is_not_persisted() {
         ..AppSettings::default()
     };
     eframe::set_value(&mut storage, eframe::APP_KEY, &settings);
-    let raw = storage.get_string(eframe::APP_KEY).expect("the envelope is saved");
+    let raw = storage
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
     assert!(
         !raw.to_ascii_lowercase().contains("fly"),
         "the settings envelope must not carry fly-camera state:\n{raw}",
     );
-    assert_eq!(load(Some(&storage)), settings, "the envelope still round-trips unchanged");
+    assert_eq!(
+        load(Some(&storage)),
+        settings,
+        "the envelope still round-trips unchanged"
+    );
 }
 
 #[test]
@@ -959,7 +1147,11 @@ fn fly_toggle_ignores_repeated_and_modified_events() {
         repeat: false,
         modifiers: egui::Modifiers::SHIFT,
     };
-    assert_eq!(fly_toggle_key(&[modified]), None, "modified C must not toggle");
+    assert_eq!(
+        fly_toggle_key(&[modified]),
+        None,
+        "modified C must not toggle"
+    );
 }
 
 /// In-memory stand-in for eframe's disk-backed storage.

@@ -68,6 +68,7 @@ pub struct FlyCamera {
     pub pitch: f32,
     /// World units per second, clamped to [`MIN_SPEED`]..=[`MAX_SPEED`].
     pub speed: f32,
+    pub sensitivity: f32,
 }
 
 impl Default for FlyCamera {
@@ -77,13 +78,14 @@ impl Default for FlyCamera {
             yaw: 0.0,
             pitch: 0.0,
             speed: DEFAULT_SPEED,
+            sensitivity: 1.0,
         }
     }
 }
 
 impl FlyCamera {
     /// Start exactly where the orbit camera is looking, keeping its direction.
-    pub fn from_orbit(orbit: &OrbitCamera) -> Self {
+    pub fn from_orbit(orbit: &OrbitCamera, sensitivity: f32) -> Self {
         let position = orbit.position();
         let direction = (orbit.target - position).normalize_or_zero();
         let direction = if direction.length_squared() > 0.0 {
@@ -96,8 +98,13 @@ impl FlyCamera {
             yaw: direction.z.atan2(direction.x),
             // `normalize_or_zero` can still hand back `y` a hair outside
             // [-1, 1] from f32 rounding, which would make `asin` NaN.
-            pitch: direction.y.clamp(-1.0, 1.0).asin().clamp(-MAX_PITCH, MAX_PITCH),
+            pitch: direction
+                .y
+                .clamp(-1.0, 1.0)
+                .asin()
+                .clamp(-MAX_PITCH, MAX_PITCH),
             speed: DEFAULT_SPEED,
+            sensitivity,
         }
     }
 
@@ -125,8 +132,9 @@ impl FlyCamera {
     /// because it is not tied to the clock).
     pub fn step(&mut self, input: FlyInput, dt: f32) {
         let look = Vec2::new(finite_or_zero(input.look.x), finite_or_zero(input.look.y));
-        self.yaw -= look.x * LOOK_SENSITIVITY;
-        self.pitch = (self.pitch - look.y * LOOK_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
+        self.yaw -= look.x * LOOK_SENSITIVITY * self.sensitivity;
+        self.pitch = (self.pitch - look.y * LOOK_SENSITIVITY * self.sensitivity)
+            .clamp(-MAX_PITCH, MAX_PITCH);
 
         if !dt.is_finite() || dt <= 0.0 {
             return;
@@ -137,8 +145,7 @@ impl FlyCamera {
         let strafe = finite_or_zero(input.strafe).clamp(-1.0, 1.0);
         let vertical = finite_or_zero(input.vertical).clamp(-1.0, 1.0);
 
-        let direction =
-            self.look_dir() * forward + self.right() * strafe + self.up() * vertical;
+        let direction = self.look_dir() * forward + self.right() * strafe + self.up() * vertical;
         let length = direction.length();
         if length <= 1e-6 {
             return;
@@ -162,7 +169,11 @@ impl FlyCamera {
         }
         let factor = (WHEEL_RATE * scroll_points / WHEEL_NOTCH_POINTS).exp();
         if factor.is_finite() {
-            let speed = if self.speed.is_finite() { self.speed } else { DEFAULT_SPEED };
+            let speed = if self.speed.is_finite() {
+                self.speed
+            } else {
+                DEFAULT_SPEED
+            };
             self.speed = (speed * factor).clamp(MIN_SPEED, MAX_SPEED);
         }
     }
@@ -194,7 +205,11 @@ impl FlyCamera {
     /// Ray through `ndc_xy` (in `[-1,1]^2`); direction intentionally
     /// unnormalized, matching [`OrbitCamera::ndc_ray`]'s contract.
     pub fn ndc_ray(&self, aspect: f32, ndc_xy: Vec2) -> (Vec3, Vec3) {
-        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            1.0
+        };
         let half_h = (FOV_Y * 0.5).tan();
         let camera_dir = Vec3::new(ndc_xy.x * half_h * aspect, ndc_xy.y * half_h, -1.0) * FAR;
         let direction = (self.view().inverse()
@@ -249,12 +264,7 @@ impl FlyKeys {
     /// Whether a movement key is held, i.e. whether the app must keep
     /// repainting so movement continues without new input.
     pub fn movement_held(&self) -> bool {
-        self.forward
-            || self.backward
-            || self.left
-            || self.right
-            || self.down
-            || self.up
+        self.forward || self.backward || self.left || self.right || self.down || self.up
     }
 
     /// Apply one key event. `physical_key` is the QWERTY position when the
@@ -336,13 +346,13 @@ pub fn fly_toggle_key(events: &[egui::Event]) -> Option<egui::Key> {
     })
 }
 
-pub fn toggle_fly(fly: &mut Option<FlyCamera>, orbit: &OrbitCamera, is_3d: bool) {
+pub fn toggle_fly(fly: &mut Option<FlyCamera>, orbit: &OrbitCamera, is_3d: bool, sensitivity: f32) {
     if !is_3d {
         return;
     }
     *fly = match fly.take() {
         Some(_) => None,
-        None => Some(FlyCamera::from_orbit(orbit)),
+        None => Some(FlyCamera::from_orbit(orbit, sensitivity)),
     };
 }
 
@@ -375,8 +385,7 @@ pub fn sync_fly(fly: &mut Option<FlyCamera>, is_3d: bool) {
 /// still keep the pointer inside the window; Wayland/macOS/Windows accept
 /// `Locked` second and end there. egui logs a refused grab and continues, so
 /// this is best-effort and fly never depends on it.
-const ENTER_GRABS: [egui::CursorGrab; 2] =
-    [egui::CursorGrab::Confined, egui::CursorGrab::Locked];
+const ENTER_GRABS: [egui::CursorGrab; 2] = [egui::CursorGrab::Confined, egui::CursorGrab::Locked];
 /// Leaving capture releases the grab.
 const EXIT_GRABS: [egui::CursorGrab; 1] = [egui::CursorGrab::None];
 
@@ -406,11 +415,7 @@ pub fn capture_transition(
 /// a text field taking the keyboard, or the web pointer lock being dropped
 /// (typically browser Esc). Capture never exits on an ordinary flying frame,
 /// so the release commands are not spammed every frame.
-pub fn capture_exit_required(
-    capture_active: bool,
-    text_focused: bool,
-    lock_lost: bool,
-) -> bool {
+pub fn capture_exit_required(capture_active: bool, text_focused: bool, lock_lost: bool) -> bool {
     capture_active && (text_focused || lock_lost)
 }
 
@@ -452,11 +457,7 @@ pub fn crosshair_segments(center: egui::Pos2) -> [(egui::Pos2, egui::Pos2); 2] {
 /// Window focus loss cancels fly outright: a locked/hidden cursor must never
 /// be stranded in a background window. The capture release follows from the
 /// now-empty fly state in the same frame's capture sync.
-pub fn exit_on_focus_loss(
-    fly: &mut Option<FlyCamera>,
-    keys: &mut FlyKeys,
-    events: &[egui::Event],
-) {
+pub fn exit_on_focus_loss(fly: &mut Option<FlyCamera>, keys: &mut FlyKeys, events: &[egui::Event]) {
     if events
         .iter()
         .any(|event| matches!(event, egui::Event::WindowFocused(false)))
@@ -476,9 +477,10 @@ pub fn sync_fly_mirror(
     fly: &mut Option<FlyCamera>,
     orbit: &OrbitCamera,
     is_3d: bool,
+    sensitivity: f32,
 ) {
     if *mirror != fly.is_some() {
-        toggle_fly(fly, orbit, is_3d);
+        toggle_fly(fly, orbit, is_3d, sensitivity);
         *mirror = fly.is_some();
     }
 }

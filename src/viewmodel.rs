@@ -138,7 +138,11 @@ impl ArrowLengthMode {
     /// The mode a legacy persisted `normalize` bool means: `true` painted every
     /// arrow the same length, `false` kept the magnitude proportion.
     pub fn from_normalize(normalize: bool) -> Self {
-        if normalize { ArrowLengthMode::Uniform } else { ArrowLengthMode::Proportional }
+        if normalize {
+            ArrowLengthMode::Uniform
+        } else {
+            ArrowLengthMode::Proportional
+        }
     }
 }
 
@@ -156,8 +160,7 @@ pub enum StreamlineSeedMode {
 
 impl StreamlineSeedMode {
     /// Every mode, in the order the sidebar selector shows them.
-    pub const ALL: [StreamlineSeedMode; 2] =
-        [StreamlineSeedMode::Auto, StreamlineSeedMode::Click];
+    pub const ALL: [StreamlineSeedMode; 2] = [StreamlineSeedMode::Auto, StreamlineSeedMode::Click];
 
     /// Short label for the selector.
     pub fn label(self) -> &'static str {
@@ -190,8 +193,10 @@ pub enum LeftClickAction {
 
 impl LeftClickAction {
     /// Every action, in the order the Features row shows them.
-    pub const ALL: [LeftClickAction; 2] =
-        [LeftClickAction::SeedStreamline, LeftClickAction::AddParticles];
+    pub const ALL: [LeftClickAction; 2] = [
+        LeftClickAction::SeedStreamline,
+        LeftClickAction::AddParticles,
+    ];
 
     /// Short label for the selector.
     pub fn label(self) -> &'static str {
@@ -306,7 +311,11 @@ impl State {
     pub fn new(mode_3d: bool) -> State {
         let formula = if mode_3d { FORMULA_3D } else { FORMULA_2D };
         let field = FieldExpr::parse(formula).expect("default formula must parse");
-        let density = if mode_3d { DEFAULT_DENSITY_3D } else { DEFAULT_DENSITY_2D };
+        let density = if mode_3d {
+            DEFAULT_DENSITY_3D
+        } else {
+            DEFAULT_DENSITY_2D
+        };
         let grid = if mode_3d && field.dimension == 3 {
             UVec3::splat(density)
         } else {
@@ -390,7 +399,11 @@ impl State {
 
     /// Samples per axis, clamped to what this mode can afford.
     pub fn set_density(self: &mut State, density: u32) -> bool {
-        let max = if self.is_3d() { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
+        let max = if self.is_3d() {
+            MAX_DENSITY_3D
+        } else {
+            MAX_DENSITY_2D
+        };
         let density = density.clamp(MIN_DENSITY, max);
         if self.density == density {
             return false;
@@ -672,10 +685,7 @@ impl State {
     /// The particle appearance knobs (ticket 48), sanitized through the one
     /// clamp the sidebar and persistence share. Like size and count, these
     /// paint from the live cloud and never dirty the scene.
-    pub fn set_particle_appearance(
-        self: &mut State,
-        appearance: ParticleAppearance,
-    ) -> bool {
+    pub fn set_particle_appearance(self: &mut State, appearance: ParticleAppearance) -> bool {
         let appearance = appearance.sanitized();
         if self.particle_appearance == appearance {
             return false;
@@ -706,7 +716,10 @@ impl State {
 
     /// Toggle plane-by-plane inspection.
     pub fn set_plane_enabled(self: &mut State, enabled: bool) -> bool {
-        let plane = PlaneView { enabled, ..self.plane };
+        let plane = PlaneView {
+            enabled,
+            ..self.plane
+        };
         self.set_plane(plane)
     }
 
@@ -719,7 +732,10 @@ impl State {
 
     /// Step the selected plane along its axis; out-of-range values clamp.
     pub fn set_plane_index(self: &mut State, index: u32) -> bool {
-        let plane = PlaneView { index, ..self.plane };
+        let plane = PlaneView {
+            index,
+            ..self.plane
+        };
         self.set_plane(plane)
     }
 
@@ -771,13 +787,23 @@ impl State {
     pub fn view_options(self: &State) -> ViewOptions {
         ViewOptions {
             colormap: self.colormap,
-            color_range: if self.auto_fit { None } else { Some((self.color_min, self.color_max)) },
+            color_range: if self.auto_fit {
+                None
+            } else {
+                Some((self.color_min, self.color_max))
+            },
         }
     }
 
     /// Resample the field with this state's grid and colour settings.
     pub fn sample(self: &State) -> Vec<ArrowData> {
-        sample_field_at(&self.field, &self.domain, self.grid(), &self.view_options(), self.time)
+        sample_field_at(
+            &self.field,
+            &self.domain,
+            self.grid(),
+            &self.view_options(),
+            self.time,
+        )
     }
 
     /// Size of one grid cell along the tightest axis: arrow lengths are
@@ -786,7 +812,13 @@ impl State {
     pub fn spacing(self: &State) -> f32 {
         let grid = self.grid();
         let size = self.domain.domain_size();
-        let cell = |extent, n| if n <= 1 { extent } else { extent / (n - 1) as f32 };
+        let cell = |extent, n| {
+            if n <= 1 {
+                extent
+            } else {
+                extent / (n - 1) as f32
+            }
+        };
         let tightest = cell(size.x, grid.x).min(cell(size.y, grid.y));
         if grid.z > 1 {
             tightest.min(cell(size.z, grid.z))
@@ -807,7 +839,9 @@ impl State {
     /// for this, so dots always ramp the same colours as the arrows and
     /// streamline segments next to them.
     pub fn color_range(self: &State, sampled: &[ArrowData]) -> (f32, f32) {
-        self.view_options().color_range.unwrap_or_else(|| magnitude_range(sampled))
+        self.view_options()
+            .color_range
+            .unwrap_or_else(|| magnitude_range(sampled))
     }
 
     /// Convert sampled arrows into GPU instances at this state's arrow
@@ -862,7 +896,10 @@ impl State {
                 };
                 let (rgb, alpha) =
                     if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
-                        (dim_color(a.color), self.arrow_opacity * self.plane_dim_opacity)
+                        (
+                            dim_color(a.color),
+                            self.arrow_opacity * self.plane_dim_opacity,
+                        )
                     } else {
                         (a.color, self.arrow_opacity)
                     };
@@ -899,7 +936,7 @@ impl State {
         }
         // Half the grid density seeds the plane: enough lines to read the flow
         // without tracing one per sampled point.
-        let axis = (self.density / 2).clamp(4, 24);
+        let axis = (self.density / 3).clamp(1, 24);
         let grid = self.grid();
         let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
         let seeds = seed_grid(&self.domain, axis, STREAMLINE_JITTER, salt);
@@ -989,7 +1026,11 @@ impl State {
     /// reused for the arrows and the streamline colour range.
     pub fn snapshot(self: &State) -> SceneGPU {
         let sampled = self.sample();
-        let arrows = if self.arrows { self.arrow_instances(&sampled) } else { Vec::new() };
+        let arrows = if self.arrows {
+            self.arrow_instances(&sampled)
+        } else {
+            Vec::new()
+        };
         SceneGPU {
             arrows: Arc::new(arrows),
             lines: Arc::new(self.streamlines_snapshot(&sampled)),
@@ -1114,13 +1155,18 @@ pub fn apply_camera_input(
     };
 
     if mode_3d {
-        camera.orbit(gesture.drag.x * ORBIT_SENSITIVITY, gesture.drag.y * ORBIT_SENSITIVITY);
+        camera.orbit(
+            gesture.drag.x * ORBIT_SENSITIVITY,
+            gesture.drag.y * ORBIT_SENSITIVITY,
+        );
         // egui reports >1 for "closer"; the orbit camera's zoom is a distance
         // multiplier, so invert it.
         camera.zoom(1.0 / zoom);
-        let world_per_point =
-            2.0 * camera.distance * (camera.fov_y * 0.5).tan() / height;
-        camera.pan(-gesture.pan.x * world_per_point, gesture.pan.y * world_per_point);
+        let world_per_point = 2.0 * camera.distance * (camera.fov_y * 0.5).tan() / height;
+        camera.pan(
+            -gesture.pan.x * world_per_point,
+            gesture.pan.y * world_per_point,
+        );
     } else {
         // The 2D view is a fixed front view (camera::OrbitCamera::front_view),
         // so its screen basis is world X (right) and world Y (up) regardless of
@@ -1182,7 +1228,11 @@ pub fn drag_channel(mode_3d: bool, buttons: DragButtons) -> Option<DragChannel> 
         });
     }
     if buttons.primary {
-        return Some(if mode_3d { DragChannel::Orbit } else { DragChannel::Pan });
+        return Some(if mode_3d {
+            DragChannel::Orbit
+        } else {
+            DragChannel::Pan
+        });
     }
     None
 }
@@ -1351,4 +1401,3 @@ pub fn undo_click_seed(
         particles: rollback,
     }
 }
-

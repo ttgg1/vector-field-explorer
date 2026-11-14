@@ -108,7 +108,7 @@ const MAX_CLICK_SEEDS: usize = 6;
 pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
-    pub sidebar: Controls,
+    pub controls: Controls,
     pub status: StatusBarState,
     /// Smoothed FPS/frame-time source, fed once per frame from `stable_dt`.
     pub fps_meter: FpsMeter,
@@ -212,10 +212,10 @@ impl VfApp {
     pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
         let settings = persistence::load(storage);
         let mut state = State::new(false);
-        let mut sidebar = Controls::new();
+        let mut controls = Controls::new();
         // Restore through the viewmodel setters so the first frame samples the
         // saved field; a corrupt record cannot poison the grid.
-        settings.view.restore(&mut state, &mut sidebar);
+        settings.view.restore(&mut state, &mut controls);
         // Ticket 47: a restored non-default domain must already be framed on
         // the first frame, not only after the first edit. This is the same
         // tested recentre helper the live domain editor uses; the default
@@ -241,7 +241,7 @@ impl VfApp {
         Self {
             state,
             bar: FormulaBarState::new(),
-            sidebar,
+            controls,
             status: StatusBarState::default(),
             fps_meter: FpsMeter::default(),
             hint_elapsed: 0.0,
