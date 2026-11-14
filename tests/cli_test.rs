@@ -1,9 +1,18 @@
 use std::ffi::OsString;
 
 use vector_field_explorer::cli::{
-    CliError, parse_config, parse_flags, resolve_config, validate_intrinsic_config,
+    CameraKind, CliError, Mode, parse_config, parse_flags, resolve_config,
+    validate_intrinsic_config,
 };
-use vector_field_explorer::{camera::OrbitCamera, fly_camera::FlyCamera, viewmodel::State};
+use vector_field_explorer::{
+    arrow_style::{ArrowStyle, ArrowStyle2D},
+    camera::OrbitCamera,
+    colormap::Colormap,
+    fly_camera::FlyCamera,
+    particles::ParticleColorMode,
+    plane::PlaneAxis,
+    viewmodel::{ArrowLengthMode, StreamlineSeedMode},
+};
 
 fn flags(args: &[&str]) -> vector_field_explorer::cli::CliFlags {
     parse_flags(std::iter::once(OsString::from("vfe")).chain(args.iter().map(OsString::from)))
@@ -326,23 +335,97 @@ fn signed_separate_token_camera_and_color_flags_match_json() {
 #[test]
 fn defaults_follow_mode_state_and_orbit_derived_fly_pose() {
     let orbit = OrbitCamera::default();
+    assert_eq!(
+        resolve_config(None, flags(&["-o", "x.png"])).unwrap().mode,
+        Mode::TwoD
+    );
     for (mode, density, formula) in [("2d", 24, "(x, y)"), ("3d", 16, "(x, y, z)")] {
         let options = resolve_config(None, flags(&["-o", "x.png", "--mode", mode])).unwrap();
-        let state = State::new(mode == "3d");
+        // Frozen spec defaults: literal expectations, not another State/default instance.
+        assert_eq!(
+            options.mode,
+            if mode == "3d" {
+                Mode::ThreeD
+            } else {
+                Mode::TwoD
+            }
+        );
         assert_eq!(
             (options.width, options.height, options.density),
             (1280, 800, density)
         );
         assert_eq!(options.formula, formula);
-        assert_eq!(options.arrows, state.arrows);
-        assert_eq!(options.streamlines, state.streamlines);
-        assert_eq!(options.particles, state.particles);
-        assert_eq!(options.arrow_params, state.arrow_params);
-        assert_eq!(options.particle_appearance, state.particle_appearance);
-        assert_eq!(options.camera.yaw, orbit.yaw);
+        assert_eq!(options.domain.min.to_array(), [-1.0; 3]);
+        assert_eq!(options.domain.max.to_array(), [1.0; 3]);
+        assert!(options.arrows);
+        assert!(!options.streamlines && !options.particles);
+        assert_eq!(
+            (
+                options.arrow_scale,
+                options.arrow_opacity,
+                options.plane_dim_opacity
+            ),
+            (1.0, 1.0, 0.2)
+        );
+        assert_eq!(options.arrow_length_mode, ArrowLengthMode::Proportional);
+        assert_eq!(
+            (options.magnitude_scale, options.proportional_exponent),
+            (1.0, 1.0)
+        );
+        assert_eq!(options.colormap, Colormap::Viridis);
+        assert_eq!(options.color_range, None);
+        assert_eq!(options.arrow_style_3d, ArrowStyle::Cone);
+        assert_eq!(options.arrow_style_2d, ArrowStyle2D::Flat);
+        assert_eq!(
+            (
+                options.arrow_params.head_length,
+                options.arrow_params.head_width,
+                options.arrow_params.shaft_radius,
+                options.arrow_params.sides
+            ),
+            (0.3, 0.12, 0.055, 12)
+        );
+        assert_eq!(options.streamline_seed_mode, StreamlineSeedMode::Auto);
+        assert!(!options.plane.enabled);
+        assert_eq!(options.plane.axis, PlaneAxis::Z);
+        assert_eq!(options.plane.index, if mode == "3d" { 7 } else { 0 });
+        assert_eq!((options.particle_count, options.particle_size), (0, 1.0));
+        let appearance = options.particle_appearance;
+        assert_eq!(appearance.opacity, 1.0);
+        assert_eq!(appearance.color_mode, ParticleColorMode::Magnitude);
+        assert_eq!(appearance.fixed_color, [0, 150, 136, 255]);
+        assert_eq!(
+            (
+                appearance.trail_len,
+                appearance.trail_fade,
+                appearance.trail_width
+            ),
+            (0, 0.65, 1.0)
+        );
+        assert!(appearance.loop_on_stagnation);
+        assert_eq!(appearance.stagnation_seconds, 0.5);
+        assert_eq!(options.camera.kind, CameraKind::Orbit);
+        assert_eq!(
+            (
+                options.camera.yaw,
+                options.camera.pitch,
+                options.camera.distance,
+                options.camera.ortho_zoom
+            ),
+            (0.8, 0.9, 3.2, 1.0)
+        );
         assert_eq!(options.camera.fov_y_degrees, 55.0);
         assert_eq!(options.camera.target, [0.0; 3]);
         assert_eq!(options.seed, 0x123456789ABCDEF0);
+        assert_eq!(options.background, [27, 27, 27, 255]);
+        assert_eq!(
+            (
+                options.start_time_seconds,
+                options.duration_seconds,
+                options.fixed_step_seconds
+            ),
+            (0.0, 0.0, 1.0 / 60.0)
+        );
         assert!(options.references.grid_and_domain_box && options.references.world_axes);
     }
     let fly = FlyCamera::from_orbit(&orbit, FlyCamera::default().sensitivity);
@@ -394,6 +477,24 @@ fn orbit_and_front_camera_flags_match_json_without_cross_mode_leakage() {
 
 #[test]
 fn numeric_bounds_are_validated_for_each_supplied_schema_member() {
+    for axis in 0..3 {
+        for (min, max, accepted) in [
+            (-100.0, 100.0, true),
+            (-100.01, 100.0, false),
+            (-100.0, 100.01, false),
+        ] {
+            let mut lo = [-1.0; 3];
+            let mut hi = [1.0; 3];
+            lo[axis] = min;
+            hi[axis] = max;
+            let json = format!(r#"{{"output":"x.png","domain":{{"min":{lo:?},"max":{hi:?}}}}}"#);
+            assert_eq!(
+                resolve_config(Some(parse_config(&json).unwrap()), flags(&[])).is_ok(),
+                accepted,
+                "axis {axis}: {json}"
+            );
+        }
+    }
     // Each row checks both inclusive ends and both neighbours; camera applicability
     // is a separate effective-state check in camera_rejects_inapplicable_explicit_members.
     let rows = [
