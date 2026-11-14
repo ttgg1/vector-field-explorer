@@ -28,6 +28,8 @@ mod camera_zoom_pan_test;
 mod clean_test_artifacts_test;
 mod click_seed_zoom_test;
 #[cfg(not(target_arch = "wasm32"))]
+mod cli_scene_test;
+#[cfg(not(target_arch = "wasm32"))]
 mod cli_test;
 mod colormap_test;
 mod domain_test;

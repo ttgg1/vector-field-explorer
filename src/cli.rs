@@ -4,6 +4,10 @@ use std::{ffi::OsString, path::PathBuf};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 
+#[path = "cli_scene.rs"]
+mod scene;
+pub use scene::{OutputFrame, PreparedScene, output_frame};
+
 use crate::{
     arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D},
     camera::OrbitCamera,

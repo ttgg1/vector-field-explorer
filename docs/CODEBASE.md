@@ -58,6 +58,13 @@ The field is formula-driven:
 
 ### 2.1 The one screen state and the one scene seam
 
+Native `cli` configuration exposes the pure `output_frame` seam implemented in
+`src/cli_scene.rs`. Its `OutputFrame` owns output dimensions, camera transforms,
+and straight-alpha sRGB/linear background values for both export backends;
+`PreparedScene` pairs that frame with renderer-ready `SceneGPU`. Geometry,
+camera applicability and background conversion are covered by
+`tests/cli_scene_test.rs`.
+
 `viewmodel::State` is the single source of truth for what the viewport shows.
 Every user edit goes through one of its setters, which owns parsing, clamping,
 min/max swaps, and the dirty flag. The app keeps only widget mirrors and
