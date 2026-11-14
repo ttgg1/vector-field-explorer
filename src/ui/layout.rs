@@ -50,6 +50,10 @@ pub fn rail_frame(style: &egui::Style) -> egui::Frame {
 /// Default expanded width of the left Controls panel, points.
 pub const DEFAULT_CONTROLS_WIDTH: f32 = 260.0;
 
+/// Default expanded width of the native CAS panel, points.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_CAS_WIDTH: f32 = 260.0;
+
 /// Default expanded width of the right Presets panel, points.
 pub const DEFAULT_PRESETS_WIDTH: f32 = 240.0;
 
@@ -89,12 +93,14 @@ pub const VIEWPORT_CHROME_ALLOWANCE: f32 = 20.0;
 /// bottom panel's frame margins.
 pub const TAB_BAR_HEIGHT: f32 = 48.0;
 
-/// Minimum tap target, points (Apple/Google's 44 pt guideline).
-pub const TOUCH_TARGET: f32 = 44.0;
+/// Minimum compact button hit target, points (ticket 76 owner-approved floor).
+pub const TOUCH_TARGET: f32 = 40.0;
 
-/// Compact control/preset row height, points: 48 pt gives text rows extra
-/// breathing room beyond the generic 44 pt touch-target minimum. Wide mode is unaffected.
-pub const COMPACT_ROW_HEIGHT: f32 = 48.0;
+/// Minimum compact control/preset row height, points. Font-derived content can
+/// make individual buttons taller; Wide mode is unaffected.
+pub const COMPACT_ROW_HEIGHT: f32 = 40.0;
+/// Vertical gap between compact controls, points.
+pub const COMPACT_ITEM_SPACING: f32 = 2.0;
 /// Minimum share of the formula bar the flexing field keeps on a phone.
 pub const FORMULA_MIN_FRACTION: f32 = 0.40;
 
@@ -118,6 +124,11 @@ pub fn layout_mode(width: f32) -> LayoutMode {
     } else {
         LayoutMode::Wide
     }
+}
+
+/// Whether free-flight camera mode may be entered in this layout.
+pub(crate) fn fly_allowed(mode: LayoutMode) -> bool {
+    mode == LayoutMode::Wide
 }
 
 /// Three-state height model for the compact bottom sheet (ticket 71).
@@ -149,6 +160,9 @@ pub enum SheetState {
     None,
     /// The left Controls panel, as a bottom sheet.
     Controls,
+    /// Native symbolic tools, sharing the single compact sheet.
+    #[cfg(not(target_arch = "wasm32"))]
+    Cas,
     /// The right Presets panel, as a bottom sheet.
     Presets,
 }
@@ -260,11 +274,14 @@ pub fn sheet_swipe_transition(size: SheetSize, delta_y: f32) -> (SheetSize, bool
         return (size, false);
     }
     if delta_y < 0.0 {
-        (match size {
-            SheetSize::Collapsed => SheetSize::Default,
-            SheetSize::Default => SheetSize::Expanded,
-            SheetSize::Expanded => SheetSize::Expanded,
-        }, false)
+        (
+            match size {
+                SheetSize::Collapsed => SheetSize::Default,
+                SheetSize::Default => SheetSize::Expanded,
+                SheetSize::Expanded => SheetSize::Expanded,
+            },
+            false,
+        )
     } else {
         match size {
             SheetSize::Expanded => (SheetSize::Default, false),
@@ -410,6 +427,12 @@ pub struct LayoutState {
     pub presets_width: f32,
     /// Whether the viewport's help overlay is visible.
     pub help_visible: bool,
+    /// Native symbolic tools are independently visible, initially closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cas_expanded: bool,
+    /// Requested CAS width, retained while collapsed or automatically squeezed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cas_width: f32,
 }
 
 impl Default for LayoutState {
@@ -420,6 +443,10 @@ impl Default for LayoutState {
             controls_width: DEFAULT_CONTROLS_WIDTH,
             presets_width: DEFAULT_PRESETS_WIDTH,
             help_visible: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas_expanded: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas_width: DEFAULT_CAS_WIDTH,
         }
     }
 }
@@ -431,6 +458,10 @@ impl LayoutState {
     pub fn sanitized(mut self) -> Self {
         self.controls_width = clamp_width(self.controls_width, DEFAULT_CONTROLS_WIDTH);
         self.presets_width = clamp_width(self.presets_width, DEFAULT_PRESETS_WIDTH);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.cas_width = clamp_width(self.cas_width, DEFAULT_CAS_WIDTH);
+        }
         self
     }
 
@@ -448,6 +479,12 @@ impl LayoutState {
     /// Show the Presets panel (or its rail).
     pub fn toggle_presets(&mut self) {
         self.presets_expanded = !self.presets_expanded;
+    }
+
+    /// Toggle only the native CAS panel, preserving all requested widths.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn toggle_cas(&mut self) {
+        self.cas_expanded = !self.cas_expanded;
     }
 
     /// Flip the help-overlay setting.
@@ -548,11 +585,8 @@ pub fn rail_panel(
 /// collapses the panel back to its rail — the symmetric affordance to the
 /// rail's expand click, alongside Ctrl+B / Ctrl+P.
 ///
-/// `small_button` is deliberate: in egui 0.37 it does **not** shrink the type
-/// (it only trims 2 pt of vertical padding), so the chevron glyph already
-/// paints at the body/button size. Keeping the compact padding leaves the
-/// panel header slim; the chevron's horizontal button padding still gives it a
-/// comfortable click target and its tooltip is unchanged.
+/// Use ordinary font-derived button padding: egui's `small_button` removes
+/// vertical padding entirely, including at the largest supported font size.
 pub fn collapse_button(ui: &mut egui::Ui, side: RailSide, shortcut: &str) -> bool {
     let tooltip = match side {
         RailSide::Left => format!("Collapse Controls ({shortcut})"),
@@ -561,7 +595,10 @@ pub fn collapse_button(ui: &mut egui::Ui, side: RailSide, shortcut: &str) -> boo
     let mut clicked = false;
     ui.horizontal(|ui| {
         clicked = ui
-            .small_button(collapse_chevron(side))
+            .add(
+                egui::Button::new(collapse_chevron(side))
+                    .min_size(super::style_panel::button_min_size(ui)),
+            )
             .on_hover_text(tooltip)
             .clicked();
     });

@@ -15,12 +15,27 @@ mod arrow_geometry_test;
 mod arrow_opacity_test;
 mod arrow_style_test;
 mod branding_assets_test;
+mod button_sizing_test;
 mod camera_input_test;
 mod camera_pan_zoom_test;
 mod camera_test;
 mod camera_zoom_pan_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cas_panel_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cas_rails_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cas_test;
 #[cfg(unix)]
 mod clean_test_artifacts_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cli_gpu_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cli_scene_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cli_svg_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cli_test;
 mod click_seed_zoom_test;
 mod colormap_test;
 mod domain_test;
@@ -42,18 +57,18 @@ mod nightly_version_test;
 #[cfg(unix)]
 mod notices_test;
 mod packaging_notices_test;
+mod panel_rails_test;
 mod particle_playback_test;
 mod particles_test;
 mod persistence_test;
 mod plane_test;
 mod pointer_lock_test;
-mod presets_test;
 mod preset_test;
+mod presets_test;
 mod reference_lines_test;
 mod responsive_test;
 mod sampling_test;
 mod screenshot_test;
-mod svg_export_test;
 mod shortcut_test;
 mod sidebar_camera_ui_test;
 mod sidebar_colormap_ui_test;
@@ -61,6 +76,7 @@ mod sidebar_controls_test;
 mod sidebar_sections_test;
 mod status_bar_test;
 mod streamlines_test;
+mod svg_export_test;
 mod test_layout_test;
 mod top_bar_test;
 mod ui_preset_test;

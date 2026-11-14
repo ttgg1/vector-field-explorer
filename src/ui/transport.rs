@@ -1,13 +1,13 @@
 //! The compact simulation transport strip (ticket 26).
 //!
-//! Rendered as one row directly under the formula bar, not as a new panel, and
+//! Rendered directly under the formula bar, not as a new panel, and
 //! only while the view has a clock consumer (particles on in 3D today). The
 //! strip owns no state: every control edits [`SimClock`], the app's one time
 //! source.
 //!
 //! The button and time labels take a `compact` flag so ticket 53 can switch to
 //! icon-only buttons and a shorter readout without changing this module's
-//! shape. v0.1.0 always renders the full row.
+//! shape. The app keeps full labels; narrow layouts wrap the row.
 
 use eframe::egui;
 
@@ -43,16 +43,21 @@ pub fn time_label(time: f32, compact: bool) -> String {
 
 /// Draw the strip and apply every edit to `clock`.
 pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: bool) {
-    ui.horizontal(|ui| {
+    let min_size = if compact {
+        egui::Vec2::splat(super::layout::TOUCH_TARGET)
+    } else {
+        super::style_panel::button_min_size(ui)
+    };
+    ui.horizontal_wrapped(|ui| {
         if ui
-            .button(play_label(clock.playing, compact))
+            .add(egui::Button::new(play_label(clock.playing, compact)).min_size(min_size))
             .on_hover_text("Play or pause the simulation (Space)")
             .clicked()
         {
             clock.toggle_playing();
         }
         if ui
-            .button(reset_label(compact))
+            .add(egui::Button::new(reset_label(compact)).min_size(min_size))
             .on_hover_text("Reset simulation time to 0; the particle cloud stays")
             .clicked()
         {

@@ -9,6 +9,13 @@ fn main() -> eframe::Result {
     // to stderr. The wasm build initializes `console_log` in its own entry
     // point.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    if std::env::args_os().nth(1).is_some() {
+        if let Err(error) = vector_field_explorer::cli::run_from(std::env::args_os()) {
+            eprintln!("export: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     // The build version seam (ticket 42): a nightly stamps its full version
     // through `VFE_BUILD_VERSION`, so the startup line matches About.
     info!("{WINDOW_TITLE} v{VERSION} starting (native)");

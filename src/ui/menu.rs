@@ -55,16 +55,16 @@ pub const DOWNLOAD_URL: &str = "https://ttgg1.github.io/vector-field-explorer/do
 /// the reachability test's variant list can never drift from the enum without
 /// the compiler noticing.
 macro_rules! menu_actions {
-    ($($variant:ident),+ $(,)?) => {
+    ($( $(#[$attr:meta])* $variant:ident),+ $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum MenuAction {
-            $($variant),+
+            $( $(#[$attr])* $variant),+
         }
 
         impl MenuAction {
             /// Every variant, in menu order. Used by the reachability test so
             /// a new variant cannot be forgotten in the table.
-            pub const ALL: &'static [MenuAction] = &[$(MenuAction::$variant),+];
+            pub const ALL: &'static [MenuAction] = &[$( $(#[$attr])* MenuAction::$variant),+];
         }
     };
 }
@@ -76,6 +76,8 @@ menu_actions! {
     CopyFormula,
     ResetAllControls,
     ToggleControls,
+    #[cfg(not(target_arch = "wasm32"))]
+    ToggleCas,
     TogglePresets,
     ToggleFly,
     ResetLayout,
@@ -144,13 +146,19 @@ pub const MENUS: &[Menu] = &[
                 label: "Export screenshot (SVG)…",
                 action: MenuAction::ExportScreenshotSvg,
             },
-            MenuItem { label: "Quit", action: MenuAction::Quit },
+            MenuItem {
+                label: "Quit",
+                action: MenuAction::Quit,
+            },
         ],
     },
     Menu {
         title: "Edit",
         items: &[
-            MenuItem { label: "Copy formula", action: MenuAction::CopyFormula },
+            MenuItem {
+                label: "Copy formula",
+                action: MenuAction::CopyFormula,
+            },
             MenuItem {
                 label: "Reset all controls",
                 action: MenuAction::ResetAllControls,
@@ -160,24 +168,53 @@ pub const MENUS: &[Menu] = &[
     Menu {
         title: "View",
         items: &[
-            MenuItem { label: "Toggle Controls", action: MenuAction::ToggleControls },
-            MenuItem { label: "Toggle Presets", action: MenuAction::TogglePresets },
+            MenuItem {
+                label: "Toggle Controls",
+                action: MenuAction::ToggleControls,
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuItem {
+                label: "Toggle CAS",
+                action: MenuAction::ToggleCas,
+            },
+            MenuItem {
+                label: "Toggle Presets",
+                action: MenuAction::TogglePresets,
+            },
             // Ticket 65: the sidebar Camera section is the one visible fly
             // control; C keeps dispatching `ToggleFly` through this table.
-            MenuItem { label: "Reset layout", action: MenuAction::ResetLayout },
-            MenuItem { label: "Reset camera", action: MenuAction::ResetCamera },
+            MenuItem {
+                label: "Reset layout",
+                action: MenuAction::ResetLayout,
+            },
+            MenuItem {
+                label: "Reset camera",
+                action: MenuAction::ResetCamera,
+            },
             // The user reported looking for color controls under View (ticket
             // 41). Ticket 59 removed the duplicate Settings entry, so this is
             // the one menu command that opens the Appearance popover.
-            MenuItem { label: "Appearance…", action: MenuAction::OpenAppearance },
+            MenuItem {
+                label: "Appearance…",
+                action: MenuAction::OpenAppearance,
+            },
         ],
     },
     Menu {
         title: "Help",
         items: &[
-            MenuItem { label: "Keyboard & mouse", action: MenuAction::ShowHelpTable },
-            MenuItem { label: "Download desktop app", action: MenuAction::OpenDownloadPage },
-            MenuItem { label: "About Vector Field Explorer", action: MenuAction::About },
+            MenuItem {
+                label: "Keyboard & mouse",
+                action: MenuAction::ShowHelpTable,
+            },
+            MenuItem {
+                label: "Download desktop app",
+                action: MenuAction::OpenDownloadPage,
+            },
+            MenuItem {
+                label: "About Vector Field Explorer",
+                action: MenuAction::About,
+            },
         ],
     },
 ];
@@ -358,6 +395,11 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             ui.state.set_time(0.0);
             SideEffect::None
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        MenuAction::ToggleCas => {
+            ui.layout.toggle_cas();
+            SideEffect::None
+        }
         MenuAction::ToggleControls => {
             ui.layout.toggle_controls();
             SideEffect::None
@@ -368,7 +410,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         }
         MenuAction::ToggleFly => {
             // Free flight is 3D-only; `toggle_fly` ignores the key in 2D.
-            toggle_fly(ui.fly, ui.orbit, ui.state.is_3d());
+            toggle_fly(ui.fly, ui.orbit, ui.state.is_3d(), ui.controls.sensitivity);
             SideEffect::None
         }
         MenuAction::ResetLayout => {

@@ -25,6 +25,123 @@ use vector_field_explorer::viewmodel::{
 use glam::Vec3;
 
 #[test]
+fn reference_visibility_defaults_and_setters_are_independent() {
+    for mode_3d in [false, true] {
+        let mut state = State::new(mode_3d);
+        assert!(state.show_grid, "the grid starts visible in either mode");
+        assert!(
+            state.show_coordinate_system,
+            "the axes start visible in either mode"
+        );
+        assert!(
+            state.snapshot_if_dirty().is_some(),
+            "consume the initial scene"
+        );
+
+        assert!(
+            !state.set_show_grid(true),
+            "repeating the grid default is a no-op"
+        );
+        assert!(
+            !state.set_show_coordinate_system(true),
+            "repeating the axes default is a no-op"
+        );
+        assert!(!state.dirty);
+        assert!(state.snapshot_if_dirty().is_none());
+
+        assert!(state.set_show_grid(false));
+        assert!(!state.show_grid);
+        assert!(
+            state.show_coordinate_system,
+            "grid visibility does not change axes"
+        );
+        assert!(state.dirty);
+        assert!(
+            state.snapshot_if_dirty().is_some(),
+            "grid change rebuilds once"
+        );
+        assert!(state.snapshot_if_dirty().is_none());
+        assert!(!state.set_show_grid(false));
+        assert!(!state.dirty, "a repeated grid choice does not rebuild");
+
+        assert!(state.set_show_coordinate_system(false));
+        assert!(!state.show_grid, "axes visibility does not change grid");
+        assert!(!state.show_coordinate_system);
+        assert!(state.dirty);
+        assert!(
+            state.snapshot_if_dirty().is_some(),
+            "axes change rebuilds once"
+        );
+        assert!(state.snapshot_if_dirty().is_none());
+        assert!(!state.set_show_coordinate_system(false));
+        assert!(!state.dirty, "a repeated axes choice does not rebuild");
+
+        assert!(state.set_show_grid(true));
+        assert!(
+            !state.show_coordinate_system,
+            "restoring grid does not restore axes"
+        );
+        assert!(state.snapshot_if_dirty().is_some());
+        assert!(state.set_show_coordinate_system(true));
+        assert!(state.show_grid, "restoring axes does not hide grid");
+        assert!(state.snapshot_if_dirty().is_some());
+    }
+}
+
+#[test]
+fn reference_visibility_is_shared_across_mode_switches() {
+    let mut state = State::new(false);
+    assert!(state.set_density(4), "keep the sampling comparison small");
+    let options_before = state.view_options();
+    let arrows_before = state.sample();
+    assert!(!arrows_before.is_empty(), "compare actual field samples");
+
+    assert!(state.set_show_grid(false));
+    assert!(state.set_show_coordinate_system(false));
+    assert_eq!(
+        state.view_options(),
+        options_before,
+        "visibility never changes sampling options"
+    );
+    assert_eq!(
+        state.sample(),
+        arrows_before,
+        "visibility never changes sampled arrows"
+    );
+
+    assert!(state.set_formula("(x, y, z)".into()));
+    assert!(state.set_mode(true));
+    assert!(state.is_3d());
+    assert!(!state.show_grid);
+    assert!(!state.show_coordinate_system);
+
+    let options_3d = state.view_options();
+    let arrows_3d = state.sample();
+    assert!(!arrows_3d.is_empty());
+    assert!(state.set_show_grid(true));
+    assert_eq!(state.view_options(), options_3d);
+    assert_eq!(
+        state.sample(),
+        arrows_3d,
+        "grid visibility cannot change 3D samples"
+    );
+    assert!(state.set_show_coordinate_system(true));
+    assert_eq!(state.view_options(), options_3d);
+    assert_eq!(
+        state.sample(),
+        arrows_3d,
+        "axes visibility cannot change 3D samples"
+    );
+
+    assert!(state.set_mode(false));
+    assert!(state.show_grid, "the 3D grid choice persists in 2D");
+    assert!(
+        state.show_coordinate_system,
+        "the 3D axes choice persists in 2D"
+    );
+}
+
+#[test]
 fn sidebar_defaults_mirror_the_seam_defaults() {
     let c = Controls::new();
     let s = State::new(false);
@@ -42,6 +159,13 @@ fn sidebar_defaults_mirror_the_seam_defaults() {
         "the proportional contrast agrees",
     );
     assert_eq!(c.arrows, s.arrows, "arrows start visible");
+    assert!(c.show_grid, "the grid starts visible");
+    assert_eq!(c.show_grid, s.show_grid, "grid visibility agrees");
+    assert!(c.show_coordinate_system, "the axes start visible");
+    assert_eq!(
+        c.show_coordinate_system, s.show_coordinate_system,
+        "axes visibility agrees"
+    );
     assert_eq!(c.arrow_style, s.arrow_style, "arrow style agrees");
     assert_eq!(c.arrow_style_2d, s.arrow_style_2d, "2D arrow style agrees");
     assert_eq!(c.arrow_params, s.arrow_params, "arrow appearance agrees");
@@ -92,6 +216,14 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_magnitude_scale(c.magnitude_scale));
     assert!(!s.set_proportional_exponent(c.proportional_exponent));
     assert!(!s.set_arrows(c.arrows));
+    assert!(
+        !s.set_show_grid(c.show_grid),
+        "synced grid visibility is a no-op"
+    );
+    assert!(
+        !s.set_show_coordinate_system(c.show_coordinate_system),
+        "synced axes visibility is a no-op"
+    );
     assert!(!s.set_arrow_style(c.arrow_style));
     assert!(!s.set_arrow_style_2d(c.arrow_style_2d));
     assert!(!s.set_arrow_params(c.arrow_params));
@@ -107,6 +239,89 @@ fn synced_controls_never_redirty_the_scene() {
     assert!(!s.set_particles(c.particles));
     assert!(!s.set_domain(c.domain_min, c.domain_max), "synced extrema are a no-op");
     assert!(s.snapshot_if_dirty().is_none(), "an untouched frame rebuilds nothing");
+}
+
+#[test]
+fn reference_visibility_applies_independently_without_redirtying() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some(), "consume the initial scene");
+
+    c.show_grid = false;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (false, false));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (true, true)
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "grid edit rebuilds once");
+    apply(&mut s, &mut c);
+    assert!(
+        s.snapshot_if_dirty().is_none(),
+        "unchanged grid does not redirty"
+    );
+
+    c.show_coordinate_system = false;
+    apply(&mut s, &mut c);
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (false, false)
+    );
+    assert_eq!(
+        (s.show_grid, c.show_grid),
+        (false, false),
+        "axes edit leaves grid hidden"
+    );
+    assert!(s.snapshot_if_dirty().is_some(), "axes edit rebuilds once");
+    apply(&mut s, &mut c);
+    assert!(
+        s.snapshot_if_dirty().is_none(),
+        "unchanged axes do not redirty"
+    );
+}
+
+#[test]
+fn reference_visibility_survives_modes_and_display_reset() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    assert!(s.snapshot_if_dirty().is_some());
+    c.streamlines = true;
+    c.seed_mode = StreamlineSeedMode::Click;
+    c.show_grid = false;
+    c.show_coordinate_system = false;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, s.show_coordinate_system), (false, false));
+
+    assert!(s.set_mode(true));
+    c.density = s.density;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (false, false));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (false, false)
+    );
+    assert!(s.set_mode(false));
+    c.density = s.density;
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (false, false));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (false, false)
+    );
+
+    c.reset_display();
+    apply(&mut s, &mut c);
+    assert_eq!((s.show_grid, c.show_grid), (true, true));
+    assert_eq!(
+        (s.show_coordinate_system, c.show_coordinate_system),
+        (true, true)
+    );
+    assert!(
+        s.streamlines && c.streamlines,
+        "Display reset leaves streamlines on"
+    );
+    assert_eq!(s.seed_mode, StreamlineSeedMode::Click);
+    assert_eq!(c.seed_mode, StreamlineSeedMode::Click);
 }
 
 #[test]

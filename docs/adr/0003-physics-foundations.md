@@ -16,6 +16,25 @@ the source model, 2D semantics, and solver boundaries define the physics
 vocabulary and UI; a general solver or a second evaluator would be a rewrite.
 Status: accepted.
 
+## Dated superseding decision — 2026-11-10 (CAS only)
+
+The owner selected `exmex` 0.21.0 with its `partial` feature for the native CAS
+track and deferred CAS wasm support and its size/runtime acceptance for future
+investigation. This supersedes the CAS candidate ordering and wasm-clean/size
+gates above for this implementation slice only. The rest of this ADR, including
+the additive transform layer, `meval` as the only evaluator, phase order, and
+solver boundaries, remains in force. The web app and its existing evaluator
+remain unchanged; the CAS dependency, module, and call paths are native-only.
+
+The native workflow is a transient CAS panel with scalar/vector input,
+operation selection, result preview/copy, and explicit Apply for vector
+results. Failures preserve the current field; no automatic apply or saved
+history is added. In 2D, curl is the scalar `dFy/dx - dFx/dy`; in 3D it is a
+vector. Unsupported symbolic functions fail clearly. See the dated
+[native CAS decision](../wiki/decisions/2026-11-10-native-cas.md); exact
+symbolic grammar/printer acceptance remains subject to independent builder
+review before implementation.
+
 ## Considered options
 
 - **Runtime CAS:** `exmex` first (MIT/Apache, wasm, but roughly 1.5–1.7 MB from

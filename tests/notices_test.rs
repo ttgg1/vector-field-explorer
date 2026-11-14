@@ -61,7 +61,7 @@ fn committed_notice_bundle_matches_the_cargo_graph() {
     );
     assert!(
         text.contains("metadata superset"),
-        "the header must say the 513-package list is a metadata superset",
+        "the header must describe the generated package list as a metadata superset",
     );
     assert!(
         text.contains("not linked into any shipped target"),

@@ -31,39 +31,19 @@ use crate::arrow_style::{
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::particles::{
-    MAX_PARTICLES, MAX_TRAIL_LEN, MIN_PARTICLE_OPACITY, MAX_PARTICLE_OPACITY,
-    MIN_TRAIL_FADE, MAX_TRAIL_FADE, MIN_TRAIL_WIDTH, MAX_TRAIL_WIDTH,
-    MIN_STAGNATION_SECONDS, MAX_STAGNATION_SECONDS, ParticleAppearance, ParticleColorMode,
+    MAX_PARTICLE_OPACITY, MAX_PARTICLES, MAX_STAGNATION_SECONDS, MAX_TRAIL_FADE, MAX_TRAIL_LEN,
+    MAX_TRAIL_WIDTH, MIN_PARTICLE_OPACITY, MIN_STAGNATION_SECONDS, MIN_TRAIL_FADE, MIN_TRAIL_WIDTH,
+    ParticleAppearance, ParticleColorMode,
 };
 use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
-    ArrowLengthMode,
-    LeftClickAction,
-    State,
-    StreamlineSeedMode,
-    DEFAULT_DENSITY_2D,
-    DEFAULT_MAGNITUDE_SCALE,
-    DEFAULT_PARTICLE_SIZE,
-    DEFAULT_PROPORTIONAL_EXPONENT,
-    MIN_DENSITY,
-    MAX_DENSITY_2D,
-    MAX_DENSITY_3D,
-    MIN_ARROW_SCALE,
-    MAX_ARROW_SCALE,
-    MIN_ARROW_OPACITY,
-    MAX_ARROW_OPACITY,
-    MIN_PLANE_DIM_OPACITY,
-    MAX_PLANE_DIM_OPACITY,
-    MIN_MAGNITUDE_SCALE,
-    MAX_MAGNITUDE_SCALE,
-    MIN_PARTICLE_SIZE,
-    MAX_PARTICLE_SIZE,
-    MIN_PROPORTIONAL_EXPONENT,
-    MAX_PROPORTIONAL_EXPONENT,
-    MIN_DOMAIN_EXTENT,
-    MAX_DOMAIN_EXTENT,
-    clamp_domain_extent,
+    ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
+    DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction, MAX_ARROW_OPACITY, MAX_ARROW_SCALE,
+    MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE,
+    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MIN_ARROW_OPACITY, MIN_ARROW_SCALE,
+    MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE, MIN_PLANE_DIM_OPACITY,
+    MIN_PROPORTIONAL_EXPONENT, State, StreamlineSeedMode, clamp_domain_extent,
 };
 use glam::Vec3;
 
@@ -103,10 +83,7 @@ impl Section {
     /// them. Camera starts open so the fly toggle is discoverable (ticket 65
     /// ruling).
     pub fn default_open(self) -> bool {
-        matches!(
-            self,
-            Section::Display | Section::Camera | Section::Features
-        )
+        matches!(self, Section::Display | Section::Camera | Section::Features)
     }
 }
 
@@ -117,9 +94,8 @@ impl Section {
 /// most two decimals and integers lose their trailing `.00`, which keeps the
 /// line short enough for the panel's 180 pt minimum.
 pub fn domain_summary(domain: &Domain, include_z: bool) -> String {
-    let axis = |name: &str, lo: f32, hi: f32| {
-        format!("{name} {}…{}", extent_text(lo), extent_text(hi))
-    };
+    let axis =
+        |name: &str, lo: f32, hi: f32| format!("{name} {}…{}", extent_text(lo), extent_text(hi));
     let mut parts = vec![
         axis("x", domain.min.x, domain.max.x),
         axis("y", domain.min.y, domain.max.y),
@@ -236,27 +212,31 @@ impl ArrowStyleSet {
 /// families, 2D offers the 2D families. Pure so the view swap is testable
 /// without a window.
 pub fn arrow_style_set(view_3d: bool) -> ArrowStyleSet {
-    if view_3d { ArrowStyleSet::ThreeD } else { ArrowStyleSet::TwoD }
+    if view_3d {
+        ArrowStyleSet::ThreeD
+    } else {
+        ArrowStyleSet::TwoD
+    }
 }
 
 /// Whether the Sides slider applies to the active view's selected family.
-pub fn sides_control_enabled(
-    view_3d: bool,
-    style_3d: ArrowStyle,
-    style_2d: ArrowStyle2D,
-) -> bool {
-    if view_3d { style_3d.uses_sides() } else { style_2d.uses_sides() }
+pub fn sides_control_enabled(view_3d: bool, style_3d: ArrowStyle, style_2d: ArrowStyle2D) -> bool {
+    if view_3d {
+        style_3d.uses_sides()
+    } else {
+        style_2d.uses_sides()
+    }
 }
 
 /// Whether the Head length/head width sliders apply to the active view's
 /// selected family. Cylinder and Line have no head, so those controls are
 /// disabled rather than silently ignored.
-pub fn head_control_enabled(
-    view_3d: bool,
-    style_3d: ArrowStyle,
-    style_2d: ArrowStyle2D,
-) -> bool {
-    if view_3d { style_3d.uses_head() } else { style_2d.uses_head() }
+pub fn head_control_enabled(view_3d: bool, style_3d: ArrowStyle, style_2d: ArrowStyle2D) -> bool {
+    if view_3d {
+        style_3d.uses_head()
+    } else {
+        style_2d.uses_head()
+    }
 }
 
 /// Whether the seed-mode selector applies. With Streamlines off both seed
@@ -312,7 +292,11 @@ pub fn stagnation_seconds_enabled(loop_on_stagnation: bool) -> bool {
 /// value shows its number so the widget can both display "Auto" and accept a
 /// typed count (ticket 30).
 pub fn particle_count_label(count: u32) -> String {
-    if count == 0 { "Auto".to_owned() } else { count.to_string() }
+    if count == 0 {
+        "Auto".to_owned()
+    } else {
+        count.to_string()
+    }
 }
 
 /// The knobs the widgets edit between frames. Starts at the same defaults as
@@ -334,6 +318,10 @@ pub struct Controls {
     pub proportional_exponent: f32,
     /// Show arrows (ticket 45); unchecking hides only the arrow instances.
     pub arrows: bool,
+    /// Show the plane/face grid and domain box.
+    pub show_grid: bool,
+    /// Show the colored reference axes, independently of field lines.
+    pub show_coordinate_system: bool,
     pub arrow_style: ArrowStyle,
     pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
@@ -366,6 +354,7 @@ pub struct Controls {
     /// camera into this every frame and reconciles a user edit through
     /// `fly_camera::sync_fly_mirror`; the sidebar itself never owns fly state.
     pub fly: bool,
+    pub sensitivity: f32,
 }
 
 impl Controls {
@@ -383,6 +372,8 @@ impl Controls {
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
             arrows: true,
+            show_grid: true,
+            show_coordinate_system: true,
             arrow_style: ArrowStyle::Cone,
             arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
@@ -402,12 +393,13 @@ impl Controls {
             plane: PlaneView::default(),
             plane_drag: false,
             fly: false,
+            sensitivity: 1.0,
         }
     }
 
     /// Restore the Display section's defaults (density, arrow length mode,
     /// both scales, arrow and off-plane opacity, the proportional contrast,
-    /// arrow visibility/style/appearance, plane-by-plane).
+    /// arrow and reference visibility/style/appearance, plane-by-plane).
     pub fn reset_display(&mut self) {
         let defaults = Controls::new();
         self.density = defaults.density;
@@ -418,6 +410,8 @@ impl Controls {
         self.magnitude_scale = defaults.magnitude_scale;
         self.proportional_exponent = defaults.proportional_exponent;
         self.arrows = defaults.arrows;
+        self.show_grid = defaults.show_grid;
+        self.show_coordinate_system = defaults.show_coordinate_system;
         self.arrow_style = defaults.arrow_style;
         self.arrow_style_2d = defaults.arrow_style_2d;
         self.arrow_params = defaults.arrow_params;
@@ -459,37 +453,46 @@ impl Controls {
     /// the pointer capture). Fly speed is not stored here — dropping the
     /// `FlyCamera` already restores `DEFAULT_SPEED` on the next entry.
     pub fn reset_camera(&mut self) {
-        self.fly = false;
+        let defaults = Controls::new();
+        self.fly = defaults.fly;
+        self.sensitivity = defaults.sensitivity;
     }
 }
 
 /// The same defaults as [`Controls::new`], so the type honours clippy's
 /// `new_without_default`: the app can reach its starting knobs either way.
 impl Default for Controls {
-    fn default() -> Controls { Controls::new() }
+    fn default() -> Controls {
+        Controls::new()
+    }
 }
 
 use crate::ui::layout;
 
 /// Draw the sidebar and hand every edit to the viewmodel setters.
 pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
-    show_compact(ui, state, controls, false)
+    show_inner(ui, state, controls, false)
 }
 
-/// Compact-mode entry: applies the 48 pt compact row floor, then draws.
+/// Compact-mode entry: applies the compact row floor and spacing, then draws.
 pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
     if compact {
         ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
+        ui.spacing_mut().item_spacing.y = layout::COMPACT_ITEM_SPACING;
     }
-    show_inner(ui, state, controls)
+    show_inner(ui, state, controls, compact)
 }
 
-fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
     // The density ceiling keys to the dimension being sampled (the ledger
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
     let view_3d = state.mode_3d;
-    let max_density = if sampling_3d { MAX_DENSITY_3D } else { MAX_DENSITY_2D };
+    let max_density = if sampling_3d {
+        MAX_DENSITY_3D
+    } else {
+        MAX_DENSITY_2D
+    };
     let grid = state.grid();
     let domain = state.domain;
 
@@ -504,12 +507,25 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
 
     section(ui, Section::Display, controls, None, |ui, controls| {
         ui.horizontal(|ui| {
-            ui.label(if sampling_3d { "Density (n³)" } else { "Density (n²)" });
+            ui.label(if sampling_3d {
+                "Density (n³)"
+            } else {
+                "Density (n²)"
+            });
             ui.add(egui::DragValue::new(&mut controls.density).range(MIN_DENSITY..=max_density))
                 .on_hover_text("Samples per axis; 3D sampling makes it the cube of this count");
         });
         ui.checkbox(&mut controls.arrows, "Show arrows")
             .on_hover_text("Hide the arrow field without hiding streamlines or particles");
+        ui.checkbox(&mut controls.show_grid, "Show grid")
+            .on_hover_text("Show the plane/face grid and domain box");
+        ui.checkbox(
+            &mut controls.show_coordinate_system,
+            "Show coordinate system",
+        )
+        .on_hover_text(
+            "Show colored X/Y axes (and Z in 3D); these reference axes are not field lines",
+        );
         let arrow_scale_on = arrow_scale_enabled(controls.arrow_length_mode);
         let arrow_scale_text = if arrow_scale_on {
             "Arrow length (grid cells)"
@@ -540,15 +556,18 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         .on_hover_text(arrow_scale_hover)
         .on_disabled_hover_text("Disabled in Magnitude mode; use Magnitude scale instead");
         ui.add(
-            egui::Slider::new(&mut controls.arrow_opacity, MIN_ARROW_OPACITY..=MAX_ARROW_OPACITY)
-                .text("Arrow opacity")
-                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+            egui::Slider::new(
+                &mut controls.arrow_opacity,
+                MIN_ARROW_OPACITY..=MAX_ARROW_OPACITY,
+            )
+            .text("Arrow opacity")
+            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
         )
         .on_hover_text(
             "Opacity of the whole arrow field; 100% is fully solid. Dense fields can be \
              de-emphasised without hiding them",
         );
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.label("Length mode");
             for mode in ArrowLengthMode::ALL {
                 ui.selectable_value(&mut controls.arrow_length_mode, mode, mode.label())
@@ -568,19 +587,22 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         })
         .response
         .on_hover_text("World length per unit of field magnitude");
-        ui.add_enabled_ui(proportional_exponent_enabled(controls.arrow_length_mode), |ui| {
-            ui.add(
-                egui::Slider::new(
-                    &mut controls.proportional_exponent,
-                    MIN_PROPORTIONAL_EXPONENT..=MAX_PROPORTIONAL_EXPONENT,
-                )
-                .text("Proportional contrast"),
-            );
-        })
+        ui.add_enabled_ui(
+            proportional_exponent_enabled(controls.arrow_length_mode),
+            |ui| {
+                ui.add(
+                    egui::Slider::new(
+                        &mut controls.proportional_exponent,
+                        MIN_PROPORTIONAL_EXPONENT..=MAX_PROPORTIONAL_EXPONENT,
+                    )
+                    .text("Proportional contrast"),
+                );
+            },
+        )
         .response
         .on_hover_text("How strongly arrow length follows magnitude; 1 = linear")
         .on_disabled_hover_text("Only Proportional arrow length follows magnitude");
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             let set = arrow_style_set(view_3d);
             ui.label(set.label());
             match set {
@@ -601,11 +623,8 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
         egui::CollapsingHeader::new("Arrow appearance")
             .default_open(false)
             .show(ui, |ui| {
-                let head_enabled = head_control_enabled(
-                    view_3d,
-                    controls.arrow_style,
-                    controls.arrow_style_2d,
-                );
+                let head_enabled =
+                    head_control_enabled(view_3d, controls.arrow_style, controls.arrow_style_2d);
                 ui.add_enabled(
                     head_enabled,
                     egui::Slider::new(
@@ -660,12 +679,24 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     // the real camera into `controls.fly` each frame, so C, Esc, a 2D switch,
     // Reset/Fit and presets all land here on the next frame.
     section(ui, Section::Camera, controls, None, |ui, controls| {
-        ui.add_enabled_ui(sampling_3d, |ui| {
-            ui.checkbox(&mut controls.fly, "Fly camera")
-                .on_hover_text("Free flight in the 3D view (C); Esc releases the mouse");
-        })
-        .response
-        .on_disabled_hover_text("3D only");
+        if compact {
+            controls.fly = false;
+            ui.label("Fly camera is unavailable in Compact")
+                .on_hover_text("Fly camera is available in Wide layouts only");
+        } else {
+            ui.add_enabled_ui(sampling_3d, |ui| {
+                ui.checkbox(&mut controls.fly, "Fly camera")
+                    .on_hover_text("Free flight in the 3D view (C); Esc releases the mouse");
+                // Sensitivity slider
+                ui.add(
+                    egui::Slider::new(&mut controls.sensitivity, 0.1..=5.0)
+                        .text("Look Sensitivity"),
+                )
+                .on_hover_text("Change mouse look sensitivity for fly mode (default 1)")
+            })
+            .response
+            .on_disabled_hover_text("3D only");
+        }
         if controls.fly && sampling_3d {
             ui.label("Flying — Esc to release");
         }
@@ -676,7 +707,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
         );
         ui.add_enabled_ui(seed_mode_enabled(controls.streamlines), |ui| {
-            ui.horizontal(|ui| {
+            button_row(ui, |ui| {
                 ui.label("Seed");
                 for mode in StreamlineSeedMode::ALL {
                     ui.selectable_value(&mut controls.seed_mode, mode, mode.label())
@@ -685,12 +716,10 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
             });
         })
         .response
-        .on_disabled_hover_text(
-            "Turn Streamlines on to choose Auto or Click seeding",
-        );
+        .on_disabled_hover_text("Turn Streamlines on to choose Auto or Click seeding");
         // Ticket 60: the left click action stays visible even while its feature
         // is off; the click is then a hinted no-op rather than a dead control.
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.label("Left click");
             for action in LeftClickAction::ALL {
                 let hover = match click_action_plan(
@@ -753,7 +782,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
                         .text("Opacity"),
                     )
                     .on_hover_text("Dot and trail alpha (0.05–1.0, default 1.0)");
-                    ui.horizontal(|ui| {
+                    button_row(ui, |ui| {
                         ui.label("Colour");
                         for mode in ParticleColorMode::ALL {
                             ui.selectable_value(
@@ -770,7 +799,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
                         |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Fixed colour");
-                                ui.color_edit_button_srgb(&mut fixed)
+                                super::style_panel::color_button(ui, |ui| ui.color_edit_button_srgb(&mut fixed))
                             })
                             .inner
                         },
@@ -850,7 +879,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     });
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.label("Colormap");
             for colormap in Colormap::ALL {
                 ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
@@ -936,7 +965,7 @@ fn plane_controls(
         return commit;
     }
 
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label("Axis");
         for axis in PlaneAxis::ALL {
             commit |= ui
@@ -1063,20 +1092,42 @@ fn section(
     }
 }
 
+/// Wrap button choices against the visible panel even when a non-button
+/// editor has requested a wider minimum for the surrounding body.
+fn button_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_wrapped(|ui| {
+        ui.set_max_width(
+            ui.available_width()
+                .min((ui.clip_rect().right() - ui.cursor().left()).max(0.0)),
+        );
+        contents(ui);
+    });
+}
+
 /// The title row every section header shares: the strong title and the
 /// generic reset button in the right-hand corner. The Domain header wraps this
 /// in a vertical layout to add its summary line.
 fn section_header_line(ui: &mut egui::Ui, section: Section, reset: &mut bool) {
     ui.label(egui::RichText::new(section.title()).strong());
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        // Full-size button, not `small_button`: the section action gets a
-        // normal click target. (In egui 0.37 `small_button` only trims
-        // vertical padding, so this is about target size, not type size.)
-        *reset = ui
-            .button("Reset")
-            .on_hover_text(format!("Reset {} to defaults", section.title()))
-            .clicked();
-    });
+    // Non-button editors can request a wider panel than its visible clip.
+    // Anchor the action to the visible remainder without resetting the parent
+    // header's cursor (which has already allocated the collapse toggle).
+    let mut rect = ui.available_rect_before_wrap();
+    rect.max.x = rect.max.x.min(ui.clip_rect().right()).max(rect.min.x);
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| {
+            // Full-size button, not `small_button`: the section action gets a
+            // normal click target. (In egui 0.37 `small_button` only trims
+            // vertical padding, so this is about target size, not type size.)
+            *reset = ui
+                .button("Reset")
+                .on_hover_text(format!("Reset {} to defaults", section.title()))
+                .clicked();
+        },
+    );
 }
 
 /// Keep a dragged extent honest before the seam sees it: NaN has no direction,
@@ -1112,6 +1163,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
     state.set_arrows(controls.arrows);
+    state.set_show_grid(controls.show_grid);
+    state.set_show_coordinate_system(controls.show_coordinate_system);
     state.set_arrow_style(controls.arrow_style);
     state.set_arrow_style_2d(controls.arrow_style_2d);
     state.set_arrow_params(controls.arrow_params);
@@ -1148,6 +1201,8 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.color_min = state.color_min;
     controls.color_max = state.color_max;
     controls.arrows = state.arrows;
+    controls.show_grid = state.show_grid;
+    controls.show_coordinate_system = state.show_coordinate_system;
     controls.arrow_style = state.arrow_style;
     controls.arrow_style_2d = state.arrow_style_2d;
     controls.arrow_params = state.arrow_params;

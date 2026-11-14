@@ -215,32 +215,18 @@ fn style_css_uses_the_brand_chrome_and_collapses_the_header() {
     }
 
     let breakpoint = css
-        .find("@media (max-width: 600px)")
-        .expect("the narrow-screen breakpoint is 600 px");
+        .find("@media (max-width: 700px)")
+        .expect("the compact breakpoint matches egui at 700 px");
     let narrow = &css[breakpoint..];
-    for hidden in [".brand-name", ".brand-tagline"] {
-        let selector = narrow
-            .find(hidden)
-            .unwrap_or_else(|| panic!("`{hidden}` must be hidden at the breakpoint"));
-        let rule = &narrow[selector..];
-        assert!(
-            rule[..rule.find('}').unwrap_or(rule.len())].contains("display: none"),
-            "`{hidden}` is withdrawn at <=600 px, keeping only the logo",
-        );
-    }
-    // The mark must stay visible: no rule inside the narrow-screen block may
-    // hide `.brand-logo`. Split the block into `selector { body }` chunks so a
-    // future `display: none` on the logo is caught, not just the current text.
-    let hides_logo = narrow.split('}').any(|chunk| {
-        let Some((selector, body)) = chunk.rsplit_once('{') else {
-            return false;
-        };
-        selector.contains(".brand-logo") && body.contains("display: none")
-    });
+    let brand = narrow
+        .find("header.brand {")
+        .expect("the entire web-page branding header is targeted");
+    let rule = &narrow[brand..];
     assert!(
-        !hides_logo,
-        "the logo stays visible at <=600 px; no narrow-screen rule may hide `.brand-logo`",
+        rule[..rule.find('}').unwrap_or(rule.len())].contains("display: none"),
+        "the whole branding header is hidden in Compact",
     );
+    assert!(!css.contains("@media (max-width: 600px)"));
 }
 
 #[test]

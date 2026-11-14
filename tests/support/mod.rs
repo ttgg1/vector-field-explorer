@@ -7,6 +7,7 @@
 //! the same production seam the app uses.
 
 pub mod menu_fixture;
+pub mod storage;
 
 use eframe::egui;
 

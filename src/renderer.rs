@@ -22,6 +22,79 @@ use glam::{Mat4, Vec3};
 
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MAX_SIDES, MIN_SIDES};
 
+/// Native capture failures retain the readback stage and its original cause.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub enum ReadbackError {
+    Map(wgpu::BufferAsyncError),
+    Poll(wgpu::PollError),
+    CallbackLost(std::sync::mpsc::RecvError),
+    Range(wgpu::MapRangeError),
+    Decode(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Display for ReadbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Map(e) => write!(f, "readback map failed: {e}"),
+            Self::Poll(e) => write!(f, "readback poll failed: {e}"),
+            Self::CallbackLost(e) => write!(f, "readback callback receive failed: {e}"),
+            Self::Range(e) => write!(f, "readback mapped range unavailable: {e}"),
+            Self::Decode(e) => write!(f, "readback RGBA decode failed: {e}"),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::error::Error for ReadbackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Map(e) => Some(e),
+            Self::Poll(e) => Some(e),
+            Self::CallbackLost(e) => Some(e),
+            Self::Range(e) => Some(e),
+            Self::Decode(_) => None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub enum OffscreenError {
+    Setup(String),
+    Readback(ReadbackError),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Display for OffscreenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Setup(e) => write!(f, "offscreen setup/submission failed: {e}"),
+            Self::Readback(e) => e.fmt(f),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::error::Error for OffscreenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Readback(e) => Some(e),
+            Self::Setup(_) => None,
+        }
+    }
+}
+
+/// Classify the real map callback status; also permits deterministic injection.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub fn readback_map_status(
+    status: Result<(), wgpu::BufferAsyncError>,
+) -> Result<(), ReadbackError> {
+    status.map_err(ReadbackError::Map)
+}
+
 /// Per-arrow GPU instance: base position, unit direction + length, color.
 ///
 /// `origin.w` is the kind tag for the ticket-62 combined 3D stream: `1.0` means
@@ -959,33 +1032,32 @@ impl DrawState {
         width: u32,
         height: u32,
         clear: [f64; 4],
-    ) -> Result<Vec<u8>, String> {
-        let readback = self.submit_offscreen(
-            device, queue, scene, view_proj, camera_pos, width, height, clear,
-        )?;
+    ) -> Result<Vec<u8>, OffscreenError> {
+        let readback = self
+            .submit_offscreen(
+                device, queue, scene, view_proj, camera_pos, width, height, clear,
+            )
+            .map_err(OffscreenError::Setup)?;
 
         let slice = readback.slice(..);
         let (mapped_tx, mapped_rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = mapped_tx.send(result);
         });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|error| format!("readback poll failed: {error}"))?;
-        mapped_rx
-            .recv()
-            .map_err(|error| format!("readback callback lost: {error}"))?
-            .map_err(|error| format!("readback mapping failed: {error}"))?;
+        let result = (|| {
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(ReadbackError::Poll)?;
+            readback_map_status(mapped_rx.recv().map_err(ReadbackError::CallbackLost)?)?;
 
-        let pixels = {
-            let mapped = slice
-                .get_mapped_range()
-                .map_err(|error| format!("readback range unavailable: {error}"))?;
-            crate::screenshot::strip_row_padding(&mapped, width, height)
-        };
+            let pixels = {
+                let mapped = slice.get_mapped_range().map_err(ReadbackError::Range)?;
+                crate::screenshot::strip_row_padding(&mapped, width, height)
+            };
+            crate::screenshot::to_rgba(self.format, pixels).map_err(ReadbackError::Decode)
+        })();
         readback.unmap();
-
-        crate::screenshot::to_rgba(self.format, pixels)
+        result.map_err(OffscreenError::Readback)
     }
 
     /// Submit an offscreen capture and complete without blocking the browser

@@ -1,45 +1,29 @@
-# Dispatch, review and fix loop — as practised from 2026-11-10
+# Dispatch/review lessons — 2026-11-10
 
-## Standing integration preference (2026-11-10; subsequently extended)
+**Historical, not policy.** [Workflow](../../../references/workflow.md) is the
+current authority; [fix loop](../../../references/fix-loop.md) is the procedure.
+Earlier full policy copies here are retired (Git preserves their text).
 
-The owner first selected option 1, “push as new branch/create PR,” for future
-reviewed work. The owner subsequently clarified, “do merges on yourself as
-well, after review,” extending that standing authority to integration. The
-earlier interpretation that merge needs separate approval is superseded.
+## Standing integration authority
 
-Current rule: after required design approval, independent review and required
-checks/gates are green, the controller may push a feature branch, open a PR,
-merge the reviewed work, push `main`, and confirm GitHub CI and smoke are green
-without asking the integration menu again. Serialize merges; `main` remains
-reviewed work only. This standing authority does not include releases or
-destructive or security-sensitive operations, which remain separately gated.
+The owner first chose “push as new branch/create PR,” then “do merges on yourself
+as well, after review.” The second ruling superseded the interpretation that
+every merge needed another approval. Source: main-root
+`.superpowers/sdd/2026-11-05-vector-field-explorer/archive/progress-through-2026-11-11.md`, 2026-11-10
+owner rulings (original lines 4637–4654). Later native-CAS ledger rulings made
+CI asynchronous; old instructions to wait for green remote runs are obsolete.
 
-Source: sequential owner rulings dated 2026-11-10 in the main-root SDD ledger,
-`.superpowers/sdd/2026-11-05-vector-field-explorer/progress.md` (owner ruling
-and subsequent owner ruling, lines 4637–4654).
+## Helper-path correction
 
-## Correction (later on 2026-11-10) — the helper IS installed
+The claim that `task-brief` / `review-package` were absent was false. The glob
+missed the **version directory** beneath `git-superpowers-*`; the helpers were
+installed. The actual missing input was
+`docs/superpowers/plans/2026-11-05-vector-field-explorer.md`, already named by
+the SDD `plan-path` marker. Creating that file restored workspace resolution.
+A missing path is not evidence that a tool is absent; check the installation
+and inputs before inventing a substitute.
 
-The section below claims the superpowers helper scripts are not on disk. **That
-was wrong.** They live one directory deeper than the glob in `AGENTS.md`
-suggested:
-
-```
-~/.cache/opencode/npm/git-superpowers-*/<version>/node_modules/superpowers/skills/subagent-driven-development/scripts/
-```
-
-`task-brief`, `review-package`, `sdd-repo` and `sdd-workspace` are all
-present and working. What was missing was the **plan file** they resolve
-their workspace from: `docs/superpowers/plans/2026-11-05-vector-field-explorer.md`
-(the `plan-path` marker in `.superpowers/sdd/2026-11-05-vector-field-explorer/`
-already pointed at it). That file has been written, so briefs now come from
-`task-brief` and review packages from `review-package` — not by hand.
-
-The lesson, recorded because it cost a detour: a missing path is not evidence
-that a tool is absent, and a hand-rolled substitute for an installed helper
-is a workaround, not a decision.
-
-## The claim
+## Why independent review matters
 
 From 2026-11-10, work in this project moves ticket → brief → implementer seat
 → review seat → fix round → re-review → serialized merge to `main`. The

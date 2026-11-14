@@ -377,7 +377,7 @@ impl VfApp {
                             capture_height,
                             filename,
                         ),
-                        Err(error) => self.screenshot.fail(error),
+                        Err(error) => self.screenshot.fail(error.to_string()),
                     }
                 }
 
