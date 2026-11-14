@@ -152,14 +152,23 @@ fn simulation_schedule(options: &CliOptions) -> Result<(Vec<(f32, f32)>, f32), C
     if duration > 0.0 && end <= start {
         return Err(invalid("f64 boundary does not advance"));
     }
-    let count = (duration / step).ceil();
-    if !count.is_finite() || count > 100_000.0 {
+    const MAX_STEPS: u32 = 100_000;
+    // Division/ceil is not an exact count: .07/.01 rounds above seven even
+    // though indexed boundary seven equals the endpoint. Use boundaries for
+    // both the work cap and termination, without tolerating tiny remainders.
+    let cap_offset = f64::from(MAX_STEPS) * step;
+    let cap_boundary = start + cap_offset;
+    if !cap_offset.is_finite() || !cap_boundary.is_finite() {
+        return Err(invalid("f64 boundary overflow"));
+    }
+    if cap_boundary < end {
         return Err(invalid("step count exceeds 100,000"));
     }
-    // The bounded count is now safe to convert to an integer.
-    let count = count as u32;
-    let mut intervals = Vec::with_capacity(count as usize);
-    for i in 0..count {
+    let mut intervals = Vec::new();
+    if duration == 0.0 {
+        return Ok((intervals, end as f32));
+    }
+    for i in 0..MAX_STEPS {
         let next = i
             .checked_add(1)
             .ok_or_else(|| invalid("step count overflow"))?;
@@ -193,6 +202,9 @@ fn simulation_schedule(options: &CliOptions) -> Result<(Vec<(f32, f32)>, f32), C
         }
         // Deliberately do not compare rk4_end with the separately rounded boundary.
         intervals.push((time, dt));
+        if b == end {
+            break;
+        }
     }
     Ok((intervals, end as f32))
 }

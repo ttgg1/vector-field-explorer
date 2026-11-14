@@ -106,6 +106,25 @@ fn particles_follow_indexed_start_of_step_rk4_and_fractional_remainder() {
 }
 
 #[test]
+fn decimal_multiple_stops_at_the_indexed_endpoint() {
+    for (duration, intervals) in [(0.07, 7), (0.14, 14), (0.28, 28), (0.56, 56)] {
+        let mut o = options(
+            r#"{"mode":"3d","density":4,"particles":true,"particle_count":7,"formula":"(t, x+t, 0)","fixed_step_seconds":0.01}"#,
+        );
+        o.duration_seconds = duration;
+        assert_eq!(intervals as f64 * o.fixed_step_seconds, duration);
+        let expected = reference_cloud(&o, 7, intervals);
+        let prepared = prepare_scene(&o, output_frame(&o).unwrap()).unwrap();
+        assert_eq!(prepared.scene.dots.len(), 7);
+        for (dot, point) in prepared.scene.dots.iter().zip(expected.pos) {
+            assert_eq!(&dot.origin[..3], point.as_ref());
+        }
+        o.particles = false;
+        assert!(prepare_scene(&o, output_frame(&o).unwrap()).is_ok());
+    }
+}
+
+#[test]
 fn schedule_rejects_nonprogress_and_excess_work_even_without_particles() {
     let base = options("{}");
     let frame = output_frame(&base).unwrap();
@@ -114,6 +133,18 @@ fn schedule_rejects_nonprogress_and_excess_work_even_without_particles() {
         (2048.0, 0.0002, 0.01, "stage"),
         (1.0, f64::from_bits(1), 0.01, "boundary"),
         (0.0, 3600.0, 0.0001, "100,000"),
+        (
+            0.0,
+            f64::from_bits(0.07_f64.to_bits() + 1),
+            0.01,
+            "boundary",
+        ),
+        (
+            0.0,
+            f64::from_bits(10.0_f64.to_bits() + 1),
+            0.0001,
+            "100,000",
+        ),
         (3600.0, 1.0, 0.01, "3600"),
         (0.0, f64::NAN, 0.01, "finite"),
         (0.0, 1.0, 0.0, "fixed_step"),
@@ -134,6 +165,12 @@ fn schedule_rejects_nonprogress_and_excess_work_even_without_particles() {
             _ => panic!("accepted invalid schedule {start}/{duration}/{step}"),
         }
     }
+}
+
+#[test]
+fn schedule_accepts_exactly_the_indexed_step_cap() {
+    let o = options(r#"{"density":4,"duration_seconds":10,"fixed_step_seconds":0.0001}"#);
+    assert!(prepare_scene(&o, output_frame(&o).unwrap()).is_ok());
 }
 
 #[test]
