@@ -12,6 +12,10 @@ pub use scene::{OutputFrame, PreparedScene, output_frame, prepare_scene};
 mod svg;
 pub use svg::scene_to_cli_svg;
 
+#[path = "cli_gpu.rs"]
+mod gpu;
+pub use gpu::{offscreen_error_to_cli, render_offscreen};
+
 use crate::{
     arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D},
     camera::OrbitCamera,

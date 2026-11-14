@@ -269,8 +269,9 @@ markers for mode applicability. Clap and pollster are native-only dependencies.
 
 **Pinned by.** `tests/cli_test.rs`, registered in the native suite.
 
-**Current boundary.** Scene preparation and CPU SVG serialization are available
-through this module; PNG, CLI dispatch and `src/main.rs` wiring are later tasks.
+**Current boundary.** Scene preparation, CPU SVG serialization and offscreen
+RGBA8 rendering are available; CLI dispatch/PNG file writing and `src/main.rs`
+wiring are later tasks.
 The existing no-argument GUI path is unchanged.
 
 #### `src/cli_svg.rs` — native CPU vector export
@@ -290,6 +291,28 @@ lighting/antialiasing; normal prepared 2D CLI scenes have no eligible particles.
 **Pinned by.** `tests/cli_svg_test.rs`: shader geometry, style/parameter/opacity
 mapping, display color, world widths/radii, clipping, reference visibility,
 portrait/landscape fit, deterministic bytes, no raster image, and 3D rejection.
+
+#### `src/cli_gpu.rs` — native surface-free GPU export
+
+**Purpose / API.** `cli::render_offscreen(&PreparedScene)` requests a headless
+wgpu adapter/device and returns packed RGBA8. It does not create a surface,
+window, app or persistence state. PNG encoding/writing belongs to CLI dispatch.
+
+**Invariants.** Dimensions, packed/padded pixel bytes, storage sizes, vertex
+counts and adapter/device limits are checked before resource allocation. No
+optional device features are requested. The target must support rendering,
+blending and copying `Rgba8UnormSrgb`; no format or CPU/noop fallback is allowed.
+The existing `DrawState` paints the prepared frame with its linear clear color;
+readback is display-encoded sRGB. GPU validation/internal/OOM scopes, uncaptured
+errors and device loss become actionable CLI errors. The doc-hidden production
+`offscreen_error_to_cli` preserves render versus typed readback classification.
+
+**Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions and actual map
+callback failure. `scripts/test-cli-gpu.sh` runs isolated displayless workers for
+injected adapter absence, real 2D/3D dimensions/field content, PNG decoding, exact
+clear/linear-alpha-blend channel bytes, and software Vulkan when installed.
+The shared suite never mutates display environment; ordinary worker returns
+without GPU execution are not runtime proof.
 
 #### `src/app/mod.rs` — application root and shared state
 
@@ -1216,6 +1239,11 @@ sorting, and the offscreen screenshot pass.
   (`sort_scene_back_to_front`, `sort_lines_back_to_front`,
   `sorted_lines_back_to_front`, `sorted_arrows_back_to_front`,
   `sort_back_to_front`).
+- Native `OffscreenError::{Setup, Readback}` and `ReadbackError::{Map, Poll,
+  CallbackLost, Range, Decode}` retain stage and typed causes. The doc-hidden
+  production `readback_map_status` classifies the actual map callback. Native
+  GUI capture stringifies only at `Screenshot::fail`; wasm async capture keeps
+  its existing `String` result.
 
 **Pipeline contract.**
 - One bind-group layout: binding 0 = `Globals` uniform (vertex+fragment),
