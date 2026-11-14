@@ -29,6 +29,9 @@ instanced GPU scene:
   plane-by-plane inspection, with independent grid and coordinate guides;
 - native PNG screenshots and persisted view, layout, and appearance settings.
 
+For scriptable, window-free 2D SVG or 2D/3D GPU PNG output, see the
+[native CLI guide](docs/cli.md) (flags, strict JSON schema and examples).
+
 It is a teaching-grade explorer, not a numerical solver: there is no
 differentiation, divergence, curl, or field-equation solver in this release.
 The architecture and module map are in [docs/CODEBASE.md](docs/CODEBASE.md);
