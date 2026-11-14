@@ -165,7 +165,7 @@ pub fn presets() -> &'static [Preset] {
             category: PresetCategory::Electrostatics,
         },
         Preset {
-            name: "Dipole",
+            name: "3D Dipole",
             formula: DIPOLE_3D,
             dimension: 3,
             category: PresetCategory::Electrostatics,

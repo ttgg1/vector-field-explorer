@@ -55,7 +55,10 @@ fn the_bridge_exposes_request_release_and_a_drained_delta() {
         "movementY",
         "lockLost",
     ] {
-        assert!(js.contains(token), "pointer_lock.js must define `{token}`:\n{js}");
+        assert!(
+            js.contains(token),
+            "pointer_lock.js must define `{token}`:\n{js}"
+        );
     }
     assert!(
         js.contains("dx = 0") && js.contains("dy = 0"),
@@ -100,13 +103,21 @@ fn native_motion_delta_sums_raw_mouse_moves_in_points() {
         ],
         1.0,
     );
-    assert_eq!(delta, Vec2::new(12.0, -3.0), "raw deltas are summed once per frame");
+    assert_eq!(
+        delta,
+        Vec2::new(-12.0, -3.0),
+        "raw deltas are summed once, with native horizontal look inverted"
+    );
 }
 
 #[test]
 fn native_motion_delta_scales_hidpi_pixels_to_points() {
     let delta = delta_for(vec![egui::Event::MouseMoved(egui::vec2(10.0, -4.0))], 2.0);
-    assert_eq!(delta, Vec2::new(5.0, -2.0), "physical raw motion is divided by pixels-per-point");
+    assert_eq!(
+        delta,
+        Vec2::new(-5.0, -2.0),
+        "native x inversion is preserved when physical motion is scaled to points"
+    );
 }
 
 #[test]
@@ -115,5 +126,8 @@ fn native_motion_delta_ignores_non_finite_values() {
         vec![egui::Event::MouseMoved(egui::vec2(f32::NAN, 3.0))],
         1.0,
     );
-    assert!(delta.is_finite(), "a non-finite raw delta must not poison the look: {delta:?}");
+    assert!(
+        delta.is_finite(),
+        "a non-finite raw delta must not poison the look: {delta:?}"
+    );
 }

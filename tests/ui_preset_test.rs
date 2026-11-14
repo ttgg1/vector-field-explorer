@@ -5,10 +5,10 @@
 // in `PresetPanel::show` route through them. These tests drive the actions the
 // way a button press would.
 
+use vector_field_explorer::export::{delete_preset, load_presets};
 use vector_field_explorer::presets::presets;
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::ui::presets::PresetPanel;
-use vector_field_explorer::export::{delete_preset, load_presets};
 use vector_field_explorer::viewmodel::State;
 
 fn panel_in(dir: &std::path::Path) -> PresetPanel {
@@ -16,7 +16,10 @@ fn panel_in(dir: &std::path::Path) -> PresetPanel {
 }
 
 fn cam_home() -> Camera {
-    Camera { position: [1.0, 2.0], scale: 3.0 }
+    Camera {
+        position: [1.0, 2.0],
+        scale: 3.0,
+    }
 }
 
 #[test]
@@ -26,7 +29,11 @@ fn test_create_records_current_camera_state() {
 
     panel.save_current("home", &cam_home()).expect("save");
 
-    let saved = panel.presets().iter().find(|p| p.name == "home").expect("created preset listed immediately");
+    let saved = panel
+        .presets()
+        .iter()
+        .find(|p| p.name == "home")
+        .expect("created preset listed immediately");
     assert_eq!(saved.position, [1.0, 2.0]);
     assert_eq!(saved.scale, 3.0);
 }
@@ -38,12 +45,18 @@ fn test_load_restores_exact_camera_state() {
     panel.save_current("home", &cam_home()).expect("save");
 
     // Drag the camera somewhere else, then load the preset back.
-    let mut camera = Camera { position: [7.0, -7.0], scale: 0.5 };
+    let mut camera = Camera {
+        position: [7.0, -7.0],
+        scale: 0.5,
+    };
     assert!(panel.load("home", &mut camera), "preset found");
     assert_eq!(camera.position, [1.0, 2.0]);
     assert_eq!(camera.scale, 3.0);
 
-    assert!(!panel.load("missing", &mut camera), "unknown preset leaves camera unchanged");
+    assert!(
+        !panel.load("missing", &mut camera),
+        "unknown preset leaves camera unchanged"
+    );
     assert_eq!(camera.position, [1.0, 2.0]);
 }
 
@@ -55,9 +68,15 @@ fn test_delete_removes_from_list_and_disk() {
 
     panel.delete("home").expect("delete");
 
-    assert!(!panel.presets().iter().any(|p| p.name == "home"), "removed from the panel list");
+    assert!(
+        !panel.presets().iter().any(|p| p.name == "home"),
+        "removed from the panel list"
+    );
     let on_disk = load_presets(dir.path()).expect("reload file");
-    assert!(!on_disk.iter().any(|p| p.name == "home"), "removed from disk");
+    assert!(
+        !on_disk.iter().any(|p| p.name == "home"),
+        "removed from disk"
+    );
 }
 
 #[test]
@@ -70,7 +89,10 @@ fn test_presets_survive_restart() {
     // Simulate an application restart: a fresh panel pointing at the same directory.
     let mut fresh = panel_in(dir.path());
     let mut camera = Camera::default();
-    assert!(fresh.load("home", &mut camera), "preset still present after restart");
+    assert!(
+        fresh.load("home", &mut camera),
+        "preset still present after restart"
+    );
     assert_eq!(camera.position, [1.0, 2.0]);
     assert_eq!(camera.scale, 3.0);
 }
@@ -80,7 +102,15 @@ fn test_delete_preset_function_removes_file_entry() {
     let dir = tempfile::tempdir().unwrap();
     let mut panel = panel_in(dir.path());
     panel.save_current("home", &cam_home()).expect("save");
-    panel.save_current("work", &Camera { position: [0.0, 0.0], scale: 2.0 }).expect("save");
+    panel
+        .save_current(
+            "work",
+            &Camera {
+                position: [0.0, 0.0],
+                scale: 2.0,
+            },
+        )
+        .expect("save");
 
     delete_preset(dir.path(), "work").expect("delete");
     let on_disk = load_presets(dir.path()).expect("reload file");
@@ -96,12 +126,23 @@ fn saving_highlights_the_row_and_a_duplicate_replaces_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut panel = panel_in(dir.path());
     panel.save_current("home", &cam_home()).expect("save");
-    assert_eq!(panel.active_name(), Some("home"), "a saved view is the active row");
+    assert_eq!(
+        panel.active_name(),
+        Some("home"),
+        "a saved view is the active row"
+    );
     assert_eq!(panel.presets().len(), 1);
 
-    let moved = Camera { position: [-4.0, 0.5], scale: 0.25 };
+    let moved = Camera {
+        position: [-4.0, 0.5],
+        scale: 0.25,
+    };
     panel.save_current("home", &moved).expect("replace");
-    assert_eq!(panel.presets().len(), 1, "the duplicate name still replaces");
+    assert_eq!(
+        panel.presets().len(),
+        1,
+        "the duplicate name still replaces"
+    );
     let saved = &panel.presets()[0];
     assert_eq!(saved.position, moved.position);
     assert_eq!(saved.scale, moved.scale);
@@ -114,15 +155,28 @@ fn loading_highlights_the_applied_row_and_a_missing_name_changes_nothing() {
     let mut panel = panel_in(dir.path());
     panel.save_current("home", &cam_home()).expect("save");
     panel
-        .save_current("work", &Camera { position: [0.0, 0.0], scale: 2.0 })
+        .save_current(
+            "work",
+            &Camera {
+                position: [0.0, 0.0],
+                scale: 2.0,
+            },
+        )
         .expect("save");
     let mut camera = Camera::default();
     assert!(panel.load("home", &mut camera));
     assert_eq!(panel.active_name(), Some("home"));
     assert!(panel.load("work", &mut camera));
     assert_eq!(panel.active_name(), Some("work"));
-    assert!(!panel.load("missing", &mut camera), "unknown preset stays untouched");
-    assert_eq!(panel.active_name(), Some("work"), "a failed load keeps the highlight");
+    assert!(
+        !panel.load("missing", &mut camera),
+        "unknown preset stays untouched"
+    );
+    assert_eq!(
+        panel.active_name(),
+        Some("work"),
+        "a failed load keeps the highlight"
+    );
 }
 
 #[test]
@@ -132,7 +186,11 @@ fn deleting_waits_for_confirmation_then_clears_the_highlight() {
     panel.save_current("home", &cam_home()).expect("save");
     panel.request_delete("home");
     assert_eq!(panel.pending_delete(), Some("home"));
-    assert_eq!(panel.presets().len(), 1, "requesting a delete removes nothing yet");
+    assert_eq!(
+        panel.presets().len(),
+        1,
+        "requesting a delete removes nothing yet"
+    );
 
     panel.cancel_delete();
     assert_eq!(panel.pending_delete(), None);
@@ -140,9 +198,16 @@ fn deleting_waits_for_confirmation_then_clears_the_highlight() {
 
     panel.request_delete("home");
     panel.delete("home").expect("confirmed delete");
-    assert!(panel.presets().is_empty(), "the confirmed delete removes the preset");
+    assert!(
+        panel.presets().is_empty(),
+        "the confirmed delete removes the preset"
+    );
     assert_eq!(panel.pending_delete(), None, "the confirmation clears");
-    assert_eq!(panel.active_name(), None, "deleting the active row clears the highlight");
+    assert_eq!(
+        panel.active_name(),
+        None,
+        "deleting the active row clears the highlight"
+    );
 }
 
 #[test]
@@ -151,7 +216,10 @@ fn a_load_hands_the_camera_to_the_live_view_exactly_once() {
     let mut panel = panel_in(dir.path());
     panel.save_current("home", &cam_home()).expect("save");
     let mut camera = Camera::default();
-    assert!(panel.take_applied().is_none(), "a save does not move the live view");
+    assert!(
+        panel.take_applied().is_none(),
+        "a save does not move the live view"
+    );
     assert!(panel.load("home", &mut camera));
     assert_eq!(
         panel.take_applied().map(|c| (c.position, c.scale)),
@@ -168,7 +236,11 @@ fn resetting_the_camera_can_clear_the_highlight() {
     panel.save_current("home", &cam_home()).expect("save");
     panel.clear_active();
     assert_eq!(panel.active_name(), None);
-    assert_eq!(panel.presets().len(), 1, "clearing the highlight keeps the preset");
+    assert_eq!(
+        panel.presets().len(),
+        1,
+        "clearing the highlight keeps the preset"
+    );
 }
 
 // Ticket 31: the Presets panel also lists the built-in field presets grouped
@@ -184,7 +256,10 @@ fn loading_a_field_preset_sets_its_formula_and_dimension() {
         .iter()
         .find(|preset| preset.name == "Magnetic dipole")
         .expect("Magnetic dipole is listed");
-    assert!(panel.load_field("Magnetic dipole", &mut state), "known preset loads");
+    assert!(
+        panel.load_field("Magnetic dipole", &mut state),
+        "known preset loads"
+    );
     assert!(state.mode_3d, "a 3D preset switches the view to 3D");
     assert_eq!(state.field.dimension, 3);
     assert_eq!(state.formula, magnetic.formula);
@@ -193,12 +268,40 @@ fn loading_a_field_preset_sets_its_formula_and_dimension() {
         .iter()
         .find(|preset| preset.name == "Point charge")
         .expect("Point charge is listed");
-    assert!(panel.load_field("Point charge", &mut state), "known preset loads");
+    assert!(
+        panel.load_field("Point charge", &mut state),
+        "known preset loads"
+    );
     assert!(!state.mode_3d, "a 2D preset switches the view back to 2D");
     assert_eq!(state.field.dimension, 2);
     assert_eq!(state.formula, point.formula);
 
-    assert!(!panel.load_field("No such preset", &mut state), "unknown name reports failure");
+    assert!(
+        !panel.load_field("No such preset", &mut state),
+        "unknown name reports failure"
+    );
+}
+
+#[test]
+fn two_and_three_dimensional_dipoles_are_independently_selectable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    for (name, dimension) in [("3D Dipole", 3), ("Dipole", 2)] {
+        assert!(
+            panel.load_field(name, &mut state),
+            "{name} loads by its own name"
+        );
+        assert_eq!(state.field.dimension, dimension);
+        assert_eq!(state.mode_3d, dimension == 3);
+        assert_eq!(panel.active_field_name(), Some(name));
+        let value = state.field.eval3(glam::Vec3::new(1.0, 0.4, 0.7)).unwrap();
+        assert_eq!(
+            value.z != 0.0,
+            dimension == 3,
+            "3D dipole retains depth flow"
+        );
+    }
 }
 
 #[test]
@@ -212,7 +315,11 @@ fn every_built_in_field_preset_loads_through_the_panel() {
             "preset `{}` must load",
             preset.name
         );
-        assert_eq!(state.formula, preset.formula, "preset `{}` formula", preset.name);
+        assert_eq!(
+            state.formula, preset.formula,
+            "preset `{}` formula",
+            preset.name
+        );
         assert_eq!(
             state.field.dimension, preset.dimension,
             "preset `{}` dimension",
@@ -299,7 +406,10 @@ fn delete_failure_on_corrupt_preset_file_sets_storage_note() {
 
     let result = panel.delete("home");
 
-    assert!(result.is_err(), "a corrupt preset file must fail the delete");
+    assert!(
+        result.is_err(),
+        "a corrupt preset file must fail the delete"
+    );
     assert!(
         panel.storage_note().is_some(),
         "a failed delete must surface a non-blocking panel note"

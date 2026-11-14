@@ -12,7 +12,7 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::presets::{PresetCategory, START_HERE, presets, presets_in};
 
-const REQUIRED: [&str; 20] = [
+const REQUIRED: [&str; 21] = [
     // Classic (pre-existing)
     "Pump",
     "Vortex",
@@ -24,6 +24,7 @@ const REQUIRED: [&str; 20] = [
     "3D helix",
     // Electrostatics (pre-existing + ticket 31)
     "Dipole",
+    "3D Dipole",
     "Source and sink",
     "Point charge",
     "Like charges",
@@ -76,11 +77,11 @@ fn required_presets_present() {
 }
 
 #[test]
-fn preset_count_stays_within_the_ticket_limit() {
-    assert!(
-        presets().len() <= 20,
-        "ticket 31 caps the built-in list at 20 presets, found {}",
-        presets().len()
+fn preset_count_includes_the_owner_added_3d_dipole() {
+    assert_eq!(
+        presets().len(),
+        REQUIRED.len(),
+        "the original 20 plus the 3D dipole"
     );
 }
 
@@ -139,6 +140,7 @@ fn grouping_preserves_declared_category_order() {
 #[test]
 fn new_physics_presets_have_the_declared_category_and_dimension() {
     let expected = [
+        ("3D Dipole", PresetCategory::Electrostatics, 3),
         ("Point charge", PresetCategory::Electrostatics, 2),
         ("Like charges", PresetCategory::Electrostatics, 2),
         ("Quadrupole", PresetCategory::Electrostatics, 2),
@@ -200,7 +202,11 @@ fn softening_covers_the_origin() {
 }
 #[test]
 fn start_here_entries_resolve() {
-    assert_eq!(START_HERE.len(), 3, "START_HERE must name exactly three presets");
+    assert_eq!(
+        START_HERE.len(),
+        3,
+        "START_HERE must name exactly three presets"
+    );
     let names: HashSet<&str> = presets().iter().map(|preset| preset.name).collect();
     let mut seen = HashSet::new();
     for name in START_HERE {
