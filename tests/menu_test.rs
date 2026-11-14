@@ -68,6 +68,8 @@ fn the_bar_carries_the_v1_menu_table() {
                 "View",
                 vec![
                     "Toggle Controls",
+                    #[cfg(not(target_arch = "wasm32"))]
+                    "Toggle CAS",
                     "Toggle Presets",
                     "Reset layout",
                     "Reset camera",
@@ -85,6 +87,27 @@ fn the_bar_carries_the_v1_menu_table() {
         ],
         "the v1 menu table is pinned; no placeholder entries",
     );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cas_is_reachable_without_an_invented_shortcut_and_toggles_independently() {
+    let item = menu::MENUS
+        .iter()
+        .find(|m| m.title == "View")
+        .unwrap()
+        .items
+        .iter()
+        .find(|i| i.action == MenuAction::ToggleCas)
+        .unwrap();
+    assert_eq!(item.label, "Toggle CAS");
+    assert!(!SHORTCUTS.iter().any(|s| s.action == MenuAction::ToggleCas));
+    let mut f = MenuFixture::new();
+    let before = f.layout.clone();
+    apply_action(MenuAction::ToggleCas, &mut f.ui());
+    assert!(f.layout.cas_expanded);
+    assert_eq!(f.layout.controls_expanded, before.controls_expanded);
+    assert_eq!(f.layout.presets_expanded, before.presets_expanded);
 }
 
 #[test]
@@ -123,6 +146,8 @@ fn every_action_maps_to_its_side_effect() {
         ),
         (MenuAction::ResetAllControls, SideEffect::None),
         (MenuAction::ToggleControls, SideEffect::None),
+        #[cfg(not(target_arch = "wasm32"))]
+        (MenuAction::ToggleCas, SideEffect::None),
         (MenuAction::TogglePresets, SideEffect::None),
         (MenuAction::ToggleFly, SideEffect::None),
         (MenuAction::ResetLayout, SideEffect::ResetLayout),
@@ -154,6 +179,7 @@ fn reset_layout_restores_expanded_panels_widths_and_help() {
         controls_width: 400.0,
         presets_width: 350.0,
         help_visible: false,
+        ..Default::default()
     };
     let effect = apply_action(MenuAction::ResetLayout, &mut fixture.ui());
     assert_eq!(

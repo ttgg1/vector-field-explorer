@@ -23,27 +23,7 @@ use vector_field_explorer::viewmodel::{
     MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
 };
 
-/// In-memory stand-in for eframe's disk-backed storage.
-#[derive(Default)]
-struct MemoryStorage {
-    values: std::collections::HashMap<String, String>,
-}
-
-impl eframe::Storage for MemoryStorage {
-    fn get_string(&self, key: &str) -> Option<String> {
-        self.values.get(key).cloned()
-    }
-
-    fn set_string(&mut self, key: &str, value: String) {
-        self.values.insert(key.to_owned(), value);
-    }
-
-    fn remove_string(&mut self, key: &str) {
-        self.values.remove(key);
-    }
-
-    fn flush(&mut self) {}
-}
+use crate::support::storage::{MemoryStorage, ron_string};
 
 /// The ticket-14 `ViewRecord` shape, before ticket 33 replaced the `normalize`
 /// bool with an arrow-length mode and added `magnitude_scale`. Serializing this
@@ -302,6 +282,10 @@ fn sample_settings() -> AppSettings {
             controls_width: 300.0,
             presets_width: 210.0,
             help_visible: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas_expanded: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas_width: 333.0,
         },
         view: ViewRecord::capture(&state),
     }
@@ -816,6 +800,11 @@ fn a_ticket_07_style_only_record_still_loads_its_style() {
     let mut storage = MemoryStorage::default();
     eframe::set_value(&mut storage, eframe::APP_KEY, &style);
     let loaded = load(Some(&storage));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        assert!(!loaded.layout.cas_expanded);
+        assert_eq!(loaded.layout.cas_width, 260.0);
+    }
     assert_eq!(
         loaded.style, style,
         "the ticket-07 appearance survives the migration"
@@ -830,6 +819,34 @@ fn a_ticket_07_style_only_record_still_loads_its_style() {
         ViewRecord::default(),
         "new view fields start at defaults"
     );
+}
+
+#[test]
+fn old_five_field_layout_envelope_preserves_style_and_view() {
+    let expected = sample_settings();
+    let raw = format!(
+        "(style:{},layout:(controls_expanded:false,presets_expanded:true,controls_width:333.0,presets_width:211.0,help_visible:false),view:{})",
+        ron_string(&expected.style),
+        ron_string(&expected.view)
+    );
+    let mut storage = MemoryStorage::default();
+    storage.set_string(eframe::APP_KEY, raw);
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.style, expected.style);
+    assert_eq!(loaded.view, expected.view);
+    assert!(!loaded.layout.controls_expanded && loaded.layout.presets_expanded);
+    assert!(!loaded.layout.help_visible);
+    assert_eq!(
+        (loaded.layout.controls_width, loaded.layout.presets_width),
+        (333.0, 211.0)
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        assert!(!loaded.layout.cas_expanded);
+        assert_eq!(loaded.layout.cas_width, 260.0);
+    }
+    save(&mut storage, &loaded);
+    assert_eq!(load(Some(&storage)), loaded);
 }
 
 #[test]

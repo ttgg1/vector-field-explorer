@@ -104,9 +104,10 @@ fn open_panel(
 ) -> PanelOutput {
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let output = panel_frame(ctx, width, vec![], state, panel);
-    let header =
-        labeled_bounds(&output.platform_output, "Symbolic tools (native)").expect("CAS header");
-    click_panel(ctx, width, header.center(), state, panel);
+    assert!(
+        has_text(&output.platform_output, "Input (scalar or vector)"),
+        "CAS body is directly visible"
+    );
     let mut output = panel_frame(ctx, width, vec![], state, panel);
     for _ in 0..3 {
         output = panel_frame(ctx, width, vec![], state, panel);
@@ -681,38 +682,14 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let mut app = vector_field_explorer::VfApp::new();
     app.layout.controls_width = 460.0;
-    app.controls.cas = vector_panel(2);
+    app.cas = vector_panel(2);
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
     let original = app.state.formula.clone();
     let mut output = app_frame(&mut app, &ctx, vec![]);
     for _ in 0..3 {
         output = app_frame(&mut app, &ctx, vec![]);
     }
-    let pos = labeled_bounds(&output, "Symbolic tools (native)")
-        .expect("app sidebar CAS header")
-        .center();
-    app_frame(
-        &mut app,
-        &ctx,
-        vec![
-            egui::Event::PointerMoved(pos),
-            egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ],
-    );
-    app_frame(
-        &mut app,
-        &ctx,
-        vec![egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::NONE,
-        }],
-    );
     for _ in 0..3 {
         output = app_frame(&mut app, &ctx, vec![]);
     }
@@ -768,12 +745,12 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
         app.bar.text, applied_formula,
         "next-frame formula-bar synchronization"
     );
-    assert_eq!(app.controls.cas.input, "x*y+z^2+t*x");
+    assert_eq!(app.cas.input, "x*y+z^2+t*x");
 
-    app.controls.cas.variable = Variable::T;
-    app.controls.cas.input = "abs(x)".into();
-    app.controls.cas.refresh(2);
-    assert!(app.controls.cas.error.is_some());
+    app.cas.variable = Variable::T;
+    app.cas.input = "abs(x)".into();
+    app.cas.refresh(2);
+    assert!(app.cas.error.is_some());
 
     // Save/reload uses the real app envelope; ordinary applied field persists,
     // while scratch input/operation/preview/error never does.
@@ -795,11 +772,11 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
     eframe::App::save(&mut app, &mut storage);
     let loaded = vector_field_explorer::VfApp::new_with_storage(Some(&storage));
     assert_eq!(loaded.state.formula, app.state.formula);
-    assert_eq!(loaded.controls.cas.input, "x");
-    assert_eq!(loaded.controls.cas.operation, Operation::Differentiate);
-    assert_eq!(loaded.controls.cas.variable, Variable::X);
-    assert!(loaded.controls.cas.preview.is_none());
-    assert!(loaded.controls.cas.error.is_none());
+    assert_eq!(loaded.cas.input, "x");
+    assert_eq!(loaded.cas.operation, Operation::Differentiate);
+    assert_eq!(loaded.cas.variable, Variable::X);
+    assert!(loaded.cas.preview.is_none());
+    assert!(loaded.cas.error.is_none());
 }
 
 #[test]

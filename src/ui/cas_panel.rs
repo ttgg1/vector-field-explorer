@@ -280,104 +280,97 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
     panel.refresh(if state.mode_3d { 3 } else { 2 });
     let dimension = if state.mode_3d { 3 } else { 2 };
-    let mut reset = false;
-    egui::CollapsingHeader::new("Symbolic tools (native)")
-        .default_open(false)
-        .show(ui, |ui| {
-            let content_width = ui.available_width();
-            reset = ui
-                .button("Reset")
-                .on_hover_text("Clear CAS scratch state without changing the plotted field")
-                .clicked();
-            ui.label("Input (scalar or vector)");
-            let input_width = ui.available_width();
-            let changed = ui
-                .add(egui::TextEdit::singleline(&mut panel.input).desired_width(input_width))
-                .on_hover_text("Enter a scalar formula or a comma-separated vector formula")
-                .changed();
-            ui.label("Operation");
-            egui::ComboBox::from_id_salt("cas_operation")
-                .selected_text(panel.operation.label())
-                // Do not impose egui's default combo-width floor on a narrow
-                // Controls panel. Both the button and menu text may wrap.
-                .width(0.0)
-                .wrap()
-                .show_ui(ui, |ui| {
-                    // Combo menus otherwise override wrapping with Extend.
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                    for op in Operation::ALL {
-                        if ui
-                            .selectable_value(&mut panel.operation, op, op.label())
-                            .on_hover_text("Choose a supported symbolic operation")
-                            .changed()
-                        {
-                            panel.last_request = None;
-                        }
-                    }
-                });
-            if panel.operation == Operation::Differentiate {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Variable");
-                    for var in Variable::ALL {
-                        if ui
-                            .selectable_value(&mut panel.variable, var, var.label())
-                            .on_hover_text("Differentiate with respect to this variable")
-                            .changed()
-                        {
-                            panel.last_request = None;
-                        }
-                    }
-                });
-            }
-            if changed {
-                panel.last_request = None;
-            }
-            panel.refresh(dimension);
-            ui.label(format!("Dimension: {}D (current app mode)", dimension));
-            if let Some(p) = panel.preview.clone() {
-                ui.label(format!(
-                    "Result — {}",
-                    if p.kind == ResultKind::Scalar {
-                        "Scalar"
-                    } else {
-                        "Vector"
-                    }
-                ))
-                .on_hover_text("Result kind is determined by the operation, not component count");
-                let mut result = p.formula.clone();
-                ui.add(
-                    egui::TextEdit::multiline(&mut result)
-                        .desired_width(content_width)
-                        .desired_rows(2)
-                        .interactive(false),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .button("Copy")
-                        .on_hover_text("Copy the complete current preview formula")
-                        .clicked()
-                    {
-                        ui.ctx().copy_text(p.formula.clone());
-                    }
-                    if p.kind == ResultKind::Vector
-                        && ui
-                            .add_enabled(
-                                panel.can_apply(dimension),
-                                egui::Button::new("Apply vector"),
-                            )
-                            .on_hover_text(
-                                "Replace the plotted field with this valid vector formula",
-                            )
-                            .clicked()
-                    {
-                        panel.apply(state, dimension);
-                    }
-                });
-            }
-            if let Some(err) = &panel.error {
-                ui.colored_label(ui.visuals().error_fg_color, format!("Error: {err}"));
+    let content_width = ui.available_width();
+    let reset = ui
+        .button("Reset")
+        .on_hover_text("Clear CAS scratch state without changing the plotted field")
+        .clicked();
+    ui.label("Input (scalar or vector)");
+    let input_width = ui.available_width();
+    let changed = ui
+        .add(egui::TextEdit::singleline(&mut panel.input).desired_width(input_width))
+        .on_hover_text("Enter a scalar formula or a comma-separated vector formula")
+        .changed();
+    ui.label("Operation");
+    egui::ComboBox::from_id_salt("cas_operation")
+        .selected_text(panel.operation.label())
+        // Do not impose egui's default combo-width floor on a narrow
+        // Controls panel. Both the button and menu text may wrap.
+        .width(0.0)
+        .wrap()
+        .show_ui(ui, |ui| {
+            // Combo menus otherwise override wrapping with Extend.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            for op in Operation::ALL {
+                if ui
+                    .selectable_value(&mut panel.operation, op, op.label())
+                    .on_hover_text("Choose a supported symbolic operation")
+                    .changed()
+                {
+                    panel.last_request = None;
+                }
             }
         });
+    if panel.operation == Operation::Differentiate {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Variable");
+            for var in Variable::ALL {
+                if ui
+                    .selectable_value(&mut panel.variable, var, var.label())
+                    .on_hover_text("Differentiate with respect to this variable")
+                    .changed()
+                {
+                    panel.last_request = None;
+                }
+            }
+        });
+    }
+    if changed {
+        panel.last_request = None;
+    }
+    panel.refresh(dimension);
+    ui.label(format!("Dimension: {}D (current app mode)", dimension));
+    if let Some(p) = panel.preview.clone() {
+        ui.label(format!(
+            "Result — {}",
+            if p.kind == ResultKind::Scalar {
+                "Scalar"
+            } else {
+                "Vector"
+            }
+        ))
+        .on_hover_text("Result kind is determined by the operation, not component count");
+        let mut result = p.formula.clone();
+        ui.add(
+            egui::TextEdit::multiline(&mut result)
+                .desired_width(content_width)
+                .desired_rows(2)
+                .interactive(false),
+        );
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Copy")
+                .on_hover_text("Copy the complete current preview formula")
+                .clicked()
+            {
+                ui.ctx().copy_text(p.formula.clone());
+            }
+            if p.kind == ResultKind::Vector
+                && ui
+                    .add_enabled(
+                        panel.can_apply(dimension),
+                        egui::Button::new("Apply vector"),
+                    )
+                    .on_hover_text("Replace the plotted field with this valid vector formula")
+                    .clicked()
+            {
+                panel.apply(state, dimension);
+            }
+        });
+    }
+    if let Some(err) = &panel.error {
+        ui.colored_label(ui.visuals().error_fg_color, format!("Error: {err}"));
+    }
     if reset {
         panel.reset();
     }

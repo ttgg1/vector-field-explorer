@@ -32,7 +32,7 @@ impl VfApp {
         // so only the camera mirror and domain recentre run here.
         let plan = layout::compact_plan(self.layout_mode);
         if plan.controls_panel {
-            self.show_controls_panel(ui);
+            self.show_left_panels(ui);
 
             // Ticket 65: a click on the Camera section's checkbox edits only the
             // mirror; apply it through the same fly seam C uses, then resync.
@@ -111,48 +111,109 @@ impl VfApp {
         });
     }
 
-    fn show_controls_panel(&mut self, ui: &mut egui::Ui) {
-        // Left Controls panel, or its collapsed rail. The panel is shown
-        // before the scene rebuild below so a control edit is reflected in this
-        // frame's snapshot and status-bar count. Its width is remembered in the
-        // layout record and restored on the next launch.
+    fn show_left_panels(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
+        let mut entries = [
+            RailEntry {
+                id: "controls",
+                label: "Controls",
+                shortcut: Some(menu::CONTROLS_SHORTCUT),
+                expanded: &mut self.layout.controls_expanded,
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            RailEntry {
+                id: "cas",
+                label: "CAS",
+                shortcut: None,
+                expanded: &mut self.layout.cas_expanded,
+            },
+        ];
+        show_rail_strip(
+            ui,
+            ("left_panel_rails", self.panel_generation),
+            layout::RailSide::Left,
+            &mut entries,
+        );
+        // One budget after top chrome and strip toggles, shared by all bodies.
+        // Include central frame margins so the painted viewport retains 100pt.
+        let mut requests = Vec::new();
         if self.layout.controls_expanded {
+            requests.push(self.layout.controls_width);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.layout.cas_expanded {
+            requests.push(self.layout.cas_width);
+        }
+        if self.layout.presets_expanded {
+            requests.push(self.layout.presets_width);
+        }
+        let right_rail = if self.layout.presets_expanded {
+            0.0
+        } else {
+            layout::RAIL_WIDTH
+        };
+        let widths = fit_panel_widths(
+            &requests,
+            ui.available_width() - right_rail - 100.0 - layout::VIEWPORT_CHROME_ALLOWANCE,
+        );
+        let mut widths = widths.into_iter();
+        if self.layout.controls_expanded {
+            let width = widths.next().unwrap();
             let mut collapse = false;
             let response = egui::Panel::left(("controls_panel", self.panel_generation))
-                .resizable(true)
-                .default_size(self.layout.controls_width)
-                .min_size(layout::MIN_PANEL_WIDTH)
-                .max_size(layout::MAX_PANEL_WIDTH)
+                .exact_size(width)
                 .show(ui, |ui| {
                     collapse = layout::collapse_button(
                         ui,
                         layout::RailSide::Left,
                         menu::CONTROLS_SHORTCUT,
                     );
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        crate::ui::sidebar::show(ui, &mut self.state, &mut self.controls);
-                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("controls_body")
+                        .show(ui, |ui| {
+                            crate::ui::sidebar::show(ui, &mut self.state, &mut self.controls);
+                        });
                 });
-            self.layout.controls_width = layout::clamp_width(
-                response.response.rect.width(),
-                layout::DEFAULT_CONTROLS_WIDTH,
-            );
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.controls_width = width;
+            }
             if collapse {
                 self.layout.controls_expanded = false;
             }
-        } else {
-            if layout::rail_panel(
-                ui,
-                ("controls_rail", self.panel_generation),
-                layout::RailSide::Left,
-                "Controls",
-                menu::CONTROLS_SHORTCUT,
-            )
-            .clicked
-            {
-                self.layout.controls_expanded = true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.layout.cas_expanded {
+            let width = widths.next().unwrap();
+            let mut collapse = false;
+            let response = egui::Panel::left(("cas_panel", self.panel_generation))
+                .exact_size(width)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        collapse = ui
+                            .add(egui::Button::new("‹").min_size(style_panel::button_min_size(ui)))
+                            .on_hover_text("Collapse CAS")
+                            .clicked();
+                        ui.strong("CAS");
+                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("cas_body")
+                        .show(ui, |ui| self.show_cas_body(ui));
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.cas_width = width;
+            }
+            if collapse {
+                self.layout.cas_expanded = false;
             }
         }
+        if self.layout.presets_expanded {
+            self.wide_presets_width = widths.next().unwrap();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_cas_body(&mut self, ui: &mut egui::Ui) {
+        crate::ui::cas_panel::show(ui, &mut self.state, &mut self.cas);
     }
 
     fn recentre_domain(&mut self, domain_before: Domain) {
@@ -213,24 +274,23 @@ impl VfApp {
         if self.layout.presets_expanded {
             let mut collapse = false;
             let response = egui::Panel::right(("presets_panel", self.panel_generation))
-                .resizable(true)
-                .default_size(self.layout.presets_width)
-                .min_size(layout::MIN_PANEL_WIDTH)
-                .max_size(layout::MAX_PANEL_WIDTH)
+                .exact_size(self.wide_presets_width)
                 .show(ui, |ui| {
                     collapse = layout::collapse_button(
                         ui,
                         layout::RailSide::Right,
                         menu::PRESETS_SHORTCUT,
                     );
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        camera_request = self.presets.show(ui, &mut self.camera, &mut self.state);
-                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("presets_body")
+                        .show(ui, |ui| {
+                            camera_request =
+                                self.presets.show(ui, &mut self.camera, &mut self.state);
+                        });
                 });
-            self.layout.presets_width = layout::clamp_width(
-                response.response.rect.width(),
-                layout::DEFAULT_PRESETS_WIDTH,
-            );
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
+                self.layout.presets_width = width;
+            }
             if collapse {
                 self.layout.presets_expanded = false;
             }
@@ -325,38 +385,41 @@ impl VfApp {
                     } else {
                         0.0
                     };
-                    let tab_width = ((ui.available_width() - close_width) / 2.0 - spacing)
-                        .max(layout::TOUCH_TARGET);
-                    if ui
-                        .add_sized(
-                            [tab_width, row_height],
-                            egui::Button::selectable(
-                                self.sheet.shows(SheetState::Controls),
-                                "Controls",
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.sheet.toggle(SheetState::Controls);
-                        if self.sheet.is_open() {
-                            self.sheet_expanded = SheetSize::Default;
-                        }
-                    }
-                    if ui
-                        .add_sized(
-                            [tab_width, row_height],
-                            egui::Button::selectable(
-                                self.sheet.shows(SheetState::Presets),
-                                "Presets",
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.sheet.toggle(SheetState::Presets);
-                        if self.sheet.is_open() {
-                            self.sheet_expanded = SheetSize::Default;
-                        }
-                    }
+                    let tabs = [
+                        (SheetState::Controls, "Controls"),
+                        #[cfg(not(target_arch = "wasm32"))]
+                        (SheetState::Cas, "CAS"),
+                        (SheetState::Presets, "Presets"),
+                    ];
+                    let available = (ui.available_width() - close_width).max(0.0);
+                    egui::ScrollArea::horizontal()
+                        .id_salt("compact_tabs")
+                        .max_width(available)
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let equal = (available / tabs.len() as f32 - spacing)
+                                    .max(layout::TOUCH_TARGET);
+                                for (sheet, label) in tabs {
+                                    // add_sized retains the measured text+padding minimum;
+                                    // excess width scrolls rather than shrinking touch targets.
+                                    if ui
+                                        .add_sized(
+                                            [equal, row_height],
+                                            egui::Button::selectable(
+                                                self.sheet.shows(sheet),
+                                                label,
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.sheet.toggle(sheet);
+                                        self.sheet_expanded = SheetSize::Default;
+                                    }
+                                }
+                            });
+                        });
                     if self.sheet.is_open()
                         && ui
                             .add_sized([layout::TOUCH_TARGET, row_height], egui::Button::new("✕"))
@@ -404,6 +467,8 @@ impl VfApp {
                 ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
                 let title = match sheet {
                     SheetState::Controls => "Controls",
+                    #[cfg(not(target_arch = "wasm32"))]
+                    SheetState::Cas => "CAS",
                     SheetState::Presets => "Presets",
                     SheetState::None => "",
                 };
@@ -467,6 +532,8 @@ impl VfApp {
                             self.presets
                                 .show_compact(ui, &mut self.camera, &mut self.state, true);
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    SheetState::Cas => self.show_cas_body(ui),
                     SheetState::None => {}
                 });
             });
@@ -525,5 +592,38 @@ impl VfApp {
         // Help > Keyboard & mouse (ticket 18): the full help table, the same
         // strings the overlay above renders.
         crate::ui::help_overlay::help_window(ui.ctx(), &mut self.help_open);
+    }
+}
+
+/// Intentional edge drags alone update requested widths. Panels use exact
+/// budgeted widths so egui's stored automatic squeeze can never become a request.
+fn resize_panel(ui: &mut egui::Ui, panel: &egui::Response, side: layout::RailSide) -> Option<f32> {
+    let rect = panel.rect;
+    let edge = match side {
+        layout::RailSide::Left => rect.right(),
+        layout::RailSide::Right => rect.left(),
+    };
+    let handle = egui::Rect::from_min_max(
+        egui::pos2(edge - 3.0, rect.top()),
+        egui::pos2(edge + 3.0, rect.bottom()),
+    );
+    let response = ui
+        .interact(
+            handle,
+            panel.id.with("requested_width"),
+            egui::Sense::drag(),
+        )
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    if (response.dragged() || response.drag_stopped())
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let width = match side {
+            layout::RailSide::Left => pos.x - rect.left(),
+            layout::RailSide::Right => rect.right() - pos.x,
+        };
+        ui.ctx().request_repaint();
+        Some(layout::clamp_width(width, rect.width()))
+    } else {
+        None
     }
 }

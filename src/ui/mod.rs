@@ -5,6 +5,7 @@ pub mod formula_bar;
 pub mod help_overlay;
 pub mod layout;
 pub mod menu;
+pub mod panel_rails;
 pub mod presets;
 pub mod sidebar;
 pub mod status_bar;

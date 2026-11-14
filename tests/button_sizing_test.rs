@@ -401,25 +401,6 @@ fn real_cas_buttons_and_selector_fit_supported_fonts_and_compact_floor() {
                         cas_panel::show(ui, &mut state, &mut panel);
                     });
             };
-            let out = frame(&ctx, compact, vec![], &mut draw);
-            let header = out
-                .platform_output
-                .accesskit_update
-                .as_ref()
-                .unwrap()
-                .nodes
-                .iter()
-                .find_map(|(_, node)| {
-                    (node.label() == Some("Symbolic tools (native)"))
-                        .then(|| node.bounds().unwrap())
-                })
-                .unwrap();
-            let pos = egui::pos2(
-                ((header.x0 + header.x1) / 2.0) as f32,
-                ((header.y0 + header.y1) / 2.0) as f32,
-            );
-            frame(&ctx, compact, pointer(pos, true), &mut draw);
-            frame(&ctx, compact, pointer(pos, false), &mut draw);
             for _ in 0..3 {
                 frame(&ctx, compact, vec![], &mut draw);
             }
@@ -460,7 +441,32 @@ fn real_compact_app_tabs_keep_large_font_ink_inside_the_panel() {
         }
         let out = frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
         assert_text_fits(&out, "Controls", true);
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_text_fits(&out, "CAS", true);
+        let tab_pos = button(&out, "Controls").center();
+        let scroll = |x| {
+            vec![
+                egui::Event::PointerMoved(tab_pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(x, 0.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                },
+            ]
+        };
+        frame_at(&ctx, 360.0, 800.0, scroll(-400.0), &mut draw);
+        for _ in 0..10 {
+            frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
+        }
+        let out = frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
         assert_text_fits(&out, "Presets", true);
+        frame_at(&ctx, 360.0, 800.0, scroll(400.0), &mut draw);
+        for _ in 0..10 {
+            frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
+        }
+        let out = frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
         let pos = button(&out, "Controls").center();
         frame_at(&ctx, 360.0, 800.0, pointer(pos, true), &mut draw);
         frame_at(&ctx, 360.0, 800.0, pointer(pos, false), &mut draw);

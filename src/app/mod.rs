@@ -109,6 +109,10 @@ pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
     pub controls: Controls,
+    /// Effective width for the later Presets phase; never persisted.
+    wide_presets_width: f32,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cas: crate::ui::cas_panel::CasPanelState,
     pub status: StatusBarState,
     /// Smoothed FPS/frame-time source, fed once per frame from `stable_dt`.
     pub fps_meter: FpsMeter,
@@ -242,6 +246,9 @@ impl VfApp {
             state,
             bar: FormulaBarState::new(),
             controls,
+            wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas: crate::ui::cas_panel::CasPanelState::default(),
             status: StatusBarState::default(),
             fps_meter: FpsMeter::default(),
             hint_elapsed: 0.0,
