@@ -260,6 +260,15 @@ impl Default for Particles {
 }
 
 impl Particles {
+    /// An empty cloud with an explicit particle RNG state; zero is valid.
+    /// This controls only spawn/respawn randomness, not field or streamline math.
+    pub fn with_seed(seed: u64) -> Self {
+        Self {
+            rng: seed,
+            ..Self::default()
+        }
+    }
+
     /// A cloud holding exactly `pos` at the default pseudo-random seed.
     ///
     /// Test seam (ticket 13): integration tests in `tests/` must place points
@@ -948,4 +957,3 @@ pub const DOT_QUAD_CORNERS: [[f32; 2]; 6] = [
 pub fn dot_billboard_corners(origin: Vec3, radius: f32, right: Vec3, up: Vec3) -> [Vec3; 6] {
     DOT_QUAD_CORNERS.map(|[x, y]| origin + (right * x + up * y) * radius)
 }
-

@@ -63,7 +63,13 @@ Native `cli` configuration exposes the pure `output_frame` seam implemented in
 and straight-alpha sRGB/linear background values for both export backends;
 `PreparedScene` pairs that frame with renderer-ready `SceneGPU`. Geometry,
 camera applicability and background conversion are covered by
-`tests/cli_scene_test.rs`.
+`tests/cli_scene_test.rs`. The same module's `prepare_scene` preflights an indexed
+f64 time schedule before seeded particle spawn/advection, then samples the final
+f32 endpoint once through `State::snapshot`, composes references onto its flow
+lines, and builds/sorts particle trails and the 3D combined arrow/dot stream.
+Only CLI start/duration/fixed-step settings retain f64 input precision; existing
+state and RK4 arguments stay f32. `Particles::with_seed` accepts an explicit RNG
+state (including zero) without changing the GUI's default stream.
 
 `viewmodel::State` is the single source of truth for what the viewport shows.
 Every user edit goes through one of its setters, which owns parsing, clamping,

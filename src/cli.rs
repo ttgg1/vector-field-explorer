@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 #[path = "cli_scene.rs"]
 mod scene;
-pub use scene::{OutputFrame, PreparedScene, output_frame};
+pub use scene::{OutputFrame, PreparedScene, output_frame, prepare_scene};
 
 use crate::{
     arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D},
@@ -216,9 +216,9 @@ pub struct CliConfig {
     pub references: Option<ReferencesPatch>,
     pub background: Option<[u8; 4]>,
     pub seed: Option<u64>,
-    pub start_time_seconds: Option<f32>,
-    pub duration_seconds: Option<f32>,
-    pub fixed_step_seconds: Option<f32>,
+    pub start_time_seconds: Option<f64>,
+    pub duration_seconds: Option<f64>,
+    pub fixed_step_seconds: Option<f64>,
 }
 
 fn comma_array<T: std::str::FromStr, const N: usize>(s: &str) -> Result<[T; N], String> {
@@ -347,11 +347,11 @@ pub struct CliFlags {
     #[arg(long)]
     pub seed: Option<u64>,
     #[arg(long)]
-    pub start_time: Option<f32>,
+    pub start_time: Option<f64>,
     #[arg(long)]
-    pub duration: Option<f32>,
+    pub duration: Option<f64>,
     #[arg(long)]
-    pub fixed_step: Option<f32>,
+    pub fixed_step: Option<f64>,
 }
 
 pub fn parse_flags(args: impl IntoIterator<Item = OsString>) -> Result<CliFlags, CliError> {
@@ -441,9 +441,9 @@ pub struct CliOptions {
     pub references: ReferencesOptions,
     pub background: [u8; 4],
     pub seed: u64,
-    pub start_time_seconds: f32,
-    pub duration_seconds: f32,
-    pub fixed_step_seconds: f32,
+    pub start_time_seconds: f64,
+    pub duration_seconds: f64,
+    pub fixed_step_seconds: f64,
 }
 
 macro_rules! overlay { ($base:expr, $other:expr, $($field:ident),+ $(,)?) => {
@@ -461,6 +461,16 @@ fn range(name: &str, v: f32, min: f32, max: f32) -> Result<(), CliError> {
 fn number(name: &str, v: Option<f32>, min: f32, max: f32) -> Result<(), CliError> {
     if let Some(v) = v {
         range(name, v, min, max)?;
+    }
+    Ok(())
+}
+fn time_number(name: &str, v: Option<f64>, min: f64, max: f64) -> Result<(), CliError> {
+    if let Some(v) = v
+        && (!v.is_finite() || !(min..=max).contains(&v))
+    {
+        return Err(CliError::Validation(format!(
+            "{name} must be finite and in {min}..={max}"
+        )));
     }
     Ok(())
 }
@@ -547,9 +557,9 @@ pub fn validate_intrinsic_config(c: &CliConfig) -> Result<(), CliError> {
     number("proportional_exponent", c.proportional_exponent, 0.25, 4.0)?;
     integer("particle_count", c.particle_count, 0, 4000)?;
     number("particle_size", c.particle_size, 0.25, 3.0)?;
-    number("start_time_seconds", c.start_time_seconds, 0.0, 3600.0)?;
-    number("duration_seconds", c.duration_seconds, 0.0, 3600.0)?;
-    number("fixed_step_seconds", c.fixed_step_seconds, 0.0001, 0.25)?;
+    time_number("start_time_seconds", c.start_time_seconds, 0.0, 3600.0)?;
+    time_number("duration_seconds", c.duration_seconds, 0.0, 3600.0)?;
+    time_number("fixed_step_seconds", c.fixed_step_seconds, 0.0001, 0.25)?;
     if let Some(d) = &c.domain {
         triple("domain.min", d.min, true)?;
         triple("domain.max", d.max, true)?;
@@ -562,7 +572,7 @@ pub fn validate_intrinsic_config(c: &CliConfig) -> Result<(), CliError> {
         }
     }
     if let (Some(start), Some(duration)) = (c.start_time_seconds, c.duration_seconds)
-        && start as f64 + duration as f64 > 3600.0
+        && start + duration > 3600.0
     {
         return Err(CliError::Validation(
             "start plus duration exceeds 3600 seconds".into(),
@@ -1037,7 +1047,7 @@ pub fn validate_effective(o: &CliOptions) -> Result<(), CliError> {
         ..Default::default()
     };
     validate_intrinsic_config(&c)?;
-    if o.start_time_seconds as f64 + o.duration_seconds as f64 > 3600.0 {
+    if o.start_time_seconds + o.duration_seconds > 3600.0 {
         return Err(CliError::Validation(
             "start plus duration exceeds 3600 seconds".into(),
         ));

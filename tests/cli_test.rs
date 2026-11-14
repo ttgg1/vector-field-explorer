@@ -627,3 +627,58 @@ fn enums_tuples_range_patch_and_forbidden_null_keep_strict_schema() {
         Some([-1.0, 2.0])
     );
 }
+#[test]
+fn requested_times_retain_f64_precision_and_validate_before_overlay() {
+    let json = r#"{"output":"x.png","start_time_seconds":2.0000000001,"duration_seconds":0.25,"fixed_step_seconds":0.01}"#;
+    let config = parse_config(json).unwrap();
+    assert_eq!(config.start_time_seconds.unwrap(), 2.0000000001);
+    assert_eq!(config.fixed_step_seconds.unwrap(), 0.01);
+    let o = resolve_config(Some(config), flags(&[])).unwrap();
+    assert_eq!(o.start_time_seconds, 2.0000000001);
+    assert_eq!(o.duration_seconds, 0.25);
+    assert_eq!(o.fixed_step_seconds, 0.01);
+    let o = resolve_config(
+        None,
+        flags(&[
+            "-o",
+            "x.png",
+            "--start-time",
+            "2.0000000001",
+            "--duration",
+            "0.25",
+            "--fixed-step",
+            "0.01",
+        ]),
+    )
+    .unwrap();
+    assert_eq!(o.start_time_seconds, 2.0000000001);
+    assert_eq!(o.fixed_step_seconds, 0.01);
+    for (key, value) in [
+        ("start_time_seconds", "3600.0000000001"),
+        ("duration_seconds", "3600.0000000001"),
+        ("fixed_step_seconds", "0.25000000001"),
+        ("fixed_step_seconds", "0.000099999999999"),
+    ] {
+        let c = parse_config(&format!(r#"{{"output":"x.png","{key}":{value}}}"#)).unwrap();
+        assert!(
+            resolve_config(
+                Some(c),
+                flags(&[
+                    "--start-time",
+                    "0",
+                    "--duration",
+                    "0",
+                    "--fixed-step",
+                    "0.01"
+                ])
+            )
+            .is_err(),
+            "{key}={value}"
+        );
+    }
+    let c = parse_config(
+        r#"{"output":"x.png","start_time_seconds":3600,"duration_seconds":0.0000000001}"#,
+    )
+    .unwrap();
+    assert!(resolve_config(Some(c), flags(&[])).is_err());
+}
