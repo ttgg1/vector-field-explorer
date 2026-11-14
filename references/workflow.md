@@ -1,10 +1,8 @@
 # Workflow — current policy
 
-Tracked policy authority, reconciled 2026-11-11 with the owner and main-root
-`.superpowers/sdd/2026-11-10-native-cas/progress.md` (latest dated sections),
-its `session-handoff-2026-11-11.md`, and `.scratch/field-viewport/QUEUE.md`.
+Tracked policy authority, reconciled with the owner's 2026-11-14 rulings.
 New owner rulings take precedence; update durable policy here, not across wiki pages.
-Local ledger/queue/handoff paths below are relative to the **main checkout**,
+Local evidence paths below are relative to the **main checkout**,
 `/home/paul/projects/vector-field-explorer`, unless explicitly stated otherwise.
 Historical ledger citations resolve to the owning SDD workspace's
 `archive/progress-through-2026-11-11.md`; original line numbers refer to that
@@ -12,19 +10,37 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
 
 ## Authority and scope
 
-- Requirements live in the owning ticket/spec; the queue schedules them. The
-  controller records progress and `Ruling: <decision> — <why>` in the active
-  ledger with `git rev-parse`-verifiable commits. Update the queue at dispatch,
-  review, blocker, reprioritization and merge transitions; preserve tickets.
-- **Current stop:** finish ticket 76 integration, this documentation cleanup,
-  and the session handoff, then break. Do not implement 77 or launch later work.
-  Read the live handoff before resuming; this stop supersedes continuous-queue
-  authority. Future physics model choices remain proposed, not approved.
+- [GitHub Issues](https://github.com/ttgg1/vector-field-explorer/issues) owns
+  **all outstanding requirements, claims, status, discussion and dependencies**,
+  including blocked/future work. Link the owning spec and evidence there; update
+  dispatch, review, blocker, reprioritization and merge transitions there.
+  Before dispatch, read the issue's current assignees, explicit agent claims,
+  discussion and dependencies. An empty assignee list does not cancel an active
+  agent claim; coordinate ownership rather than assigning a human stand-in.
+- The controller retains the active ledger
+  `.superpowers/sdd/2026-11-10-native-cas/progress.md`, recording progress and
+  `Ruling: <decision> — <why>` with `git rev-parse`-verifiable commits and GitHub
+  links. Git plus verified reports establish completion, not a status line.
+  Preserve `.scratch/field-viewport/issues/` and `QUEUE.md` beside it as historical
+  evidence/recovery aids, not a parallel tracker. Old handoffs are dated evidence.
+  For legacy IDs, consult `github-issue-migration-2026-11-14.md` beside the ledger;
+  its later physics mapping/decisions are in `physics-ticket-publication-2026-11-14.md`
+  and `physics-roadmap-decisions-2026-11-14.md`. Distinguish GitHub and local IDs.
+- The owner resumed the queue and authorized integration when ready; the former
+  stop after local ticket 76 is retired. Select the **cheapest dependency-ready**
+  authorized work by relative estimated effort, after design and ownership gates;
+  historical phase order is not mandatory and creates no artificial dependencies.
+  Physics [#17](https://github.com/ttgg1/vector-field-explorer/issues/17) owns the
+  roadmap; [#24](https://github.com/ttgg1/vector-field-explorer/issues/24) is an
+  evidence/design frontier, not evaluator implementation or numerical approval.
+  Planning approval and evidence spikes do not approve algorithms, tolerances,
+  query envelopes or work limits; follow the current issue's design/review gates.
 - Before creating tickets from feedback, use `grilling`; add `domain-modeling`
   for terminology/hard-to-reverse decisions. Group/deduplicate findings, extend
   the owning ticket for refinements, ledger rulings, and obtain confirmation of
   the resulting ticket set. Ask the whole current frontier in rounds before
-  finalizing feedback-derived tickets. Approved scope still needs just-in-time design.
+  finalizing feedback-derived tickets. AI-created GitHub issues require the
+  `opencode` label. Approved scope still needs just-in-time design.
 - Feature work uses brainstorming/planning then SDD + TDD; bugs use systematic
   diagnosis before fixes. Use domain-modeling for glossary/ADR changes.
 
@@ -50,6 +66,8 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
    complex/high-risk changes still require scoped independent re-review.
 5. Use `feat:` / `fix:` / `docs:` commits, one set per task. A subject containing
    `(ticket NN)` requires a matching [review record](../docs/wiki/process/review-records.md).
+   Future AI-created commits require the `Generated-by: OpenCode` trailer;
+   preserve old/shared history rather than rewriting it to add attribution.
 
 Helpers/templates are under
 `~/.cache/opencode/npm/git-superpowers-*/<version>/node_modules/superpowers/skills/subagent-driven-development/`.
@@ -60,7 +78,11 @@ Review packages use the last reviewed HEAD as round BASE; verify ancestry.
 
 ## Seats and recovery
 
-Always pass model and variant explicitly:
+Use these preferred seats when model selection is allowed by the harness.
+Pass model/variant explicitly only when the tool contract permits it; when it
+requires an explicit user request for a particular model, obtain that request
+before setting the argument. Otherwise use the permitted default and record the
+actual seat; this table does not override higher-priority tool restrictions.
 
 | Role | Model | Effort |
 | --- | --- | --- |
@@ -117,4 +139,5 @@ work beyond an explicit stop point. Never force-push main.
 
 At phase boundaries, use DCP `compress` when available, preserving paths,
 rulings, hashes and blockers. Final handoff records verified HEAD/merge, gates
-and waivers, queue, open findings, active/parked seats and the resume boundary.
+and waivers, GitHub work/claim links, open findings, active/parked seats and the
+resume boundary.

@@ -7,13 +7,14 @@ keep dependencies compatible.
 
 1. Read [Workflow](references/workflow.md) before dispatch, implementation,
    review, or integration: it is the single tracked authority for current policy.
-2. Reconcile current work from the main checkout's local resources (ignored,
-   not necessarily present in worktrees):
-   - `.superpowers/sdd/2026-11-10-native-cas/progress.md`, latest dated rulings,
-     and `session-handoff-2026-11-11.md` beside it;
-   - `.scratch/field-viewport/QUEUE.md` for scheduling;
-   - `.scratch/field-viewport/issues/NN-slug.md` for requirements;
-   - verifiable Git history for completion. A queue/status line is not evidence.
+2. Reconcile outstanding requirements, claims, status, discussion and dependencies
+   in [GitHub Issues](https://github.com/ttgg1/vector-field-explorer/issues)
+   before dispatch. Workflow defines claim checks, attribution and scheduling.
+   For recovery/provenance, read the main checkout's ignored
+   `.superpowers/sdd/2026-11-10-native-cas/progress.md` (latest dated rulings)
+   and relevant reports. The migration and physics mapping pointers are in
+   Workflow; preserved local tickets/queue and old handoffs are historical
+   evidence, not current authority. Verify completion against Git and reports.
 3. Read only the references needed for the task:
    - **Code/navigation:** [module map](docs/CODEBASE.md).
    - **Rust, UI, rendering, persistence:** [engineering notes](references/rust.md).
