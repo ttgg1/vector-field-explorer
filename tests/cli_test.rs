@@ -1,5 +1,233 @@
 use std::ffi::OsString;
 
+fn native_command(root: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_vector-field-explorer"));
+    command
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env("WGPU_BACKEND", "noop")
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_CACHE_HOME", root.join("gpu-cache"))
+        .env("HOME", root.join("home"));
+    command
+}
+
+#[test]
+fn native_dispatch_help_version_exports_and_contextual_errors() {
+    let root = std::env::temp_dir().join(format!("vfe-dispatch-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for flag in ["--help", "--version"] {
+        let result = native_command(&root).arg(flag).output().unwrap();
+        assert!(
+            result.status.success(),
+            "{flag}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!result.stdout.is_empty());
+    }
+    let config = root.join("input.json");
+    std::fs::write(&config, r#"{"output":"unused.png","width":91,"height":67,"formula":"(1,0)","references":{"grid_and_domain_box":false,"world_axes":false}}"#).unwrap();
+    let output = root.join("field.SVG");
+    let result = native_command(&root)
+        .arg("--config")
+        .arg(&config)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let svg = std::fs::read_to_string(&output).unwrap();
+    assert!(svg.contains("<polygon"), "actual field geometry missing");
+    assert!(svg.contains("91") && svg.contains("67"));
+    for (args, expected) in [
+        (vec!["--bogus"], "unexpected argument"),
+        (vec!["--width", "0", "-o", "x.svg"], "width"),
+        (vec!["--formula", "(unknown,0)", "-o", "x.svg"], "unknown"),
+        (vec!["--mode", "3d", "-o", "x.svg"], "3D SVG"),
+        (vec!["-o", "x.png"], "adapter"),
+        (vec!["--config", "/nonexistent-vfe-config.json"], "config"),
+        (
+            vec![
+                "--duration",
+                "3600",
+                "--fixed-step",
+                "0.0001",
+                "-o",
+                "x.svg",
+            ],
+            "100,000",
+        ),
+    ] {
+        let result = native_command(&root).args(&args).output().unwrap();
+        assert!(!result.status.success(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(expected),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let result = native_command(&root)
+        .arg("-o")
+        .arg(root.join("missing/field.svg"))
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("write"));
+    std::fs::write(&config, "{bad JSON").unwrap();
+    let result = native_command(&root)
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("config"));
+    std::fs::write(&config, r#"{"density":201}"#).unwrap();
+    let result = native_command(&root)
+        .arg("--config")
+        .arg(&config)
+        .args(["--density", "8", "-o"])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("density"));
+    // Linux's GUI cannot start without a display; this proves the retained route.
+    #[cfg(target_os = "linux")]
+    {
+        let result = native_command(&root).output().unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!stderr.contains("output path is required"));
+        assert!(stderr.contains("DISPLAY") || stderr.contains("display"));
+    }
+    for dir in ["config", "data", "home"] {
+        assert!(
+            !root.join(dir).exists(),
+            "unexpected persistence directory: {dir}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_dispatch_preserves_non_utf8_config_and_output_paths() {
+    use std::os::unix::ffi::OsStringExt;
+    let root = std::env::temp_dir().join(format!("vfe-paths-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let config = root.join(OsString::from_vec(b"config-\xff.json".to_vec()));
+    let output = root.join(OsString::from_vec(b"field-\xff.svg".to_vec()));
+    std::fs::write(&config, r#"{"formula":"(1,0)"}"#).unwrap();
+    let result = native_command(&root)
+        .arg("--config")
+        .arg(&config)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        std::fs::read_to_string(output)
+            .unwrap()
+            .contains("<polygon")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Invoked explicitly by scripts/test-cli-dispatch.sh; ordinary suite runs
+/// are not real-adapter evidence and do not require a GPU.
+#[test]
+fn displayless_native_dispatch_worker() {
+    if std::env::var_os("VFE_CLI_RUNTIME").is_none() {
+        return;
+    }
+    assert!(std::env::var_os("DISPLAY").is_none());
+    assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+    let root = std::env::temp_dir().join(format!("vfe-cli-runtime-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for dir in ["config", "data", "home"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+        std::fs::write(
+            root.join(dir).join("sentinel"),
+            b"unchanged GUI persistence",
+        )
+        .unwrap();
+    }
+    for mode in ["2d", "3d"] {
+        let path = root.join(format!("{mode}.PNG"));
+        let mut command = native_command(&root);
+        command.env_remove("WGPU_BACKEND");
+        if let Some(backend) = std::env::var_os("WGPU_BACKEND") {
+            command.env("WGPU_BACKEND", backend);
+        }
+        let result = command
+            .args([
+                "--mode",
+                mode,
+                "--width",
+                "129",
+                "--height",
+                "97",
+                "--density",
+                "8",
+                "--references-grid-and-box",
+                "false",
+                "--references-world-axes",
+                "false",
+                "--background-rgba",
+                "73,131,207,109",
+                "--output",
+            ])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let image = image::open(&path).unwrap().to_rgba8();
+        assert_eq!(image.dimensions(), (129, 97));
+        let field_pixels = image
+            .pixels()
+            .filter(|pixel| pixel.0 != [73, 131, 207, 109])
+            .count();
+        assert!(field_pixels > 0, "{mode}: blank field-only PNG");
+        eprintln!(
+            "native subprocess {mode}: decoded 129x97 PNG, {field_pixels} non-background pixels"
+        );
+    }
+    let result = native_command(&root)
+        .env_remove("WGPU_BACKEND")
+        .args(["--width", "8", "--height", "8", "--output"])
+        .arg(root.join("missing/field.png"))
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("write PNG"));
+    for dir in ["config", "data", "home"] {
+        let entries = std::fs::read_dir(root.join(dir))
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1, "persistence write in {dir}");
+        assert_eq!(
+            std::fs::read(root.join(dir).join("sentinel")).unwrap(),
+            b"unchanged GUI persistence"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 use vector_field_explorer::cli::{
     CameraKind, CliError, Mode, parse_config, parse_flags, resolve_config,
     validate_intrinsic_config,

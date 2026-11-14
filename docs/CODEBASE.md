@@ -23,6 +23,7 @@ One Rust crate, `vector-field-explorer`, built two ways:
 | Target | Entry point | UI/GPU runtime | Storage |
 | --- | --- | --- | --- |
 | Native desktop | `src/main.rs::main` | `eframe::run_native`, wgpu | eframe app storage (RON under `eframe::APP_KEY`) |
+| Native CLI | `src/main.rs::main` → `cli::run_from` | CPU SVG / displayless wgpu PNG | explicit output file only; no GUI persistence |
 | Browser | `src/main.rs::start` (`#[wasm_bindgen(start)]`) | `eframe::WebRunner`, wgpu/WebGPU | eframe's browser storage + `localStorage` for camera presets |
 
 The crate is both `cdylib` and `rlib` ([Cargo.toml](../Cargo.toml)), so the wasm
@@ -166,7 +167,7 @@ The one seam is `cfg(target_arch = "wasm32")`, not a second app.
 
 | Concern | Native | Browser |
 | --- | --- | --- |
-| Startup | `main` → `eframe::run_native` | `start` → `ensure_webgpu` → `WebRunner::start` |
+| Startup | `main` → CLI when arguments supplied, otherwise `eframe::run_native` | `start` → `ensure_webgpu` → `WebRunner::start` |
 | Window options | `window.rs::window_options` | eframe `WebOptions` |
 | Logging | `env_logger` to stderr, default `info` | `console_log` at `Info` |
 | Time | `std::time` | `web-time` |
@@ -235,11 +236,14 @@ including the pre-start WebGPU gate and the static fallback UI.
 **Invariants.**
 - Native initializes `env_logger`, logs the version from `version::VERSION`, and
   never runs on wasm.
+- After logging setup, arguments dispatch to `cli::run_from` before window options
+  or app construction; help/version succeed without a window or GPU. No arguments
+  retain the ordinary GUI path and its startup log.
 - Wasm initializes `console_log`, checks `navigator.gpu` and awaits
   `requestAdapter()` before `WebRunner::new()`, reveals `#webgpu-unsupported`
   with the reason on failure, hides the panel on success, and removes `#loading`
   only after the runner starts.
-- Both paths install `fonts::install` and construct
+- Both GUI paths install `fonts::install` and construct
   `VfApp::new_with_storage(cc.storage)`.
 - `show_startup_error` changes the loading overlay text rather than panicking.
 
@@ -251,14 +255,14 @@ including the pre-start WebGPU gate and the static fallback UI.
 `navigator.gpu` and an adapter exist, not that every WebGPU feature the app uses
 is available.
 
-#### `src/cli.rs` — native plot export configuration
+#### `src/cli.rs` — native plot export configuration and dispatch
 
 **Purpose.** Parse one-shot export flags and strict JSON, overlay config with
 explicit flags, and validate the resolved settings without opening a window.
 
 **Public API.** Native-only `CliConfig`, `CliFlags`, `CliOptions`, `CliError`,
 `parse_config`, `parse_flags`, `resolve_config`, `validate_intrinsic_config`,
-and `validate_effective`. See the [CLI export spec](superpowers/specs/2026-11-11-cli-plot-export-design.md)
+`validate_effective`, `run_from` and `run_export`. See the [user CLI guide](cli.md)
 for the complete JSON/flag mapping.
 
 **Invariants.** Unknown JSON members are rejected, including nested members;
@@ -269,10 +273,14 @@ markers for mode applicability. Clap and pollster are native-only dependencies.
 
 **Pinned by.** `tests/cli_test.rs`, registered in the native suite.
 
-**Current boundary.** Scene preparation, CPU SVG serialization and offscreen
-RGBA8 rendering are available; CLI dispatch/PNG file writing and `src/main.rs`
-wiring are later tasks.
-The existing no-argument GUI path is unchanged.
+**Dispatch.** `run_from` handles clap help/version, reads an optional strict JSON
+config, resolves flags and calls `run_export`. The latter validates and prepares
+one scene, selects CPU SVG or offscreen RGBA8 + PNG encoding by output extension,
+and writes the explicit path with contextual errors. Neither constructs `VfApp`,
+uses storage, nor opens dialogs. No-argument GUI and wasm startup are unchanged.
+`tests/cli_test.rs` exercises the actual executable with child-only environments;
+`scripts/test-cli-dispatch.sh` separately runs real displayless 2D/3D PNG decoding,
+non-background field checks and persistence sentinels through the wired binary.
 
 #### `src/cli_svg.rs` — native CPU vector export
 

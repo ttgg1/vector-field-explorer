@@ -1,4 +1,4 @@
-//! Native one-shot plot configuration; dispatch and backends are added separately.
+//! Native one-shot plot configuration and window-free export dispatch.
 use std::{ffi::OsString, path::PathBuf};
 
 use clap::{Parser, ValueEnum};
@@ -364,6 +364,57 @@ pub struct CliFlags {
 
 pub fn parse_flags(args: impl IntoIterator<Item = OsString>) -> Result<CliFlags, CliError> {
     CliFlags::try_parse_from(args).map_err(|e| CliError::Parse(e.to_string()))
+}
+
+/// Run a one-shot invocation, including successful help/version requests.
+/// The native entry point retains GUI ownership when there are no arguments.
+pub fn run_from(args: impl IntoIterator<Item = OsString>) -> Result<(), CliError> {
+    let flags = match CliFlags::try_parse_from(args) {
+        Ok(flags) => flags,
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            return error
+                .print()
+                .map_err(|e| CliError::Write(format!("write CLI help/version: {e}")));
+        }
+        Err(error) => return Err(CliError::Parse(error.to_string())),
+    };
+    let config = flags
+        .config
+        .as_ref()
+        .map(|path| {
+            let json = std::fs::read_to_string(path)
+                .map_err(|e| CliError::Config(format!("read config {}: {e}", path.display())))?;
+            parse_config(&json)
+                .map_err(|e| CliError::Config(format!("config {}: {e}", path.display())))
+        })
+        .transpose()?;
+    run_export(resolve_config(config, flags)?)
+}
+
+/// Prepare one final scene and save it to the explicit path, without GUI state.
+pub fn run_export(options: CliOptions) -> Result<(), CliError> {
+    validate_effective(&options)?;
+    let prepared = prepare_scene(&options, output_frame(&options)?)?;
+    if output_extension(&options.output)?.eq_ignore_ascii_case("svg") {
+        std::fs::write(&options.output, scene_to_cli_svg(&prepared)?)
+            .map_err(|e| CliError::Write(format!("write SVG {}: {e}", options.output.display())))
+    } else {
+        let pixels = render_offscreen(&prepared)?;
+        image::save_buffer_with_format(
+            &options.output,
+            &pixels,
+            options.width,
+            options.height,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .map_err(|e| CliError::Write(format!("write PNG {}: {e}", options.output.display())))
+    }
 }
 
 fn reject_nulls(value: &serde_json::Value, path: &str) -> Result<(), CliError> {
