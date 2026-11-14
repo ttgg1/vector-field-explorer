@@ -1518,15 +1518,18 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`layout`, `menu`, `presets`, `sidebar`, `status_bar`, `style_panel`, `top_bar`,
+`layout`, `menu`, `panel_rails`, `presets`, `sidebar`, `status_bar`, `style_panel`, `top_bar`,
 `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
-Native-only Controls section for transient scalar/vector formula input,
+Native-only independent panel for transient scalar/vector formula input,
 operation preview, copy, and explicitly applying validated vector results.
+`VfApp::cas` owns scratch state; `app/panels.rs::show_left_panels` assembles its
+rail/body independently of Controls, and Compact reuses the single sheet.
+`tests/cas_rails_test.rs` exercises actual rail/menu/tab/Apply and resize paths.
 Preview identity includes input, operation, variable, and the current app mode;
 CAS scratch is not persisted.
 

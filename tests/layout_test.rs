@@ -3,7 +3,7 @@
 // Ticket 22 adds the rotated rail-label seam: angles, placement, chevron and
 // the unchanged click/tooltip contract.
 
-use crate::persistence_test::{from_ron, ron_string};
+use crate::support::storage::{from_ron, ron_string};
 use eframe::egui;
 
 use crate::support;
@@ -24,29 +24,42 @@ const _: () = assert!(RAIL_WIDTH < MIN_PANEL_WIDTH);
 // 14 pt type), so the band must clear that, not merely the 26 pt outer width
 // the first pass codified.
 const _: () = assert!(RAIL_LABEL_SIZE >= 13.0);
-const _: () = assert!(
-    RAIL_WIDTH - 2.0 * RAIL_FRAME_MARGIN as f32 >= RAIL_LABEL_SIZE * 1.15
-);
+const _: () = assert!(RAIL_WIDTH - 2.0 * RAIL_FRAME_MARGIN as f32 >= RAIL_LABEL_SIZE * 1.15);
 
 #[test]
 fn first_launch_expands_both_panels_and_shows_help() {
     let layout = LayoutState::default();
-    assert!(layout.controls_expanded, "the Controls panel starts expanded");
+    assert!(
+        layout.controls_expanded,
+        "the Controls panel starts expanded"
+    );
     assert!(layout.presets_expanded, "the Presets panel starts expanded");
-    assert!(layout.help_visible, "the help overlay is visible on first run");
+    assert!(
+        layout.help_visible,
+        "the help overlay is visible on first run"
+    );
     assert_eq!(layout.controls_width, DEFAULT_CONTROLS_WIDTH);
     assert_eq!(layout.presets_width, DEFAULT_PRESETS_WIDTH);
     let rail = RAIL_WIDTH;
-    assert!((16.0..=40.0).contains(&rail), "the rail is a slim strip: {rail}");
+    assert!(
+        (16.0..=40.0).contains(&rail),
+        "the rail is a slim strip: {rail}"
+    );
 }
 
 #[test]
 fn toggles_flip_visibility_and_back() {
     let mut layout = LayoutState::default();
     layout.toggle_controls();
-    assert!(!layout.controls_expanded, "one click collapses the Controls panel");
+    assert!(
+        !layout.controls_expanded,
+        "one click collapses the Controls panel"
+    );
     layout.toggle_controls();
-    assert!(layout.controls_expanded, "a second click pins it open again");
+    assert!(
+        layout.controls_expanded,
+        "a second click pins it open again"
+    );
     layout.toggle_presets();
     assert!(!layout.presets_expanded);
     layout.toggle_presets();
@@ -68,17 +81,32 @@ fn reset_restores_first_launch_layout() {
         ..Default::default()
     };
     layout.reset();
-    assert_eq!(layout, LayoutState::default(), "reset layout returns every knob");
-    assert!(layout.controls_expanded, "reset re-expands rather than hiding");
+    assert_eq!(
+        layout,
+        LayoutState::default(),
+        "reset layout returns every knob"
+    );
+    assert!(
+        layout.controls_expanded,
+        "reset re-expands rather than hiding"
+    );
 }
 
 #[test]
 fn widths_clamp_and_corrupt_widths_fall_back() {
     assert_eq!(clamp_width(10.0, 250.0), MIN_PANEL_WIDTH);
     assert_eq!(clamp_width(10_000.0, 250.0), MAX_PANEL_WIDTH);
-    assert_eq!(clamp_width(212.5, 250.0), 212.5, "a sane width passes through");
+    assert_eq!(
+        clamp_width(212.5, 250.0),
+        212.5,
+        "a sane width passes through"
+    );
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        assert_eq!(clamp_width(bad, 250.0), 250.0, "{bad} falls back to the default");
+        assert_eq!(
+            clamp_width(bad, 250.0),
+            250.0,
+            "{bad} falls back to the default"
+        );
     }
     let corrupt = LayoutState {
         controls_width: f32::NAN,
@@ -88,7 +116,10 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
     .sanitized();
     assert_eq!(corrupt.controls_width, DEFAULT_CONTROLS_WIDTH);
     assert_eq!(corrupt.presets_width, MAX_PANEL_WIDTH);
-    assert!(corrupt.controls_expanded && corrupt.presets_expanded, "visibility survives");
+    assert!(
+        corrupt.controls_expanded && corrupt.presets_expanded,
+        "visibility survives"
+    );
 }
 
 // --- Ticket 53: compact mode is transient and never rewrites the record -----
@@ -118,7 +149,10 @@ fn compact_mode_does_not_mutate_stored_widths() {
             && plan.sheet
     );
 
-    assert_eq!(layout, before, "compact mode reads the record, never writes it");
+    assert_eq!(
+        layout, before,
+        "compact mode reads the record, never writes it"
+    );
 
     // The same record is what wide re-reads after a resize.
     assert_eq!(layout_mode(1200.0), LayoutMode::Wide);
@@ -265,7 +299,10 @@ fn rail_pass(
     label: &str,
     pointer: Option<(egui::Pos2, Option<bool>)>,
     time: f64,
-) -> (vector_field_explorer::ui::layout::RailPanel, Vec<egui::epaint::TextShape>) {
+) -> (
+    vector_field_explorer::ui::layout::RailPanel,
+    Vec<egui::epaint::TextShape>,
+) {
     let screen = screen_rect();
     let mut input = egui::RawInput {
         screen_rect: Some(screen),
@@ -326,8 +363,14 @@ fn rail_angles_are_vertical_with_opposite_signs() {
     // Each label is exactly 90 degrees from horizontal text; the pair is a
     // vertical mirror (180 degrees apart) because the reading directions are
     // opposite. This is the documented convention from ticket 22.
-    assert!((left.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-6, "{left}");
-    assert!((right.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-6, "{right}");
+    assert!(
+        (left.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-6,
+        "{left}"
+    );
+    assert!(
+        (right.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-6,
+        "{right}"
+    );
     assert!(
         ((right - left).abs() - std::f32::consts::PI).abs() < 1e-6,
         "left and right are mirror rotations: {left} vs {right}"
@@ -413,9 +456,19 @@ fn chevron_stays_at_the_bottom_pointing_outward() {
         let (panel, text) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let band = panel.content_rect;
         let pos = rail_chevron_pos(band);
-        assert_eq!(pos.x, band.center().x, "the chevron is horizontally centred");
-        assert!(pos.y > band.center().y, "the chevron sits in the lower half");
-        assert!(band.contains(pos), "the chevron stays inside the band: {pos:?}");
+        assert_eq!(
+            pos.x,
+            band.center().x,
+            "the chevron is horizontally centred"
+        );
+        assert!(
+            pos.y > band.center().y,
+            "the chevron sits in the lower half"
+        );
+        assert!(
+            band.contains(pos),
+            "the chevron stays inside the band: {pos:?}"
+        );
         assert!(
             pos.y > band.bottom() - RAIL_CHEVRON_ZONE,
             "the chevron sits in the reserved bottom zone: {pos:?}"
@@ -434,8 +487,8 @@ fn chevron_stays_at_the_bottom_pointing_outward() {
 
         // The label band ends above the chevron so the two never overlap.
         let galley = measure_galley("Controls");
-        let label = RailLabel::place(band, galley.mesh_bounds, side)
-            .visual_bounds(galley.mesh_bounds);
+        let label =
+            RailLabel::place(band, galley.mesh_bounds, side).visual_bounds(galley.mesh_bounds);
         assert!(
             label.max.y < pos.y - RAIL_LABEL_SIZE / 2.0,
             "label bottom {} overlaps the chevron at {}",
@@ -531,7 +584,10 @@ fn rail_click_target_covers_the_label_and_pins() {
         let (press, _) = rail_pass(&ctx, side, "Controls", Some((target, Some(true))), 1.4);
         let (release, _) = rail_pass(&ctx, side, "Controls", Some((target, Some(false))), 1.5);
         assert!(!press.clicked, "the press alone does not report a click");
-        assert!(release.clicked, "the release over the rail pins the panel on {side:?}");
+        assert!(
+            release.clicked,
+            "the release over the rail pins the panel on {side:?}"
+        );
     }
 }
 
@@ -601,6 +657,9 @@ fn collapse_button_paints_the_inward_chevron_and_reports_a_click() {
         let (press, _) = collapse_pass(&ctx, side, Some((target, Some(true))), 0.2);
         let (release, _) = collapse_pass(&ctx, side, Some((target, Some(false))), 0.3);
         assert!(!press, "the press alone does not collapse on {side:?}");
-        assert!(release, "the release over the chevron collapses on {side:?}");
+        assert!(
+            release,
+            "the release over the chevron collapses on {side:?}"
+        );
     }
 }

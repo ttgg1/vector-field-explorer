@@ -160,6 +160,9 @@ pub enum SheetState {
     None,
     /// The left Controls panel, as a bottom sheet.
     Controls,
+    /// Native symbolic tools, sharing the single compact sheet.
+    #[cfg(not(target_arch = "wasm32"))]
+    Cas,
     /// The right Presets panel, as a bottom sheet.
     Presets,
 }
@@ -271,11 +274,14 @@ pub fn sheet_swipe_transition(size: SheetSize, delta_y: f32) -> (SheetSize, bool
         return (size, false);
     }
     if delta_y < 0.0 {
-        (match size {
-            SheetSize::Collapsed => SheetSize::Default,
-            SheetSize::Default => SheetSize::Expanded,
-            SheetSize::Expanded => SheetSize::Expanded,
-        }, false)
+        (
+            match size {
+                SheetSize::Collapsed => SheetSize::Default,
+                SheetSize::Default => SheetSize::Expanded,
+                SheetSize::Expanded => SheetSize::Expanded,
+            },
+            false,
+        )
     } else {
         match size {
             SheetSize::Expanded => (SheetSize::Default, false),

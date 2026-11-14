@@ -55,16 +55,16 @@ pub const DOWNLOAD_URL: &str = "https://ttgg1.github.io/vector-field-explorer/do
 /// the reachability test's variant list can never drift from the enum without
 /// the compiler noticing.
 macro_rules! menu_actions {
-    ($($variant:ident),+ $(,)?) => {
+    ($( $(#[$attr:meta])* $variant:ident),+ $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum MenuAction {
-            $($variant),+
+            $( $(#[$attr])* $variant),+
         }
 
         impl MenuAction {
             /// Every variant, in menu order. Used by the reachability test so
             /// a new variant cannot be forgotten in the table.
-            pub const ALL: &'static [MenuAction] = &[$(MenuAction::$variant),+];
+            pub const ALL: &'static [MenuAction] = &[$( $(#[$attr])* MenuAction::$variant),+];
         }
     };
 }
@@ -76,6 +76,8 @@ menu_actions! {
     CopyFormula,
     ResetAllControls,
     ToggleControls,
+    #[cfg(not(target_arch = "wasm32"))]
+    ToggleCas,
     TogglePresets,
     ToggleFly,
     ResetLayout,
@@ -169,6 +171,11 @@ pub const MENUS: &[Menu] = &[
             MenuItem {
                 label: "Toggle Controls",
                 action: MenuAction::ToggleControls,
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuItem {
+                label: "Toggle CAS",
+                action: MenuAction::ToggleCas,
             },
             MenuItem {
                 label: "Toggle Presets",
@@ -386,6 +393,11 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             // 1x. The particle cloud itself is left alone.
             *ui.clock = SimClock::default();
             ui.state.set_time(0.0);
+            SideEffect::None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        MenuAction::ToggleCas => {
+            ui.layout.toggle_cas();
             SideEffect::None
         }
         MenuAction::ToggleControls => {

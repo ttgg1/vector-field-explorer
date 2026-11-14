@@ -120,16 +120,29 @@ impl VfApp {
             match action {
                 MenuAction::ToggleControls => {
                     self.sheet.toggle(SheetState::Controls);
+                    self.sheet_expanded = SheetSize::Default;
                     ctx.request_repaint();
                     return;
                 }
                 MenuAction::TogglePresets => {
                     self.sheet.toggle(SheetState::Presets);
+                    self.sheet_expanded = SheetSize::Default;
+                    ctx.request_repaint();
+                    return;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                MenuAction::ToggleCas => {
+                    self.sheet.toggle(SheetState::Cas);
+                    self.sheet_expanded = SheetSize::Default;
                     ctx.request_repaint();
                     return;
                 }
                 _ => {}
             }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if action == MenuAction::ResetAllControls {
+            self.cas.reset();
         }
         let effect = menu::apply_action(
             action,
