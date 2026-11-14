@@ -302,7 +302,7 @@ jobs:
             mkdir -p dist
             cp "$bin" "dist/vector-field-explorer.exe"
             cp README.md LICENSE THIRD_PARTY_LICENSES.md packaging/THIRD_PARTY_NOTICES.txt dist/
-            ( cd dist && python -m zipfile -c "../${name}.zip" \
+            ( cd dist && python -m zipfile -c "${name}.zip" \
                 vector-field-explorer.exe README.md LICENSE \
                 THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt )
             asset="dist/${name}.zip"
