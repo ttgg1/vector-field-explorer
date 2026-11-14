@@ -55,6 +55,7 @@ mod nightly_version_test;
 #[cfg(unix)]
 mod notices_test;
 mod packaging_notices_test;
+mod panel_rails_test;
 mod particle_playback_test;
 mod particles_test;
 mod persistence_test;

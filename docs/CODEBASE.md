@@ -1631,15 +1631,15 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores only the five desktop fields; the
-  sheet and mode are never persisted.
+- Compact is transient: `LayoutState` stores five desktop fields plus native-only
+  `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
   outward on a rail and inward on a collapse button; the rail is the only
   restore affordance; the real content band is narrower than the outer width.
 - `LayoutState::sanitized` clamps widths; `reset` restores first-launch layout
-  (both panels expanded, help visible).
+  (Controls/Presets expanded, native CAS closed, help visible).
 - `formula_field_width` never goes below 40 % of the bar and never returns a
   negative width.
 - Compact buttons have a 40-point floor; the tab bar grows beyond its 48-point
@@ -1649,7 +1649,7 @@ tab-bar/sheet plan.
 `rail_paints_one_rotated_label_inside_the_real_band`,
 `rotated_labels_fit_inside_the_real_rail_band`,
 `rail_panel_is_outer_width_and_the_label_band_is_narrower`,
-`layout_state_serializes_exactly_its_five_persisted_fields`,
+`layout_state_serializes_exactly_its_platform_persisted_fields`,
 `widths_clamp_and_corrupt_widths_fall_back`;
 `tests/responsive_test.rs` (11):
 `layout_mode_is_compact_at_and_below_700_points`,
@@ -1660,6 +1660,15 @@ tab-bar/sheet plan.
 
 **Limitations.** Width-only breakpoint; the compact sheet does not persist which
 tab was open; rail content band is deliberately narrow.
+
+#### `src/ui/panel_rails.rs` — ordered reusable panel toggles
+
+`RailEntry`, `RailEntryResponse`, `RailStripResponse` and `show_rail_strip` provide
+an ordered, vertically scrolling 32pt strip with stable entry IDs, independent
+visibility and measured rotated-label bounds. `fit_panel_widths` fits requested
+widths by minimums and proportional excess without mutating persisted widths.
+Production widget interaction, third-entry extensibility and width allocation
+are pinned by `tests/panel_rails_test.rs`.
 
 #### `src/ui/menu.rs` — the pure menu and shortcut tables
 

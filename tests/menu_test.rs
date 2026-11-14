@@ -154,6 +154,7 @@ fn reset_layout_restores_expanded_panels_widths_and_help() {
         controls_width: 400.0,
         presets_width: 350.0,
         help_visible: false,
+        ..Default::default()
     };
     let effect = apply_action(MenuAction::ResetLayout, &mut fixture.ui());
     assert_eq!(

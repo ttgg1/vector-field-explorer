@@ -3,6 +3,7 @@
 // Ticket 22 adds the rotated rail-label seam: angles, placement, chevron and
 // the unchanged click/tooltip contract.
 
+use crate::persistence_test::{from_ron, ron_string};
 use eframe::egui;
 
 use crate::support;
@@ -64,6 +65,7 @@ fn reset_restores_first_launch_layout() {
         controls_width: 400.0,
         presets_width: 350.0,
         help_visible: false,
+        ..Default::default()
     };
     layout.reset();
     assert_eq!(layout, LayoutState::default(), "reset layout returns every knob");
@@ -102,6 +104,7 @@ fn compact_mode_does_not_mutate_stored_widths() {
         controls_width: 300.0,
         presets_width: 210.0,
         help_visible: false,
+        ..Default::default()
     };
     let before = layout.clone();
 
@@ -125,9 +128,7 @@ fn compact_mode_does_not_mutate_stored_widths() {
 }
 
 #[test]
-fn layout_state_serializes_exactly_its_five_persisted_fields() {
-    // Ticket 53 adds no fields to the persisted record: a saved layout may only
-    // carry the ticket-14 knobs, never the transient mode or sheet.
+fn layout_state_serializes_exactly_its_platform_persisted_fields() {
     let value = serde_json::to_value(LayoutState::default()).expect("layout serializes");
     let object = value.as_object().expect("layout is a map");
     let keys: std::collections::BTreeSet<&str> = object.keys().map(String::as_str).collect();
@@ -137,10 +138,75 @@ fn layout_state_serializes_exactly_its_five_persisted_fields() {
         "controls_width",
         "presets_width",
         "help_visible",
+        #[cfg(not(target_arch = "wasm32"))]
+        "cas_expanded",
+        #[cfg(not(target_arch = "wasm32"))]
+        "cas_width",
     ]
     .into_iter()
     .collect();
     assert_eq!(keys, expected, "the persisted layout record gained a field");
+}
+
+#[test]
+fn old_layout_defaults_only_new_fields_and_round_trips() {
+    let old = "(controls_expanded:false,presets_expanded:true,controls_width:333.0,presets_width:211.0,help_visible:false)";
+    let layout: LayoutState = from_ron(old);
+    assert!(!layout.controls_expanded && layout.presets_expanded);
+    assert_eq!(
+        (layout.controls_width, layout.presets_width),
+        (333.0, 211.0)
+    );
+    assert!(!layout.help_visible);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        assert!(!layout.cas_expanded);
+        assert_eq!(layout.cas_width, 260.0);
+    }
+    assert_eq!(from_ron::<LayoutState>(&ron_string(&layout)), layout);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cas_width_sanitizes_toggle_is_independent_and_reset_restores() {
+    use vector_field_explorer::ui::layout::DEFAULT_CAS_WIDTH;
+    for (width, expected) in [
+        (f32::NAN, 260.0),
+        (f32::INFINITY, 260.0),
+        (f32::NEG_INFINITY, 260.0),
+        (0.0, 180.0),
+        (999.0, 460.0),
+    ] {
+        let mut layout = LayoutState {
+            cas_width: width,
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(layout.cas_width, expected);
+        let before = layout.clone();
+        layout.toggle_cas();
+        assert!(layout.cas_expanded);
+        assert_eq!(
+            layout,
+            LayoutState {
+                cas_expanded: true,
+                ..before
+            }
+        );
+        layout.toggle_cas();
+        assert!(!layout.cas_expanded);
+        assert_eq!(layout.cas_width, expected);
+        layout.cas_expanded = true;
+        layout.reset();
+        assert_eq!(layout, LayoutState::default());
+        assert_eq!(layout.cas_width, DEFAULT_CAS_WIDTH);
+    }
+    let layout = LayoutState {
+        cas_expanded: true,
+        cas_width: 333.0,
+        ..Default::default()
+    };
+    assert_eq!(from_ron::<LayoutState>(&ron_string(&layout)), layout);
 }
 
 // --- Ticket 22: rotated rail label -----------------------------------------

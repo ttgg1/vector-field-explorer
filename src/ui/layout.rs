@@ -50,6 +50,10 @@ pub fn rail_frame(style: &egui::Style) -> egui::Frame {
 /// Default expanded width of the left Controls panel, points.
 pub const DEFAULT_CONTROLS_WIDTH: f32 = 260.0;
 
+/// Default expanded width of the native CAS panel, points.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_CAS_WIDTH: f32 = 260.0;
+
 /// Default expanded width of the right Presets panel, points.
 pub const DEFAULT_PRESETS_WIDTH: f32 = 240.0;
 
@@ -417,6 +421,12 @@ pub struct LayoutState {
     pub presets_width: f32,
     /// Whether the viewport's help overlay is visible.
     pub help_visible: bool,
+    /// Native symbolic tools are independently visible, initially closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cas_expanded: bool,
+    /// Requested CAS width, retained while collapsed or automatically squeezed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub cas_width: f32,
 }
 
 impl Default for LayoutState {
@@ -427,6 +437,10 @@ impl Default for LayoutState {
             controls_width: DEFAULT_CONTROLS_WIDTH,
             presets_width: DEFAULT_PRESETS_WIDTH,
             help_visible: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas_expanded: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            cas_width: DEFAULT_CAS_WIDTH,
         }
     }
 }
@@ -438,6 +452,10 @@ impl LayoutState {
     pub fn sanitized(mut self) -> Self {
         self.controls_width = clamp_width(self.controls_width, DEFAULT_CONTROLS_WIDTH);
         self.presets_width = clamp_width(self.presets_width, DEFAULT_PRESETS_WIDTH);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.cas_width = clamp_width(self.cas_width, DEFAULT_CAS_WIDTH);
+        }
         self
     }
 
@@ -455,6 +473,12 @@ impl LayoutState {
     /// Show the Presets panel (or its rail).
     pub fn toggle_presets(&mut self) {
         self.presets_expanded = !self.presets_expanded;
+    }
+
+    /// Toggle only the native CAS panel, preserving all requested widths.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn toggle_cas(&mut self) {
+        self.cas_expanded = !self.cas_expanded;
     }
 
     /// Flip the help-overlay setting.
