@@ -627,6 +627,23 @@ owns no selection cache, UI or persistence framework.
 **Pinned by.** [tests/plot_examples_test.rs](../tests/plot_examples_test.rs):
 `catalogue_is_exact_and_unique`, including kind serialization round trips.
 
+#### `src/plot_state.rs` — transient scalar plot data
+
+`ScalarDraft` holds source, error and optional accepted expression and sampled
+cache. `SampledPlot` owns curve slots/edges or a surface mesh. `PlotSettings` and
+`PlotState` hold plot controls, independent drafts, remembered vector projection
+and generation counters. These types are transient and do not persist caches.
+
+#### `src/plot_scene.rs` — immutable scalar scene construction
+
+`build_plot_scene` converts supplied sampled geometry into `PlotScene`, without
+evaluating expressions. `PlotGeometry` carries curve instances or mesh vertices
+and indices; `ViewportScene` distinguishes vector and plot scenes. Bounds and
+automatic signed-height ranges use only rendered segment/triangle participants;
+independent grid and axes references follow the explicit scalar kind. Empty or
+mismatched data has no plot bounds and a status. `tests/plot_state_test.rs`
+covers scene colors, bounds, invalid data and reference visibility.
+
 #### `src/cas.rs` — native symbolic transform adapter
 
 **Purpose.** Differentiate scalar meval formulas and compose gradient,

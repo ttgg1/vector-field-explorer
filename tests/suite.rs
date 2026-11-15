@@ -64,6 +64,7 @@ mod persistence_test;
 mod plane_test;
 mod plot_curve_test;
 mod plot_examples_test;
+mod plot_state_test;
 mod plot_surface_test;
 mod pointer_lock_test;
 mod preset_test;

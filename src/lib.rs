@@ -17,6 +17,8 @@ pub mod persistence;
 pub mod plane;
 pub mod plot;
 pub mod plot_examples;
+pub mod plot_scene;
+pub mod plot_state;
 pub mod pointer_lock;
 pub mod presets;
 pub mod reference;
