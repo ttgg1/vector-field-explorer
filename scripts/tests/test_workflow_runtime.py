@@ -27,9 +27,9 @@ class Service:
         self.plan = plan
 
     def models(self):
-        return [{'providerID': 'openai', 'modelID': r['model'].split('/')[1], 'enabled': True,
-                 'type': 'chat', 'capabilities': {'tools': True}, 'variants': [{'id': r['effort']}], 'cost': []}
-                for r in self.config['roles'].values()]
+        return [{'providerID': r['model'].split('/')[0], 'modelID': r['model'].split('/')[1], 'enabled': True,
+                 'status': 'active', 'type': 'chat', 'capabilities': {'tools': True}, 'variants': [{'id': r['effort']}], 'cost': []}
+                for r in self.config['mode_roles'].values()]
 
     def create(self, title, ref, files, read_files=None):
         sid = 'ses_' + str(len(self.sessions))

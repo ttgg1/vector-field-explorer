@@ -1,9 +1,24 @@
 {
-  "roles": {
-    "orchestrator": {"model": "openai/gpt-6-luna", "effort": "low"},
-    "implementer": {"model": "openai/gpt-6.1-terra", "effort": "medium"},
-    "reviewer": {"model": "openai/gpt-6.1-sol", "effort": "medium"},
-    "escalation": {"model": "openai/gpt-6.1-sol", "effort": "high"}
+  "workflow": {"mode": "openai"},
+  "modes": {
+    "openai": {
+      "orchestrator": {"model": "openai/gpt-6.1-sol", "effort": "medium"},
+      "implementer_simple": {"model": "openai/gpt-6-luna", "effort": "low"},
+      "implementer_standard": {"model": "openai/gpt-6-luna", "effort": "medium"},
+      "implementer_complex": {"model": "openai/gpt-6.1-sol", "effort": "high"},
+      "reviewer_standard": {"model": "openai/gpt-6.1-sol", "effort": "medium"},
+      "reviewer_complex": {"model": "openai/gpt-6.1-sol", "effort": "high"},
+      "recovery": {"model": "openai/gpt-6.1-sol", "effort": "high"}
+    },
+    "opencode-go": {
+      "orchestrator": {"model": "opencode-go/deepseek-v4.1-flash", "effort": "low"},
+      "implementer_simple": {"model": "opencode-go/deepseek-v4.1-flash", "effort": "low"},
+      "implementer_standard": {"model": "opencode-go/deepseek-v4.1-flash", "effort": "high"},
+      "implementer_complex": {"model": "opencode-go/deepseek-v4-pro", "effort": "high"},
+      "reviewer_standard": {"model": "opencode-go/gpt-6-luna", "effort": "medium"},
+      "reviewer_complex": {"model": "opencode-go/gpt-6-luna", "effort": "high"},
+      "recovery": {"model": "opencode-go/gpt-6-luna", "effort": "high"}
+    }
   },
   "limits": {
     "max_attempts": 3, "max_reviews": 3, "escalate_after": 2,

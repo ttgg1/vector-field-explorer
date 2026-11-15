@@ -13,11 +13,95 @@ class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.config = policy.load_config(ROOT / '.opencode/agent-workflow.json')
 
+    def test_mode_configuration_and_catalog_routes(self):
+        self.assertEqual(self.config['selected_mode'], 'openai')
+        self.assertEqual(self.config['roles']['implementer'], self.config['mode_roles']['implementer_standard'])
+        raw = json.loads((ROOT / '.opencode/agent-workflow.json').read_text())
+        self.assertEqual(set(raw['modes']), {'openai', 'opencode-go'})
+        for mode, expected in {
+            'openai': [('gpt-6.1-sol', 'medium'), ('gpt-6-luna', 'low'), ('gpt-6-luna', 'medium'),
+                       ('gpt-6.1-sol', 'high'), ('gpt-6.1-sol', 'medium'), ('gpt-6.1-sol', 'high'), ('gpt-6.1-sol', 'high')],
+            'opencode-go': [('deepseek-v4.1-flash', 'low'), ('deepseek-v4.1-flash', 'low'),
+                            ('deepseek-v4.1-flash', 'high'), ('deepseek-v4-pro', 'high'),
+                            ('gpt-6-luna', 'medium'), ('gpt-6-luna', 'high'), ('gpt-6-luna', 'high')],
+        }.items():
+            names = ('orchestrator', 'implementer_simple', 'implementer_standard', 'implementer_complex',
+                     'reviewer_standard', 'reviewer_complex', 'recovery')
+            for name, (model, effort) in zip(names, expected):
+                self.assertEqual(raw['modes'][mode][name], {'model': f'{mode}/{model}', 'effort': effort})
+        raw['workflow']['mode'] = 'opencode-go'
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'config.json'
+            path.write_text(json.dumps(raw))
+            config = policy.load_config(path)
+        self.assertEqual(config['selected_mode'], 'opencode-go')
+        self.assertEqual(config['roles']['reviewer'], config['mode_roles']['reviewer_standard'])
+        catalog = [{'providerID': r['model'].split('/')[0], 'modelID': r['model'].split('/')[1],
+                    'name': 'DeepSeek V4.1 Flash 1017' if 'flash' in r['model'] else 'other',
+                    'enabled': True, 'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
+                    'variants': [{'id': r['effort']}]} for r in config['mode_roles'].values()]
+        self.assertEqual(catalog[0]['name'], 'DeepSeek V4.1 Flash 1017')
+        refs = policy.validate_models(config, catalog)
+        self.assertEqual(refs['implementer_standard'], {'providerID': 'opencode-go', 'id': 'deepseek-v4.1-flash', 'variant': 'high'})
+        for change in ('missing', 'disabled', 'provider', 'tools', 'variant', 'type'):
+            bad = copy.deepcopy(catalog)
+            for model in bad:
+                if model['modelID'] == 'deepseek-v4.1-flash':
+                    if change == 'disabled': model['enabled'] = False
+                    if change == 'provider': model['providerID'] = 'openai'
+                    if change == 'tools': model['capabilities']['tools'] = False
+                    if change == 'variant': model['variants'] = []
+                    if change == 'type': model['type'] = 'embedding'
+            if change == 'missing': bad = [m for m in bad if m['modelID'] != 'deepseek-v4.1-flash']
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                policy.validate_models(config, bad)
+
+    def test_task_classification(self):
+        def classify(files, **kw):
+            args = dict(complexity='simple', risk='trivial', ambiguity='low', test_coverage='adequate')
+            args.update(kw)
+            return policy.classify_task(self.config, files, **args)['class']
+        self.assertEqual(classify(['src/foo/a.rs']), 'S')
+        self.assertEqual(classify(['src/foo.rs', 'src/bar.rs']), 'M')
+        self.assertEqual(classify(['docs/a.md'], ambiguity='unknown'), 'M')
+        self.assertEqual(classify(['docs/a.md'], test_coverage='unknown'), 'M')
+        for files, args in [(['src/a.rs', 'src/b.rs', 'src/c.rs'], {}), (['src/auth/x.rs'], {}),
+                            (['docs/a.md'], {'complexity': 'complex'}), (['docs/a.md'], {'risk': 'high'}),
+                            (['docs/a.md'], {'ambiguity': 'high'}), (['docs/a.md'], {'test_coverage': 'poor'}),
+                            (['docs/a.md'], {'failed_attempts': 1}), (['docs/a.md'], {'blocking_findings': 1})]:
+            with self.subTest(files=files, args=args): self.assertEqual(classify(files, **args), 'L')
+        for files, args in [([], {}), (['../bad'], {}), (['x'], {'risk': 'bad'}),
+                            (['x'], {'complexity': 'bad'}), (['x'], {'ambiguity': 'bad'}),
+                            (['x'], {'test_coverage': 'bad'}), (['x'], {'failed_attempts': True}),
+                            (['x'], {'blocking_findings': -1})]:
+            with self.subTest(files=files, args=args), self.assertRaises(ValueError): classify(files, **args)
+
+    def test_mode_schema_rejects_invalid_unselected_routes(self):
+        raw = json.loads((ROOT / '.opencode/agent-workflow.json').read_text())
+        for mutate in (lambda c: c['modes']['opencode-go'].pop('recovery'),
+                       lambda c: c['modes']['opencode-go']['recovery'].update(model='openai/x'),
+                       lambda c: c['modes']['opencode-go']['recovery'].update(effort='bad effort'),
+                       lambda c: c['workflow'].update(mode='unknown')):
+            value = copy.deepcopy(raw)
+            mutate(value)
+            with tempfile.TemporaryDirectory() as d:
+                path = Path(d) / 'config.json'
+                path.write_text(json.dumps(value))
+                with self.assertRaises(ValueError): policy.load_config(path)
+
+    def test_catalog_rejects_explicit_inactive_status(self):
+        models = [{'providerID': 'openai', 'modelID': r['model'].split('/')[1], 'enabled': True,
+                   'status': 'deprecated', 'type': 'chat', 'capabilities': {'tools': True},
+                   'variants': [{'id': r['effort']}]} for r in self.config['mode_roles'].values()]
+        with self.assertRaises(ValueError): policy.validate_models(self.config, models)
+        for model in models: model.pop('status')
+        with self.assertRaises(ValueError): policy.validate_models(self.config, models)
+
     def test_config_rejects_unknown_boolean_integer_and_nan(self):
         for mutate in (lambda c: c.update(extra=1),
                        lambda c: c['limits'].update(max_attempts=True),
                        lambda c: c['prices'].update({'openai/x': {'input': float('nan'), 'output': 1, 'cache_read': 1, 'cache_write': 1}})):
-            config = copy.deepcopy(self.config)
+            config = json.loads((ROOT / '.opencode/agent-workflow.json').read_text())
             mutate(config)
             with tempfile.TemporaryDirectory() as d:
                 path = Path(d) / 'config.json'
@@ -26,7 +110,7 @@ class PolicyTests(unittest.TestCase):
                     policy.load_config(path)
 
     def test_config_rejects_unrepresentable_prices(self):
-        config = copy.deepcopy(self.config)
+        config = json.loads((ROOT / '.opencode/agent-workflow.json').read_text())
         config['prices']['openai/x'] = {'input': 10 ** 400, 'output': 1, 'cache_read': 1, 'cache_write': 1}
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'config.json'
@@ -36,12 +120,12 @@ class PolicyTests(unittest.TestCase):
 
     def test_catalog_requires_exact_enabled_openai_tool_chat_variant(self):
         models = []
-        for role in self.config['roles'].values():
+        for role in self.config['mode_roles'].values():
             models.append({'providerID': 'openai', 'modelID': role['model'].split('/', 1)[1],
-                           'enabled': True, 'type': 'chat', 'capabilities': {'tools': True},
+                           'enabled': True, 'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
                            'variants': [{'id': role['effort']}], 'cost': []})
         refs = policy.validate_models(self.config, models)
-        self.assertEqual(refs['implementer'], {'id': 'gpt-6.1-terra', 'providerID': 'openai', 'variant': 'medium'})
+        self.assertEqual(refs['implementer'], {'id': 'gpt-6-luna', 'providerID': 'openai', 'variant': 'medium'})
         with self.assertRaises(ValueError):
             policy.validate_models(self.config, [dict(m, providerID='other') for m in models])
 
