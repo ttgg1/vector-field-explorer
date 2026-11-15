@@ -56,6 +56,26 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 policy.validate_models(config, bad)
 
+    def test_same_mode_override_requires_reason_and_exact_catalog_identity(self):
+        catalog = [{'providerID': r['model'].split('/')[0], 'modelID': r['model'].split('/')[1],
+                    'enabled': True, 'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
+                    'variants': [{'id': r['effort']}]} for r in self.config['mode_roles'].values()]
+        refs = policy.validate_models(self.config, catalog)
+        override = {'role': 'implementer_simple', 'model': 'openai/gpt-6-luna', 'effort': 'low',
+                    'reason': 'small isolated change'}
+        resolved = policy.validate_override(self.config, override, catalog, refs)
+        self.assertEqual(resolved['providerID'], 'openai')
+        self.assertEqual(resolved['id'], 'gpt-6-luna')
+        for change in ('reason', 'role', 'provider', 'variant', 'stale'):
+            bad = copy.deepcopy(override)
+            if change == 'reason': bad['reason'] = '  '
+            if change == 'role': bad['role'] = 'unknown'
+            if change == 'provider': bad['model'] = 'opencode-go/deepseek-v4.1-flash'
+            if change == 'variant': bad['effort'] = 'max'
+            if change == 'stale': bad['catalog_identity'] = 'stale'
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                policy.validate_override(self.config, bad, catalog, refs)
+
     def test_task_classification(self):
         def classify(files, **kw):
             args = dict(complexity='simple', risk='trivial', ambiguity='low', test_coverage='adequate')

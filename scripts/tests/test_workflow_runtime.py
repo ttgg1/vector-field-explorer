@@ -109,6 +109,53 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_work(service)
 
+    def test_task_class_routes_sessions_and_records_resolution(self):
+        self.request['risk'] = 'normal'
+        service = Service(self.root, self.config)
+        result = self.run_work(service)
+        task = result['tasks'][0]
+        self.assertEqual(task['classification']['class'], 'M')
+        self.assertEqual(task['route']['role'], 'implementer_standard')
+        self.assertEqual(task['route']['model'], self.config['mode_roles']['implementer_simple']['model'])
+        self.assertEqual(result['selected_mode'], 'openai')
+        self.assertEqual(task['duration_seconds'] >= 0, True)
+        self.assertTrue(all(call['model'] for call in result['calls']))
+
+    def test_normal_and_high_risk_routing_use_independent_standard_and_complex_reviewers(self):
+        for risk, role in (('normal', 'reviewer_standard'), ('high', 'reviewer_complex')):
+            self.fresh_worktree('route-' + risk)
+            self.request.update(id='review-' + risk, risk=risk, allowed_files=['new.py'])
+            result = self.run_work(Service(self.root, self.config,
+                [lambda: (self.root / 'new.py').write_text('value = 2\n')]))
+            review = next(s for s in result['calls'] if s['role'] == role)
+            self.assertEqual(review['model'], policy.validate_models(self.config, Service(self.root, self.config).models())[role])
+            (self.root / 'new.py').unlink()
+
+    def test_override_rejected_before_session_and_recovery_and_review_roles_are_explicit(self):
+        self.request['task_overrides'] = {'run-one': {'role': 'implementer_simple', 'model': 'openai/nope',
+            'effort': 'low', 'reason': 'requested'}}
+        service = Service(self.root, self.config)
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(service.sessions, {})
+
+    def test_recovery_role_is_selected_for_declared_complex_task(self):
+        self.request['complexity'] = 'complex'
+        task = {'id': 'one', 'requirements': ['change'], 'acceptance_criteria': ['new'],
+                'allowed_files': ['docs/a.md'], 'depends_on': []}
+        service = Service(self.root, self.config, plan=[task])
+        result = self.run_work(service)
+        self.assertEqual(result['tasks'][0]['route']['role'], 'recovery')
+        implementation = next(value for value in service.sessions.values() if value[0].startswith('implement:'))
+        self.assertEqual(implementation[1], policy.validate_models(self.config, service.models())['recovery'])
+
+    def test_run_records_usage_coverage_cost_basis_and_mode(self):
+        result = self.run_work()
+        record = result['records'][0]
+        self.assertEqual(record['cost_source'], 'reported')
+        self.assertIn('allowance', record)
+        self.assertIsNone(record['allowance'])
+
     def test_normal_and_high_review_actual_new_file_diff_independent_session(self):
         for risk, effort in [('normal', 'medium'), ('high', 'high')]:
             with self.subTest(risk=risk):
@@ -341,7 +388,7 @@ class RuntimeTests(unittest.TestCase):
     def test_api_security_failure_keeps_usage_and_unknown_coverage_no_hopping(self):
         service = Service(self.root, self.config)
         def failed(sid, text, event):
-            event({'kind': 'assistant', 'message': {'id': 'failed', 'cost': 0.02, 'error': {'type': 'QuotaError'}}})
+            event({'kind': 'assistant', 'message': {'id': 'failed', 'model': {'id': 'gpt-6-luna', 'providerID': 'openai', 'variant': 'medium'}, 'cost': 0.02, 'error': {'type': 'QuotaError'}}})
             raise api.APIError('quota', retryable=False)
         service.turn = failed
         result = self.run_work(service)

@@ -1,4 +1,5 @@
 from pathlib import Path
+import copy
 import unittest
 
 from scripts.workflow import metrics, policy
@@ -21,6 +22,20 @@ class MetricsTests(unittest.TestCase):
         conflicting = dict(record, cost=1.0)
         with self.assertRaises(ValueError):
             metrics.summarize([record, conflicting], tasks, True)
+
+    def test_mode_aggregation_preserves_unknown_cost_and_allowance(self):
+        openai = metrics.message_record('t', 'implementer', 's', self.message, self.config)
+        go_config = copy_config = dict(self.config)
+        go_config['roles'] = {'implementer': {'model': 'opencode-go/deepseek-v4.1-flash'}}
+        message = {'id': 'go', 'model': {'id': 'deepseek-v4.1-flash', 'providerID': 'opencode-go'},
+                   'tokens': {'input': 4, 'output': 2, 'reasoning': 1, 'cache': {'read': 1, 'write': 0}}}
+        go = metrics.message_record('t2', 'implementer', 's2', message, go_config)
+        report = metrics.summarize([openai, go], [], True)
+        self.assertIn('by_mode', report)
+        self.assertIsNone(go['cost'])
+        self.assertIsNone(go['allowance'])
+        self.assertIsNone(report['by_mode']['opencode-go']['cost'])
+        self.assertIsNone(report['cost_per_accepted'])
 
     def test_unknown_semantics_and_failed_spend(self):
         message = dict(self.message, id='failed', cost=0, error={'message': 'failure'})

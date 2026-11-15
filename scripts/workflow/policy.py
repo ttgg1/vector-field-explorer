@@ -116,6 +116,41 @@ def validate_models(config, catalog):
     return refs
 
 
+def catalog_identity(catalog):
+    """Stable digest of the exact discovery snapshot used for a resolution."""
+    import hashlib
+    return hashlib.sha256(json.dumps(catalog, sort_keys=True, separators=(',', ':'),
+                                    allow_nan=False).encode()).hexdigest()
+
+
+def validate_override(config, override, catalog, refs):
+    if not isinstance(override, dict) or set(override) != {'role', 'model', 'effort', 'reason'}:
+        raise ValueError('override requires role, model, effort and reason')
+    if not _text(override['reason']) or override['role'] not in MODE_ROLES:
+        raise ValueError('override requires known role and nonempty reason')
+    if not isinstance(override['model'], str) or not isinstance(override['effort'], str):
+        raise ValueError('invalid override identity')
+    mode = config['selected_mode']
+    if not override['model'].startswith(mode + '/'):
+        raise ValueError('override provider/mode mismatch')
+    identity = catalog_identity(catalog)
+    selected = next((m for m in catalog if isinstance(m, dict)
+                     and m.get('providerID') == mode
+                     and m.get('modelID') == override['model'].split('/', 1)[1]
+                     and m.get('enabled') is True and m.get('status') == 'active'
+                     and m.get('type') == 'chat' and isinstance(m.get('capabilities'), dict)
+                     and m['capabilities'].get('tools') is True
+                     and any(isinstance(v, dict) and v.get('id') == override['effort']
+                             for v in m.get('variants', []))), None)
+    configured = config['mode_roles'][override['role']]
+    if selected is None or configured != {'model': override['model'], 'effort': override['effort']}:
+        raise ValueError('override is not a validated seat in selected mode')
+    ref = refs[override['role']]
+    return dict(ref, role=override['role'], model=override['model'], effort=override['effort'],
+                reason=override['reason'].strip(), catalog_identity=identity,
+                catalog_snapshot=selected)
+
+
 def _match(path, pattern):
     # fnmatch treats slash as ordinary; use segment-wise glob with ** recursion.
     def match(parts, patterns):
