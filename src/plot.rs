@@ -1,12 +1,13 @@
 //! Pure, bounded scalar plot geometry.
 
-use glam::{DVec3, Vec3};
+use glam::{DVec3, UVec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{domain::Domain, scalar::ScalarExpr};
 
 const MAX_CURVE_SLOTS: usize = 4097;
 const MAX_PROBE_LEVEL: usize = 6;
+const MAX_SURFACE_AXIS: u32 = 96;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlotKind {
@@ -36,6 +37,133 @@ pub struct SampleDiagnostics {
 pub struct CurveEdges {
     pub segments: Vec<[Vec3; 2]>,
     pub diagnostics: SampleDiagnostics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SurfaceMesh {
+    pub positions: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    pub indices: Vec<u32>,
+    pub diagnostics: SampleDiagnostics,
+}
+
+/// Inclusive XY graph, capped to 96 vertices per axis before allocation.
+/// Domain Z is validated but never clips heights. Missing corners or an invalid
+/// center omit the entire cell; a single center probe is not a continuity proof.
+/// The open, CCW mesh has no walls/caps and retains only used vertices, with
+/// area-weighted normals accumulated in f64 from surviving faces alone.
+pub fn sample_surface(expr: &ScalarExpr, domain: &Domain, resolution: UVec2) -> SurfaceMesh {
+    let mut mesh = SurfaceMesh::default();
+    if !domain.min.is_finite() || !domain.max.is_finite() || !domain.min.cmple(domain.max).all() {
+        mesh.diagnostics.invalid_domain = true;
+        return mesh;
+    }
+    let nx = resolution.x.min(MAX_SURFACE_AXIS) as usize;
+    let ny = resolution.y.min(MAX_SURFACE_AXIS) as usize;
+    if nx < 2 || ny < 2 || domain.min.x == domain.max.x || domain.min.y == domain.max.y {
+        return mesh;
+    }
+    let slots = nx.checked_mul(ny).expect("bounded surface grid");
+    let index_cap = (nx - 1)
+        .checked_mul(ny - 1)
+        .and_then(|cells| cells.checked_mul(6))
+        .expect("bounded surface indices");
+    let axis = |i: usize, n: usize, lo: f32, hi: f32| {
+        let t = i as f64 / (n - 1) as f64;
+        (1.0 - t) * f64::from(lo) + t * f64::from(hi)
+    };
+    let mut grid = vec![None; slots];
+    let mut positions = Vec::with_capacity(slots);
+    for j in 0..ny {
+        let y = axis(j, ny, domain.min.y, domain.max.y);
+        for i in 0..nx {
+            let x = axis(i, nx, domain.min.x, domain.max.x);
+            if let Some(position) = surface_position(expr, x, y, &mut mesh.diagnostics) {
+                grid[j * nx + i] = Some(positions.len());
+                positions.push(position);
+            }
+        }
+    }
+    let mut normals = vec![DVec3::ZERO; positions.len()];
+    let mut indices = Vec::with_capacity(index_cap);
+    for j in 0..ny - 1 {
+        for i in 0..nx - 1 {
+            let corners = [
+                grid[j * nx + i],
+                grid[j * nx + i + 1],
+                grid[(j + 1) * nx + i],
+                grid[(j + 1) * nx + i + 1],
+            ];
+            let [Some(a), Some(b), Some(c), Some(d)] = corners else {
+                mesh.diagnostics.rejected_cells += 1;
+                continue;
+            };
+            mesh.diagnostics.probes += 1;
+            let x = (axis(i, nx, domain.min.x, domain.max.x)
+                + axis(i + 1, nx, domain.min.x, domain.max.x))
+                * 0.5;
+            let y = (axis(j, ny, domain.min.y, domain.max.y)
+                + axis(j + 1, ny, domain.min.y, domain.max.y))
+                * 0.5;
+            if surface_position(expr, x, y, &mut mesh.diagnostics).is_none() {
+                mesh.diagnostics.rejected_cells += 1;
+                continue;
+            }
+            let face = |a: usize, b: usize, c: usize| {
+                let a = positions[a].as_dvec3();
+                (positions[b].as_dvec3() - a).cross(positions[c].as_dvec3() - a)
+            };
+            let first = face(a, b, c);
+            let second = face(b, d, c);
+            // Check GPU-rounded geometry before normalization: distinct samples
+            // can collapse to the same f32 coordinate on a very narrow domain.
+            if [first, second]
+                .iter()
+                .any(|n| !n.is_finite() || n.length_squared() == 0.0)
+            {
+                mesh.diagnostics.rejected_cells += 1;
+                continue;
+            }
+            for (triangle, normal) in [([a, b, c], first), ([b, d, c], second)] {
+                for index in triangle {
+                    normals[index] += normal;
+                    indices.push(index);
+                }
+            }
+        }
+    }
+    let mut remap = vec![None; positions.len()];
+    mesh.indices.reserve(indices.len());
+    for index in indices {
+        let compact = *remap[index].get_or_insert_with(|| {
+            let compact = mesh.positions.len() as u32;
+            mesh.positions.push(positions[index]);
+            // Graph faces all point toward +Z, so a used vertex's finite area
+            // sum cannot cancel. f64 also keeps extreme f32 cross-products safe.
+            mesh.normals.push(normals[index].normalize().as_vec3());
+            compact
+        });
+        mesh.indices.push(compact);
+    }
+    mesh
+}
+
+fn surface_position(
+    expr: &ScalarExpr,
+    x: f64,
+    y: f64,
+    diagnostics: &mut SampleDiagnostics,
+) -> Option<Vec3> {
+    let Some(z) = expr.eval(x, y) else {
+        diagnostics.invalid_samples += 1;
+        return None;
+    };
+    let position = Vec3::new(x as f32, y as f32, z as f32);
+    if !position.is_finite() {
+        diagnostics.unrepresentable_samples += 1;
+        return None;
+    }
+    Some(position)
 }
 
 /// Inclusive X samples `(x, f(x), 0)`, including absent slots at invalid heights.

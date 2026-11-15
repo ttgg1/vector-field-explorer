@@ -570,13 +570,15 @@ GPU-coordinate representability belongs to the sampler, not this evaluator.
 **Pinned by.** [tests/scalar_test.rs](../tests/scalar_test.rs):
 `scalar_rhs_context_and_errors`, `partly_undefined_is_valid_syntax`.
 
-#### `src/plot.rs` — pure bounded curve geometry and plot types
+#### `src/plot.rs` — pure bounded scalar geometry and plot types
 
 **Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable
 and defaults to `VectorField`; `PlotBounds` carries f64 min/max coordinates.
 `sample_curve` delegates to `sample_curve_with_diagnostics`, returning optional
 `(x, f(x), 0)` slots. `curve_edges` returns original adjacent segments and
 `SampleDiagnostics` in `CurveEdges`.
+`sample_surface(expr, domain, UVec2)` returns `SurfaceMesh` positions, normals,
+u32 indices and diagnostics, compacted to vertices used by surviving triangles.
 
 **Invariants.** Requests cap at 4097 slots before allocation; zero requests are
 empty, one samples the midpoint, and larger requests include both X endpoints
@@ -588,14 +590,26 @@ only when f64 height spread exceeds eight times `max(domain Y span, 1)`;
 root level 0 through level 6 permits at most 127 probes per original edge.
 Unresolved edges are omitted, never replaced with subdivisions.
 
+Surface axes cap at 96 before allocation (9,216 slots / 54,150 indices maximum).
+Reversed/non-finite XYZ domains set `invalid_domain`; finite Z never clips
+heights. Zero/one axes or zero XY extent yield empty geometry. A missing corner
+or invalid/unrepresentable center rejects both triangles of a cell; at most one
+center probe runs per complete candidate cell (9,025 maximum). CCW triangles
+`(a,b,c), (b,d,c)` face +Z. Degeneracy checks use GPU-rounded positions; cross
+products and area-weighted normal accumulation use f64 and surviving faces only.
+The graph is open: no walls, caps, fake origin vertices or hole filling.
+
 **Pinned by.** [tests/plot_curve_test.rs](../tests/plot_curve_test.rs): slot counts,
 inclusive/extreme endpoints, holes, representability, pole rejection, input/work
 caps, exact probe depth and threshold equality, and f64 spread arithmetic.
+[tests/plot_surface_test.rs](../tests/plot_surface_test.rs) pins exact counts,
+winding/unit/sloped normals, corner/center holes, domain rejection, degeneracy,
+allocation/probe caps and extreme finite normal arithmetic.
 
 **Limitations.** The conservative display heuristic may omit steep continuous
-edges and cannot prove continuity. This foundation has no surface sampler,
-renderer or bounds computation; later consumers must derive bounds from
-surviving geometry rather than isolated slots.
+edges and cannot prove continuity; surface center probes likewise cannot detect
+every singularity. This foundation has no renderer or bounds computation; later
+consumers must derive bounds from surviving geometry rather than isolated slots.
 
 #### `src/plot_examples.rs` — static scalar example catalogue
 

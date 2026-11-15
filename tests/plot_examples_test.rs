@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use vector_field_explorer::{
-    plot::PlotKind,
+    domain::Domain,
+    plot::{PlotKind, curve_edges, sample_curve, sample_surface},
     plot_examples::EXAMPLES,
     scalar::{ScalarContext, ScalarExpr},
 };
@@ -45,6 +46,29 @@ fn catalogue_is_exact_and_unique() {
             ScalarContext::Surface
         };
         let expr = ScalarExpr::parse(example.source, context).unwrap();
+        let domain = Domain::default();
+        if kind == Curve2D {
+            let slots = sample_curve(&expr, &domain, 513);
+            assert!(slots.iter().all(Option::is_some), "{name}");
+            let edges = curve_edges(&expr, &domain, &slots);
+            assert!(!edges.segments.is_empty(), "{name}");
+            assert!(
+                edges.segments.iter().flatten().all(|p| p.is_finite()),
+                "{name}"
+            );
+        } else {
+            let mesh = sample_surface(&expr, &domain, glam::UVec2::splat(64));
+            assert_eq!(mesh.positions.len(), 4096, "{name}");
+            assert_eq!(mesh.indices.len(), 23814, "{name}");
+            assert!(mesh.positions.iter().all(|p| p.is_finite()), "{name}");
+            assert!(mesh.normals.iter().all(|n| n.is_finite()), "{name}");
+            assert!(
+                mesh.indices
+                    .iter()
+                    .all(|&i| (i as usize) < mesh.positions.len()),
+                "{name}"
+            );
+        }
         for x in [-1.0, -0.5, 0.0, 0.5, 1.0] {
             for y in [-1.0, 0.0, 1.0] {
                 assert!(expr.eval(x, y).unwrap().is_finite(), "{name}");
