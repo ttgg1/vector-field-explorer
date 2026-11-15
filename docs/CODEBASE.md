@@ -554,6 +554,63 @@ them at a point.
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
 
+#### `src/scalar.rs` — static scalar right-hand-side expressions
+
+**Purpose / API.** `ScalarExpr::parse(source, ScalarContext::{Curve, Surface})`
+validates scalar syntax and bindings with existing `meval`; `eval(x, y)` returns
+an optional finite f64 height. `ScalarError` implements `Display` and `Error`,
+preserving the source, underlying error and allowed variables.
+
+**Invariants.** Curves allow `x`; surfaces allow `x, y`. Built-in constants and
+functions remain available. Binding validation does not require a finite value
+at an arbitrary point: `sqrt(x)` and even `sqrt(-1)` are valid syntax. Assignment
+syntax, unknown symbols/functions and static-context `z`/`t` are rejected.
+GPU-coordinate representability belongs to the sampler, not this evaluator.
+
+**Pinned by.** [tests/scalar_test.rs](../tests/scalar_test.rs):
+`scalar_rhs_context_and_errors`, `partly_undefined_is_valid_syntax`.
+
+#### `src/plot.rs` — pure bounded curve geometry and plot types
+
+**Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable
+and defaults to `VectorField`; `PlotBounds` carries f64 min/max coordinates.
+`sample_curve` delegates to `sample_curve_with_diagnostics`, returning optional
+`(x, f(x), 0)` slots. `curve_edges` returns original adjacent segments and
+`SampleDiagnostics` in `CurveEdges`.
+
+**Invariants.** Requests cap at 4097 slots before allocation; zero requests are
+empty, one samples the midpoint, and larger requests include both X endpoints
+using f64 interpolation. Reversed/non-finite X/Y domains produce absent slots
+and `invalid_domain`; Z is irrelevant, and Y/Z never clip heights. Non-finite
+values and f32-unrepresentable coordinates remain gaps with distinct counters.
+Edges skip missing, zero-length or non-finite geometry. Midpoint probes recurse
+only when f64 height spread exceeds eight times `max(domain Y span, 1)`;
+root level 0 through level 6 permits at most 127 probes per original edge.
+Unresolved edges are omitted, never replaced with subdivisions.
+
+**Pinned by.** [tests/plot_curve_test.rs](../tests/plot_curve_test.rs): slot counts,
+inclusive/extreme endpoints, holes, representability, pole rejection, input/work
+caps, exact probe depth and threshold equality, and f64 spread arithmetic.
+
+**Limitations.** The conservative display heuristic may omit steep continuous
+edges and cannot prove continuity. This foundation has no surface sampler,
+renderer or bounds computation; later consumers must derive bounds from
+surviving geometry rather than isolated slots.
+
+#### `src/plot_examples.rs` — static scalar example catalogue
+
+**Purpose / API.** `PlotExample { kind, name, source }` and `EXAMPLES` supply the
+eight #12 formulas: three curves and five surfaces. Names and right-hand-side
+sources are stable catalogue data, separate from vector presets.
+
+**Invariants / limitations.** All entries parse in their declared scalar context
+and have finite default-domain evaluations. Charge examples use a dimensionless
+0.1 regularizer; they are illustrations, not physical solvers. The catalogue
+owns no selection cache, UI or persistence framework.
+
+**Pinned by.** [tests/plot_examples_test.rs](../tests/plot_examples_test.rs):
+`catalogue_is_exact_and_unique`, including kind serialization round trips.
+
 #### `src/cas.rs` — native symbolic transform adapter
 
 **Purpose.** Differentiate scalar meval formulas and compose gradient,
