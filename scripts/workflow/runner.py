@@ -649,17 +649,8 @@ def report(paths):
                              and bool(state.get('accepted_diff', {}).get('files'))
                              and state.get('accepted_tree') is not None
                              and state.get('final_validation_status') == 'passed')
-        merged_evidence = (state.get('status') == 'merged' and isinstance(state.get('merge'), dict)
-                           and state['merge'].get('tree') == state.get('accepted_tree')
-                           and state['merge'].get('commit') and state['merge'].get('patch_sha256'))
-        task_status = {t['id']: t.get('status') for t in state.get('tasks', [])}
         for record in run_records:
-            accepted_task = task_status.get(record.get('task_id')) in ('accepted', 'merged')
             record['mode'] = mode
-            record['attribution'] = {'accepted': bool(accepted_evidence and accepted_task),
-                                     'merged': bool(merged_evidence and accepted_task),
-                                     'run_id': state.get('id'), 'accepted_tree': state.get('accepted_tree') if accepted_evidence else None,
-                                     'merge_commit': state.get('merge', {}).get('commit') if merged_evidence else None}
         records.extend(run_records)
         for call in state['calls']:
             if not call.get('usage_complete', False) or not call.get('message_ids'):
@@ -674,7 +665,6 @@ def report(paths):
                     unknown = metrics.message_record(call['task_id'], call['role'], call['session_id'],
                                    {'id': unknown_id, 'error': call.get('error', 'usage unavailable/incomplete')}, legacy_config)
                     unknown['mode'] = mode
-                    unknown['attribution'] = None
                     records.append(unknown)
         eligible = accepted_evidence
         reported_tasks = []
@@ -686,8 +676,7 @@ def report(paths):
                     reported['historical_status'] = task['status']
             reported_tasks.append(reported)
             tasks.append(dict(reported, id=state['id'] + ':' + task['id'], mode=mode,
-                              accepted_tree=state.get('accepted_tree') if accepted_evidence else None,
-                              merge_commit=state.get('merge', {}).get('commit') if merged_evidence else None))
+                              accepted_tree=state.get('accepted_tree') if accepted_evidence else None))
         runs.append({'id': state['id'], 'root': state['root'], 'status': state['status'], 'tasks': reported_tasks,
                      'selected_mode': state.get('selected_mode', state.get('config', {}).get('selected_mode', 'openai')),
                      'calls': state['calls'], 'records': run_records, 'error': state['error'], 'merge': state.get('merge'),

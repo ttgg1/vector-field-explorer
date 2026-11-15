@@ -18,7 +18,8 @@ class MetricsTests(unittest.TestCase):
         summary = metrics.summarize([record, record], tasks, True)
         self.assertEqual(summary['total_tokens'], 132)
         self.assertEqual(summary['cost'], 0.5)
-        self.assertEqual(summary['useful_merged_lines_per_million_tokens'], 12 / 132 * 1000000)
+        self.assertEqual(summary['merged'], 1)
+        self.assertNotIn('useful_merged_lines_per_million_tokens', summary)
         conflicting = dict(record, cost=1.0)
         with self.assertRaises(ValueError):
             metrics.summarize([record, conflicting], tasks, True)
@@ -35,53 +36,32 @@ class MetricsTests(unittest.TestCase):
         self.assertIsNone(go['cost'])
         self.assertIsNone(go['allowance'])
         self.assertIsNone(report['by_mode']['opencode-go']['cost'])
-        self.assertIsNone(report['cost_per_accepted'])
-
-    def test_mode_accepted_ratio_uses_only_mode_attributable_records(self):
-        a = metrics.message_record('a', 'implementer', 's1', self.message, self.config)
-        a.update(mode='openai', attribution={'accepted': True, 'merged': False})
-        b = metrics.message_record('b', 'implementer', 's2', dict(self.message, id='b', cost=0.2), self.config)
-        b.update(mode='openai', attribution={'accepted': True, 'merged': False})
-        failed = metrics.message_record('c', 'implementer', 's3', dict(self.message, id='c', cost=1.0), self.config)
-        failed.update(mode='openai', attribution={'accepted': False, 'merged': False})
-        tasks = [{'id': 'a', 'status': 'accepted', 'attempts': 1, 'reviews': 0, 'rejections': 0, 'escalations': 0, 'mode': 'openai'},
-                 {'id': 'b', 'status': 'accepted', 'attempts': 1, 'reviews': 0, 'rejections': 0, 'escalations': 0, 'mode': 'openai'},
-                 {'id': 'c', 'status': 'failed', 'attempts': 1, 'reviews': 0, 'rejections': 0, 'escalations': 0, 'mode': 'openai'}]
-        result = metrics.summarize([a, b, failed], tasks, True)
-        self.assertEqual(result['by_mode']['openai']['accepted'], 2)
-        self.assertEqual(result['by_mode']['openai']['cost_per_accepted'], 0.35)
-
-    def test_mode_ratio_is_null_for_incomplete_attribution(self):
-        accepted = metrics.message_record('a', 'implementer', 's1', self.message, self.config)
-        accepted.update(mode='openai', attribution={'accepted': True, 'merged': False})
-        unknown = metrics.message_record('b', 'implementer', 's2', dict(self.message, id='b'), self.config)
-        unknown.update(mode='openai', attribution=None)
-        tasks = [{'id': 'a', 'status': 'accepted', 'attempts': 1, 'reviews': 0, 'rejections': 0, 'escalations': 0, 'mode': 'openai'}]
-        result = metrics.summarize([accepted, unknown], tasks, True)
-        self.assertIsNone(result['by_mode']['openai']['cost_per_accepted'])
-
-    def test_accepted_and_merged_attribution_excludes_failed_spend_by_mode(self):
-        accepted = metrics.message_record('accepted-task', 'implementer', 's1', self.message, self.config)
-        accepted.update(mode='openai', attribution={'accepted': True, 'merged': True})
-        failed_message = dict(self.message, id='failed', cost=0.25)
-        failed = metrics.message_record('failed-task', 'implementer', 's2', failed_message, self.config)
-        failed.update(mode='opencode-go', attribution={'accepted': False, 'merged': False})
-        tasks = [{'id': 'a', 'status': 'merged', 'attempts': 1, 'reviews': 1, 'rejections': 0,
-                  'escalations': 0, 'merged_lines': 2, 'mode': 'openai'},
-                 {'id': 'b', 'status': 'failed', 'attempts': 1, 'reviews': 0, 'rejections': 0,
-                  'escalations': 0, 'merged_lines': None, 'mode': 'opencode-go'}]
-        report = metrics.summarize([accepted, failed], tasks, True)
-        self.assertEqual(report['cost'], 0.75)
-        self.assertEqual(report['cost_per_accepted'], 0.5)
-        self.assertEqual(report['by_mode']['openai']['accepted'], 1)
         self.assertEqual(report['by_mode']['opencode-go']['accepted'], 0)
-        self.assertIsNone(report['by_mode']['opencode-go']['cost_per_accepted'])
+        self.assertEqual(report['by_mode']['opencode-go']['merged'], 0)
+        self.assertNotIn('cost_per_accepted', report)
+        self.assertNotIn('tokens_per_accepted', report)
+        self.assertNotIn('cost_per_accepted', report['by_mode']['opencode-go'])
 
-    def test_unattributed_message_makes_accepted_ratios_unknown(self):
-        record = metrics.message_record('t', 'implementer', 's', self.message, self.config)
-        task = {'id': 't', 'status': 'accepted', 'attempts': 1, 'reviews': 0, 'rejections': 0, 'escalations': 0}
-        report = metrics.summarize([record], [task], True)
-        self.assertIsNone(report['cost_per_accepted'])
+    def test_mode_totals_and_outcome_counts_do_not_claim_unit_efficiency(self):
+        openai = metrics.message_record('a', 'implementer', 's1', self.message, self.config)
+        go_config = dict(self.config)
+        go_config['roles'] = {'implementer': {'model': 'opencode-go/deepseek-v4.1-flash'}}
+        go_message = {'id': 'go', 'model': {'id': 'deepseek-v4.1-flash', 'providerID': 'opencode-go'},
+                      'tokens': {'input': 4, 'output': 2, 'reasoning': 1, 'cache': {'read': 1, 'write': 0}}}
+        go = metrics.message_record('b', 'implementer', 's2', go_message, go_config)
+        tasks = [{'id': 'a', 'status': 'merged', 'attempts': 1, 'reviews': 1, 'rejections': 0,
+                  'escalations': 0, 'merged_lines': 12, 'mode': 'openai'},
+                 {'id': 'b', 'status': 'accepted', 'attempts': 1, 'reviews': 0, 'rejections': 0,
+                  'escalations': 0, 'merged_lines': None, 'mode': 'opencode-go'}]
+        report = metrics.summarize([openai, go], tasks, True)
+        self.assertEqual(report['by_mode']['openai']['merged'], 1)
+        self.assertEqual(report['by_mode']['opencode-go']['accepted'], 1)
+        self.assertEqual(report['by_mode']['opencode-go']['totals']['input'], 4)
+        self.assertIsNone(report['by_mode']['opencode-go']['cost'])
+        for key in ('tokens_per_accepted', 'cost_per_accepted', 'tokens_per_merged',
+                    'cost_per_merged', 'useful_merged_lines_per_million_tokens'):
+            self.assertNotIn(key, report)
+            self.assertNotIn(key, report['by_mode']['openai'])
 
     def test_unknown_semantics_and_failed_spend(self):
         message = dict(self.message, id='failed', cost=0, error={'message': 'failure'})
@@ -89,7 +69,7 @@ class MetricsTests(unittest.TestCase):
         summary = metrics.summarize([record], [], None)
         self.assertIsNone(summary['total_tokens'])
         self.assertIsNone(summary['cost'])
-        self.assertIsNone(summary['tokens_per_accepted'])
+        self.assertNotIn('tokens_per_accepted', summary)
 
     def test_configured_rates_count_cache_and_reasoning_once(self):
         self.config['output_includes_reasoning'] = True

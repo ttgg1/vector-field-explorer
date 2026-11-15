@@ -218,7 +218,7 @@ class RuntimeTests(unittest.TestCase):
         result = self.run_work(Recovering(self.root, self.config))
         self.assertEqual(result['calls'][-1]['invocation_model'], policy.validate_models(self.config, catalog)['recovery'])
 
-    def test_failed_run_spend_is_not_attributed_to_accepted_or_merged_work(self):
+    def test_failed_run_keeps_spend_but_not_accepted_outcome_count(self):
         self.request['id'] = 'failed-spend'
         self.config['limits']['max_attempts'] = 1
         self.config['output_includes_reasoning'] = True
@@ -229,22 +229,22 @@ class RuntimeTests(unittest.TestCase):
         report = runner.report([runner.Git(self.root).directory() / 'runs/failed-spend.json'])
         self.assertGreater(report['coverage']['cost_known'], 0)
         self.assertEqual(report['accepted'], 0)
-        self.assertIsNone(report['cost_per_accepted'])
+        self.assertNotIn('cost_per_accepted', report)
 
-    def test_accepted_run_attribution_includes_git_tree_and_merged_attribution_requires_proof(self):
+    def test_report_uses_verified_run_and_merge_status_without_unit_efficiency(self):
         result = self.run_work()
         run_file = runner.Git(self.root).directory() / 'runs/run-one.json'
         report = runner.report([run_file])
-        record = report['runs'][0]['records'][0]
-        self.assertTrue(record['attribution']['accepted'])
-        self.assertFalse(record['attribution']['merged'])
+        self.assertEqual((report['accepted'], report['merged']), (1, 0))
+        self.assertEqual(report['runs'][0]['tasks'][0]['status'], 'accepted')
+        self.assertNotIn('cost_per_accepted', report)
         git(self.root, 'add', '.')
         git(self.root, 'commit', '-m', 'accepted task')
         commit = git(self.root, 'rev-parse', 'HEAD')
         git(self.main, 'merge', '--ff-only', commit)
         runner.record_merge(self.root, 'run-one', commit, 'main')
         report = runner.report([run_file])
-        self.assertTrue(report['runs'][0]['records'][0]['attribution']['merged'])
+        self.assertEqual((report['accepted'], report['merged']), (1, 1))
 
     def test_normal_and_high_review_actual_new_file_diff_independent_session(self):
         for risk, effort in [('normal', 'medium'), ('high', 'high')]:
@@ -675,14 +675,14 @@ print(json.dumps(result))
         report = runner.report([runner.Git(self.root).directory() / 'runs/run-one.json'])
         self.assertEqual((report['accepted'], report['merged']), (0, 0))
         self.assertEqual(report['first_pass_acceptance_rate'], 0)
-        self.assertIsNone(report['cost_per_accepted'])
+        self.assertNotIn('cost_per_accepted', report)
         tasks = report['runs'][0]['tasks']
         self.assertTrue(all(t['status'] not in ('accepted', 'merged') for t in tasks))
         self.assertEqual([t['attempts'] for t in tasks], [1, 1])
         self.assertEqual([t['reviews'] for t in tasks], [1, 1])
         self.assertEqual([t['review_results'][0]['decision'] for t in tasks], ['approve', 'approve'])
         self.assertEqual(len(report['runs'][0]['records']), len(result['records']))
-        self.assertTrue(all(record['attribution']['accepted'] is False for record in report['runs'][0]['records']))
+        self.assertTrue(all(record.get('mode') == 'openai' for record in report['runs'][0]['records']))
         self.assertAlmostEqual(sum(r['cost'] for r in result['records']), 0.05)
 
     def test_f3_legacy_failed_run_with_surviving_edits_cannot_count_historical_acceptance(self):
@@ -699,7 +699,7 @@ print(json.dumps(result))
         self.assertEqual(task['historical_status'], 'accepted')
         self.assertEqual(task['status'], 'failed')
         self.assertEqual(len(report['runs'][0]['records']), len(state['records']))
-        self.assertTrue(all(record['attribution']['accepted'] is False for record in report['runs'][0]['records']))
+        self.assertTrue(all(record.get('mode') == 'openai' for record in report['runs'][0]['records']))
 
     def test_f3_final_global_failure_counts_zero_despite_two_historical_approvals(self):
         self.request.update(complexity='complex', risk='normal', allowed_files=['docs/a.md', 'code.py'])
@@ -720,7 +720,7 @@ print(json.dumps(result))
         self.assertEqual([t['status'] for t in tasks], ['failed', 'failed'])
         self.assertEqual([t['review_results'][0]['decision'] for t in tasks], ['approve', 'approve'])
         self.assertEqual(len(report['runs'][0]['records']), len(result['records']))
-        self.assertTrue(all(record['attribution']['accepted'] is False for record in report['runs'][0]['records']))
+        self.assertTrue(all(record.get('mode') == 'openai' for record in report['runs'][0]['records']))
         self.assertAlmostEqual(sum(r['cost'] for r in result['records']), 0.05)
 
     def test_unexpected_provider_model_or_effort_stops_but_keeps_usage(self):
