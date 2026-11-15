@@ -162,3 +162,17 @@ fn surface_large_finite_normal_math() {
     assert_eq!((mesh.positions.len(), mesh.indices.len()), (9, 24));
     assert_sound(&mesh);
 }
+
+#[test]
+fn surface_rounded_xy_collapse_cannot_cancel_normals() {
+    let domain = Domain::new(
+        Vec3::new(1.0, -2.0, -1.0),
+        Vec3::new(f32::from_bits(1.0f32.to_bits() + 1), 7.0, 1.0),
+    );
+    let expr = ScalarExpr::parse("1e8*(x-1)*y", ScalarContext::Surface).unwrap();
+    let mesh = sample_surface(&expr, &domain, UVec2::splat(4));
+    assert_sound(&mesh);
+    assert_eq!((mesh.positions.len(), mesh.indices.len()), (8, 18));
+    assert_eq!(mesh.diagnostics.rejected_cells, 6);
+    assert_eq!(mesh.diagnostics.probes, 9);
+}

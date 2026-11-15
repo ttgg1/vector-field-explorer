@@ -115,12 +115,10 @@ pub fn sample_surface(expr: &ScalarExpr, domain: &Domain, resolution: UVec2) -> 
             };
             let first = face(a, b, c);
             let second = face(b, d, c);
-            // Check GPU-rounded geometry before normalization: distinct samples
-            // can collapse to the same f32 coordinate on a very narrow domain.
-            if [first, second]
-                .iter()
-                .any(|n| !n.is_finite() || n.length_squared() == 0.0)
-            {
+            // Require positive projected area after GPU rounding: a vertical
+            // face can have nonzero 3D area but contribute no positive Z, so
+            // opposing faces could otherwise cancel a vertex's normal.
+            if [first, second].iter().any(|n| !n.is_finite() || n.z <= 0.0) {
                 mesh.diagnostics.rejected_cells += 1;
                 continue;
             }

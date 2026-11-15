@@ -595,8 +595,10 @@ Reversed/non-finite XYZ domains set `invalid_domain`; finite Z never clips
 heights. Zero/one axes or zero XY extent yield empty geometry. A missing corner
 or invalid/unrepresentable center rejects both triangles of a cell; at most one
 center probe runs per complete candidate cell (9,025 maximum). CCW triangles
-`(a,b,c), (b,d,c)` face +Z. Degeneracy checks use GPU-rounded positions; cross
-products and area-weighted normal accumulation use f64 and surviving faces only.
+`(a,b,c), (b,d,c)` face +Z. Each cell requires strictly positive projected XY
+area for both faces after GPU rounding, preventing cancellation of used vertex
+normals. Cross products and area-weighted accumulation use f64 and surviving
+faces only.
 The graph is open: no walls, caps, fake origin vertices or hole filling.
 
 **Pinned by.** [tests/plot_curve_test.rs](../tests/plot_curve_test.rs): slot counts,
