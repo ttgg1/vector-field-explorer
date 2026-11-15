@@ -61,12 +61,17 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
    Manual seats commit when assigned; runtime seats leave accepted edits for
    the controller's commit/integration step.
    Implementers dispatch no subagents; push/merge only if expressly assigned.
-3. Run every applicable deterministic validation before acceptance. A validated,
-   explicitly trivial, nonbinary diff may skip LLM review **only** within the
-   configured safe path/file/line thresholds; record the policy reason and actual
-   diff identity. Otherwise a fresh, read-only independent reviewer checks the
-   original requirements and complete actual task diff: normal risk uses the
-   configured reviewer; high-risk paths or declarations use escalation.
+3. Run every applicable deterministic validation before final acceptance. For a
+   decomposed runtime request, trusted task-local checks can gate retries; tasks
+   without them are provisional and cannot skip review. Run the mandatory global
+   validation after all tasks; only then can a nonempty final diff be accepted.
+   A validated, explicitly trivial, nonbinary diff may skip LLM review **only**
+   within configured prose-safe paths/file/line thresholds; protected ADR,
+   architecture, executable/configuration and agent-instruction paths always
+   require review. Record the policy reason and actual diff identity. Otherwise a
+   fresh, read-only independent reviewer checks the original requirements and
+   complete actual task diff: normal risk uses the configured reviewer; high-risk
+   paths or declarations use escalation.
    Whole-branch review is once at the end when required by the owning brief,
    not a repeated full review for each fix.
 4. Use [the fix loop](fix-loop.md) for actionable findings. Simple, low-risk fixes

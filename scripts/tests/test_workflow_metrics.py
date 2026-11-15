@@ -60,3 +60,40 @@ class MetricsTests(unittest.TestCase):
         record = metrics.message_record('t', 'implementer', 's', message, self.config, wrong)
         self.assertIsNone(record['cost'])
         self.assertIsNone(metrics.summarize([record], [], True)['total_tokens'])
+
+    def test_f4_zero_sentinel_with_positive_configured_or_catalog_rates_is_estimated(self):
+        self.config['output_includes_reasoning'] = True
+        rates = {'input': 2, 'output': 4, 'cache_read': 1, 'cache_write': 3}
+        catalog = {'providerID': 'openai', 'modelID': 'gpt-6.1-terra',
+                   'cost': [{'input': 2, 'output': 4, 'cache': {'read': 1, 'write': 3}}]}
+        for source in ('configured', 'catalog'):
+            with self.subTest(source=source):
+                self.config['prices'] = {'openai/gpt-6.1-terra': rates} if source == 'configured' else {}
+                record = metrics.message_record('t', 'implementer', 's', dict(self.message, cost=0), self.config, catalog)
+                self.assertAlmostEqual(record['cost'], 0.000296)
+                self.assertEqual(record['cost_source'], 'estimated')
+                self.assertTrue(record['coverage']['cost'])
+
+    def test_f4_explicit_known_zero_and_positive_reported_cost_remain_authoritative(self):
+        self.config['prices']['openai/gpt-6.1-terra'] = {'input': 2, 'output': 4, 'cache_read': 1, 'cache_write': 3}
+        for message, want in ((dict(self.message, cost=0, cost_known=True), 0), (self.message, 0.5)):
+            with self.subTest(cost=want):
+                record = metrics.message_record('t', 'implementer', 's', message, self.config)
+                self.assertEqual(record['cost'], want)
+                self.assertEqual(record['cost_source'], 'reported')
+
+    def test_f4_zero_sentinel_does_not_invent_cost_with_unknown_counts_or_semantics(self):
+        self.config['prices']['openai/gpt-6.1-terra'] = {'input': 2, 'output': 4, 'cache_read': 1, 'cache_write': 3}
+        record = metrics.message_record('t', 'implementer', 's', dict(self.message, cost=0), self.config)
+        self.assertIsNone(record['cost'])
+        self.config['output_includes_reasoning'] = True
+        record = metrics.message_record('t', 'implementer', 's', dict(self.message, cost=0, tokens={}), self.config)
+        self.assertIsNone(record['cost'])
+
+    def test_f4_all_zero_rates_only_estimate_free_when_usage_and_semantics_supported(self):
+        self.config['output_includes_reasoning'] = True
+        self.config['prices']['openai/gpt-6.1-terra'] = dict.fromkeys(('input', 'output', 'cache_read', 'cache_write'), 0)
+        record = metrics.message_record('t', 'implementer', 's', dict(self.message, cost=0), self.config)
+        self.assertEqual((record['cost'], record['cost_source']), (0, 'estimated'))
+        record = metrics.message_record('t', 'implementer', 's', dict(self.message, cost=0, tokens={}), self.config)
+        self.assertIsNone(record['cost'])

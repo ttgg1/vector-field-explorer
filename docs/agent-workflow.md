@@ -52,6 +52,11 @@ nonempty list of **exact files**, not directories/globs. `context` is an array
 of `{file}` or `{file,start,end}` entries, with inclusive one-based lines (it
 may be empty). `complexity` is `simple|complex`, `risk` is
 `trivial|normal|high`. `validation` is a nonempty list of trusted argv arrays.
+Optional `task_validation` maps planned task IDs to nonempty lists of trusted
+argv arrays. The planner may associate these IDs with tasks, but cannot create or
+alter commands. Without a task-local check, a decomposed task remains provisional
+and cannot use the trivial-review skip; complete request validation always runs
+after all tasks and is required for final acceptance.
 Extra/duplicate keys, invalid types, traversal, symlink aliases/escapes and
 empty acceptance/ownership/validation are rejected. CLI JSON input is capped
 at 1 MiB. Context, actual diffs, model responses, validation output and API
@@ -92,7 +97,13 @@ sandbox.
   the implementer session, sending actionable validation/review feedback and
   diff/evidence pointers instead of repeating unchanged context. Configured
   escalation switches the model/effort for subsequent turns in that session.
-- The controller runs **every** configured validation argv, recording exits,
+- The controller runs configured task-local validation during that task's retry
+  loop, recording exits. In a decomposed request, tasks without local checks
+  remain provisional and receive independent review; the controller runs **every**
+  global validation argv only after all tasks, as the mandatory final acceptance
+  gate. A failed final gate preserves edits and prior task reviews but accepts no
+  changes; recovery is explicit rather than guessing which task to reopen. For a
+  single task, global validation also serves its retry loop. Commands record exits,
   output and time/output failures. Commands must leave files unchanged, write
   generated output outside the worktree and terminate within the bounds.
   Python bytecode writing is disabled in the CLI and validation environment.
@@ -193,7 +204,10 @@ do not delete its Git objects as a cleanup shortcut.
 `metrics` aggregates all role messages and failed attempts, reporting raw input,
 output, reasoning, cache-read/write counts, coverage, actual positive reported
 costs, attempts/reviews/rejections/escalations and per-task validation/status.
-Accepted and Git-proven merged work have separate denominators. The merged-line
+Only tasks from a run that passes its final global gate and has a nonempty final
+diff count as accepted; historical provisional approvals remain in run evidence
+but do not enter acceptance denominators after final failure. Accepted and
+Git-proven merged work have separate denominators. The merged-line
 proxy counts **nonblank added source lines in the final accepted patch**,
 excluding docs/tests/generated/vendor/build/config paths and nonsource suffixes;
 shared files are attributed once to their final editing task. It counts comments

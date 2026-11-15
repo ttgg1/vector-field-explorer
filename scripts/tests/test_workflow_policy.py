@@ -60,6 +60,22 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.review_policy(self.config, ['src/auth/token.rs'], 1, 0, 'trivial', True)['risk'], 'high')
         self.assertTrue(policy.review_policy(self.config, ['src/notes.md'], 1, 0, 'trivial', True)['required'])
 
+    def test_f2_architecture_and_nested_agent_instructions_force_high_review(self):
+        for path in ('docs/adr/0002-single-simulation-clock.md', 'docs/AGENTS.md', 'CLAUDE.md',
+                     'nested/CLAUDE.md', 'AGENTS.override.md', 'docs/GEMINI.md', '.agents/rules.md',
+                     '.claude/commands/task.md', 'docs/.opencode/agents/review.md', 'docs/.agents/rules.md',
+                     'docs/.claude/rules.md', 'docs/CODEBASE.md', 'GLOSSARY.md'):
+            with self.subTest(path=path):
+                review = policy.review_policy(self.config, [path], 1, 1, 'trivial', True)
+                self.assertEqual((review['required'], review['risk'], review['role']), (True, 'high', 'escalation'))
+
+    def test_f2_docs_executable_and_config_are_not_safe_prose(self):
+        for path in ('docs/setup.py', 'docs/install.sh', 'docs/build.json', 'docs/site.yml'):
+            with self.subTest(path=path):
+                self.assertTrue(policy.review_policy(self.config, [path], 1, 1, 'trivial', True)['required'])
+        self.assertFalse(policy.review_policy(self.config, ['docs/guide/usage.md'], 1, 1, 'trivial', True)['required'])
+        self.assertFalse(policy.review_policy(self.config, ['README.md'], 1, 1, 'trivial', True)['required'])
+
     def test_reject_ambiguous_or_empty_paths(self):
         for path in ('a//b', './a', '/a', 'a/../b', 'a\\b'):
             with self.subTest(path=path), self.assertRaises(ValueError):

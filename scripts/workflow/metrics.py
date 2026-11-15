@@ -49,7 +49,8 @@ def message_record(task_id, role, session_id, message, config, catalog_model=Non
                      'cache_read': cache_rates.get('read'), 'cache_write': cache_rates.get('write')}
     valid_rates = isinstance(rates, dict) and all(_money(rates.get(k)) is not None for k in ('input', 'output', 'cache_read', 'cache_write'))
     reported = _money(message.get('cost'))
-    if reported == 0 and not valid_rates and message.get('cost_known') is not True:
+    # Pricing can support an estimate, but cannot authenticate a reported zero.
+    if reported == 0 and message.get('cost_known') is not True:
         reported = None
     source = 'reported' if reported is not None else None
     cost = reported

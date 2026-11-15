@@ -256,6 +256,88 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(merged['tasks'][1]['merged_lines'], 1)
         self.assertEqual(merged['merge']['commit'], commit)
 
+    def test_f1_decomposition_defers_whole_request_validation_until_both_edits(self):
+        self.config['limits']['max_attempts'] = 1
+        self.request.update(complexity='complex', allowed_files=['docs/a.md', 'code.py'],
+                            acceptance_criteria=['Both requested files have their final contents'])
+        self.request['validation'] = [[sys.executable, '-c', 'from pathlib import Path; '
+            'assert Path("docs/a.md").read_text() == "new\\n"; assert Path("code.py").read_text() == "value = 2\\n"']]
+        task = {'id': 'change-doc', 'requirements': ['Change the text'], 'acceptance_criteria': ['Text is new'],
+                'allowed_files': ['docs/a.md'], 'depends_on': []}
+        service = Service(self.root, self.config, [lambda: (self.root / 'docs/a.md').write_text('new\n'),
+                                                  lambda: (self.root / 'code.py').write_text('value = 2\n')],
+                          ['{"decision":"approve","findings":[]}'] * 2,
+                          [task, dict(task, id='change-code', allowed_files=['code.py'], depends_on=['change-doc'])])
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'accepted', result['error'])
+        self.assertEqual([t['attempts'] for t in result['tasks']], [1, 1])
+        self.assertEqual([t['validations'] for t in result['tasks']], [[], []])
+        self.assertEqual([t['reviews'] for t in result['tasks']], [1, 1])
+        self.assertTrue(all(t['review_policy']['required'] for t in result['tasks']))
+        self.assertEqual(result['final_validation_status'], 'passed')
+        self.assertEqual([v['exit'] for v in result['final_validations']], [0])
+        self.assertEqual(result['final_validations'][0]['argv'], self.request['validation'][0])
+        prompts = [text for sid, text in service.turns if service.sessions[sid][0].startswith('review:')]
+        self.assertTrue(all('"final_acceptance": "pending"' in prompt for prompt in prompts))
+        self.assertTrue(all('"deterministic_validation": "unavailable"' in prompt for prompt in prompts))
+
+    def test_f1_final_global_failure_preserves_provisional_reviews_and_edits(self):
+        self.config['limits']['max_attempts'] = 1
+        self.request.update(complexity='complex', risk='normal', allowed_files=['docs/a.md', 'code.py'])
+        self.request['validation'] = [[sys.executable, '-c', 'raise SystemExit(7)']]
+        task = {'id': 'one', 'requirements': ['text'], 'acceptance_criteria': ['new'],
+                'allowed_files': ['docs/a.md'], 'depends_on': []}
+        service = Service(self.root, self.config, [lambda: (self.root / 'docs/a.md').write_text('new\n'),
+                                                  lambda: (self.root / 'code.py').write_text('value = 2\n')],
+                          ['{"decision":"approve","findings":[]}'] * 2,
+                          [task, dict(task, id='two', allowed_files=['code.py'], depends_on=['one'])])
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(len(result['tasks']), 2)
+        self.assertEqual([t['status'] for t in result['tasks']], ['provisional', 'provisional'])
+        self.assertEqual(result['final_validation_status'], 'failed')
+        self.assertEqual([v['exit'] for v in result['final_validations']], [7])
+        self.assertEqual([t['review_results'][0]['decision'] for t in result['tasks']], ['approve', 'approve'])
+        self.assertEqual((self.root / 'code.py').read_text(), 'value = 2\n')
+        self.assertEqual(len(result['records']), 5)
+        self.assertNotIn('accepted_tree', result)
+
+    def test_f1_trusted_local_checks_retry_in_same_session_then_final_gate(self):
+        self.request.update(complexity='complex', risk='normal', allowed_files=['docs/a.md', 'code.py'])
+        local = [sys.executable, '-c', 'from pathlib import Path; assert Path("docs/a.md").read_text() == "good\\n"']
+        self.request['task_validation'] = {'one': [local]}
+        self.request['validation'] = [[sys.executable, '-c', 'from pathlib import Path; '
+            'assert Path("docs/a.md").read_text() == "good\\n"; assert Path("code.py").read_text() == "value = 2\\n"']]
+        task = {'id': 'one', 'requirements': ['text'], 'acceptance_criteria': ['good'],
+                'allowed_files': ['docs/a.md'], 'depends_on': []}
+        service = Service(self.root, self.config, [lambda: (self.root / 'docs/a.md').write_text('bad\n'),
+                                                  lambda: (self.root / 'docs/a.md').write_text('good\n'),
+                                                  lambda: (self.root / 'code.py').write_text('value = 2\n')],
+                          ['{"decision":"approve","findings":[]}'] * 2,
+                          [task, dict(task, id='two', allowed_files=['code.py'], depends_on=['one'])])
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'accepted', result['error'])
+        self.assertEqual([v['exit'] for v in result['tasks'][0]['validations']], [1, 0])
+        planner_prompt = next(text for sid, text in service.turns if service.sessions[sid][0].startswith('plan:'))
+        self.assertIn('"task_validation_ids": ["one"]', planner_prompt)
+        self.assertEqual([t['attempts'] for t in result['tasks']], [2, 1])
+        rounds = [(sid, text) for sid, text in service.turns if service.sessions[sid][0] == 'implement:one']
+        self.assertEqual(rounds[0][0], rounds[1][0])
+        self.assertIn('validation', rounds[1][1])
+        self.assertNotIn('CONTEXT', rounds[1][1])
+        self.assertEqual(result['final_validation_status'], 'passed')
+
+    def test_f1_local_validation_schema_and_unknown_task_ids_fail_closed(self):
+        for mapping in ([], {'one': []}, {'one': ['shell string']}, {'one': [[True]]}):
+            with self.subTest(mapping=mapping), self.assertRaises(ValueError):
+                runner.validate_manifest(dict(self.request, task_validation=mapping), self.root, self.config)
+        self.request['task_validation'] = {'unknown': [[sys.executable, '-c', 'pass']]}
+        service = Service(self.root, self.config)
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('unknown task', result['error'])
+        self.assertEqual(len(service.sessions), 0)
+
     def test_api_security_failure_keeps_usage_and_unknown_coverage_no_hopping(self):
         service = Service(self.root, self.config)
         def failed(sid, text, event):
@@ -442,6 +524,64 @@ print(json.dumps(result))
         result = self.run_work(service)
         self.assertEqual(result['status'], 'failed')
         self.assertIn('empty final', result['error'])
+
+    def test_f3_failed_empty_diff_counts_no_final_acceptance_in_production_report(self):
+        self.request.update(complexity='complex', risk='normal')
+        task = {'id': 'one', 'requirements': ['text'], 'acceptance_criteria': ['new'],
+                'allowed_files': ['docs/a.md'], 'depends_on': []}
+        service = Service(self.root, self.config, [lambda: (self.root / 'docs/a.md').write_text('new\n'),
+                                                  lambda: (self.root / 'docs/a.md').write_text('old\n')],
+                          ['{"decision":"approve","findings":[]}'] * 2,
+                          [task, dict(task, id='two', depends_on=['one'])])
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'failed')
+        report = runner.report([runner.Git(self.root).directory() / 'runs/run-one.json'])
+        self.assertEqual((report['accepted'], report['merged']), (0, 0))
+        self.assertEqual(report['first_pass_acceptance_rate'], 0)
+        self.assertIsNone(report['cost_per_accepted'])
+        tasks = report['runs'][0]['tasks']
+        self.assertTrue(all(t['status'] not in ('accepted', 'merged') for t in tasks))
+        self.assertEqual([t['attempts'] for t in tasks], [1, 1])
+        self.assertEqual([t['reviews'] for t in tasks], [1, 1])
+        self.assertEqual([t['review_results'][0]['decision'] for t in tasks], ['approve', 'approve'])
+        self.assertEqual(report['runs'][0]['records'], result['records'])
+        self.assertAlmostEqual(sum(r['cost'] for r in result['records']), 0.05)
+
+    def test_f3_legacy_failed_run_with_surviving_edits_cannot_count_historical_acceptance(self):
+        self.assertEqual(self.run_work()['status'], 'accepted')
+        state = self.state()
+        # Historical v1 evidence can have accepted task flags after a final
+        # failure. Reporting must reconcile run-level eligibility, not trust them.
+        state.update(status='failed', error='final global validation failed')
+        path = Path(self.temp.name) / 'legacy-failed.json'
+        path.write_text(json.dumps(state))
+        report = runner.report([path])
+        self.assertEqual((report['accepted'], report['merged']), (0, 0))
+        task = report['runs'][0]['tasks'][0]
+        self.assertEqual(task['historical_status'], 'accepted')
+        self.assertEqual(task['status'], 'failed')
+        self.assertEqual(report['runs'][0]['records'], state['records'])
+
+    def test_f3_final_global_failure_counts_zero_despite_two_historical_approvals(self):
+        self.request.update(complexity='complex', risk='normal', allowed_files=['docs/a.md', 'code.py'])
+        self.request['validation'] = [[sys.executable, '-c', 'raise SystemExit(7)']]
+        task = {'id': 'one', 'requirements': ['text'], 'acceptance_criteria': ['new'],
+                'allowed_files': ['docs/a.md'], 'depends_on': []}
+        service = Service(self.root, self.config, [lambda: (self.root / 'docs/a.md').write_text('new\n'),
+                                                  lambda: (self.root / 'code.py').write_text('value = 2\n')],
+                          ['{"decision":"approve","findings":[]}'] * 2,
+                          [task, dict(task, id='two', allowed_files=['code.py'], depends_on=['one'])])
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(len(result['tasks']), 2)
+        report = runner.report([runner.Git(self.root).directory() / 'runs/run-one.json'])
+        self.assertEqual((report['accepted'], report['merged']), (0, 0))
+        tasks = report['runs'][0]['tasks']
+        self.assertEqual([t['historical_status'] for t in tasks], ['provisional', 'provisional'])
+        self.assertEqual([t['status'] for t in tasks], ['failed', 'failed'])
+        self.assertEqual([t['review_results'][0]['decision'] for t in tasks], ['approve', 'approve'])
+        self.assertEqual(report['runs'][0]['records'], result['records'])
+        self.assertAlmostEqual(sum(r['cost'] for r in result['records']), 0.05)
 
     def test_unexpected_provider_model_or_effort_stops_but_keeps_usage(self):
         service = Service(self.root, self.config)

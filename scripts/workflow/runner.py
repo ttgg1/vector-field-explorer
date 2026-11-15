@@ -53,8 +53,18 @@ def _files(value, root):
         owned_path(root, name)
 
 
+def _validations(commands):
+    if not isinstance(commands, list) or not commands:
+        raise ValueError('validation is required')
+    for argv in commands:
+        _texts(argv, 'validation argv')
+        if any('\x00' in arg for arg in argv):
+            raise ValueError('NUL in validation argv')
+
+
 def validate_manifest(request, root, config):
-    _keys(request, 'id requirements acceptance_criteria allowed_files context complexity risk validation expected_head expected_branch', 'request')
+    optional = ' task_validation' if isinstance(request, dict) and 'task_validation' in request else ''
+    _keys(request, 'id requirements acceptance_criteria allowed_files context complexity risk validation expected_head expected_branch' + optional, 'request')
     if not isinstance(request['id'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', request['id']):
         raise ValueError('invalid unique run ID')
     for key in ('requirements', 'acceptance_criteria'):
@@ -66,12 +76,14 @@ def validate_manifest(request, root, config):
         raise ValueError('expected_head must be a full Git object ID')
     if not policy._text(request['expected_branch']) or request['expected_branch'].startswith('-'):
         raise ValueError('invalid expected branch')
-    if not isinstance(request['validation'], list) or not request['validation']:
-        raise ValueError('validation is required')
-    for argv in request['validation']:
-        _texts(argv, 'validation argv')
-        if any('\x00' in arg for arg in argv):
-            raise ValueError('NUL in validation argv')
+    _validations(request['validation'])
+    local = request.get('task_validation', {})
+    if not isinstance(local, dict):
+        raise ValueError('task_validation must map task IDs to trusted argv arrays')
+    for task_id, commands in local.items():
+        if not isinstance(task_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', task_id):
+            raise ValueError('invalid task_validation task ID')
+        _validations(commands)
     if not isinstance(request['context'], list) or len(request['context']) > 100:
         raise ValueError('invalid bounded context list')
     for entry in request['context']:
@@ -276,7 +288,8 @@ def run(root, manifest, config, service):
             raise ValueError('run requires clean worktree (including ignored files)')
         state = {'version': 1, 'id': request['id'], 'root': str(root), 'identity': expected, 'baseline': baseline,
                  'request': request, 'config': copy.deepcopy(config), 'status': 'running', 'tasks': [],
-                 'records': [], 'calls': [], 'events': [], 'error': None, 'created': time.time()}
+                 'records': [], 'calls': [], 'events': [], 'error': None, 'created': time.time(),
+                 'final_validations': [], 'final_validation_status': 'pending'}
         def save():
             _atomic(path, state)
         save()
@@ -343,6 +356,19 @@ def run(root, manifest, config, service):
             finally:
                 git.check(expected)
 
+        def validate(commands, evidence, attempt=None):
+            results = []
+            for argv in commands:
+                git.check(expected)
+                result = dict(api.bounded_command(argv, root, config['limits']['validation_timeout_seconds'],
+                                                  config['limits']['max_validation_output_bytes'],
+                                                  env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1')), argv=argv)
+                results.append(result)
+                evidence.append(dict(result, attempt=attempt))
+                save()
+                git.check(expected)
+            return results
+
         current = None
         try:
             git.check(expected)
@@ -358,12 +384,17 @@ def run(root, manifest, config, service):
                 sid = create('plan:' + request['id'], 'orchestrator', [])
                 prompt = ('Plan only; no edits, shell, subagents or commands. Return ONLY a JSON array of tasks, each with exactly '
                           'id,requirements (text array),acceptance_criteria (text array),allowed_files (exact files),depends_on (IDs). '
+                          'Include each trusted task_validation_id on its matching task; commands are controller-owned. '
                           'Keep all original requirements covered; bounded by max_tasks=' + str(config['limits']['max_tasks']) + '.\n'
-                          + json.dumps({k: request[k] for k in ('requirements', 'acceptance_criteria', 'allowed_files')}) + '\nCONTEXT\n' + context)
+                          + json.dumps({k: request[k] for k in ('requirements', 'acceptance_criteria', 'allowed_files')}
+                                       | {'task_validation_ids': sorted(request.get('task_validation', {}))}) + '\nCONTEXT\n' + context)
                 tasks = _tasks(call(request['id'], 'orchestrator', sid, prompt), request, root, config)
                 if git.snapshot() != baseline:
                     raise ValueError('read-only planner modified worktree')
                 state['planning'] = 'planned once'
+            local_checks = request.get('task_validation', {})
+            if not set(local_checks) <= {task['id'] for task in tasks}:
+                raise ValueError('task_validation references unknown task ID')
             for task in tasks:
                 current = dict(task, status='failed', attempts=0, reviews=0, rejections=0, escalations=0,
                                validations=[], merged_lines=None, baseline=git.snapshot())
@@ -374,6 +405,9 @@ def run(root, manifest, config, service):
                 current['session_id'] = sid
                 active_role = role
                 feedback = None
+                # Global acceptance is not a prerequisite for partial tasks.
+                # A single task can still use the global commands for retries.
+                commands = local_checks.get(task['id'], request['validation'] if len(tasks) == 1 else [])
                 for attempt in range(1, config['limits']['max_attempts'] + 1):
                     current['attempts'] = attempt
                     if attempt > config['limits']['escalate_after']:
@@ -403,16 +437,7 @@ def run(root, manifest, config, service):
                     save()
                     if not set(diff['files']) <= set(task['allowed_files']):
                         raise ValueError('ownership violation; edits preserved')
-                    results = []
-                    for argv in request['validation']:
-                        git.check(expected)
-                        result = dict(api.bounded_command(argv, root, config['limits']['validation_timeout_seconds'],
-                                                          config['limits']['max_validation_output_bytes'],
-                                                          env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1')), argv=argv)
-                        results.append(result)
-                        current['validations'].append(dict(result, attempt=attempt))
-                        save()
-                        git.check(expected)
+                    results = validate(commands, current['validations'], attempt)
                     validated_tree = git.snapshot()
                     if validated_tree != after:
                         raise ValueError('validation modified worktree; validation must be read-only')
@@ -420,7 +445,8 @@ def run(root, manifest, config, service):
                         feedback = {'validation': results, 'error': 'empty diff' if not diff['files'] else 'validation failed',
                                     'diff_sha256': diff['sha256'], 'evidence': str(path)}
                         continue
-                    review = policy.review_policy(config, diff['files'], diff['added'], diff['deleted'], request['risk'], True, diff['binary'])
+                    current['deterministic_validation'] = 'passed' if commands else 'unavailable'
+                    review = policy.review_policy(config, diff['files'], diff['added'], diff['deleted'], request['risk'], bool(commands), diff['binary'])
                     current['review_policy'] = review
                     save()
                     if review['required']:
@@ -430,12 +456,14 @@ def run(root, manifest, config, service):
                         save()
                         review_sid = create('review:' + task['id'] + ':' + str(current['reviews']), review['role'], [])
                         review_prompt = ('Independent read-only review. Do not edit, execute commands or delegate. '
-                            'Review original requirements/acceptance against this complete actual task diff; not a summary. '
+                            'Review this task\'s requirements/acceptance against its complete actual diff; not a summary. '
+                            'Original request criteria are context: final request acceptance remains pending until all tasks and global checks finish. '
                             'Return ONLY JSON {"decision":"approve|request_changes|block","findings":['
                             '{"file":"owned path","line":1,"severity":"critical|important|minor","message":"actionable fix"}]}. '
                             'Approve only if clean/pass; minor nonblocking findings may be recorded.\n'
                             + json.dumps({'task': task, 'original_requirements': request['requirements'],
-                                          'original_acceptance_criteria': request['acceptance_criteria'], 'validation': results})
+                                          'original_acceptance_criteria': request['acceptance_criteria'], 'validation': results,
+                                          'deterministic_validation': current['deterministic_validation'], 'final_acceptance': 'pending'})
                             + '\nCOMPLETE DIFF\n' + diff['text'])
                         parsed = policy.parse_review(call(task['id'], review['role'], review_sid, review_prompt))
                         if any(f['file'] not in diff['files'] for f in parsed['findings']):
@@ -455,16 +483,27 @@ def run(root, manifest, config, service):
                                 raise ValueError('review cap reached without acceptance')
                             feedback = {'review': parsed, 'diff_sha256': diff['sha256'], 'evidence': str(path)}
                             continue
-                    current.update(status='accepted', accepted_tree=after, accepted_identity=git.identity())
+                    current.update(status='provisional', provisional_tree=after, provisional_identity=git.identity())
                     save()
                     break
-                if current['status'] != 'accepted':
+                if current['status'] != 'provisional':
                     raise ValueError('attempt cap reached without acceptance')
-            state.update(status='accepted', accepted_tree=git.snapshot(), accepted_identity=git.identity())
-            state['accepted_diff'] = git.diff(baseline, state['accepted_tree'], config['limits']['max_diff_bytes'])
-            if not state['accepted_diff']['files']:
+            final_tree = git.snapshot()
+            state['final_diff'] = git.diff(baseline, final_tree, config['limits']['max_diff_bytes'])
+            state['final_validation_status'] = 'failed'
+            save()
+            results = validate(request['validation'], state['final_validations'])
+            if git.snapshot() != final_tree:
+                raise ValueError('final validation modified worktree; validation must be read-only')
+            if any(r['exit'] != 0 or r['error'] for r in results):
+                raise ValueError('final request validation failed; explicit recovery required')
+            state['final_validation_status'] = 'passed'
+            if not state['final_diff']['files']:
                 raise ValueError('empty final run diff; accepted subtasks undo all work')
             git.check(expected)
+            for task in state['tasks']:
+                task.update(status='accepted', accepted_tree=task['provisional_tree'], accepted_identity=task['provisional_identity'])
+            state.update(status='accepted', accepted_tree=final_tree, accepted_identity=git.identity(), accepted_diff=state['final_diff'])
         except Exception as exc:
             state.update(status='blocked' if current and current['status'] == 'blocked' else 'failed', error=f'{type(exc).__name__}: {exc}')
             # Best-effort final snapshot cannot overwrite the primary failure.
@@ -532,7 +571,7 @@ def report(paths):
     states = [read_json(path) for path in paths]
     semantics = {state['config']['output_includes_reasoning'] for state in states}
     convention = semantics.pop() if len(semantics) == 1 else None
-    records, tasks = [], []
+    records, tasks, runs = [], [], []
     for state in states:
         records.extend(state['records'])
         for call in state['calls']:
@@ -541,12 +580,23 @@ def report(paths):
                 if not any(r['session_id'] == call['session_id'] and r['message_id'] == unknown_id for r in records):
                     records.append(metrics.message_record(call['task_id'], call['role'], call['session_id'],
                                    {'id': unknown_id, 'error': call.get('error', 'usage unavailable/incomplete')}, state['config']))
+        eligible = state['status'] in ('accepted', 'merged') and bool(state.get('accepted_diff', {}).get('files'))
+        reported_tasks = []
         for task in state['tasks']:
-            tasks.append(dict(task, id=state['id'] + ':' + task['id']))
+            reported = dict(task)
+            if not eligible or task['status'] == 'provisional':
+                reported['status'] = 'blocked' if task['status'] == 'blocked' else 'failed'
+                if reported['status'] != task['status']:
+                    reported['historical_status'] = task['status']
+            reported_tasks.append(reported)
+            tasks.append(dict(reported, id=state['id'] + ':' + task['id']))
+        runs.append({'id': state['id'], 'root': state['root'], 'status': state['status'], 'tasks': reported_tasks,
+                     'calls': state['calls'], 'records': state['records'], 'error': state['error'], 'merge': state.get('merge'),
+                     'final_validations': state.get('final_validations', []),
+                     'final_validation_status': state.get('final_validation_status', 'unknown')})
         # Planner-only failures still count as failed work, not an empty success.
         if not state['tasks']:
             tasks.append({'id': state['id'], 'status': 'failed', 'attempts': 0, 'reviews': 0, 'rejections': 0, 'escalations': 0})
     result = metrics.summarize(records, tasks, convention)
-    result['runs'] = [{'id': s['id'], 'root': s['root'], 'status': s['status'], 'tasks': s['tasks'],
-                       'calls': s['calls'], 'records': s['records'], 'error': s['error'], 'merge': s.get('merge')} for s in states]
+    result['runs'] = runs
     return result

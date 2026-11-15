@@ -14,8 +14,8 @@
   },
   "review": {
     "trivial_max_lines": 30, "trivial_max_files": 2,
-    "trivial_paths": ["docs/**", "*.md"],
-    "high_risk_paths": [".opencode/**", "scripts/workflow/**", "scripts/agent_workflow.py", "references/workflow.md", "AGENTS.md", "**/*auth*", "**/*security*", "**/*migration*", "**/*concurr*", "Cargo.toml", "Cargo.lock", ".github/**"],
+    "trivial_paths": ["docs/**/*.md", "*.md"],
+    "high_risk_paths": ["**/.opencode/**", "**/.claude/**", "**/.agents/**", "scripts/workflow/**", "scripts/agent_workflow.py", "references/workflow.md", "docs/adr/**", "docs/CODEBASE.md", "GLOSSARY.md", "**/AGENTS.md", "**/AGENTS.override.md", "**/CLAUDE.md", "**/GEMINI.md", "**/*auth*", "**/*security*", "**/*migration*", "**/*concurr*", "Cargo.toml", "Cargo.lock", ".github/**"],
     "skip_trivial": true
   },
   "prices": {},
