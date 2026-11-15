@@ -10,7 +10,7 @@
 
 **Spec:** [Owner-approved design](../specs/2026-11-15-scalar-plotting-design.md), approved in conversation on 2026-11-15 (“go ahead” in response to the written approval request).
 
-**Plan status:** DRAFT FOR CONTROLLER/OWNER REVIEW. This document does not authorize production changes. Planning baseline `fb7d290`; worktree `/home/paul/.local/share/opencode/worktree/9d1d25/issue-12-scalar-plotting`, branch `feature/issue-12-scalar-plotting`.
+**Plan status:** APPROVED by owner on 2026-11-15 in conversation (“go ahead” in response to the plan confirmation request). Execute through delegated TDD implementation and independent review under Workflow. Planning baseline `fb7d290`; worktree `/home/paul/.local/share/opencode/worktree/9d1d25/issue-12-scalar-plotting`, branch `feature/issue-12-scalar-plotting`.
 
 ## Global Constraints
 
@@ -245,4 +245,4 @@ Use `glam::{Vec3,DVec3,UVec2,Mat4}`, `std::sync::Arc`, existing `Domain`, `Color
 
 Self-review performed by this planning seat, **no reviewer subagent**: checked every spec section/acceptance bullet against the map, exact examples/limits against source design, intertask names/types and cache ownership, test registration and shared-file serialization. Five likely hidden failures appear in Review Focus and have owning tests. Production bodies are left to implementers; plan fixes interfaces, policy values and observable assertions, not a new framework.
 
-**Remaining ambiguities/blockers:** No owner design decision remains open after the recorded approval. Plan approval is still pending and must be requested by controller, not this delegated seat. Actual device/format capability and pixel tolerance calibration require runtime evidence; failure returns to controller, never weakens approved depth/gap/export behavior. The unavailable Workflow executable paths are an environment discrepancy handled with controller-verified Rustup proxies, not a tracked policy change. Any need to change dependencies, global depth, vector behavior, conservative gap semantics or approved scope is a new design gate. Baseline/issue claims must be rechecked at dispatch; no completion is inferred from missing historical artifacts.
+**Remaining ambiguities/blockers:** No owner design decision remains open after the recorded approval; the owner subsequently approved this plan. Actual device/format capability and pixel tolerance calibration require runtime evidence; failure returns to controller, never weakens approved depth/gap/export behavior. The unavailable Workflow executable paths are an environment discrepancy handled with controller-verified Rustup proxies, not a tracked policy change. Any need to change dependencies, global depth, vector behavior, conservative gap semantics or approved scope is a new design gate. Baseline/issue claims must be rechecked at dispatch; no completion is inferred from missing historical artifacts.
