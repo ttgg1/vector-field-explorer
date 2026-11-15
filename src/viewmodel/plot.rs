@@ -203,30 +203,27 @@ impl State {
             PlotKind::Surface3D => Some(ScalarContext::Surface),
             PlotKind::VectorField => None,
         };
-        if let Some(context) = context {
-            if self.scalar_draft(context).samples.is_none() {
-                let samples =
-                    self.scalar_draft(context)
-                        .accepted
-                        .as_ref()
-                        .map(|expr| match context {
-                            ScalarContext::Curve => {
-                                let slots = sample_curve(
-                                    expr,
-                                    &self.domain,
-                                    self.plot.settings.curve_samples,
-                                );
-                                let edges = curve_edges(expr, &self.domain, &slots);
-                                SampledPlot::Curve { slots, edges }
-                            }
-                            ScalarContext::Surface => SampledPlot::Surface(sample_surface(
-                                expr,
-                                &self.domain,
-                                UVec2::splat(self.plot.settings.surface_resolution),
-                            )),
-                        });
-                self.scalar_draft_mut(context).samples = samples.map(Arc::new);
-            }
+        if let Some(context) = context
+            && self.scalar_draft(context).samples.is_none()
+        {
+            let samples = self
+                .scalar_draft(context)
+                .accepted
+                .as_ref()
+                .map(|expr| match context {
+                    ScalarContext::Curve => {
+                        let slots =
+                            sample_curve(expr, &self.domain, self.plot.settings.curve_samples);
+                        let edges = curve_edges(expr, &self.domain, &slots);
+                        SampledPlot::Curve { slots, edges }
+                    }
+                    ScalarContext::Surface => SampledPlot::Surface(sample_surface(
+                        expr,
+                        &self.domain,
+                        UVec2::splat(self.plot.settings.surface_resolution),
+                    )),
+                });
+            self.scalar_draft_mut(context).samples = samples.map(Arc::new);
         }
         let draft = context.map(|c| self.scalar_draft(c));
         let mut scene = build_plot_scene(

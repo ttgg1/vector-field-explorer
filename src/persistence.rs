@@ -18,9 +18,9 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
 use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
-    DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance,
-    ParticleColorMode,
+    DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
 };
+use crate::plot::PlotKind;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
@@ -59,6 +59,17 @@ impl AppSettings {
 pub struct ViewRecord {
     pub formula: String,
     pub mode_3d: bool,
+    pub plot_kind: PlotKind,
+    pub curve_source: String,
+    pub surface_source: String,
+    pub curve_samples: usize,
+    pub surface_resolution: u32,
+    pub plot_line_width: f32,
+    pub plot_auto_height: bool,
+    pub plot_height_min: f32,
+    pub plot_height_max: f32,
+    #[serde(default)]
+    pub last_vector_mode_3d: Option<bool>,
     pub domain_min: [f32; 3],
     pub domain_max: [f32; 3],
     pub density: u32,
@@ -77,7 +88,11 @@ pub struct ViewRecord {
     /// never write the key, so it stays `None` and the old flat bool decodes
     /// through [`deserialize_legacy_normalize`] rather than `Option`'s RON
     /// `Some(...)` spelling.
-    #[serde(default, skip_serializing, deserialize_with = "deserialize_legacy_normalize")]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "deserialize_legacy_normalize"
+    )]
     pub normalize: Option<bool>,
     /// The three-way replacement for `normalize` (ticket 33). Missing on a
     /// legacy record; the container-level default then supplies Proportional.
@@ -173,6 +188,20 @@ impl ViewRecord {
         Self {
             formula: state.formula.clone(),
             mode_3d: state.mode_3d,
+            plot_kind: state.plot.kind,
+            curve_source: state.plot.curve.source.clone(),
+            surface_source: state.plot.surface.source.clone(),
+            curve_samples: state.plot.settings.curve_samples,
+            surface_resolution: state.plot.settings.surface_resolution,
+            plot_line_width: state.plot.settings.line_width,
+            plot_auto_height: state.plot.settings.auto_height,
+            plot_height_min: state.plot.settings.height_min,
+            plot_height_max: state.plot.settings.height_max,
+            last_vector_mode_3d: Some(if state.is_vector_mode() {
+                state.mode_3d
+            } else {
+                state.plot.vector_mode_3d
+            }),
             domain_min: state.domain.min.to_array(),
             domain_max: state.domain.max.to_array(),
             density: state.density,
@@ -221,19 +250,21 @@ impl ViewRecord {
     /// record cannot poison the sampling grid.
     pub fn restore(&self, state: &mut State, controls: &mut Controls) {
         let defaults = Controls::new();
-        state.set_mode(self.mode_3d);
+        state.set_plot_kind(PlotKind::VectorField);
+        state.set_mode(self.last_vector_mode_3d.unwrap_or(self.mode_3d));
         state.set_formula(self.formula.clone());
 
         controls.density = self.density;
         controls.arrow_scale = finite_or(self.arrow_scale, defaults.arrow_scale);
         controls.arrow_opacity = finite_or(self.arrow_opacity, defaults.arrow_opacity);
-        controls.plane_dim_opacity =
-            finite_or(self.plane_dim_opacity, defaults.plane_dim_opacity);
+        controls.plane_dim_opacity = finite_or(self.plane_dim_opacity, defaults.plane_dim_opacity);
         // Legacy records carried a `normalize` bool instead of a mode; it wins
         // when present so old settings land in the matching mode, and new
         // records (where it is absent) use the stored three-way mode.
-        controls.arrow_length_mode =
-            self.normalize.map(ArrowLengthMode::from_normalize).unwrap_or(self.arrow_length_mode);
+        controls.arrow_length_mode = self
+            .normalize
+            .map(ArrowLengthMode::from_normalize)
+            .unwrap_or(self.arrow_length_mode);
         controls.magnitude_scale = finite_or(self.magnitude_scale, defaults.magnitude_scale);
         controls.proportional_exponent =
             finite_or(self.proportional_exponent, defaults.proportional_exponent);
@@ -254,10 +285,7 @@ impl ViewRecord {
         controls.particle_size = finite_or(self.particle_size, defaults.particle_size);
         controls.particle_count = self.particle_count.min(MAX_PARTICLES as u32);
         controls.particle_appearance = ParticleAppearance {
-            opacity: finite_or(
-                self.particle_opacity,
-                defaults.particle_appearance.opacity,
-            ),
+            opacity: finite_or(self.particle_opacity, defaults.particle_appearance.opacity),
             color_mode: self.particle_color_mode,
             fixed_color: self.particle_fixed_color,
             trail_len: self.particle_trail_len,
@@ -282,6 +310,13 @@ impl ViewRecord {
         controls.domain_min = Vec3::from_array(self.domain_min);
         controls.domain_max = Vec3::from_array(self.domain_max);
         sidebar::apply(state, controls);
+        state.set_plot_samples(self.curve_samples);
+        state.set_plot_resolution(self.surface_resolution);
+        state.set_plot_width(self.plot_line_width);
+        state.set_plot_auto_height(self.plot_auto_height);
+        state.set_plot_height_range(self.plot_height_min, self.plot_height_max);
+        state.restore_plot_drafts(self.curve_source.clone(), self.surface_source.clone());
+        state.set_plot_kind(self.plot_kind);
     }
 }
 
