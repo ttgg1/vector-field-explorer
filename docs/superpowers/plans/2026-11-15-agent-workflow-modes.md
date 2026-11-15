@@ -73,9 +73,11 @@ Go review diversity is selected as a cost-conscious initial hypothesis because G
 
 **Files:**
 - Modify: `scripts/workflow/runner.py`
+- Modify: `scripts/workflow/policy.py` only for exact same-mode override validation helpers.
 - Modify: `scripts/workflow/metrics.py` only where runtime evidence needs a compatible additive schema.
 - Modify: `scripts/tests/test_workflow_runtime.py`
 - Modify: `scripts/tests/test_workflow_metrics.py`
+- Modify: `scripts/tests/test_workflow_policy.py` for override validation.
 
 **Interfaces:**
 - Consumes Task 1 validated mode roles and deterministic classifier.
