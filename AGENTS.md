@@ -7,6 +7,8 @@ keep dependencies compatible.
 
 1. Read [Workflow](references/workflow.md) before dispatch, implementation,
    review, or integration: it is the single tracked authority for current policy.
+   For runnable OpenCode requests or usage/merge evidence, read the
+   [runtime guide](docs/agent-workflow.md).
 2. Reconcile outstanding requirements, claims, status, discussion and dependencies
    in [GitHub Issues](https://github.com/ttgg1/vector-field-explorer/issues)
    before dispatch. Workflow defines claim checks, attribution and scheduling.

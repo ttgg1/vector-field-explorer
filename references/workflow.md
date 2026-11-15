@@ -1,6 +1,6 @@
 # Workflow — current policy
 
-Tracked policy authority, reconciled with the owner's 2026-11-14 rulings.
+Tracked policy authority, reconciled with the owner's 2026-11-15 rulings.
 New owner rulings take precedence; update durable policy here, not across wiki pages.
 Local evidence paths below are relative to the **main checkout**,
 `/home/paul/projects/vector-field-explorer`, unless explicitly stated otherwise.
@@ -47,23 +47,34 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
 ## Dispatch and evidence
 
 1. Record BASE, brief, accepted scope, dependencies and exclusive file ownership.
-   One `feature/<topic>` branch/worktree per task. Default to parallel implementers
-   for authorized independent, file-disjoint tasks, subject to ownership/build
-   limits and usage-limit/explicit-stop rules; serialize shared seams.
+   One `feature/<topic>` branch/worktree per request. Use the bounded runtime
+   described in [the workflow guide](../docs/agent-workflow.md) for authorized
+   runnable requests. Simple, well-defined requests within the configured file
+   threshold bypass planning; complex requests receive one bounded plan.
+   Serialize shared/dependent files. Independently authorized, file-disjoint
+   requests may run in parallel worktrees, subject to build and usage limits.
 2. The controller keeps the ledger and serializes integration, rather than
    writing production code during the loop. An implementer reads its brief,
    uses TDD (observe the right RED before production changes), runs applicable
-   gates, self-reviews, commits, and writes `task-N-report.md` with exact hashes,
+   gates, self-reviews, and writes `task-N-report.md` with exact hashes,
    evidence and `DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT`.
+   Manual seats commit when assigned; runtime seats leave accepted edits for
+   the controller's commit/integration step.
    Implementers dispatch no subagents; push/merge only if expressly assigned.
-3. **Initial independent review is required for every task.** A separate review
-   seat checks the diff against scope and quality, not just reported gate results.
-   Use [the fix loop](fix-loop.md) for findings. Whole-branch review is once at
-   the end, not a repeated full review for every scoped fix.
-4. **Skip independent re-review for simple, low-risk tasks/fixes with passing
-   applicable tests**, recording the finding closure evidence and why the
-   simple-task exception applies. This never waives initial review;
-   complex/high-risk changes still require scoped independent re-review.
+3. Run every applicable deterministic validation before acceptance. A validated,
+   explicitly trivial, nonbinary diff may skip LLM review **only** within the
+   configured safe path/file/line thresholds; record the policy reason and actual
+   diff identity. Otherwise a fresh, read-only independent reviewer checks the
+   original requirements and complete actual task diff: normal risk uses the
+   configured reviewer; high-risk paths or declarations use escalation.
+   Whole-branch review is once at the end when required by the owning brief,
+   not a repeated full review for each fix.
+4. Use [the fix loop](fix-loop.md) for actionable findings. Simple, low-risk fixes
+   with passing applicable tests may skip independent re-review with closure
+   evidence; complex/high-risk fixes require scoped re-review. The runtime is
+   stricter: each nontrivial implementation round receives fresh diff review.
+   Attempts/reviews are capped; unresolved findings remain failed/blocked, not
+   accepted or parked. Preserve failed edits and usage evidence.
 5. Use `feat:` / `fix:` / `docs:` commits, one set per task. A subject containing
    `(ticket NN)` requires a matching [review record](../docs/wiki/process/review-records.md).
    Future AI-created commits require the `Generated-by: OpenCode` trailer;
@@ -78,26 +89,30 @@ Review packages use the last reviewed HEAD as round BASE; verify ancestry.
 
 ## Seats and recovery
 
-Use these preferred seats when model selection is allowed by the harness.
-Pass model/variant explicitly only when the tool contract permits it; when it
-requires an explicit user request for a particular model, obtain that request
-before setting the argument. Otherwise use the permitted default and record the
-actual seat; this table does not override higher-priority tool restrictions.
+The single source for default model/effort roles and bounds is
+[agent-workflow.json](../.opencode/agent-workflow.json). Validate exact enabled
+OpenAI chat/tool models and effort variants against service discovery before
+execution. The orchestrator plans once; the implementer starts in its configured
+seat and reuses its session for targeted retries. Escalate after the configured
+attempt threshold, or initially for genuinely complex work. Normal reviews use
+the reviewer role; high-risk reviews use escalation, always independently.
 
-| Role | Model | Effort |
-| --- | --- | --- |
-| Controller | `openai/gpt-6.1-sol#medium` | controller work |
-| Implementer | `openai/gpt-6-luna` | `#low` narrow/mechanical; `#medium` ordinary; `#high` wide/subtle |
-| Reviewer | `openai/gpt-6.1-sol` | `#medium` scoped; `#high` whole-task/branch |
-
-Choose effort by task difficulty/review scope, **not round number**. If the same
-finding returns twice, use a fresh, stronger implementer seat. No kimi k3.x,
-NVIDIA/Nemotron, LM Studio or `strata` seats.
+The chief-of-staff controller coordinates claims, budgets, evidence and serialized
+integration; it does not silently change the current harness session's model.
+Outside the runtime, pass model/variant only when the tool contract permits it;
+this policy does not override an explicit-user-request requirement or other
+higher-priority restrictions. No kimi k3.x, NVIDIA/Nemotron, LM Studio or `strata`
+seats. Keep explicit configured roles; unavailable roles fail closed.
 
 **Usage/rate/quota/budget limit: save progress and STOP.** No retries or
 model/provider hopping unless the owner explicitly resumes/chooses a seat.
 Earlier automatic free-model fallbacks are retired. An authentication/security
 block likewise needs owner resolution, not a workaround.
+Ambiguous admission/wait failures require manual service reconciliation, never
+automatic resubmission. The runtime preserves run/session references in the
+linked worktree Git directory, prevents duplicate/concurrent runs, and requires
+a new clean worktree after unresolved failure. Accepted edits are not merged:
+record merge status only after the guide's preserving Git-identity proof.
 
 ## Local verification
 
@@ -107,6 +122,9 @@ For Rust changes: `cargo build`, `scripts/test.sh` (full
 Run `scripts/smoke-run.sh 15` for renderer, shader, windowing or input changes,
 or when the ticket requires it: build/tests create no wgpu device.
 Docs-only changes need docs, diff, link and policy-consistency checks, not Cargo.
+For Python workflow tooling, also run `python3 -m unittest discover -s scripts/tests -v`
+and compile changed Python files. Tests must remain offline; discovery-only
+`doctor` is allowed, model generation for verification is not.
 
 Use the Rustup toolchain explicitly:
 `PATH=/home/paul/.cargo/bin:/usr/bin:/bin`,
