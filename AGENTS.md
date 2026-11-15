@@ -27,5 +27,25 @@ keep dependencies compatible.
      [plan/spec index](docs/superpowers/README.md).
    - **History:** [wiki index](docs/wiki/index.md), [review records](docs/reviews/).
 
+## Token-efficient coding policy
+
+- Use OpenAI models only. Read [agent-workflow.json](.opencode/agent-workflow.json)
+  for configurable role defaults and limits; validate model IDs and reasoning
+  effort against the enabled provider catalog. Never silently switch provider.
+- Keep simple tasks direct: skip decomposition when the request is clear and
+  bounded. Give implementers only relevant requirements, acceptance criteria,
+  owned paths and context. Reuse sessions and send only targeted retry feedback.
+- Review the actual diff against the request. Skip model review only for a
+  validated, low-risk trivial change inside the configured safe paths and size
+  limits. Use the configured reviewer for normal changes and high-effort
+  escalation for high-risk changes; never downgrade protected paths.
+- Bound attempts and reviews using configuration. Stop on unresolved failures;
+  retain validation evidence and account for usage per agent, including cached
+  tokens and cost only when known. Report accepted work separately from Git-verified
+  merged work; never infer a merge from approval.
+- For runnable requests, follow the [workflow guide](docs/agent-workflow.md).
+  [Workflow](references/workflow.md) remains the authority for claims, review and
+  integration policy; this section is the concise agent entry point.
+
 Use applicable skills before acting; use `writing-for-agents` for agent docs.
 Prune superseded instructions rather than appending another policy copy.
