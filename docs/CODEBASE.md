@@ -880,6 +880,14 @@ effective subset. Streamlines are retraced on any scene rebuild. The snapshot
 does not include per-frame particles by design, so a caller that only reads
 `snapshot()` sees an empty dot/trail/combined stream.
 
+#### `src/viewmodel/plot.rs` — scalar state transitions and lazy scenes
+
+**Contract.** `State` keeps independent curve and surface drafts, settings and
+sample caches while preserving vector state. Plot setters reconcile transitions,
+sanitize controls and invalidate relevant caches; `plot_scene` lazily samples
+accepted expressions and delegates scene construction to `plot_scene`.
+`tests/plot_state_test.rs` covers editing, transitions, settings and caching.
+
 #### `src/persistence.rs` — one settings envelope
 
 **Purpose.** Restore and save style, layout, and view state under one eframe
