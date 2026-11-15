@@ -97,22 +97,43 @@ def summarize(records, tasks, output_includes_reasoning=None):
         return n / d if n is not None and d else None
     merged_lines = sum(t['merged_lines'] for t in merged) if merged and all(t.get('merged_lines') is not None for t in merged) else None
     by_mode = {}
-    for mode in sorted({row.get('mode', row['model'].split('/', 1)[0]) for row in rows}):
+    for mode in sorted({row.get('mode', row['model'].split('/', 1)[0]) for row in rows} | {t.get('mode', 'unknown') for t in tasks}):
         mode_rows = [row for row in rows if row.get('mode', row['model'].split('/', 1)[0]) == mode]
         mode_totals = {key: sum(r['usage'][key] for r in mode_rows) if all(r['usage'][key] is not None for r in mode_rows) else None for key in COUNTS}
         mode_tokens = sum(mode_totals[k] for k in token_keys) if output_includes_reasoning is not None and all(mode_totals[k] is not None for k in COUNTS) else None
         mode_cost = sum(r['cost'] for r in mode_rows) if all(r['cost'] is not None for r in mode_rows) else None
+        mode_tasks = [t for t in tasks if t.get('mode', 'unknown') == mode]
+        accepted_tasks = [t for t in mode_tasks if t['status'] in ('accepted', 'merged')]
+        merged_tasks = [t for t in mode_tasks if t['status'] == 'merged']
+        eligible = [r for r in mode_rows if isinstance(r.get('attribution'), dict) and r['attribution'].get('accepted') is True]
+        merge_eligible = [r for r in mode_rows if isinstance(r.get('attribution'), dict) and r['attribution'].get('merged') is True]
+        accepted_complete = bool(accepted_tasks) and all(isinstance(r.get('attribution'), dict) for r in mode_rows) and all(r.get('coverage', {}).get('usage') and r.get('cost') is not None for r in eligible)
+        merged_complete = bool(merged_tasks) and all(isinstance(r.get('attribution'), dict) for r in mode_rows) and all(r.get('coverage', {}).get('usage') and r.get('cost') is not None for r in merge_eligible)
+        accepted_mode_tokens = sum(sum(r['usage'][k] for k in token_keys) for r in eligible) if accepted_complete and output_includes_reasoning is not None else None
+        merged_mode_tokens = sum(sum(r['usage'][k] for k in token_keys) for r in merge_eligible) if merged_complete and merge_eligible and output_includes_reasoning is not None else None
+        accepted_mode_cost = sum(r['cost'] for r in eligible) if accepted_complete else None
+        merged_mode_cost = sum(r['cost'] for r in merge_eligible) if merged_complete and merge_eligible else None
         by_mode[mode] = {'totals': mode_totals, 'total_tokens': mode_tokens, 'cost': mode_cost,
+                         'accepted': len(accepted_tasks), 'merged': len(merged_tasks),
+                         'tokens_per_accepted': ratio(accepted_mode_tokens, len(accepted_tasks)),
+                         'cost_per_accepted': ratio(accepted_mode_cost, len(accepted_tasks)),
+                         'tokens_per_merged': ratio(merged_mode_tokens, len(merged_tasks)),
+                         'cost_per_merged': ratio(merged_mode_cost, len(merged_tasks)),
                          'coverage': {'messages': len(mode_rows), 'cost_known': sum(r['cost'] is not None for r in mode_rows)}}
-    known_rates = all(row.get('coverage', {}).get('usage') and row.get('cost') is not None for row in rows)
-    accepted_tokens = total_tokens if known_rates and output_includes_reasoning is not None else None
-    accepted_cost = cost if known_rates else None
+    eligible = [r for r in rows if isinstance(r.get('attribution'), dict) and r['attribution'].get('accepted') is True]
+    merge_eligible = [r for r in rows if isinstance(r.get('attribution'), dict) and r['attribution'].get('merged') is True]
+    accepted_complete = bool(accepted) and all(isinstance(r.get('attribution'), dict) for r in rows) and all(r.get('coverage', {}).get('usage') and r.get('cost') is not None for r in eligible)
+    merged_complete = bool(merged) and all(isinstance(r.get('attribution'), dict) for r in rows) and all(r.get('coverage', {}).get('usage') and r.get('cost') is not None for r in merge_eligible)
+    accepted_tokens = sum(sum(r['usage'][k] for k in token_keys) for r in eligible) if accepted_complete and output_includes_reasoning is not None else None
+    merged_tokens = sum(sum(r['usage'][k] for k in token_keys) for r in merge_eligible) if merged_complete and merge_eligible and output_includes_reasoning is not None else None
+    accepted_cost = sum(r['cost'] for r in eligible) if accepted_complete else None
+    merged_cost = sum(r['cost'] for r in merge_eligible) if merged_complete and merge_eligible else None
     return {'totals': totals, 'total_tokens': total_tokens, 'cost': cost, 'by_mode': by_mode,
             'coverage': {'messages': len(rows), 'cost_known': sum(r['cost'] is not None for r in rows),
                          'usage_known': {k: sum(r['usage'][k] is not None for r in rows) for k in COUNTS}},
             'accepted': len(accepted), 'merged': len(merged),
             'tokens_per_accepted': ratio(accepted_tokens, len(accepted)), 'cost_per_accepted': ratio(accepted_cost, len(accepted)),
-            'tokens_per_merged': ratio(accepted_tokens, len(merged)), 'cost_per_merged': ratio(accepted_cost, len(merged)),
+             'tokens_per_merged': ratio(merged_tokens, len(merged)), 'cost_per_merged': ratio(merged_cost, len(merged)),
             'first_pass_acceptance_rate': ratio(sum(t['attempts'] == 1 for t in accepted), len(tasks)),
             'review_rejection_rate': ratio(sum(t['rejections'] for t in tasks), sum(t['reviews'] for t in tasks)),
             'retry_frequency': ratio(sum(t['attempts'] > 1 for t in tasks), len(tasks)),

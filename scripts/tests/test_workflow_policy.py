@@ -62,7 +62,7 @@ class PolicyTests(unittest.TestCase):
                     'variants': [{'id': r['effort']}]} for r in self.config['mode_roles'].values()]
         refs = policy.validate_models(self.config, catalog)
         override = {'role': 'implementer_simple', 'model': 'openai/gpt-6-luna', 'effort': 'low',
-                    'reason': 'small isolated change'}
+                    'reason': 'small isolated change', 'catalog_identity': policy.catalog_identity(catalog)}
         resolved = policy.validate_override(self.config, override, catalog, refs)
         self.assertEqual(resolved['providerID'], 'openai')
         self.assertEqual(resolved['id'], 'gpt-6-luna')
@@ -75,6 +75,21 @@ class PolicyTests(unittest.TestCase):
             if change == 'stale': bad['catalog_identity'] = 'stale'
             with self.subTest(change=change), self.assertRaises(ValueError):
                 policy.validate_override(self.config, bad, catalog, refs)
+        with self.assertRaises(ValueError):
+            policy.validate_override(self.config, {k: v for k, v in override.items() if k != 'catalog_identity'}, catalog, refs)
+
+    def test_same_mode_override_resolves_any_advertised_model_and_variant(self):
+        catalog = [{'providerID': r['model'].split('/')[0], 'modelID': r['model'].split('/')[1],
+                    'enabled': True, 'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
+                    'variants': [{'id': r['effort']}]} for r in self.config['mode_roles'].values()]
+        catalog.append({'providerID': 'openai', 'modelID': 'gpt-6.1-terra', 'enabled': True,
+                        'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
+                        'variants': [{'id': 'xhigh'}], 'name': 'Terra', 'cost': []})
+        identity = policy.catalog_identity(catalog)
+        override = {'role': 'implementer_simple', 'model': 'openai/gpt-6.1-terra', 'effort': 'xhigh',
+                    'reason': 'explicit test override', 'catalog_identity': identity}
+        result = policy.validate_override(self.config, override, catalog, policy.validate_models(self.config, catalog))
+        self.assertEqual((result['id'], result['variant']), ('gpt-6.1-terra', 'xhigh'))
 
     def test_task_classification(self):
         def classify(files, **kw):

@@ -124,8 +124,8 @@ def catalog_identity(catalog):
 
 
 def validate_override(config, override, catalog, refs):
-    if not isinstance(override, dict) or set(override) != {'role', 'model', 'effort', 'reason'}:
-        raise ValueError('override requires role, model, effort and reason')
+    if not isinstance(override, dict) or set(override) != {'role', 'model', 'effort', 'reason', 'catalog_identity'}:
+        raise ValueError('override requires role, model, effort, reason and catalog_identity')
     if not _text(override['reason']) or override['role'] not in MODE_ROLES:
         raise ValueError('override requires known role and nonempty reason')
     if not isinstance(override['model'], str) or not isinstance(override['effort'], str):
@@ -134,6 +134,8 @@ def validate_override(config, override, catalog, refs):
     if not override['model'].startswith(mode + '/'):
         raise ValueError('override provider/mode mismatch')
     identity = catalog_identity(catalog)
+    if not isinstance(override['catalog_identity'], str) or override['catalog_identity'] != identity:
+        raise ValueError('stale or missing override catalog identity')
     selected = next((m for m in catalog if isinstance(m, dict)
                      and m.get('providerID') == mode
                      and m.get('modelID') == override['model'].split('/', 1)[1]
@@ -142,10 +144,9 @@ def validate_override(config, override, catalog, refs):
                      and m['capabilities'].get('tools') is True
                      and any(isinstance(v, dict) and v.get('id') == override['effort']
                              for v in m.get('variants', []))), None)
-    configured = config['mode_roles'][override['role']]
-    if selected is None or configured != {'model': override['model'], 'effort': override['effort']}:
-        raise ValueError('override is not a validated seat in selected mode')
-    ref = refs[override['role']]
+    if selected is None:
+        raise ValueError('override is not an enabled active tool-chat model variant in selected mode')
+    ref = {'providerID': mode, 'id': override['model'].split('/', 1)[1], 'variant': override['effort']}
     return dict(ref, role=override['role'], model=override['model'], effort=override['effort'],
                 reason=override['reason'].strip(), catalog_identity=identity,
                 catalog_snapshot=selected)

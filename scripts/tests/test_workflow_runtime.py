@@ -133,7 +133,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_override_rejected_before_session_and_recovery_and_review_roles_are_explicit(self):
         self.request['task_overrides'] = {'run-one': {'role': 'implementer_simple', 'model': 'openai/nope',
-            'effort': 'low', 'reason': 'requested'}}
+            'effort': 'low', 'reason': 'requested', 'catalog_identity': 'stale'}}
         service = Service(self.root, self.config)
         result = self.run_work(service)
         self.assertEqual(result['status'], 'failed')
@@ -155,6 +155,96 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record['cost_source'], 'reported')
         self.assertIn('allowance', record)
         self.assertIsNone(record['allowance'])
+
+    def test_arbitrary_catalog_override_reaches_session_and_is_audited(self):
+        catalog = Service(self.root, self.config).models()
+        catalog.append({'providerID': 'openai', 'modelID': 'gpt-6.1-terra', 'enabled': True,
+                        'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
+                        'variants': [{'id': 'xhigh'}], 'name': 'Terra', 'cost': []})
+        self.config['mode_roles']['implementer_simple'] = {'model': 'openai/gpt-6-luna', 'effort': 'low'}
+        override = {'role': 'implementer_simple', 'model': 'openai/gpt-6.1-terra', 'effort': 'xhigh',
+                    'reason': 'explicit test override', 'catalog_identity': policy.catalog_identity(catalog)}
+        self.request['task_overrides'] = {'run-one': override}
+        service = Service(self.root, self.config)
+        service.models = lambda: catalog
+        result = self.run_work(service)
+        self.assertEqual(next(iter(service.sessions.values()))[1],
+                         {'providerID': 'openai', 'id': 'gpt-6.1-terra', 'variant': 'xhigh'})
+        route = result['tasks'][0]['route']
+        self.assertEqual((route['model'], route['effort'], route['reason']),
+                         ('openai/gpt-6.1-terra', 'xhigh', 'explicit test override'))
+
+    def test_override_missing_or_stale_catalog_identity_fails_before_session(self):
+        catalog = Service(self.root, self.config).models()
+        override = {'role': 'implementer_simple', 'model': 'openai/gpt-6-luna', 'effort': 'low',
+                    'reason': 'explicit', 'catalog_identity': 'stale'}
+        self.request['task_overrides'] = {'run-one': override}
+        service = Service(self.root, self.config)
+        result = self.run_work(service)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(service.sessions, {})
+        self.request['id'] = 'missing-identity'
+        self.request.pop('task_overrides', None)
+        self.request['task_overrides'] = {'missing-identity': {'role': 'implementer_simple', 'model': 'openai/gpt-6-luna', 'effort': 'low', 'reason': 'explicit'}}
+        service = Service(self.root, self.config)
+        with self.assertRaisesRegex(ValueError, 'catalog_identity'):
+            self.run_work(service)
+        self.assertEqual(service.sessions, {})
+
+    def test_override_call_and_recovery_records_use_actual_invocation_refs(self):
+        catalog = Service(self.root, self.config).models()
+        catalog.append({'providerID': 'openai', 'modelID': 'gpt-6.1-terra', 'enabled': True,
+                        'status': 'active', 'type': 'chat', 'capabilities': {'tools': True},
+                        'variants': [{'id': 'xhigh'}], 'cost': []})
+        self.config['limits']['escalate_after'] = 1
+        self.config['limits']['max_attempts'] = 2
+        override = {'role': 'implementer_simple', 'model': 'openai/gpt-6.1-terra', 'effort': 'xhigh',
+                    'reason': 'test', 'catalog_identity': policy.catalog_identity(catalog)}
+        self.request['task_overrides'] = {'run-one': override}
+        self.request['validation'] = [[sys.executable, '-c', 'raise SystemExit(1)']]
+        self.config['output_includes_reasoning'] = True
+        self.config['prices']['openai/gpt-6-luna'] = {'input': 2, 'output': 3, 'cache_read': 1, 'cache_write': 1}
+        class Recovering(Service):
+            def models(self): return catalog
+            def turn(inner, sid, text, event):
+                inner.turns.append((sid, text))
+                model = inner.sessions[sid][1]
+                event({'kind': 'assistant', 'message': {'id': 'm' + str(len(inner.turns)), 'model': model,
+                      'tokens': {'input': 1, 'output': 1, 'reasoning': 0, 'cache': {'read': 0, 'write': 0}}, 'cost': 0.01}})
+                inner.root.joinpath('docs/a.md').write_text('new\n')
+                return 'implemented'
+            def switch(inner, sid, ref):
+                super().switch(sid, ref)
+        result = self.run_work(Recovering(self.root, self.config))
+        self.assertEqual(result['calls'][-1]['invocation_model'], policy.validate_models(self.config, catalog)['recovery'])
+
+    def test_failed_run_spend_is_not_attributed_to_accepted_or_merged_work(self):
+        self.request['id'] = 'failed-spend'
+        self.config['limits']['max_attempts'] = 1
+        self.config['output_includes_reasoning'] = True
+        self.config['prices']['openai/gpt-6-luna'] = {'input': 2, 'output': 3, 'cache_read': 1, 'cache_write': 1}
+        self.request['validation'] = [[sys.executable, '-c', 'raise SystemExit(2)']]
+        result = self.run_work(Service(self.root, self.config))
+        self.assertEqual(result['status'], 'failed')
+        report = runner.report([runner.Git(self.root).directory() / 'runs/failed-spend.json'])
+        self.assertGreater(report['coverage']['cost_known'], 0)
+        self.assertEqual(report['accepted'], 0)
+        self.assertIsNone(report['cost_per_accepted'])
+
+    def test_accepted_run_attribution_includes_git_tree_and_merged_attribution_requires_proof(self):
+        result = self.run_work()
+        run_file = runner.Git(self.root).directory() / 'runs/run-one.json'
+        report = runner.report([run_file])
+        record = report['runs'][0]['records'][0]
+        self.assertTrue(record['attribution']['accepted'])
+        self.assertFalse(record['attribution']['merged'])
+        git(self.root, 'add', '.')
+        git(self.root, 'commit', '-m', 'accepted task')
+        commit = git(self.root, 'rev-parse', 'HEAD')
+        git(self.main, 'merge', '--ff-only', commit)
+        runner.record_merge(self.root, 'run-one', commit, 'main')
+        report = runner.report([run_file])
+        self.assertTrue(report['runs'][0]['records'][0]['attribution']['merged'])
 
     def test_normal_and_high_review_actual_new_file_diff_independent_session(self):
         for risk, effort in [('normal', 'medium'), ('high', 'high')]:
@@ -591,7 +681,8 @@ print(json.dumps(result))
         self.assertEqual([t['attempts'] for t in tasks], [1, 1])
         self.assertEqual([t['reviews'] for t in tasks], [1, 1])
         self.assertEqual([t['review_results'][0]['decision'] for t in tasks], ['approve', 'approve'])
-        self.assertEqual(report['runs'][0]['records'], result['records'])
+        self.assertEqual(len(report['runs'][0]['records']), len(result['records']))
+        self.assertTrue(all(record['attribution']['accepted'] is False for record in report['runs'][0]['records']))
         self.assertAlmostEqual(sum(r['cost'] for r in result['records']), 0.05)
 
     def test_f3_legacy_failed_run_with_surviving_edits_cannot_count_historical_acceptance(self):
@@ -607,7 +698,8 @@ print(json.dumps(result))
         task = report['runs'][0]['tasks'][0]
         self.assertEqual(task['historical_status'], 'accepted')
         self.assertEqual(task['status'], 'failed')
-        self.assertEqual(report['runs'][0]['records'], state['records'])
+        self.assertEqual(len(report['runs'][0]['records']), len(state['records']))
+        self.assertTrue(all(record['attribution']['accepted'] is False for record in report['runs'][0]['records']))
 
     def test_f3_final_global_failure_counts_zero_despite_two_historical_approvals(self):
         self.request.update(complexity='complex', risk='normal', allowed_files=['docs/a.md', 'code.py'])
@@ -627,7 +719,8 @@ print(json.dumps(result))
         self.assertEqual([t['historical_status'] for t in tasks], ['provisional', 'provisional'])
         self.assertEqual([t['status'] for t in tasks], ['failed', 'failed'])
         self.assertEqual([t['review_results'][0]['decision'] for t in tasks], ['approve', 'approve'])
-        self.assertEqual(report['runs'][0]['records'], result['records'])
+        self.assertEqual(len(report['runs'][0]['records']), len(result['records']))
+        self.assertTrue(all(record['attribution']['accepted'] is False for record in report['runs'][0]['records']))
         self.assertAlmostEqual(sum(r['cost'] for r in result['records']), 0.05)
 
     def test_unexpected_provider_model_or_effort_stops_but_keeps_usage(self):

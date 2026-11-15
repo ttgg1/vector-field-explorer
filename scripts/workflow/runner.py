@@ -90,8 +90,8 @@ def validate_manifest(request, root, config):
     for task_id, override in overrides.items():
         if not isinstance(task_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', task_id):
             raise ValueError('invalid override task ID')
-        if not isinstance(override, dict):
-            raise ValueError('invalid task override')
+        if not isinstance(override, dict) or 'catalog_identity' not in override:
+            raise ValueError('task override requires catalog_identity')
     if not isinstance(request['context'], list) or len(request['context']) > 100:
         raise ValueError('invalid bounded context list')
     for entry in request['context']:
@@ -303,15 +303,16 @@ def run(root, manifest, config, service):
             _atomic(path, state)
         save()
 
-        def call(task_id, role, session, prompt):
+        def call(task_id, role, session, prompt, resolved_ref=None):
             git.check(expected)
             routed_role = role if role in config['mode_roles'] else policy.ALIASES.get(role, 'implementer_standard')
             if role == 'escalation':
                 routed_role = 'recovery'
+            expected_ref = resolved_ref or state['refs'][routed_role]
             call_state = {'id': len(state['calls']) + 1, 'task_id': task_id, 'role': role,
                           'session_id': session, 'status': 'pending', 'user_id': None,
-                          'model': state['refs'][routed_role], 'invocation_role': role,
-                          'invocation_model': state['refs'][routed_role], 'message_ids': [], 'usage_complete': False,
+                          'model': expected_ref, 'invocation_role': role,
+                          'invocation_model': expected_ref, 'message_ids': [], 'usage_complete': False,
                           'started': time.time()}
             state['calls'].append(call_state)
             save()
@@ -326,17 +327,20 @@ def run(root, manifest, config, service):
                     key = (session, message['id'])
                     if not any((r['session_id'], r['message_id']) == key for r in state['records']):
                         call_state['message_ids'].append(message['id'])
-                        expected_role = routed_role
-                        model = next((m for m in state['catalog'] if m.get('providerID') == config['mode_roles'][expected_role]['model'].split('/')[0]
-                                      and m.get('modelID') == config['mode_roles'][expected_role]['model'].split('/')[1]), None)
-                        state['records'].append(metrics.message_record(task_id, routed_role, session, message, config, model))
+                        model = next((m for m in state['catalog'] if m.get('providerID') == expected_ref['providerID']
+                                      and m.get('modelID') == expected_ref['id']), None)
+                        if model is None and role in config['mode_roles']:
+                            model = next((m for m in state['catalog'] if m.get('providerID') == config['mode_roles'][role]['model'].split('/')[0]
+                                          and m.get('modelID') == config['mode_roles'][role]['model'].split('/')[1]), None)
+                        record_role = role if role in config['mode_roles'] else policy.ALIASES.get(role, 'implementer_standard')
+                        state['records'].append(metrics.message_record(task_id, record_role, session, message, config, model))
                         save()
                         observed = message.get('model')
                         if isinstance(observed, str):
-                            observed = state['refs'][expected_role] if observed == config['mode_roles'][expected_role]['model'] else observed
+                            observed = expected_ref if observed == expected_ref['providerID'] + '/' + expected_ref['id'] else observed
                         elif isinstance(observed, dict) and 'variant' not in observed and isinstance(observed.get('id'), str):
-                            observed = dict(observed, variant=config['mode_roles'][expected_role]['effort'])
-                        if observed != state['refs'][expected_role]:
+                            observed = dict(observed, variant=expected_ref['variant'])
+                        if observed != expected_ref:
                             raise ValueError('assistant used unexpected provider/model/effort; usage preserved, no fallback')
                 call_state['duration_seconds'] = time.time() - call_state['started']
                 save()
@@ -358,14 +362,15 @@ def run(root, manifest, config, service):
                 save()
                 git.check(expected)
 
-        def create(title, role, files):
+        def create(title, role, files, resolved_ref=None):
             git.check(expected)
             # Persist intent before POST; a creation timeout has unknown session ID.
-            entry = {'kind': 'session_creation', 'title': title, 'role': role, 'session_id': None}
+            ref = resolved_ref or state['refs'][role]
+            entry = {'kind': 'session_creation', 'title': title, 'role': role, 'model': ref, 'session_id': None}
             state['events'].append(entry)
             save()
             try:
-                sid = service.create(title, state['refs'][role], files,
+                sid = service.create(title, ref, files,
                                      read_files=sorted(set(request['allowed_files'] + [e['file'] for e in request['context']])))
                 entry['session_id'] = sid
                 save()
@@ -431,16 +436,27 @@ def run(root, manifest, config, service):
                 save()
                 role = ('recovery' if request['complexity'] == 'complex' else
                         {'S': 'implementer_simple', 'M': 'implementer_standard', 'L': 'implementer_complex'}[classification['class']])
+                resolved_ref = state['refs'][role]
+                configured_route = {'role': role, 'model': config['mode_roles'][role]['model'],
+                                    'effort': config['mode_roles'][role]['effort'],
+                                    'provider': config['selected_mode'], 'catalog_identity': state['catalog_identity']}
                 override = request.get('task_overrides', {}).get(task['id'])
                 if override is not None:
                     current['override'] = policy.validate_override(config, override, state['catalog'], state['refs'])
                     role = current['override']['role']
-                current['route'] = {'role': role, 'model': config['mode_roles'][role]['model'],
-                                    'effort': config['mode_roles'][role]['effort'],
-                                    'provider': config['selected_mode'], 'catalog_identity': state['catalog_identity']}
-                sid = create('implement:' + task['id'], role, task['allowed_files'])
-                current['session_id'] = sid
+                    resolved_ref = {key: current['override'][key] for key in ('providerID', 'id', 'variant')}
+                current['route'] = configured_route
+                current['route']['role'] = role
+                if override is not None:
+                    current['route'].update(model=override['model'], effort=override['effort'],
+                                            reason=override['reason'].strip(), catalog_identity=override['catalog_identity'],
+                                            catalog_snapshot=current['override']['catalog_snapshot'])
+                current['route']['resolved_ref'] = resolved_ref
+                current['route']['invocation_role'] = role
+                current['route']['invocation_model'] = resolved_ref
+                sid = create('implement:' + task['id'], role, task['allowed_files'], resolved_ref)
                 active_role = role
+                current['session_id'] = sid
                 feedback = None
                 # Global acceptance is not a prerequisite for partial tasks.
                 # A single task can still use the global commands for retries.
@@ -454,15 +470,29 @@ def run(root, manifest, config, service):
                     save()
                     if role != active_role:
                         git.check(expected)
-                        service.switch(sid, state['refs'][role])
+                        resolved_ref = state['refs']['recovery'] if role == 'recovery' else current['route']['resolved_ref']
+                        service.switch(sid, resolved_ref)
                         git.check(expected)
                         active_role = role
+                    else:
+                        service_ref = state['refs']['recovery'] if role == 'recovery' else current['route']['resolved_ref']
+                        if service_ref != resolved_ref:
+                            git.check(expected)
+                            service.switch(sid, service_ref)
+                            git.check(expected)
+                            resolved_ref = service_ref
+                            active_role = role
+                    current['invocation_role'] = role
+                    current['invocation_model'] = resolved_ref
+                    current['route']['invocation_role'] = role
+                    current['route']['invocation_model'] = resolved_ref
+                    save()
                     prompt = ('Implement only the owned files. No Git operations, shell, subagents, or commands. '
                               'The controller runs validation. Preserve other work. Report when edits are ready.\n'
                               + json.dumps(task) + '\nCONTEXT\n' + context) if attempt == 1 else (
                               'Targeted retry in this session; do not repeat unchanged context. Fix this feedback only:\n' + json.dumps(feedback))
                     try:
-                        call(task['id'], role, sid, prompt)
+                        call(task['id'], role, sid, prompt, resolved_ref)
                     except api.APIError as exc:
                         if not exc.retryable or attempt == config['limits']['max_attempts']:
                             raise
@@ -613,7 +643,24 @@ def report(paths):
     convention = semantics.pop() if len(semantics) == 1 else None
     records, tasks, runs = [], [], []
     for state in states:
-        records.extend(state['records'])
+        run_records = [dict(record) for record in state.get('records', [])]
+        mode = state.get('selected_mode', state.get('config', {}).get('selected_mode', 'openai'))
+        accepted_evidence = (state.get('status') in ('accepted', 'merged')
+                             and bool(state.get('accepted_diff', {}).get('files'))
+                             and state.get('accepted_tree') is not None
+                             and state.get('final_validation_status') == 'passed')
+        merged_evidence = (state.get('status') == 'merged' and isinstance(state.get('merge'), dict)
+                           and state['merge'].get('tree') == state.get('accepted_tree')
+                           and state['merge'].get('commit') and state['merge'].get('patch_sha256'))
+        task_status = {t['id']: t.get('status') for t in state.get('tasks', [])}
+        for record in run_records:
+            accepted_task = task_status.get(record.get('task_id')) in ('accepted', 'merged')
+            record['mode'] = mode
+            record['attribution'] = {'accepted': bool(accepted_evidence and accepted_task),
+                                     'merged': bool(merged_evidence and accepted_task),
+                                     'run_id': state.get('id'), 'accepted_tree': state.get('accepted_tree') if accepted_evidence else None,
+                                     'merge_commit': state.get('merge', {}).get('commit') if merged_evidence else None}
+        records.extend(run_records)
         for call in state['calls']:
             if not call.get('usage_complete', False) or not call.get('message_ids'):
                 unknown_id = 'unknown-call-' + str(call['id'])
@@ -624,9 +671,12 @@ def report(paths):
                     if call['role'] not in legacy_config['roles']:
                         model_ref = call.get('model', {})
                         legacy_config['roles'][call['role']] = {'model': model_ref.get('providerID', 'openai') + '/' + model_ref.get('id', 'unknown')}
-                    records.append(metrics.message_record(call['task_id'], call['role'], call['session_id'],
-                                   {'id': unknown_id, 'error': call.get('error', 'usage unavailable/incomplete')}, legacy_config))
-        eligible = state['status'] in ('accepted', 'merged') and bool(state.get('accepted_diff', {}).get('files'))
+                    unknown = metrics.message_record(call['task_id'], call['role'], call['session_id'],
+                                   {'id': unknown_id, 'error': call.get('error', 'usage unavailable/incomplete')}, legacy_config)
+                    unknown['mode'] = mode
+                    unknown['attribution'] = None
+                    records.append(unknown)
+        eligible = accepted_evidence
         reported_tasks = []
         for task in state['tasks']:
             reported = dict(task)
@@ -635,15 +685,17 @@ def report(paths):
                 if reported['status'] != task['status']:
                     reported['historical_status'] = task['status']
             reported_tasks.append(reported)
-            tasks.append(dict(reported, id=state['id'] + ':' + task['id']))
+            tasks.append(dict(reported, id=state['id'] + ':' + task['id'], mode=mode,
+                              accepted_tree=state.get('accepted_tree') if accepted_evidence else None,
+                              merge_commit=state.get('merge', {}).get('commit') if merged_evidence else None))
         runs.append({'id': state['id'], 'root': state['root'], 'status': state['status'], 'tasks': reported_tasks,
                      'selected_mode': state.get('selected_mode', state.get('config', {}).get('selected_mode', 'openai')),
-                     'calls': state['calls'], 'records': state['records'], 'error': state['error'], 'merge': state.get('merge'),
+                     'calls': state['calls'], 'records': run_records, 'error': state['error'], 'merge': state.get('merge'),
                      'final_validations': state.get('final_validations', []),
                      'final_validation_status': state.get('final_validation_status', 'unknown')})
         # Planner-only failures still count as failed work, not an empty success.
         if not state['tasks']:
-            tasks.append({'id': state['id'], 'status': 'failed', 'attempts': 0, 'reviews': 0, 'rejections': 0, 'escalations': 0})
+            tasks.append({'id': state['id'], 'status': 'failed', 'attempts': 0, 'reviews': 0, 'rejections': 0, 'escalations': 0, 'mode': mode})
     result = metrics.summarize(records, tasks, convention)
     result['runs'] = runs
     return result
