@@ -3,10 +3,15 @@
 import fnmatch
 import json
 import math
+import re
 from pathlib import PurePosixPath
 
 
 ROLES = {'orchestrator', 'implementer', 'reviewer', 'escalation'}
+MODE_ROLES = {'orchestrator', 'implementer_simple', 'implementer_standard', 'implementer_complex',
+              'reviewer_standard', 'reviewer_complex', 'recovery'}
+ALIASES = {'orchestrator': 'orchestrator', 'implementer': 'implementer_standard',
+           'reviewer': 'reviewer_standard', 'escalation': 'recovery'}
 LIMITS = {'max_attempts', 'max_reviews', 'escalate_after', 'max_tasks',
           'max_context_bytes', 'max_diff_bytes', 'max_response_bytes',
           'api_timeout_seconds', 'validation_timeout_seconds',
@@ -49,12 +54,20 @@ def load_config(path):
                             parse_constant=lambda x: (_ for _ in ()).throw(ValueError(f'invalid number {x}')))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f'cannot load config: {exc}') from exc
-    _keys(config, {'roles', 'limits', 'review', 'prices', 'output_includes_reasoning'}, 'config')
-    _keys(config['roles'], ROLES, 'roles')
-    for name, role in config['roles'].items():
-        _keys(role, {'model', 'effort'}, name)
-        if not _text(role['model']) or not role['model'].startswith('openai/') or not _text(role['model'][7:]) or not _text(role['effort']):
-            raise ValueError(f'{name}: expected OpenAI model and effort')
+    _keys(config, {'workflow', 'modes', 'limits', 'review', 'prices', 'output_includes_reasoning'}, 'config')
+    _keys(config['workflow'], {'mode'}, 'workflow')
+    _keys(config['modes'], {'openai', 'opencode-go'}, 'modes')
+    mode = config['workflow']['mode']
+    if not isinstance(mode, str) or mode not in config['modes']:
+        raise ValueError('invalid workflow mode')
+    for provider, roles in config['modes'].items():
+        _keys(roles, MODE_ROLES, provider)
+        for name, role in roles.items():
+            _keys(role, {'model', 'effort'}, f'{provider}/{name}')
+            if (not isinstance(role['model'], str) or
+                not re.fullmatch(re.escape(provider) + r'/[A-Za-z0-9][A-Za-z0-9._-]*', role['model']) or
+                not isinstance(role['effort'], str) or not re.fullmatch(r'[a-z][a-z0-9_-]*', role['effort'])):
+                raise ValueError(f'{provider}/{name}: invalid model or effort')
     _keys(config['limits'], LIMITS, 'limits')
     for key, value in config['limits'].items():
         _positive(value, key)
@@ -75,26 +88,68 @@ def load_config(path):
         _keys(rates, {'input', 'output', 'cache_read', 'cache_write'}, 'price')
         if any(type(v) not in (int, float) or v < 0 or v > 1e100 or not math.isfinite(v) for v in rates.values()):
             raise ValueError('invalid price')
+    config['selected_mode'] = mode
+    config['mode_roles'] = config['modes'][mode]
+    config['roles'] = {alias: config['mode_roles'][name] for alias, name in ALIASES.items()}
     return config
 
 
 def validate_models(config, catalog):
     refs = {}
-    for name, role in config['roles'].items():
+    mode = config['selected_mode']
+    for name, role in config['mode_roles'].items():
         model = role['model']
-        if not isinstance(model, str) or not model.startswith('openai/') or not model[7:]:
-            raise ValueError(f'{name}: invalid OpenAI model')
-        model_id = model[7:]
-        matches = [m for m in catalog if isinstance(m, dict) and m.get('providerID') == 'openai'
+        if not isinstance(model, str) or not re.fullmatch(re.escape(mode) + r'/[A-Za-z0-9][A-Za-z0-9._-]*', model):
+            raise ValueError(f'{mode}/{name}: invalid model')
+        model_id = model.split('/', 1)[1]
+        matches = [m for m in catalog if isinstance(m, dict) and m.get('providerID') == mode
                    and m.get('modelID') == model_id and m.get('enabled') is True
+                   and m.get('status') == 'active'
                    and m.get('type') == 'chat' and isinstance(m.get('capabilities'), dict)
                    and m['capabilities'].get('tools') is True
                    and isinstance(m.get('variants'), list)
                    and any(isinstance(v, dict) and v.get('id') == role['effort'] for v in m['variants'])]
         if not matches:
-            raise ValueError(f'{name}: unavailable enabled OpenAI chat/tool model or variant {model}#{role["effort"]}')
-        refs[name] = {'id': model_id, 'providerID': 'openai', 'variant': role['effort']}
+            raise ValueError(f'{mode}/{name}: unavailable enabled chat/tool model or variant {model}#{role["effort"]}')
+        refs[name] = {'id': model_id, 'providerID': mode, 'variant': role['effort']}
+    refs.update({alias: refs[name] for alias, name in ALIASES.items()})
     return refs
+
+
+def catalog_identity(catalog):
+    """Stable digest of the exact discovery snapshot used for a resolution."""
+    import hashlib
+    return hashlib.sha256(json.dumps(catalog, sort_keys=True, separators=(',', ':'),
+                                    allow_nan=False).encode()).hexdigest()
+
+
+def validate_override(config, override, catalog, refs):
+    if not isinstance(override, dict) or set(override) != {'role', 'model', 'effort', 'reason', 'catalog_identity'}:
+        raise ValueError('override requires role, model, effort, reason and catalog_identity')
+    if not _text(override['reason']) or override['role'] not in MODE_ROLES:
+        raise ValueError('override requires known role and nonempty reason')
+    if not isinstance(override['model'], str) or not isinstance(override['effort'], str):
+        raise ValueError('invalid override identity')
+    mode = config['selected_mode']
+    if not override['model'].startswith(mode + '/'):
+        raise ValueError('override provider/mode mismatch')
+    identity = catalog_identity(catalog)
+    if not isinstance(override['catalog_identity'], str) or override['catalog_identity'] != identity:
+        raise ValueError('stale or missing override catalog identity')
+    selected = next((m for m in catalog if isinstance(m, dict)
+                     and m.get('providerID') == mode
+                     and m.get('modelID') == override['model'].split('/', 1)[1]
+                     and m.get('enabled') is True and m.get('status') == 'active'
+                     and m.get('type') == 'chat' and isinstance(m.get('capabilities'), dict)
+                     and m['capabilities'].get('tools') is True
+                     and any(isinstance(v, dict) and v.get('id') == override['effort']
+                             for v in m.get('variants', []))), None)
+    if selected is None:
+        raise ValueError('override is not an enabled active tool-chat model variant in selected mode')
+    ref = {'providerID': mode, 'id': override['model'].split('/', 1)[1], 'variant': override['effort']}
+    return dict(ref, role=override['role'], model=override['model'], effort=override['effort'],
+                reason=override['reason'].strip(), catalog_identity=identity,
+                catalog_snapshot=selected)
 
 
 def _match(path, pattern):
@@ -106,6 +161,31 @@ def _match(path, pattern):
             return match(parts, patterns[1:]) or bool(parts) and match(parts[1:], patterns)
         return bool(parts) and fnmatch.fnmatchcase(parts[0], patterns[0]) and match(parts[1:], patterns[1:])
     return match(path.split('/'), pattern.split('/'))
+
+
+def classify_task(config, files, complexity, risk, ambiguity='unknown', test_coverage='unknown',
+                  failed_attempts=0, blocking_findings=0):
+    if (not isinstance(files, list) or not files or any(not _path(p) for p in files) or
+        len(files) != len(set(files)) or complexity not in ('simple', 'complex') or
+        risk not in ('trivial', 'normal', 'high') or ambiguity not in ('low', 'medium', 'high', 'unknown') or
+        test_coverage not in ('adequate', 'limited', 'poor', 'unknown') or
+        any(type(n) is not int or n < 0 for n in (failed_attempts, blocking_findings))):
+        raise ValueError('invalid classification inputs')
+    modules = set()
+    for path in files:
+        parts = path.split('/')
+        if len(parts) > 1 and parts[0] == 'src':
+            modules.add(parts[1] if len(parts) > 2 else parts[1].removesuffix('.rs'))
+    high_path = any(_match('/'.join(f.split('/')[:n]), pattern)
+                    for f in files for n in range(1, len(f.split('/')) + 1)
+                    for pattern in config['review']['high_risk_paths'])
+    if (complexity == 'complex' or risk == 'high' or high_path or ambiguity == 'high' or
+        test_coverage == 'poor' or failed_attempts or blocking_findings or len(modules) >= 3):
+        return {'class': 'L', 'reason': 'high complexity, risk, uncertainty, history, or module scope'}
+    if (len(files) <= config['limits']['simple_max_files'] and len(modules) <= 1 and risk == 'trivial'
+        and ambiguity == 'low' and test_coverage == 'adequate'):
+        return {'class': 'S', 'reason': 'small isolated low-risk task with adequate coverage'}
+    return {'class': 'M', 'reason': 'ordinary scope or insufficient evidence for simple class'}
 
 
 def review_policy(config, files, added, deleted, declared_risk, validated, binary=False):

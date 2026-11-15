@@ -1,4 +1,5 @@
 from pathlib import Path
+import copy
 import unittest
 
 from scripts.workflow import metrics, policy
@@ -17,10 +18,50 @@ class MetricsTests(unittest.TestCase):
         summary = metrics.summarize([record, record], tasks, True)
         self.assertEqual(summary['total_tokens'], 132)
         self.assertEqual(summary['cost'], 0.5)
-        self.assertEqual(summary['useful_merged_lines_per_million_tokens'], 12 / 132 * 1000000)
+        self.assertEqual(summary['merged'], 1)
+        self.assertNotIn('useful_merged_lines_per_million_tokens', summary)
         conflicting = dict(record, cost=1.0)
         with self.assertRaises(ValueError):
             metrics.summarize([record, conflicting], tasks, True)
+
+    def test_mode_aggregation_preserves_unknown_cost_and_allowance(self):
+        openai = metrics.message_record('t', 'implementer', 's', self.message, self.config)
+        go_config = copy_config = dict(self.config)
+        go_config['roles'] = {'implementer': {'model': 'opencode-go/deepseek-v4.1-flash'}}
+        message = {'id': 'go', 'model': {'id': 'deepseek-v4.1-flash', 'providerID': 'opencode-go'},
+                   'tokens': {'input': 4, 'output': 2, 'reasoning': 1, 'cache': {'read': 1, 'write': 0}}}
+        go = metrics.message_record('t2', 'implementer', 's2', message, go_config)
+        report = metrics.summarize([openai, go], [], True)
+        self.assertIn('by_mode', report)
+        self.assertIsNone(go['cost'])
+        self.assertIsNone(go['allowance'])
+        self.assertIsNone(report['by_mode']['opencode-go']['cost'])
+        self.assertEqual(report['by_mode']['opencode-go']['accepted'], 0)
+        self.assertEqual(report['by_mode']['opencode-go']['merged'], 0)
+        self.assertNotIn('cost_per_accepted', report)
+        self.assertNotIn('tokens_per_accepted', report)
+        self.assertNotIn('cost_per_accepted', report['by_mode']['opencode-go'])
+
+    def test_mode_totals_and_outcome_counts_do_not_claim_unit_efficiency(self):
+        openai = metrics.message_record('a', 'implementer', 's1', self.message, self.config)
+        go_config = dict(self.config)
+        go_config['roles'] = {'implementer': {'model': 'opencode-go/deepseek-v4.1-flash'}}
+        go_message = {'id': 'go', 'model': {'id': 'deepseek-v4.1-flash', 'providerID': 'opencode-go'},
+                      'tokens': {'input': 4, 'output': 2, 'reasoning': 1, 'cache': {'read': 1, 'write': 0}}}
+        go = metrics.message_record('b', 'implementer', 's2', go_message, go_config)
+        tasks = [{'id': 'a', 'status': 'merged', 'attempts': 1, 'reviews': 1, 'rejections': 0,
+                  'escalations': 0, 'merged_lines': 12, 'mode': 'openai'},
+                 {'id': 'b', 'status': 'accepted', 'attempts': 1, 'reviews': 0, 'rejections': 0,
+                  'escalations': 0, 'merged_lines': None, 'mode': 'opencode-go'}]
+        report = metrics.summarize([openai, go], tasks, True)
+        self.assertEqual(report['by_mode']['openai']['merged'], 1)
+        self.assertEqual(report['by_mode']['opencode-go']['accepted'], 1)
+        self.assertEqual(report['by_mode']['opencode-go']['totals']['input'], 4)
+        self.assertIsNone(report['by_mode']['opencode-go']['cost'])
+        for key in ('tokens_per_accepted', 'cost_per_accepted', 'tokens_per_merged',
+                    'cost_per_merged', 'useful_merged_lines_per_million_tokens'):
+            self.assertNotIn(key, report)
+            self.assertNotIn(key, report['by_mode']['openai'])
 
     def test_unknown_semantics_and_failed_spend(self):
         message = dict(self.message, id='failed', cost=0, error={'message': 'failure'})
@@ -28,7 +69,7 @@ class MetricsTests(unittest.TestCase):
         summary = metrics.summarize([record], [], None)
         self.assertIsNone(summary['total_tokens'])
         self.assertIsNone(summary['cost'])
-        self.assertIsNone(summary['tokens_per_accepted'])
+        self.assertNotIn('tokens_per_accepted', summary)
 
     def test_configured_rates_count_cache_and_reasoning_once(self):
         self.config['output_includes_reasoning'] = True

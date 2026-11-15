@@ -61,6 +61,7 @@ def message_record(task_id, role, session_id, message, config, catalog_model=Non
         source = 'estimated'
     return {'task_id': task_id, 'role': role, 'session_id': session_id, 'message_id': message['id'],
             'model': model, 'usage': usage, 'cost': cost, 'cost_source': source,
+            'mode': model.split('/', 1)[0], 'allowance': None,
             'error': message.get('error'), 'coverage': {'usage': all(usage[k] is not None for k in COUNTS), 'cost': cost is not None}}
 
 
@@ -94,15 +95,23 @@ def summarize(records, tasks, output_includes_reasoning=None):
     merged = [t for t in tasks if t['status'] == 'merged']
     def ratio(n, d):
         return n / d if n is not None and d else None
-    merged_lines = sum(t['merged_lines'] for t in merged) if merged and all(t.get('merged_lines') is not None for t in merged) else None
-    return {'totals': totals, 'total_tokens': total_tokens, 'cost': cost,
-            'coverage': {'messages': len(rows), 'cost_known': sum(r['cost'] is not None for r in rows),
-                         'usage_known': {k: sum(r['usage'][k] is not None for r in rows) for k in COUNTS}},
-            'accepted': len(accepted), 'merged': len(merged),
-            'tokens_per_accepted': ratio(total_tokens, len(accepted)), 'cost_per_accepted': ratio(cost, len(accepted)),
-            'tokens_per_merged': ratio(total_tokens, len(merged)), 'cost_per_merged': ratio(cost, len(merged)),
-            'first_pass_acceptance_rate': ratio(sum(t['attempts'] == 1 for t in accepted), len(tasks)),
-            'review_rejection_rate': ratio(sum(t['rejections'] for t in tasks), sum(t['reviews'] for t in tasks)),
-            'retry_frequency': ratio(sum(t['attempts'] > 1 for t in tasks), len(tasks)),
-            'escalation_frequency': ratio(sum(t['escalations'] > 0 for t in tasks), len(tasks)),
-            'useful_merged_lines_per_million_tokens': ratio(merged_lines * 1000000 if merged_lines is not None else None, total_tokens)}
+    by_mode = {}
+    for mode in sorted({row.get('mode', row['model'].split('/', 1)[0]) for row in rows} | {t.get('mode', 'unknown') for t in tasks}):
+        mode_rows = [row for row in rows if row.get('mode', row['model'].split('/', 1)[0]) == mode]
+        mode_totals = {key: sum(r['usage'][key] for r in mode_rows) if all(r['usage'][key] is not None for r in mode_rows) else None for key in COUNTS}
+        mode_tokens = sum(mode_totals[k] for k in token_keys) if output_includes_reasoning is not None and all(mode_totals[k] is not None for k in COUNTS) else None
+        mode_cost = sum(r['cost'] for r in mode_rows) if all(r['cost'] is not None for r in mode_rows) else None
+        mode_tasks = [t for t in tasks if t.get('mode', 'unknown') == mode]
+        accepted_tasks = [t for t in mode_tasks if t['status'] in ('accepted', 'merged')]
+        merged_tasks = [t for t in mode_tasks if t['status'] == 'merged']
+        by_mode[mode] = {'totals': mode_totals, 'total_tokens': mode_tokens, 'cost': mode_cost,
+                         'accepted': len(accepted_tasks), 'merged': len(merged_tasks),
+                         'coverage': {'messages': len(mode_rows), 'cost_known': sum(r['cost'] is not None for r in mode_rows)}}
+    return {'totals': totals, 'total_tokens': total_tokens, 'cost': cost, 'by_mode': by_mode,
+             'coverage': {'messages': len(rows), 'cost_known': sum(r['cost'] is not None for r in rows),
+                          'usage_known': {k: sum(r['usage'][k] is not None for r in rows) for k in COUNTS}},
+             'accepted': len(accepted), 'merged': len(merged),
+             'first_pass_acceptance_rate': ratio(sum(t['attempts'] == 1 for t in accepted), len(tasks)),
+             'review_rejection_rate': ratio(sum(t['rejections'] for t in tasks), sum(t['reviews'] for t in tasks)),
+             'retry_frequency': ratio(sum(t['attempts'] > 1 for t in tasks), len(tasks)),
+             'escalation_frequency': ratio(sum(t['escalations'] > 0 for t in tasks), len(tasks))}

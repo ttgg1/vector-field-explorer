@@ -18,6 +18,8 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 | [Native CLI plot export plan](plans/2026-11-11-cli-plot-export.md) | Ticket 78 implementation tasks and verification handoffs; consult live workflow/ledger before dispatch. |
 | [Accuracy-first source evaluator design](specs/2026-11-14-source-evaluator-design.md) | GitHub #24 all-eight pure model/evaluator; PROPOSED, pending owner review, not implementation authorization. Supersedes isolated 2026-11-10 source drafts. |
 | [Accuracy-first source evaluator plan](plans/2026-11-14-source-evaluator.md) | Five bounded TDD/review units, provisional numerical defaults and separate E/B diagnostics; no product work authorized by publication. |
+| [Public-catalog workflow design](specs/2026-11-15-public-catalog-workflow-design.md) | Owner-approved compact OpenCode Go integration; public rates only, no benchmark or accepted-work efficiency ratios. |
+| [Public-catalog workflow plan](plans/2026-11-15-public-catalog-workflow.md) | Small report-surface change retaining per-mode usage/cost totals and accepted/merged counts. |
 
 CAS implementation evidence: [73 review record](../reviews/73-native-cas.md),
 [75 review record](../reviews/75-native-cas-panel.md), and verifiable Git history.
