@@ -54,6 +54,7 @@ Go review diversity is selected as a cost-conscious initial hypothesis because G
 - Modify: `.opencode/agent-workflow.json`
 - Modify: `scripts/workflow/policy.py`
 - Modify: `scripts/tests/test_workflow_policy.py`
+- Modify: `scripts/tests/test_workflow_runtime.py` only to generate fixture catalog entries for every selected mode route/variant (retain the fixture's strict exact-match behavior).
 - Modify: `.opencode/request.example.json` only if the mode/class/override contract requires an example update here; otherwise Task 3 owns it.
 
 **Interfaces:**
