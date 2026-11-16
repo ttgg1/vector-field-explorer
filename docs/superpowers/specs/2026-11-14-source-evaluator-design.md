@@ -1,8 +1,8 @@
 # All-eight source evaluator — accuracy-first design
 
-**PROPOSED IMPLEMENTATION DESIGN — pending owner review; not implementation
-authorization.** Owns [GitHub #24](https://github.com/ttgg1/vector-field-explorer/issues/24),
-under [#17](https://github.com/ttgg1/vector-field-explorer/issues/17).
+**APPROVED IMPLEMENTATION DESIGN — owner approved 2026-11-16.** Owns
+[GitHub #24](https://github.com/ttgg1/vector-field-explorer/issues/24), under
+[#17](https://github.com/ttgg1/vector-field-explorer/issues/17).
 [Implementation plan](../plans/2026-11-14-source-evaluator.md).
 
 ## Authority and intent

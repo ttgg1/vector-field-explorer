@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Follow the controller's assigned method; implementers spawn no subagents.
 
-**PROPOSED IMPLEMENTATION DESIGN — pending owner review, not implementation authorization.**
+**APPROVED IMPLEMENTATION PLAN — owner approved 2026-11-16.**
 
 **Goal:** Deliver #24's pure all-eight softened source evaluator with adjustable requested tolerance, independent E/B availability and bounded cancellable computation.
 
