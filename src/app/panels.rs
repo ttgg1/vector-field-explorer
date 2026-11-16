@@ -70,14 +70,20 @@ impl VfApp {
         let plan = layout::compact_plan(self.layout_mode);
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = if plan.compact_top_bar {
-                top_bar::show_compact(ui, &self.screenshot, self.state.mode_3d)
+                top_bar::show_compact_with_plot_kind(
+                    ui,
+                    &self.screenshot,
+                    self.state.mode_3d,
+                    self.state.plot.kind,
+                )
             } else {
-                top_bar::show(
+                top_bar::show_with_plot_kind(
                     ui,
                     &mut self.style,
                     &self.screenshot,
                     &mut self.appearance_open,
                     self.state.mode_3d,
+                    self.state.plot.kind,
                 )
             };
             style_changed = changed;
@@ -136,6 +142,7 @@ impl VfApp {
         );
         // One budget after top chrome and strip toggles, shared by all bodies.
         // Include central frame margins so the painted viewport retains 100pt.
+        let mut plot_action = None;
         let mut requests = Vec::new();
         if self.layout.controls_expanded {
             requests.push(self.layout.controls_width);
@@ -171,7 +178,12 @@ impl VfApp {
                     egui::ScrollArea::vertical()
                         .id_salt("controls_body")
                         .show(ui, |ui| {
-                            crate::ui::sidebar::show(ui, &mut self.state, &mut self.controls);
+                            plot_action = crate::ui::sidebar::show_with_plot_action(
+                                ui,
+                                &mut self.state,
+                                &mut self.controls,
+                                false,
+                            );
                         });
                 });
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
@@ -208,6 +220,9 @@ impl VfApp {
         }
         if self.layout.presets_expanded {
             self.wide_presets_width = widths.next().unwrap();
+        }
+        if let Some(action) = plot_action {
+            self.apply_plot_panel_action(action);
         }
     }
 
@@ -477,6 +492,7 @@ impl VfApp {
 
         let mut close = false;
         let mut camera_request = None;
+        let mut plot_action = None;
         let controls_shown = sheet == SheetState::Controls;
         egui::Panel::bottom("compact_sheet")
             .exact_size(height)
@@ -531,7 +547,7 @@ impl VfApp {
 
                 egui::ScrollArea::vertical().show(ui, |ui| match sheet {
                     SheetState::Controls => {
-                        crate::ui::sidebar::show_compact(
+                        plot_action = crate::ui::sidebar::show_compact_with_plot_action(
                             ui,
                             &mut self.state,
                             &mut self.controls,
@@ -561,6 +577,9 @@ impl VfApp {
             // The sheet is gone; request the frame that grows the viewport.
             ui.ctx().request_repaint();
         }
+        if let Some(action) = plot_action {
+            self.apply_plot_panel_action(action);
+        }
         self.finish_presets(camera_request);
         if controls_shown && layout::fly_allowed(self.layout_mode) {
             sync_fly_mirror(
@@ -574,6 +593,20 @@ impl VfApp {
         // A preset (or the sheet's camera toggle) can leave fly; release the
         // pointer in this same frame, as the wide chrome path does.
         self.sync_fly_capture(ui.ctx());
+    }
+
+    /// Run a Plot-section action against the current viewport. Fit uses the
+    /// last painted aspect because the panel runs before the central viewport.
+    fn apply_plot_panel_action(&mut self, action: crate::ui::plot_panel::PlotPanelAction) {
+        match action {
+            crate::ui::plot_panel::PlotPanelAction::FitPlot => {
+                let aspect = self
+                    .last_viewport_rect
+                    .map(|rect| rect.width().max(1.0) / rect.height().max(1.0))
+                    .unwrap_or(1.0);
+                let _ = self.fit_plot(aspect);
+            }
+        }
     }
 
     /// Frame phase: the help overlay and the two help windows, painted last

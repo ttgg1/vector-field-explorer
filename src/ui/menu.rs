@@ -377,7 +377,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         MenuAction::ExportScreenshot => SideEffect::Screenshot,
         MenuAction::ExportScreenshotSvg => SideEffect::ScreenshotSvg,
         MenuAction::Quit => SideEffect::Quit,
-        MenuAction::CopyFormula => SideEffect::CopyText(ui.state.formula.clone()),
+        MenuAction::CopyFormula => SideEffect::CopyText(ui.state.active_source().to_string()),
         MenuAction::ResetAllControls => {
             // The Controls panel's knobs, not the field itself: the formula is
             // the document, the controls are how it is displayed.

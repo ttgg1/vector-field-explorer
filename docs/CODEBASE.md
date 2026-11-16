@@ -1698,8 +1698,8 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`layout`, `menu`, `panel_rails`, `presets`, `sidebar`, `status_bar`, `style_panel`, `top_bar`,
-`transport`.
+`layout`, `menu`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
+`status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -1738,6 +1738,28 @@ as an image.
 
 **Limitation.** Per-context cache; no SVG rendering.
 
+#### `src/ui/plot_panel.rs` — scalar plot controls
+
+**Purpose.** The Plot section shared by the wide Controls panel and the compact
+sheet: explicit kind selector, example catalogue, curve samples/line width,
+surface resolution (Advanced), shared colormap, height range, Fit plot and the
+plot-section reset.
+
+**Public API.** `PlotPanelAction::FitPlot`, `PLOT_KINDS`, `kind_label`,
+`source_label`, `source_hint`, `source_help`, `active_example_name`, `show`.
+
+**Invariants.**
+- `show` edits `State` only through existing setters and returns only the Fit
+  action; the app runs the Task 6 `fit_plot` seam with the viewport aspect.
+- Kind choices are exactly Vector field / Curve `y=f(x)` / Surface `z=f(x,y)`;
+  only Curve exposes samples and line width, only Surface exposes resolution.
+- `Custom` is derived from the active draft text, never stored separately.
+- Fit is disabled with a visible explanation when no finite geometry exists.
+- The section reset restores plot settings/draft and preserves the vector
+  formula; no new shortcut or global settings page is added.
+
+**Pinned by.** `tests/plot_ui_test.rs`.
+
 #### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
 
 **Purpose.** The top formula row.
@@ -1746,11 +1768,15 @@ as an image.
 state, bar, compact)`.
 
 **Invariants.**
-- The bar's text mirror is refreshed from `state.formula` when they differ, so
-  a preset or restore updates the field.
-- Every edit is handed to `state.set_formula`; the bar never parses or clamps
-  itself.
-- Clicking 3D/2D calls `state.set_mode`.
+- The bar's text mirror is refreshed from `state.active_source()` when they
+  differ, so presets, restores and kind changes update the field without
+  overwriting a preserved scalar draft.
+- Every edit is handed to `state.set_active_source`; the bar never parses or
+  clamps itself.
+- Scalar kinds show the fixed `y =` or `z =` label and an `x`/`x and y` hint;
+  vector mode keeps comma-separated component syntax.
+- Clicking 3D/2D calls `state.set_mode` (which selects the saved Curve/Surface
+  in plot mode).
 - Compact sets a 44 pt interaction height and uses
   `layout::formula_field_width` (≥ 40 % of the bar); wide lets the field fill
   the remainder.
@@ -1942,7 +1968,8 @@ with a local mirror and a single `apply` handoff.
 `particle_size_enabled`, `particle_fixed_color_enabled`, `fixed_color_rgb`,
 `fixed_color_opaque`, `trail_fade_enabled`, `trail_width_enabled`,
 `stagnation_seconds_enabled`, `particle_count_label`, `Controls` (+ `new`,
-per-section resets, `Default`), `show`, `apply`.
+per-section resets, `Default`), `show`, `show_with_plot_action`,
+`show_compact`, `show_compact_with_plot_action`, `apply`.
 
 **Invariants.**
 - Section order is Display → Camera → Features → Coloring → Domain; the first
@@ -1966,6 +1993,9 @@ per-section resets, `Default`), `show`, `apply`.
 - The Camera section's fly checkbox is a mirror; the app syncs the real camera
   into it before drawing and reconciles a click through
   `fly_camera::sync_fly_mirror`.
+- In scalar mode the Plot section is drawn first; vector-only sections are
+  disabled with explanations and retain their values. Only shared plot controls
+  (grid/axes, domain, palette) reach the seam, and Fit is returned to the app.
 
 **Pinned by.** `tests/sidebar_controls_test.rs` (51), including
 `untouched_frame_rebuilds_nothing_through_apply`,

@@ -69,6 +69,7 @@ mod plot_examples_test;
 mod plot_renderer_test;
 mod plot_state_test;
 mod plot_surface_test;
+mod plot_ui_test;
 mod pointer_lock_test;
 mod preset_test;
 mod presets_test;

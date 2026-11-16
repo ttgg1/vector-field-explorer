@@ -10,6 +10,7 @@
 
 use eframe::egui;
 
+use crate::plot::PlotKind;
 use crate::screenshot::Screenshot;
 use crate::ui::branding;
 use crate::ui::menu::{self, MENUS, MenuAction};
@@ -301,7 +302,7 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
 
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
-fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool) -> bool {
+fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool, kind: PlotKind) -> bool {
     style_panel::restore_menu_button_padding(ui);
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
     // the sidebar Camera section.
@@ -309,9 +310,14 @@ fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool) -> boo
     if let Some(label) = menu::item_shortcut_label(item) {
         button = button.shortcut_text(label);
     }
-    let enabled = item.action != MenuAction::ExportScreenshotSvg
-        || crate::screenshot::svg_export_enabled(mode_3d);
-    let clicked = ui.add_enabled(enabled, button).clicked();
+    let reason = (item.action == MenuAction::ExportScreenshotSvg)
+        .then(|| svg_disabled_reason(kind, mode_3d))
+        .flatten();
+    let response = match reason {
+        Some(reason) => ui.add_enabled(false, button).on_disabled_hover_text(reason),
+        None => ui.add(button),
+    };
+    let clicked = response.clicked();
     if clicked {
         // Every item is a one-shot command: close the dropdown so the next
         // click lands on the app, not the menu.
@@ -331,12 +337,29 @@ fn screenshot_button(ui: &mut egui::Ui, screenshot: &Screenshot) -> bool {
     clicked
 }
 
-fn screenshot_svg_button(ui: &mut egui::Ui, mode_3d: bool) -> bool {
-    let enabled = crate::screenshot::svg_export_enabled(mode_3d);
-    ui
-        .add_enabled(enabled, egui::Button::new("Screenshot as SVG"))
-        .on_hover_text("Save the 2D viewport as a vector SVG")
-        .clicked()
+fn screenshot_svg_button(ui: &mut egui::Ui, mode_3d: bool, kind: PlotKind) -> bool {
+    let reason = svg_disabled_reason(kind, mode_3d);
+    let response = ui
+        .add_enabled(reason.is_none(), egui::Button::new("Screenshot as SVG"))
+        .on_hover_text("Save the 2D viewport as a vector SVG");
+    let response = match reason {
+        Some(reason) => response.on_disabled_hover_text(reason),
+        None => response,
+    };
+    response.clicked()
+}
+
+/// Why the SVG export is unavailable, or `None` when it is enabled. Scalar
+/// kinds use the exact shared constant; the existing vector 3D-only reason is
+/// unchanged.
+pub fn svg_disabled_reason(kind: PlotKind, mode_3d: bool) -> Option<&'static str> {
+    if let Err(message) = crate::screenshot::svg_export_allowed(kind) {
+        return Some(message);
+    }
+    if !crate::screenshot::svg_export_enabled(mode_3d) {
+        return Some("SVG export is 2D only; use PNG in 3D");
+    }
+    None
 }
 
 /// The Appearance popover anchored to the gear, including ticket 41's
@@ -405,6 +428,26 @@ pub fn show(
     appearance_open: &mut bool,
     mode_3d: bool,
 ) -> (Option<MenuAction>, bool) {
+    show_with_plot_kind(
+        ui,
+        style,
+        screenshot,
+        appearance_open,
+        mode_3d,
+        PlotKind::VectorField,
+    )
+}
+
+/// Wide menu bar with the active plot kind, so scalar SVG is disabled with its
+/// exact explanation instead of the vector 3D reason.
+pub fn show_with_plot_kind(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    appearance_open: &mut bool,
+    mode_3d: bool,
+    kind: PlotKind,
+) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
     let mut appearance_button = None;
@@ -414,7 +457,7 @@ pub fn show(
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
-                    if add_menu_item(ui, item, mode_3d) {
+                    if add_menu_item(ui, item, mode_3d, kind) {
                         action = Some(item.action);
                     }
                 }
@@ -440,7 +483,7 @@ pub fn show(
                 if screenshot_button(ui, screenshot) {
                     action = Some(MenuAction::ExportScreenshot);
                 }
-                if screenshot_svg_button(ui, mode_3d) {
+                if screenshot_svg_button(ui, mode_3d, kind) {
                     action = Some(MenuAction::ExportScreenshotSvg);
                 }
             },
@@ -461,6 +504,16 @@ pub fn show_compact(
     ui: &mut egui::Ui,
     screenshot: &Screenshot,
     mode_3d: bool,
+) -> (Option<MenuAction>, bool) {
+    show_compact_with_plot_kind(ui, screenshot, mode_3d, PlotKind::VectorField)
+}
+
+/// Compact bar with the active plot kind (same SVG guard as [`show_with_plot_kind`]).
+pub fn show_compact_with_plot_kind(
+    ui: &mut egui::Ui,
+    screenshot: &Screenshot,
+    mode_3d: bool,
+    kind: PlotKind,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let style_changed = false;
@@ -483,7 +536,7 @@ pub fn show_compact(
                     if item.action == MenuAction::OpenAppearance {
                         continue;
                     }
-                    if add_menu_item(ui, item, mode_3d) {
+                    if add_menu_item(ui, item, mode_3d, kind) {
                         action = Some(item.action);
                     }
                 }
