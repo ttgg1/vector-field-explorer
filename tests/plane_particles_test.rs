@@ -4,6 +4,7 @@
 use eframe::egui;
 use glam::Vec3;
 use vector_field_explorer::VfApp;
+use vector_field_explorer::particles::ParticleAppearance;
 use vector_field_explorer::plane::PlaneAxis;
 use vector_field_explorer::sim_clock::has_clock_consumer;
 use vector_field_explorer::view_command::{ClickActionPlan, click_action_plan};
@@ -179,6 +180,33 @@ fn purely_normal_plane_particles_stay_in_place() {
             "a purely normal field cannot move a particle within the slice"
         );
     }
+}
+
+#[test]
+fn plane_particle_trails_reach_the_2d_viewport_scene() {
+    let mut app = VfApp::new();
+    app.state.set_formula("x, y, z".into());
+    app.state.set_mode(false);
+    app.state.set_particles(true);
+    app.state.set_particle_appearance(ParticleAppearance {
+        trail_len: 8,
+        ..Default::default()
+    });
+    step(&mut app, 0.05);
+    step(&mut app, 0.05);
+
+    let scene = app.test_assemble_viewport_scene();
+    assert!(
+        !scene.trails.is_empty(),
+        "the 2D viewport scene must carry the slice's particle trail segments"
+    );
+    assert!(
+        scene
+            .trails
+            .iter()
+            .all(|line| line.a[2].abs() < 1e-5 && line.b[2].abs() < 1e-5),
+        "plane trails stay on the flat slice"
+    );
 }
 
 #[test]

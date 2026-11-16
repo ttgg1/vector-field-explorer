@@ -75,10 +75,10 @@ impl SimClock {
     }
 
     /// Advance one frame only while [`should_animate`] holds. With no clock
-    /// consumer (particles off or the 2D view) the clock *holds*: time stays
-    /// where it was and the step is cleared, so re-enabling the consumer
-    /// resumes from the held time rather than replaying or accumulating the
-    /// hidden frames. Paused frames hold the same way.
+    /// consumer (particles off or a field without three components) the clock
+    /// *holds*: time stays where it was and the step is cleared, so re-enabling
+    /// the consumer resumes from the held time rather than replaying or
+    /// accumulating the hidden frames. Paused frames hold the same way.
     pub fn advance_for(&mut self, state: &State, dt: f32) {
         if should_animate(state, self) {
             self.advance(dt);

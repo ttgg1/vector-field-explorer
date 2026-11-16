@@ -177,10 +177,12 @@ impl VfApp {
                     .unwrap_or(0)
             );
         } else if particle_count(&self.particles) > 0 {
-            // Toggle off (or the 2D view): drop the cloud so switching back
-            // spawns fresh at the fixed seed; the dots were already emptied
-            // because the toggle marks the state dirty, and the trails reset
-            // here because the snapshot never carries per-frame history.
+            // Toggle off (or a two-component field with no depth/slice flow):
+            // drop the cloud so switching back spawns fresh at the fixed seed;
+            // the dots were already emptied because the toggle marks the state
+            // dirty, and the trails reset here because the snapshot never
+            // carries per-frame history. A 2D plane slice is a valid target
+            // and keeps its cloud and trails.
             clear(&mut self.particles);
             if let Some(scene) = self.scene.as_vector_mut() {
                 scene.trails = Arc::new(Vec::new());

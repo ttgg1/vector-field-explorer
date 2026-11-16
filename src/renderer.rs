@@ -187,8 +187,8 @@ pub enum ArrowDrawPlan {
 pub enum DrawPass {
     /// Backdrop/streamline lines, six vertices per instance.
     Lines { instances: usize },
-    /// Fading particle trail segments, six vertices per instance. 3D only;
-    /// painted behind the arrows and particles so trails read as motion
+    /// Fading particle trail segments, six vertices per instance. Painted in
+    /// both views behind the arrows and particles so trails read as motion
     /// history rather than as foreground geometry (ticket 48).
     Trails { instances: usize },
     /// The single 3D combined arrow + particle draw.
@@ -312,18 +312,21 @@ impl SceneGPU {
         matches!(self.arrow_draw_plan(), ArrowDrawPlan::Flat2D { .. })
     }
 
-    /// The draws `record` performs, in painter order. 3D is the backdrop lines,
-    /// then fading particle trails, then exactly one combined arrow+particle
-    /// draw (even when the arrow list is empty: the dots live in `combined`).
-    /// 2D keeps its arrows-then-dots draws, ignores `combined`, and never has
-    /// trails (particles are 3D-only).
+    /// The draws `record` performs, in painter order. In both views the
+    /// backdrop lines and fading particle trails come first. 3D then issues
+    /// exactly one combined arrow+particle draw (even when the arrow list is
+    /// empty: the dots live in `combined`); 2D keeps its arrows-then-dots draws
+    /// and ignores `combined`. A 2D plane slice can carry trails; ordinary
+    /// two-component 2D simply has none.
     pub fn draw_passes(&self) -> Vec<DrawPass> {
         let mut passes = Vec::with_capacity(5);
         if !self.lines.is_empty() {
             passes.push(DrawPass::Lines { instances: self.lines.len() });
         }
-        if self.mode_3d && !self.trails.is_empty() {
-            passes.push(DrawPass::Trails { instances: self.trails.len() });
+        if !self.trails.is_empty() {
+            passes.push(DrawPass::Trails {
+                instances: self.trails.len(),
+            });
         }
         if self.mode_3d {
             if !self.combined.is_empty() {

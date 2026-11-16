@@ -110,7 +110,7 @@ per-frame simulation state beside it.
         │
         ├─ 3D: combined_instances(arrows, dots) + sort_scene_back_to_front
         ├─ 2D: sorted_arrows_back_to_front(arrows); combined stays empty
-        ├─ trails: sorted_lines_back_to_front(trails) (3D only)
+        ├─ trails: sorted_lines_back_to_front(trails) (3D and 2D plane slices)
         ▼
  SceneGPU + view_proj + eye_position
         │  egui_wgpu::Callback::new_paint_callback(rect, DrawCallback)
@@ -564,7 +564,8 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
 - A two-finger gesture suppresses the pointer-drag orbit channel; pinch zoom is
   folded into `top_bar::wheel_zoom` by egui.
 - 3D builds the combined arrow+particle stream and sorts it far-to-near; 2D
-  sorts only arrows and never reads `combined`; trails are 3D only.
+  sorts only arrows and never reads `combined`; 2D plane-slice trails are sorted
+  and painted behind them, while ordinary two-component 2D has no trails.
 - The screenshot runs before the paint callback, using the same `scene`,
   `view_proj` and eye position, so the capture is the displayed frame. A
   request is consumed once per capture.

@@ -1,6 +1,6 @@
 //! Ticket 48: the line pipeline blends straight alpha so particle trails can
 //! fade, dot opacity rides the already-alpha dot pipeline, and trails sit
-//! between the backdrop lines and the combined 3D arrow + particle draw.
+//! between the backdrop lines and the arrows/dots in both 3D and 2D.
 
 use std::sync::Arc;
 
@@ -86,15 +86,28 @@ fn trails_draw_between_lines_and_the_combined_scene() {
 }
 
 #[test]
-fn two_d_never_draws_trails() {
+fn two_d_draws_plane_trails_but_keeps_an_empty_list_empty() {
     let scene = SceneGPU {
         mode_3d: false,
         trails: Arc::new(vec![line([0.0; 3], [1.0, 0.0, 0.0], 0.1)]),
         ..SceneGPU::default()
     };
+    assert_eq!(
+        scene.draw_passes(),
+        vec![DrawPass::Trails { instances: 1 }],
+        "a 2D plane slice paints its particle trails behind arrows and dots",
+    );
+
+    let empty = SceneGPU {
+        mode_3d: false,
+        ..SceneGPU::default()
+    };
     assert!(
-        !scene.draw_passes().iter().any(|pass| matches!(pass, DrawPass::Trails { .. })),
-        "particles are 3D-only, so 2D hides their trails",
+        !empty
+            .draw_passes()
+            .iter()
+            .any(|pass| matches!(pass, DrawPass::Trails { .. })),
+        "an empty trail list emits no pass",
     );
 }
 
