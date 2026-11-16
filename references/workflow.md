@@ -1,6 +1,6 @@
 # Workflow — current policy
 
-Tracked policy authority, reconciled with the owner's 2026-11-15 rulings.
+Tracked policy authority, reconciled with the owner's 2026-11-16 rulings.
 New owner rulings take precedence; update durable policy here, not across wiki pages.
 Local evidence paths below are relative to the **main checkout**,
 `/home/paul/projects/vector-field-explorer`, unless explicitly stated otherwise.
@@ -17,8 +17,8 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
   Before dispatch, read the issue's current assignees, explicit agent claims,
   discussion and dependencies. An empty assignee list does not cancel an active
   agent claim; coordinate ownership rather than assigning a human stand-in.
-- The controller retains the active ledger
-  `.superpowers/sdd/2026-11-10-native-cas/progress.md`, recording progress and
+- The controller retains the active plan ledger
+  `.superpowers/sdd/<plan-name>/progress.md`, recording progress and
   `Ruling: <decision> — <why>` with `git rev-parse`-verifiable commits and GitHub
   links. Git plus verified reports establish completion, not a status line.
   Preserve `.scratch/field-viewport/issues/` and `QUEUE.md` beside it as historical
@@ -35,51 +35,45 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
   evidence/design frontier, not evaluator implementation or numerical approval.
   Planning approval and evidence spikes do not approve algorithms, tolerances,
   query envelopes or work limits; follow the current issue's design/review gates.
-- Before creating tickets from feedback, use `grilling`; add `domain-modeling`
-  for terminology/hard-to-reverse decisions. Group/deduplicate findings, extend
+- Before creating tickets from feedback, use the installed `grilling`; add
+  `domain-modeling` for terminology/hard-to-reverse decisions. Group/deduplicate findings, extend
   the owning ticket for refinements, ledger rulings, and obtain confirmation of
   the resulting ticket set. Ask the whole current frontier in rounds before
   finalizing feedback-derived tickets. AI-created GitHub issues require the
   `opencode` label. Approved scope still needs just-in-time design.
 - Feature work uses brainstorming/planning then SDD + TDD; bugs use systematic
-  diagnosis before fixes. Use domain-modeling for glossary/ADR changes.
+  diagnosis before fixes. Use `domain-modeling` for glossary/ADR changes and
+  `writing-for-agents` for agent-facing docs. Use `handoff` only when transferring
+  an active task to another session; do not load all skills by default.
 
 ## Dispatch and evidence
 
-1. Record BASE, brief, accepted scope, dependencies and exclusive file ownership.
-   One `feature/<topic>` branch/worktree per request. Use the bounded runtime
-   described in [the workflow guide](../docs/agent-workflow.md) for authorized
-   runnable requests. Simple, well-defined requests within the configured file
-   threshold bypass planning; complex requests receive one bounded plan.
-   Serialize shared/dependent files. Independently authorized, file-disjoint
-   requests may run in parallel worktrees, subject to build and usage limits.
-2. The controller keeps the ledger and serializes integration, rather than
-   writing production code during the loop. An implementer reads its brief,
-   uses TDD (observe the right RED before production changes), runs applicable
-   gates, self-reviews, and writes `task-N-report.md` with exact hashes,
-   evidence and `DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT`.
-   Manual seats commit when assigned; runtime seats leave accepted edits for
-   the controller's commit/integration step.
-   Implementers dispatch no subagents; push/merge only if expressly assigned.
-3. Run every applicable deterministic validation before final acceptance. For a
-   decomposed runtime request, trusted task-local checks can gate retries; tasks
-   without them are provisional and cannot skip review. Run the mandatory global
-   validation after all tasks; only then can a nonempty final diff be accepted.
-   A validated, explicitly trivial, nonbinary diff may skip LLM review **only**
-   within configured prose-safe paths/file/line thresholds; protected ADR,
-   architecture, executable/configuration and agent-instruction paths always
-   require review. Record the policy reason and actual diff identity. Otherwise a
-   fresh, read-only independent reviewer checks the original requirements and
-   complete actual task diff: normal risk uses the configured reviewer; high-risk
-   paths or declarations use escalation.
-   Whole-branch review is once at the end when required by the owning brief,
-   not a repeated full review for each fix.
+1. Record BASE, brief, accepted scope, dependencies, and exclusive file ownership.
+   Use one `feature/<topic>` branch/worktree per request and the explicit native
+   OpenCode entry points in [the workflow guide](../docs/agent-workflow.md).
+   Clear, bounded tasks need no separate plan artifact; applicable skills such
+   as brainstorming and TDD still apply. Serialize shared files; parallelize
+   only independent, file-disjoint, dependency-ready tasks when worthwhile.
+2. The controller keeps the ledger and serializes integration. The implementer
+   reads its brief, uses TDD (observe the right RED before production changes),
+   runs applicable gates, self-reviews, and reports exact BASE/HEAD, evidence,
+   and `DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT`. It does not push
+   or merge unless expressly assigned.
+3. Run every applicable deterministic validation before acceptance. A validated,
+   explicitly trivial, nonbinary docs-only diff of at most 30 changed lines and
+   at most two Markdown files may skip LLM review **only** when every file is
+   root-level Markdown or under `docs/`, and formatting, link, policy, and diff
+   checks pass. ADR, architecture, executable/configuration, and agent-instruction
+   paths always require review. Record the reason and diff identity. Otherwise,
+   a fresh read-only independent reviewer checks the original requirements and
+   complete actual diff. High-risk work still requires independent review; effort
+   increases only through the documented task-local escalation process.
 4. Use [the fix loop](fix-loop.md) for actionable findings. Simple, low-risk fixes
    with passing applicable tests may skip independent re-review with closure
-   evidence; complex/high-risk fixes require scoped re-review. The runtime is
-   stricter: each nontrivial implementation round receives fresh diff review.
-   Attempts/reviews are capped; unresolved findings remain failed/blocked, not
-   accepted or parked. Preserve failed edits and usage evidence.
+   evidence; complex/high-risk fixes require scoped re-review. Limit a task to
+   three implementation attempts and three review rounds; the finding fix loop
+   stops after five rounds. Unresolved work remains failed/blocked, not accepted
+   or parked. Preserve failed edits and usage evidence.
 5. Use `feat:` / `fix:` / `docs:` commits, one set per task. A subject containing
    `(ticket NN)` requires a matching [review record](../docs/wiki/process/review-records.md).
    Future AI-created commits require the `Generated-by: OpenCode` trailer;
@@ -92,32 +86,45 @@ Use `scripts/task-brief` and `scripts/review-package` with the owning plan from
 workspace. Provide explicit main-root artifact output paths for worktree seats.
 Review packages use the last reviewed HEAD as round BASE; verify ancestry.
 
-## Seats and recovery
+## Native roles and recovery
 
-The single source for default model/effort roles and bounds is
-[agent-workflow.json](../.opencode/agent-workflow.json). Validate exact enabled
-OpenAI chat/tool models and effort variants against service discovery before
-execution. The orchestrator plans once; the implementer starts in its configured
-seat and reuses its session for targeted retries. Escalate after the configured
-attempt threshold, or initially for genuinely complex work. Normal reviews use
-the reviewer role; high-risk reviews use escalation, always independently.
+Select roles through the native Markdown agents and commands under `.opencode/`.
+Implementers do not delegate; only orchestrators dispatch approved implementer,
+reviewer, and fix roles.
+Validate configured model identifiers and variants against the enabled catalog
+when adding or changing profiles. `openai` is the default mode; use OpenCode Go
+only when explicitly selected. Complexity guides planning depth and role, but
+never automatically raises reasoning effort. Every new task/role starts at its
+profile's lowest supported effort. Escalate one supported level at a time only
+after checking requirements, context, and approach; record the failure and
+reason. Escalation is local to that task/role. A new independent task resets to
+lowest effort. More expensive model changes require explicit owner authorization.
+
+OpenAI: GPT-6.1 Sol low for orchestration, complex implementation, and review;
+GPT-6 Luna uses its lowest supported variant for simple/standard implementation
+and review fixes. OpenCode Go: DeepSeek V4.1 Flash low for orchestration, implementation,
+and fixes; GLM 5.3 Flash low for independent review. MiMo V2.6 Flash is an
+explicit alternative reviewer; the current catalog exposes no variant for it.
+Catalog discovery confirms model IDs/capabilities, not internal checkpoints,
+actual billing, or subscription allowance consumption.
+
+Do not use Kimi K3.x, NVIDIA/Nemotron, LM Studio, or Strata seats. If a configured
+model is unavailable or fails, stop and request owner direction; do not fall back.
 
 The chief-of-staff controller coordinates claims, budgets, evidence and serialized
 integration; it does not silently change the current harness session's model.
-Outside the runtime, pass model/variant only when the tool contract permits it;
-this policy does not override an explicit-user-request requirement or other
-higher-priority restrictions. No kimi k3.x, NVIDIA/Nemotron, LM Studio or `strata`
-seats. Keep explicit configured roles; unavailable roles fail closed.
+Use the selected native role's model preference only when the OpenCode/tool
+contract permits it; this policy does not override explicit user requirements
+or higher-priority restrictions. Never silently change provider or account.
+Unavailable roles require owner resolution rather than fallback.
 
 **Usage/rate/quota/budget limit: save progress and STOP.** No retries or
-model/provider hopping unless the owner explicitly resumes/chooses a seat.
-Earlier automatic free-model fallbacks are retired. An authentication/security
-block likewise needs owner resolution, not a workaround.
-Ambiguous admission/wait failures require manual service reconciliation, never
-automatic resubmission. The runtime preserves run/session references in the
-linked worktree Git directory, prevents duplicate/concurrent runs, and requires
-a new clean worktree after unresolved failure. Accepted edits are not merged:
-record merge status only after the guide's preserving Git-identity proof.
+model/provider hopping unless the owner explicitly resumes/chooses a seat. An
+authentication/security block likewise needs owner resolution, not a workaround.
+Preserve session IDs, relevant logs, worktree, and edits for manual reconciliation;
+do not resubmit an ambiguous request blindly. A review approval is not a merge:
+verify commit identity, reviewed HEAD, ancestry, and inclusion in the intended
+target before reporting merged status.
 
 ## Local verification
 
@@ -127,9 +134,9 @@ For Rust changes: `cargo build`, `scripts/test.sh` (full
 Run `scripts/smoke-run.sh 15` for renderer, shader, windowing or input changes,
 or when the ticket requires it: build/tests create no wgpu device.
 Docs-only changes need docs, diff, link and policy-consistency checks, not Cargo.
-For Python workflow tooling, also run `python3 -m unittest discover -s scripts/tests -v`
-and compile changed Python files. Tests must remain offline; discovery-only
-`doctor` is allowed, model generation for verification is not.
+For metrics tooling, run `python3 -m unittest discover -s scripts/tests -v`
+and compile changed Python files. Tests remain offline and consume fixtures;
+never generate model output as verification.
 
 Use the Rustup toolchain explicitly:
 `PATH=/home/paul/.cargo/bin:/usr/bin:/bin`,
