@@ -5,10 +5,12 @@
 //! body is unchanged; only the imports moved from `super::*` / `crate::` to
 //! `vector_field_explorer::`.
 
-use glam::{Vec2, Vec3};
+use glam::{UVec3, Vec2, Vec3};
 use vector_field_explorer::camera::{OrbitCamera, ViewCamera};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
+use vector_field_explorer::flow::PlaneFlow;
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::streamlines::{
     CLICK_BURST_REACH, CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, click_seed, ray_seed,
     seed_grid, trace, trace_at,
@@ -641,6 +643,38 @@ fn trace_at_varies_with_t() {
         maxdiff = maxdiff.max((pa.x - pb.x).abs().max((pa.y - pb.y).abs()));
     }
     assert!(maxdiff > 1e-3, "maxdiff = {}", maxdiff);
+}
+
+#[test]
+fn trace_at_accepts_projected_plane_flow() {
+    // The generic tracer walks any `Flow`: a plane flow keeps every point in
+    // its local `z == 0` slice.
+    let field = FieldExpr::parse("1, 2, 3").expect("constant field parses");
+    let domain = Domain::default();
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::Z,
+            index: 1,
+            ..Default::default()
+        },
+        UVec3::splat(5),
+    );
+    let flow = PlaneFlow {
+        field: &field,
+        frame,
+    };
+    let opts = StreamlineOpts {
+        max_len: 50,
+        step_scale: 0.05,
+        both_directions: true,
+    };
+    let line = trace_at(&flow, Vec3::ZERO, &frame.local_domain(), &opts, 0.0);
+    assert!(line.len() > 1, "the projected flow advances the trace");
+    assert!(
+        line.iter().all(|p| p.z == 0.0),
+        "the trace stays on the slice"
+    );
 }
 
 #[test]

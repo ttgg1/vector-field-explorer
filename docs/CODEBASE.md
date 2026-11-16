@@ -571,6 +571,28 @@ them at a point.
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
 
+#### `src/flow.rs` — the tracer's velocity-field abstraction
+
+**Purpose.** Give the streamline tracer one `Flow::eval(point, t)` seam over
+either the world field or a projected slice.
+
+**Public API.** `Flow`, `PlaneFlow { field, frame }`, `SceneFlow::{World,
+Plane}`; `FieldExpr` implements `Flow`.
+
+**Invariants.**
+- `FieldExpr`'s flow delegates to `eval3_at` unchanged.
+- `PlaneFlow` lifts local `(u, v, 0)` points through `PlaneFrame::to_world`,
+  evaluates the world field, then projects the velocity with
+  `PlaneFrame::project`, so a trace never leaves the slice.
+- `SceneFlow` selects world flow outside a plane slice and plane flow inside
+  one.
+
+**Pinned by.** `tests/scene_flow_test.rs` and `tests/streamlines_test.rs`
+(`trace_at_accepts_projected_plane_flow`).
+
+**Limitations.** Projection drops the out-of-plane velocity component, so a
+purely normal field has zero slice flow.
+
 #### `src/scalar.rs` — static scalar right-hand-side expressions
 
 **Purpose / API.** `ScalarExpr::parse(source, ScalarContext::{Curve, Surface})`

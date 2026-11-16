@@ -10,6 +10,7 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
+use super::flow::{Flow, SceneFlow};
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
@@ -844,6 +845,19 @@ impl State {
         }
     }
 
+    /// The flow the visible scene traces. A plane slice projects the world
+    /// field onto its local frame; every other view traces the world field
+    /// over [`scene_domain`](State::scene_domain).
+    pub fn scene_flow(self: &State) -> SceneFlow<'_> {
+        match self.plane_frame() {
+            Some(frame) => SceneFlow::Plane(super::flow::PlaneFlow {
+                field: &self.field,
+                frame,
+            }),
+            None => SceneFlow::World(&self.field),
+        }
+    }
+
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
     /// `n`×`n`×`n` when sampling runs three-dimensional.
     pub fn grid(self: &State) -> UVec3 {
@@ -1025,7 +1039,7 @@ impl State {
         let axis = (self.density / 3).clamp(1, 24);
         let grid = self.grid();
         let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
-        let seeds = seed_grid(&self.domain, axis, STREAMLINE_JITTER, salt);
+        let seeds = seed_grid(&self.scene_domain(), axis, STREAMLINE_JITTER, salt);
         let opts = self.streamline_opts();
         let range = self.color_range(sampled);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
@@ -1049,8 +1063,10 @@ impl State {
 
     /// Trace one seed and push its coloured segments: one instance per segment,
     /// coloured at the segment's start by the same [`color_range`] the arrows
-    /// use. Shared by the grid seeds and the click bursts so both paint
-    /// identically.
+    /// use. The trace and the colour magnitude both come from
+    /// [`scene_flow`](State::scene_flow), so a slice stays in its local frame
+    /// and colours by projected magnitude. Shared by the grid seeds and the
+    /// click bursts so both paint identically.
     fn push_line(
         self: &State,
         lines: &mut Vec<LineInstanceGPU>,
@@ -1059,11 +1075,12 @@ impl State {
         range: (f32, f32),
     ) {
         let (lo, hi) = range;
-        let path = trace_at(&self.field, seed, &self.domain, opts, self.time);
+        let flow = self.scene_flow();
+        let path = trace_at(&flow, seed, &self.scene_domain(), opts, self.time);
         for i in 0..path.len().saturating_sub(1) {
             let pa = path[i];
             let pb = path[i + 1];
-            let mag = match self.field.eval3_at(pa, self.time) {
+            let mag = match flow.eval(pa, self.time) {
                 Some(v) => v.length(),
                 None => 0.0,
             };
@@ -1099,7 +1116,7 @@ impl State {
         let dimension = if self.mode_3d { 3 } else { 2 };
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for click in clicks {
-            for seed in burst_seeds(*click, &self.domain, CLICK_BURST_SEEDS, dimension) {
+            for seed in burst_seeds(*click, &self.scene_domain(), CLICK_BURST_SEEDS, dimension) {
                 self.push_line(&mut lines, seed, &opts, color_range);
             }
         }
