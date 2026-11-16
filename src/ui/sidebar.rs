@@ -156,10 +156,11 @@ impl DomainAxis {
 }
 
 /// The rows the Domain editor renders. Pure so the 2D/3D gating is testable
-/// without a window; `is_3d` is the sampling dimension, not raw `mode_3d`, so a
-/// flat formula in 3D mode still hides z.
-pub fn domain_axes(is_3d: bool) -> &'static [DomainAxis] {
-    if is_3d {
+/// without a window. `three_component` is whether the field itself has a z
+/// component, not the sampling mode: a 3D field in 2D keeps its z rows, while a
+/// flat formula in 3D mode hides z.
+pub fn domain_axes(three_component: bool) -> &'static [DomainAxis] {
+    if three_component {
         &[DomainAxis::X, DomainAxis::Y, DomainAxis::Z]
     } else {
         &[DomainAxis::X, DomainAxis::Y]

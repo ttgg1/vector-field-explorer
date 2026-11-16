@@ -309,6 +309,39 @@ fn three_component_field_in_2d_uses_slice_local_references() {
 }
 
 #[test]
+fn two_d_x_slice_frames_on_its_local_extents() {
+    let o = options(
+        r#"{"mode":"2d","width":1280,"height":800,"formula":"(x,y,z)","density":5,"domain":{"min":[-10,-2,-5],"max":[10,2,5]},"plane":{"axis":"x","index":2}}"#,
+    );
+    let mut state = State::new(false);
+    state.set_formula(o.formula.clone());
+    state.set_density(o.density);
+    state.set_domain(o.domain.min, o.domain.max);
+    state.set_plane(o.plane);
+    let local = state.scene_domain().domain_size();
+    let aspect = o.width as f32 / o.height as f32;
+    let expected_height = (local.x / aspect).max(local.y) * 1.35;
+    let expected_half = expected_height * 0.5 / o.camera.ortho_zoom;
+
+    let frame = output_frame(&o).unwrap();
+    assert!(
+        (frame.projection.y_axis.y - 1.0 / expected_half).abs() < 1e-4,
+        "the ortho height must frame the x slice's local z/y extents, got {}",
+        frame.projection.y_axis.y,
+    );
+
+    // The old world-extent calculation used world x = 20, which for this
+    // asymmetric box would double the visible height.
+    let world = o.domain.max - o.domain.min;
+    let world_height = (world.x / aspect).max(world.y) * 1.35;
+    let world_half = world_height * 0.5 / o.camera.ortho_zoom;
+    assert!(
+        (frame.projection.y_axis.y - 1.0 / world_half).abs() > 1e-3,
+        "the frame must not be sized by the world x box"
+    );
+}
+
+#[test]
 fn explicit_particle_seed_preserves_default_stream_and_accepts_zero() {
     let domain = vector_field_explorer::domain::Domain::default();
     let mut gui = Particles::default();

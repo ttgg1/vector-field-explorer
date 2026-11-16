@@ -228,7 +228,16 @@ pub fn output_frame(options: &CliOptions) -> Result<OutputFrame, CliError> {
         (Mode::TwoD, CameraKind::Orbit) => {
             orbit.target = Vec3::from_array(camera.target);
             orbit.ortho_zoom = camera.ortho_zoom;
-            let extent = options.domain.max - options.domain.min;
+            // Frame what the 2D scene actually renders. For a three-component
+            // field that is the selected plane's local frame, whose horizontal
+            // extent can differ from the world x/y box; ordinary two-component
+            // 2D keeps the world extents.
+            let mut local = State::new(false);
+            local.set_formula(options.formula.clone());
+            local.set_density(options.density);
+            local.set_domain(options.domain.min, options.domain.max);
+            local.set_plane(options.plane);
+            let extent = local.scene_domain().domain_size();
             let plane_height = (extent.x / aspect).max(extent.y) * 1.35;
             (
                 orbit.front_view(),
