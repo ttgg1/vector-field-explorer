@@ -5,11 +5,12 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
+use crate::export::CameraPreset;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::export::{delete_preset, load_presets, save_preset};
 #[cfg(target_arch = "wasm32")]
 use crate::export::{load_wasm_presets, save_wasm_presets};
-use crate::export::CameraPreset;
+use crate::plot::PlotKind;
 use crate::presets::{PresetCategory, START_HERE, presets, presets_in};
 use crate::render::Camera;
 use crate::view_command::ViewCommand;
@@ -81,7 +82,10 @@ impl PresetPanel {
         {
             let dir = default_preset_dir();
             if let Err(error) = fs::create_dir_all(&dir) {
-                warn!("could not create preset directory {}: {error}", dir.display());
+                warn!(
+                    "could not create preset directory {}: {error}",
+                    dir.display()
+                );
             }
             let presets = match load_presets(&dir) {
                 Ok(presets) => presets,
@@ -116,7 +120,10 @@ impl PresetPanel {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_dir(dir: PathBuf) -> io::Result<Self> {
         if let Err(error) = fs::create_dir_all(&dir) {
-            warn!("could not create preset directory {}: {error}", dir.display());
+            warn!(
+                "could not create preset directory {}: {error}",
+                dir.display()
+            );
         }
         let presets = match load_presets(&dir) {
             Ok(presets) => presets,
@@ -231,7 +238,10 @@ impl PresetPanel {
                 camera.position = p.position;
                 camera.scale = p.scale;
                 self.active = Some(name.to_owned());
-                self.applied = Some(Camera { position: p.position, scale: p.scale });
+                self.applied = Some(Camera {
+                    position: p.position,
+                    scale: p.scale,
+                });
                 debug!("preset loaded: {name}");
                 true
             }
@@ -287,6 +297,10 @@ impl PresetPanel {
     pub fn load_field(&mut self, name: &str, state: &mut State) -> bool {
         match presets().iter().find(|preset| preset.name == name) {
             Some(preset) => {
+                // A field preset is always a vector field: return there before
+                // the vector projection/formula setters so a scalar kind can
+                // never reinterpret the preset text as a scalar draft.
+                state.set_plot_kind(PlotKind::VectorField);
                 state.set_mode(preset.dimension == 3);
                 state.set_formula(preset.formula.to_string());
                 self.active_field = Some(name.to_owned());
@@ -473,7 +487,9 @@ impl PresetPanel {
             let name = self.new_name.clone();
             if ui
                 .add_enabled(!name.is_empty(), egui::Button::new("Save current view"))
-                .on_hover_text("Save the current camera under this name (replaces an existing name)")
+                .on_hover_text(
+                    "Save the current camera under this name (replaces an existing name)",
+                )
                 .clicked()
             {
                 if self.save_current(&name, camera).is_ok() {

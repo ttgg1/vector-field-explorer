@@ -471,11 +471,31 @@ use crate::ui::layout;
 
 /// Draw the sidebar and hand every edit to the viewmodel setters.
 pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
-    show_inner(ui, state, controls, false)
+    let _ = show_with_plot_action(ui, state, controls, false);
+}
+
+/// Wide entry that also reports a Plot action the app must run (Fit plot).
+pub fn show_with_plot_action(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    compact: bool,
+) -> Option<crate::ui::plot_panel::PlotPanelAction> {
+    show_inner(ui, state, controls, compact)
 }
 
 /// Compact-mode entry: applies the compact row floor and spacing, then draws.
 pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
+    let _ = show_compact_with_plot_action(ui, state, controls, compact);
+}
+
+/// Compact entry that also reports a Plot action the app must run.
+pub fn show_compact_with_plot_action(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    compact: bool,
+) -> Option<crate::ui::plot_panel::PlotPanelAction> {
     if compact {
         ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
         ui.spacing_mut().item_spacing.y = layout::COMPACT_ITEM_SPACING;
@@ -483,7 +503,17 @@ pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Control
     show_inner(ui, state, controls, compact)
 }
 
-fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
+fn show_inner(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    compact: bool,
+) -> Option<crate::ui::plot_panel::PlotPanelAction> {
+    // The Plot section is drawn first and may switch kind within this frame;
+    // every later scalar/vector gate reads the resulting state, not a stale
+    // pre-click snapshot.
+    let plot_action = crate::ui::plot_panel::show(ui, state, compact);
+
     // The density ceiling keys to the dimension being sampled (the ledger
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
@@ -495,6 +525,7 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
     };
     let grid = state.grid();
     let domain = state.domain;
+    let vector_mode = state.is_vector_mode();
 
     // The plane mirror follows the seam (which clamps/recentres it on grid
     // changes) except while its slider is mid-drag: the in-flight value has to
@@ -506,17 +537,26 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
     let mut commit_plane = false;
 
     section(ui, Section::Display, controls, None, |ui, controls| {
-        ui.horizontal(|ui| {
-            ui.label(if sampling_3d {
-                "Density (n³)"
-            } else {
-                "Density (n²)"
-            });
-            ui.add(egui::DragValue::new(&mut controls.density).range(MIN_DENSITY..=max_density))
+        if !vector_mode {
+            ui.label(
+                "Vector-only display controls are disabled while plotting; their values are retained.",
+            );
+        }
+        ui.add_enabled_ui(vector_mode, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(if sampling_3d {
+                    "Density (n³)"
+                } else {
+                    "Density (n²)"
+                });
+                ui.add(
+                    egui::DragValue::new(&mut controls.density).range(MIN_DENSITY..=max_density),
+                )
                 .on_hover_text("Samples per axis; 3D sampling makes it the cube of this count");
+            });
+            ui.checkbox(&mut controls.arrows, "Show arrows")
+                .on_hover_text("Hide the arrow field without hiding streamlines or particles");
         });
-        ui.checkbox(&mut controls.arrows, "Show arrows")
-            .on_hover_text("Hide the arrow field without hiding streamlines or particles");
         ui.checkbox(&mut controls.show_grid, "Show grid")
             .on_hover_text("Show the plane/face grid and domain box");
         ui.checkbox(
@@ -526,151 +566,160 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
         .on_hover_text(
             "Show colored X/Y axes (and Z in 3D); these reference axes are not field lines",
         );
-        let arrow_scale_on = arrow_scale_enabled(controls.arrow_length_mode);
-        let arrow_scale_text = if arrow_scale_on {
-            "Arrow length (grid cells)"
-        } else {
-            "Arrow length (Proportional/Uniform)"
-        };
-        let arrow_scale_hover = if arrow_scale_on {
-            "Arrow length as a multiple of one grid cell"
-        } else {
-            "Disabled in Magnitude mode; use Magnitude scale instead"
-        };
-        ui.add_enabled_ui(arrow_scale_on, |ui| {
+        ui.add_enabled_ui(vector_mode, |ui| {
+            let arrow_scale_on = arrow_scale_enabled(controls.arrow_length_mode);
+            let arrow_scale_text = if arrow_scale_on {
+                "Arrow length (grid cells)"
+            } else {
+                "Arrow length (Proportional/Uniform)"
+            };
+            let arrow_scale_hover = if arrow_scale_on {
+                "Arrow length as a multiple of one grid cell"
+            } else {
+                "Disabled in Magnitude mode; use Magnitude scale instead"
+            };
+            ui.add_enabled_ui(arrow_scale_on, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut controls.arrow_scale, MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
+                        .text(arrow_scale_text),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Exact length");
+                    ui.add(
+                        egui::DragValue::new(&mut controls.arrow_scale)
+                            .speed(0.01)
+                            .range(MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
+                            .max_decimals(2),
+                    );
+                });
+            })
+            .response
+            .on_hover_text(arrow_scale_hover)
+            .on_disabled_hover_text("Disabled in Magnitude mode; use Magnitude scale instead");
             ui.add(
-                egui::Slider::new(&mut controls.arrow_scale, MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
-                    .text(arrow_scale_text),
-            );
-            ui.horizontal(|ui| {
-                ui.label("Exact length");
-                ui.add(
-                    egui::DragValue::new(&mut controls.arrow_scale)
-                        .speed(0.01)
-                        .range(MIN_ARROW_SCALE..=MAX_ARROW_SCALE)
-                        .max_decimals(2),
-                );
-            });
-        })
-        .response
-        .on_hover_text(arrow_scale_hover)
-        .on_disabled_hover_text("Disabled in Magnitude mode; use Magnitude scale instead");
-        ui.add(
-            egui::Slider::new(
-                &mut controls.arrow_opacity,
-                MIN_ARROW_OPACITY..=MAX_ARROW_OPACITY,
+                egui::Slider::new(
+                    &mut controls.arrow_opacity,
+                    MIN_ARROW_OPACITY..=MAX_ARROW_OPACITY,
+                )
+                .text("Arrow opacity")
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
             )
-            .text("Arrow opacity")
-            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-        )
-        .on_hover_text(
-            "Opacity of the whole arrow field; 100% is fully solid. Dense fields can be \
+            .on_hover_text(
+                "Opacity of the whole arrow field; 100% is fully solid. Dense fields can be \
              de-emphasised without hiding them",
-        );
-        button_row(ui, |ui| {
-            ui.label("Length mode");
-            for mode in ArrowLengthMode::ALL {
-                ui.selectable_value(&mut controls.arrow_length_mode, mode, mode.label())
-                    .on_hover_text(mode.tooltip());
-            }
-        });
-        ui.add_enabled_ui(magnitude_scale_enabled(controls.arrow_length_mode), |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Magnitude scale");
-                ui.add(
-                    egui::DragValue::new(&mut controls.magnitude_scale)
-                        .speed(0.01)
-                        .range(MIN_MAGNITUDE_SCALE..=MAX_MAGNITUDE_SCALE)
-                        .max_decimals(2),
-                );
-            });
-        })
-        .response
-        .on_hover_text("World length per unit of field magnitude");
-        ui.add_enabled_ui(
-            proportional_exponent_enabled(controls.arrow_length_mode),
-            |ui| {
-                ui.add(
-                    egui::Slider::new(
-                        &mut controls.proportional_exponent,
-                        MIN_PROPORTIONAL_EXPONENT..=MAX_PROPORTIONAL_EXPONENT,
-                    )
-                    .text("Proportional contrast"),
-                );
-            },
-        )
-        .response
-        .on_hover_text("How strongly arrow length follows magnitude; 1 = linear")
-        .on_disabled_hover_text("Only Proportional arrow length follows magnitude");
-        button_row(ui, |ui| {
-            let set = arrow_style_set(view_3d);
-            ui.label(set.label());
-            match set {
-                ArrowStyleSet::ThreeD => {
-                    for style in ArrowStyle::ALL {
-                        ui.selectable_value(&mut controls.arrow_style, style, style.label())
-                            .on_hover_text(style.tooltip());
-                    }
-                }
-                ArrowStyleSet::TwoD => {
-                    for style in ArrowStyle2D::ALL {
-                        ui.selectable_value(&mut controls.arrow_style_2d, style, style.label())
-                            .on_hover_text(style.tooltip());
-                    }
-                }
-            }
-        });
-        egui::CollapsingHeader::new("Arrow appearance")
-            .default_open(false)
-            .show(ui, |ui| {
-                let head_enabled =
-                    head_control_enabled(view_3d, controls.arrow_style, controls.arrow_style_2d);
-                ui.add_enabled(
-                    head_enabled,
-                    egui::Slider::new(
-                        &mut controls.arrow_params.head_length,
-                        MIN_HEAD_LENGTH..=MAX_HEAD_LENGTH,
-                    )
-                    .text("Head length"),
-                )
-                .on_hover_text("Arrow head length as a fraction of the total arrow length")
-                .on_disabled_hover_text("This arrow family has no arrowhead");
-                ui.add_enabled(
-                    head_enabled,
-                    egui::Slider::new(
-                        &mut controls.arrow_params.head_width,
-                        MIN_HEAD_WIDTH..=MAX_HEAD_WIDTH,
-                    )
-                    .text("Head width"),
-                )
-                .on_hover_text("Arrow head width as a fraction of the total arrow length")
-                .on_disabled_hover_text("This arrow family has no arrowhead");
-                ui.add(
-                    egui::Slider::new(
-                        &mut controls.arrow_params.shaft_radius,
-                        MIN_SHAFT_RADIUS..=MAX_SHAFT_RADIUS,
-                    )
-                    .text("Shaft radius"),
-                )
-                .on_hover_text("Shaft radius as a fraction of the total arrow length");
-                ui.add_enabled(
-                    sides_control_enabled(view_3d, controls.arrow_style, controls.arrow_style_2d),
-                    egui::Slider::new(&mut controls.arrow_params.sides, MIN_SIDES..=MAX_SIDES)
-                        .text("Sides"),
-                )
-                .on_hover_text("Radial side count for the active arrow family")
-                .on_disabled_hover_text("This arrow family has a fixed silhouette");
-                if ui
-                    .button("Reset arrow appearance")
-                    .on_hover_text("Restore the default head and shaft geometry")
-                    .clicked()
-                {
-                    controls.arrow_params = ArrowParams::default();
+            );
+            button_row(ui, |ui| {
+                ui.label("Length mode");
+                for mode in ArrowLengthMode::ALL {
+                    ui.selectable_value(&mut controls.arrow_length_mode, mode, mode.label())
+                        .on_hover_text(mode.tooltip());
                 }
             });
-        if sampling_3d {
-            commit_plane |= plane_controls(ui, controls, &domain, grid);
-        }
+            ui.add_enabled_ui(magnitude_scale_enabled(controls.arrow_length_mode), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Magnitude scale");
+                    ui.add(
+                        egui::DragValue::new(&mut controls.magnitude_scale)
+                            .speed(0.01)
+                            .range(MIN_MAGNITUDE_SCALE..=MAX_MAGNITUDE_SCALE)
+                            .max_decimals(2),
+                    );
+                });
+            })
+            .response
+            .on_hover_text("World length per unit of field magnitude");
+            ui.add_enabled_ui(
+                proportional_exponent_enabled(controls.arrow_length_mode),
+                |ui| {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut controls.proportional_exponent,
+                            MIN_PROPORTIONAL_EXPONENT..=MAX_PROPORTIONAL_EXPONENT,
+                        )
+                        .text("Proportional contrast"),
+                    );
+                },
+            )
+            .response
+            .on_hover_text("How strongly arrow length follows magnitude; 1 = linear")
+            .on_disabled_hover_text("Only Proportional arrow length follows magnitude");
+            button_row(ui, |ui| {
+                let set = arrow_style_set(view_3d);
+                ui.label(set.label());
+                match set {
+                    ArrowStyleSet::ThreeD => {
+                        for style in ArrowStyle::ALL {
+                            ui.selectable_value(&mut controls.arrow_style, style, style.label())
+                                .on_hover_text(style.tooltip());
+                        }
+                    }
+                    ArrowStyleSet::TwoD => {
+                        for style in ArrowStyle2D::ALL {
+                            ui.selectable_value(&mut controls.arrow_style_2d, style, style.label())
+                                .on_hover_text(style.tooltip());
+                        }
+                    }
+                }
+            });
+            egui::CollapsingHeader::new("Arrow appearance")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let head_enabled = head_control_enabled(
+                        view_3d,
+                        controls.arrow_style,
+                        controls.arrow_style_2d,
+                    );
+                    ui.add_enabled(
+                        head_enabled,
+                        egui::Slider::new(
+                            &mut controls.arrow_params.head_length,
+                            MIN_HEAD_LENGTH..=MAX_HEAD_LENGTH,
+                        )
+                        .text("Head length"),
+                    )
+                    .on_hover_text("Arrow head length as a fraction of the total arrow length")
+                    .on_disabled_hover_text("This arrow family has no arrowhead");
+                    ui.add_enabled(
+                        head_enabled,
+                        egui::Slider::new(
+                            &mut controls.arrow_params.head_width,
+                            MIN_HEAD_WIDTH..=MAX_HEAD_WIDTH,
+                        )
+                        .text("Head width"),
+                    )
+                    .on_hover_text("Arrow head width as a fraction of the total arrow length")
+                    .on_disabled_hover_text("This arrow family has no arrowhead");
+                    ui.add(
+                        egui::Slider::new(
+                            &mut controls.arrow_params.shaft_radius,
+                            MIN_SHAFT_RADIUS..=MAX_SHAFT_RADIUS,
+                        )
+                        .text("Shaft radius"),
+                    )
+                    .on_hover_text("Shaft radius as a fraction of the total arrow length");
+                    ui.add_enabled(
+                        sides_control_enabled(
+                            view_3d,
+                            controls.arrow_style,
+                            controls.arrow_style_2d,
+                        ),
+                        egui::Slider::new(&mut controls.arrow_params.sides, MIN_SIDES..=MAX_SIDES)
+                            .text("Sides"),
+                    )
+                    .on_hover_text("Radial side count for the active arrow family")
+                    .on_disabled_hover_text("This arrow family has a fixed silhouette");
+                    if ui
+                        .button("Reset arrow appearance")
+                        .on_hover_text("Restore the default head and shaft geometry")
+                        .clicked()
+                    {
+                        controls.arrow_params = ArrowParams::default();
+                    }
+                });
+            if sampling_3d {
+                commit_plane |= plane_controls(ui, controls, &domain, grid);
+            }
+        });
     });
 
     // Camera (ticket 65): view controls sit between Display and Features. The
@@ -684,7 +733,10 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
             ui.label("Fly camera is unavailable in Compact")
                 .on_hover_text("Fly camera is available in Wide layouts only");
         } else {
-            ui.add_enabled_ui(sampling_3d, |ui| {
+            if !vector_mode {
+                ui.label("Fly camera is vector-only; the plot has its own navigation.");
+            }
+            ui.add_enabled_ui(sampling_3d && vector_mode, |ui| {
                 ui.checkbox(&mut controls.fly, "Fly camera")
                     .on_hover_text("Free flight in the 3D view (C); Esc releases the mouse");
                 // Sensitivity slider
@@ -703,6 +755,10 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
     });
 
     section(ui, Section::Features, controls, None, |ui, controls| {
+        if !vector_mode {
+            ui.label("Streamlines and particles are vector-only; their values are retained.");
+        }
+        ui.add_enabled_ui(vector_mode, |ui| {
         ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
             "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
         );
@@ -876,28 +932,36 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
                 .response
                 .on_disabled_hover_text("Turn Particles on to change their appearance");
             });
+        });
     });
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
-        button_row(ui, |ui| {
-            ui.label("Colormap");
-            for colormap in Colormap::ALL {
-                ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
-                    .on_hover_text("Color map for field magnitude");
+        if !vector_mode {
+            ui.label(
+                "Vector magnitude range is disabled while plotting; plot colours live in Plot.",
+            );
+        }
+        ui.add_enabled_ui(vector_mode, |ui| {
+            button_row(ui, |ui| {
+                ui.label("Colormap");
+                for colormap in Colormap::ALL {
+                    ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
+                        .on_hover_text("Color map for field magnitude");
+                }
+            });
+            ui.checkbox(&mut controls.auto_fit, "Auto-fit color range")
+                .on_hover_text("Fit the color range to the sampled magnitudes");
+            if !controls.auto_fit {
+                ui.horizontal(|ui| {
+                    ui.label("Magnitude range:");
+                    ui.add(egui::DragValue::new(&mut controls.color_min).speed(0.01))
+                        .on_hover_text("Magnitude at the color ramp's low end");
+                    ui.label("to");
+                    ui.add(egui::DragValue::new(&mut controls.color_max).speed(0.01))
+                        .on_hover_text("Magnitude at the color ramp's high end");
+                });
             }
         });
-        ui.checkbox(&mut controls.auto_fit, "Auto-fit color range")
-            .on_hover_text("Fit the color range to the sampled magnitudes");
-        if !controls.auto_fit {
-            ui.horizontal(|ui| {
-                ui.label("Magnitude range:");
-                ui.add(egui::DragValue::new(&mut controls.color_min).speed(0.01))
-                    .on_hover_text("Magnitude at the color ramp's low end");
-                ui.label("to");
-                ui.add(egui::DragValue::new(&mut controls.color_max).speed(0.01))
-                    .on_hover_text("Magnitude at the color ramp's high end");
-            });
-        }
     });
 
     // The Domain editor renders only the axes the current sampling dimension
@@ -945,7 +1009,39 @@ fn show_inner(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, com
         state.set_plane(controls.plane);
         controls.plane = state.plane;
     }
-    apply(state, controls);
+    if vector_mode {
+        apply(state, controls);
+    } else {
+        apply_plot_mode(state, controls);
+    }
+    plot_action
+}
+
+/// Scalar-mode hand-off: only the controls shared by plots (grid/axes, domain,
+/// palette) reach the seam. Vector magnitude/arrow/feature setters stay out so
+/// a scalar frame can never overwrite the values scalar mode retains, and the
+/// palette is taken from the Plot panel rather than a stale vector mirror.
+fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
+    state.set_show_grid(controls.show_grid);
+    state.set_show_coordinate_system(controls.show_coordinate_system);
+    let domain_min = Vec3::new(
+        extent_or_previous(controls.domain_min.x, state.domain.min.x),
+        extent_or_previous(controls.domain_min.y, state.domain.min.y),
+        extent_or_previous(controls.domain_min.z, state.domain.min.z),
+    );
+    let domain_max = Vec3::new(
+        extent_or_previous(controls.domain_max.x, state.domain.max.x),
+        extent_or_previous(controls.domain_max.y, state.domain.max.y),
+        extent_or_previous(controls.domain_max.z, state.domain.max.z),
+    );
+    state.set_domain(domain_min, domain_max);
+
+    // Mirrors only: the Plot panel already called the palette setter directly.
+    controls.colormap = state.colormap;
+    controls.show_grid = state.show_grid;
+    controls.show_coordinate_system = state.show_coordinate_system;
+    controls.domain_min = state.domain.min;
+    controls.domain_max = state.domain.max;
 }
 
 /// Draw the plane-by-plane controls (3D sampling only) and report whether the

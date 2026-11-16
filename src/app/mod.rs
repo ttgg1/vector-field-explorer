@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 use glam::{Vec2, Vec3};
@@ -11,6 +11,9 @@ use crate::fly_camera::{
     sync_fly, sync_fly_mirror,
 };
 use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::plot::PlotKind;
+use crate::plot_camera::PlotCamera;
+use crate::plot_scene::{PlotScene, ViewportScene};
 use crate::reference::reference_lines_visible;
 use crate::render::Camera;
 use crate::renderer::{
@@ -47,6 +50,7 @@ use crate::particles::{
 mod frame;
 mod input;
 mod panels;
+pub mod plot;
 mod simulation;
 mod viewport;
 
@@ -169,7 +173,32 @@ pub struct VfApp {
     /// The viewport rect from this frame (set in the central panel) so the help
     /// overlay can anchor to its bottom-left corner.
     last_viewport_rect: Option<egui::Rect>,
-    scene: SceneGPU,
+    /// The one cached GUI scene: the vector snapshot or the scalar plot scene.
+    /// The CLI keeps its own `SceneGPU` and never reads this.
+    scene: ViewportScene,
+    /// The transient plot-only camera, independent of the saved vector orbit.
+    plot_camera: PlotCamera,
+    /// The vector orbit/2D pose remembered while plotting. Never persisted:
+    /// scalar navigation must not move the camera the user returns to.
+    saved_vector_orbit: Option<OrbitCamera>,
+    /// Last observed `State::plot.transition_epoch`, so one kind change is
+    /// reconciled exactly once per frame boundary.
+    last_plot_epoch: u64,
+    /// Whether the previous transition-relevant frame was vector mode.
+    last_plot_was_vector: bool,
+    /// `State::plot.generation` the cached plot scene was built from.
+    plot_scene_generation: u64,
+    /// Callback prepare/paint errors, published by `PlotCallback` because the
+    /// egui-wgpu trait cannot return a Result.
+    plot_errors: Arc<Mutex<Option<String>>>,
+    /// Readable plot status for the UI/status bar: fit failures, callback
+    /// errors and unsupported-install diagnostics. Never a vector fallback.
+    plot_status: String,
+    /// Whether the live `PlotDrawState` is installed in the current renderer.
+    plot_renderer_ready: bool,
+    /// Leaving plot mode asks the next viewport frame to drop the large plot
+    /// color/depth targets while the device is available.
+    plot_release_pending: bool,
     renderer_ready: bool,
     streamline_count: usize,
     /// The advected cloud behind the "Particles" toggle (ticket 05): 3D-view
@@ -242,6 +271,13 @@ impl VfApp {
         let arrow_style_2d = state.arrow_style_2d;
         let arrow_params = state.arrow_params;
         let mode_3d = state.mode_3d;
+        let last_plot_epoch = state.plot.transition_epoch;
+        let last_plot_was_vector = state.is_vector_mode();
+        let saved_vector_orbit = if last_plot_was_vector {
+            None
+        } else {
+            Some(orbit)
+        };
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -270,7 +306,7 @@ impl VfApp {
             about_open: false,
             help_open: false,
             last_viewport_rect: None,
-            scene: SceneGPU {
+            scene: ViewportScene::Vector(SceneGPU {
                 arrows: Arc::new(Vec::new()),
                 lines: Arc::new(backdrop),
                 trails: Arc::new(Vec::new()),
@@ -280,7 +316,16 @@ impl VfApp {
                 arrow_style_2d,
                 arrow_params,
                 mode_3d,
-            },
+            }),
+            plot_camera: PlotCamera::default(),
+            saved_vector_orbit,
+            last_plot_epoch,
+            last_plot_was_vector,
+            plot_scene_generation: 0,
+            plot_errors: Arc::new(Mutex::new(None)),
+            plot_status: String::new(),
+            plot_renderer_ready: false,
+            plot_release_pending: false,
             renderer_ready: false,
             streamline_count: 0,
             particles: Particles::default(),

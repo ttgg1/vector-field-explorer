@@ -16,11 +16,33 @@ impl VfApp {
                 return;
             };
 
+            // Task 6: scalar mode owns its isolated depth pass and never builds
+            // or paints vector geometry. The plot path handles its own input,
+            // capture dispatch and renderer installation.
+            if !self.state.is_vector_mode() {
+                self.frame_plot_viewport(ui, rect, render_state);
+                return;
+            }
+
+            if self.plot_release_pending {
+                // Leaving plot mode: drop the large target while the device is
+                // available. Pipelines stay installed for a later re-entry.
+                let mut renderer = render_state.renderer.write();
+                if let Some(state) = renderer
+                    .callback_resources
+                    .get_mut::<crate::plot_renderer::PlotDrawState>()
+                {
+                    state.release_targets();
+                }
+                self.plot_release_pending = false;
+            }
+
             if !self.renderer_ready {
                 let mut renderer = render_state.renderer.write();
-                renderer
-                    .callback_resources
-                    .insert(DrawState::new(&render_state.device, render_state.target_format));
+                renderer.callback_resources.insert(DrawState::new(
+                    &render_state.device,
+                    render_state.target_format,
+                ));
                 self.renderer_ready = true;
                 log::info!("wgpu renderer initialized");
             }
@@ -214,7 +236,11 @@ impl VfApp {
                     camera.view(),
                     camera.vp_matrix(
                         aspect,
-                        if self.state.mode_3d { None } else { Some(self.state.plane_size()) },
+                        if self.state.mode_3d {
+                            None
+                        } else {
+                            Some(self.state.plane_size())
+                        },
                     ),
                     camera.eye_position(!self.state.mode_3d),
                 )
@@ -227,45 +253,54 @@ impl VfApp {
             // never reads the combined stream, but it still paints a stable
             // far-to-near copy of the arrows (the pre-ticket-62 order).
             let combined = if self.state.mode_3d {
-                let mut instances = combined_instances(
-                    self.scene.arrows.as_slice(),
-                    self.scene.dots.as_slice(),
-                );
+                let cached = self.scene.as_vector().expect("vector branch");
+                let mut instances =
+                    combined_instances(cached.arrows.as_slice(), cached.dots.as_slice());
                 sort_scene_back_to_front(&mut instances, &view);
                 Arc::new(instances)
             } else {
                 Arc::new(Vec::new())
             };
+            let cached = self.scene.as_vector().expect("vector branch");
             let arrows = if self.state.mode_3d {
-                Arc::clone(&self.scene.arrows)
+                Arc::clone(&cached.arrows)
             } else {
-                Arc::new(sorted_arrows_back_to_front(self.scene.arrows.as_slice(), &view))
+                Arc::new(sorted_arrows_back_to_front(cached.arrows.as_slice(), &view))
             };
             // Trails are 3D-only and painted behind the combined stream, so
             // their own stable far-to-near order is enough (ticket 48).
             let trails = if self.state.mode_3d {
-                Arc::new(sorted_lines_back_to_front(self.scene.trails.as_slice(), &view))
+                Arc::new(sorted_lines_back_to_front(cached.trails.as_slice(), &view))
             } else {
                 Arc::new(Vec::new())
             };
-            self.scene.combined = Arc::clone(&combined);
+            let lines = Arc::clone(&cached.lines);
+            let dots = Arc::clone(&cached.dots);
+            let arrow_style = cached.arrow_style;
+            let arrow_style_2d = cached.arrow_style_2d;
+            let arrow_params = cached.arrow_params;
+            if let Some(cached) = self.scene.as_vector_mut() {
+                cached.combined = Arc::clone(&combined);
+            }
 
             let scene = SceneGPU {
                 arrows,
-                lines: Arc::clone(&self.scene.lines),
+                lines,
                 trails,
-                dots: Arc::clone(&self.scene.dots),
+                dots,
                 combined,
-                arrow_style: self.scene.arrow_style,
-                arrow_style_2d: self.scene.arrow_style_2d,
-                arrow_params: self.scene.arrow_params,
+                arrow_style,
+                arrow_style_2d,
+                arrow_params,
                 mode_3d: self.state.mode_3d,
             };
 
             // SVG screenshot export (ticket 69): serialize the 2D scene as
             // vector geometry. No GPU readback is needed, so this runs
-            // synchronously on the frame thread.
-            if self.screenshot.take_svg_request() && screenshot::svg_export_enabled(self.state.mode_3d) {
+            // synchronously on the frame thread. Task 6 guards execution here
+            // as well as in the menu: scalar kinds never fall through to the
+            // vector exporter.
+            if self.take_svg_export_route() == super::plot::SvgExportRoute::Allowed {
                 #[cfg(not(target_arch = "wasm32"))]
                 let over_cap = screenshot::exceeds_svg_element_cap(&scene);
                 let element_count = screenshot::svg_element_count(&scene);
@@ -284,10 +319,8 @@ impl VfApp {
                     f64::from(clear[3]),
                 ];
                 let svg = screenshot::scene_to_svg(&scene, view_proj, w, h, clear_f);
-                let filename = screenshot::default_svg_filename(
-                    screenshot::SystemTime::now(),
-                    "2D",
-                );
+                let filename =
+                    screenshot::default_svg_filename(screenshot::SystemTime::now(), "2D");
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     if over_cap {
@@ -310,7 +343,9 @@ impl VfApp {
                             screenshot::compose_svg_export_message(element_count, true),
                             false,
                         ),
-                        Err(e) => self.screenshot.notify(format!("screenshot failed: {e}"), true),
+                        Err(e) => self
+                            .screenshot
+                            .notify(format!("screenshot failed: {e}"), true),
                     }
                 }
             }
@@ -369,21 +404,30 @@ impl VfApp {
                             )
                     };
                     match capture {
-                        Ok(rgba) => screenshot::spawn_save(
-                            self.screenshot.sender(),
-                            ui.ctx().clone(),
-                            rgba,
-                            capture_width,
-                            capture_height,
-                            filename,
-                        ),
+                        Ok(rgba) => match self.screenshot.capture_sink() {
+                            Some(sink) => screenshot::spawn_save(
+                                sink,
+                                ui.ctx().clone(),
+                                rgba,
+                                capture_width,
+                                capture_height,
+                                filename,
+                            ),
+                            None => self
+                                .screenshot
+                                .fail("capture generation was cancelled".into()),
+                        },
                         Err(error) => self.screenshot.fail(error.to_string()),
                     }
                 }
 
                 #[cfg(target_arch = "wasm32")]
                 {
-                    let tx = self.screenshot.sender();
+                    let Some(sink) = self.screenshot.capture_sink() else {
+                        self.screenshot
+                            .fail("capture generation was cancelled".into());
+                        return;
+                    };
                     let ctx = ui.ctx().clone();
                     let started = {
                         let mut renderer = render_state.renderer.write();
@@ -411,7 +455,7 @@ impl VfApp {
                                         capture_width,
                                         capture_height,
                                         filename,
-                                        tx,
+                                        sink,
                                         ctx,
                                     );
                                 },
@@ -437,10 +481,8 @@ impl VfApp {
             // click will land. Two centred 12 px lines over the field pass;
             // painter-only, no interaction.
             if crosshair_visible(self.fly.is_some(), self.capture_active) {
-                let stroke = egui::Stroke::new(
-                    1.0,
-                    egui::Color32::from_white_alpha(CROSSHAIR_ALPHA),
-                );
+                let stroke =
+                    egui::Stroke::new(1.0, egui::Color32::from_white_alpha(CROSSHAIR_ALPHA));
                 for (from, to) in crosshair_segments(rect.center()) {
                     ui.painter().line_segment([from, to], stroke);
                 }

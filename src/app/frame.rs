@@ -19,11 +19,7 @@ impl eframe::App for VfApp {
         if mode != self.layout_mode {
             self.layout_mode = mode;
             if mode == LayoutMode::Compact {
-                crate::fly_camera::exit_fly_for_layout(
-                    &mut self.fly,
-                    &mut self.fly_keys,
-                    mode,
-                );
+                crate::fly_camera::exit_fly_for_layout(&mut self.fly, &mut self.fly_keys, mode);
             }
             ui.ctx().request_repaint();
         }
@@ -36,6 +32,12 @@ impl eframe::App for VfApp {
         let ctx = ui.ctx().clone();
         let domain_before = self.frame_input(&ctx);
         self.frame_chrome(ui, &ctx, domain_before);
+        // Chrome setters (formula bar 2D/3D, presets, CAS, future plot panel)
+        // can change the plot kind. Reconcile and release capture again before
+        // simulation so a same-frame transition cannot advance/render stale
+        // vector geometry or leave a captured pointer behind.
+        self.reconcile_plot_transition();
+        self.sync_fly_capture(&ctx);
         self.frame_simulation(&ctx);
         self.frame_status_bar(ui);
         self.frame_viewport(ui, frame);

@@ -21,6 +21,8 @@ use crate::particles::{
 
 use std::sync::Arc;
 
+mod plot;
+
 use glam::{UVec3, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
@@ -222,6 +224,7 @@ impl LeftClickAction {
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
 pub struct State {
+    pub plot: crate::plot_state::PlotState,
     pub mode_3d: bool,
     pub formula: String,
     pub field: FieldExpr,
@@ -322,6 +325,10 @@ impl State {
             UVec3::new(density, density, 1)
         };
         State {
+            plot: crate::plot_state::PlotState {
+                vector_mode_3d: mode_3d,
+                ..Default::default()
+            },
             mode_3d,
             formula: formula.to_string(),
             field,
@@ -388,11 +395,19 @@ impl State {
     /// The projection: an orthographic front view for 2D, the orbiting
     /// perspective camera for 3D.
     pub fn set_mode(self: &mut State, mode_3d: bool) -> bool {
+        if !self.is_vector_mode() {
+            return self.set_plot_kind(if mode_3d {
+                crate::plot::PlotKind::Surface3D
+            } else {
+                crate::plot::PlotKind::Curve2D
+            });
+        }
         if self.mode_3d == mode_3d {
             return false;
         }
         let previous_grid = self.grid();
         self.mode_3d = mode_3d;
+        self.plot.vector_mode_3d = mode_3d;
         self.sync_plane(previous_grid);
         self.mark_dirty()
     }
@@ -423,6 +438,15 @@ impl State {
             return false;
         }
         let previous_grid = self.grid();
+        if self.domain.min.x != domain.min.x
+            || self.domain.max.x != domain.max.x
+            || self.domain.min.y != domain.min.y
+            || self.domain.max.y != domain.max.y
+        {
+            self.plot.curve.samples = None;
+            self.plot.surface.samples = None;
+        }
+        self.plot.generation += 1;
         self.domain = domain;
         self.sync_plane(previous_grid);
         self.mark_dirty()
@@ -524,6 +548,7 @@ impl State {
             return false;
         }
         self.colormap = colormap;
+        self.plot.generation += 1;
         self.mark_dirty()
     }
 
@@ -565,6 +590,7 @@ impl State {
             return false;
         }
         self.show_grid = show;
+        self.plot.generation += 1;
         self.mark_dirty()
     }
 
@@ -574,6 +600,7 @@ impl State {
             return false;
         }
         self.show_coordinate_system = show;
+        self.plot.generation += 1;
         self.mark_dirty()
     }
 

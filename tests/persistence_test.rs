@@ -12,6 +12,8 @@ use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::plane::DIM_ALPHA;
+use vector_field_explorer::plot::PlotKind;
+use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
@@ -24,6 +26,146 @@ use vector_field_explorer::viewmodel::{
 };
 
 use crate::support::storage::{MemoryStorage, ron_string};
+
+#[test]
+fn old_record_defaults_vector_and_preserves_projection() {
+    for mode in [false, true] {
+        let mut legacy = legacy_settings(false);
+        legacy.view.mode_3d = mode;
+        let mut storage = MemoryStorage::default();
+        eframe::set_value(&mut storage, eframe::APP_KEY, &legacy);
+        let mut state = State::new(!mode);
+        state.set_plot_kind(PlotKind::Curve2D);
+        load(Some(&storage))
+            .view
+            .restore(&mut state, &mut Controls::new());
+        assert_eq!(state.plot.kind, PlotKind::VectorField);
+        assert_eq!(state.mode_3d, mode);
+        assert_eq!(state.plot.vector_mode_3d, mode);
+    }
+}
+
+#[test]
+fn plot_round_trip_restores_drafts_not_cache() {
+    let mut state = State::new(true);
+    state.set_formula("(x, y, z)".into());
+    state.set_scalar_source(ScalarContext::Curve, "x+2".into());
+    state.set_scalar_source(ScalarContext::Surface, "x+y+3".into());
+    state.set_plot_samples(127);
+    state.set_plot_resolution(23);
+    state.set_plot_width(0.025);
+    state.set_plot_auto_height(false);
+    state.set_plot_height_range(-4.0, 7.0);
+    state.set_plot_kind(PlotKind::Curve2D);
+    state.plot_scene();
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: ViewRecord::capture(&state),
+            ..Default::default()
+        },
+    );
+    let raw = storage.get_string(eframe::APP_KEY).unwrap();
+    for key in [
+        "plot_kind:Curve2D",
+        "curve_source:",
+        "surface_source:",
+        "curve_samples:127",
+        "surface_resolution:23",
+        "plot_line_width:",
+        "plot_auto_height:false",
+        "plot_height_min:",
+        "plot_height_max:",
+        "last_vector_mode_3d:",
+    ] {
+        assert!(raw.contains(key), "missing {key}: {raw}");
+    }
+    for key in ["accepted:", "samples:Some", "mesh", "cache", "camera"] {
+        assert!(!raw.contains(key), "unexpected {key}: {raw}");
+    }
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.formula, "(x, y, z)");
+    let mut restored = State::new(false);
+    loaded.view.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.plot.kind, PlotKind::Curve2D);
+    assert_eq!(restored.plot.curve.source, "x+2");
+    assert_eq!(restored.plot.surface.source, "x+y+3");
+    assert_eq!(restored.plot.settings.curve_samples, 127);
+    assert_eq!(restored.plot.settings.surface_resolution, 23);
+    assert_eq!(restored.plot.settings.line_width, 0.025);
+    assert!(!restored.plot.settings.auto_height);
+    assert_eq!(
+        (
+            restored.plot.settings.height_min,
+            restored.plot.settings.height_max
+        ),
+        (-4.0, 7.0)
+    );
+    assert!(restored.plot.curve.samples.is_none());
+    assert!(restored.plot.surface.samples.is_none());
+    restored.set_plot_kind(PlotKind::VectorField);
+    assert!(restored.mode_3d);
+    assert_eq!(restored.formula, "(x, y, z)");
+}
+
+#[test]
+fn invalid_restored_draft_has_no_plot() {
+    let mut state = State::new(false);
+    state.set_plot_kind(PlotKind::Curve2D);
+    state.plot_scene();
+    state.set_active_source(")(".into());
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: ViewRecord::capture(&state),
+            ..Default::default()
+        },
+    );
+    let mut restored = State::new(false);
+    restored.set_plot_kind(PlotKind::Curve2D);
+    restored.plot_scene();
+    load(Some(&storage))
+        .view
+        .restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.plot.curve.source, ")(");
+    assert!(restored.plot.curve.error.is_some());
+    assert!(restored.plot.curve.accepted.is_none());
+    assert!(restored.plot.curve.samples.is_none());
+    assert!(restored.plot_scene().bounds.is_none());
+}
+
+#[test]
+fn contradictory_projection_and_corrupt_controls() {
+    let mut storage = MemoryStorage::default();
+    let style = ron_string(&AppStyle::default());
+    storage.set_string(eframe::APP_KEY, format!("(style:{style},view:(plot_kind:Surface3D,mode_3d:false,last_vector_mode_3d:Some(false),curve_samples:0,surface_resolution:999,plot_line_width:NaN,plot_auto_height:false,plot_height_min:inf,plot_height_max:-inf))"));
+    let mut state = State::new(true);
+    load(Some(&storage))
+        .view
+        .restore(&mut state, &mut Controls::new());
+    assert_eq!(state.plot.kind, PlotKind::Surface3D);
+    assert!(state.mode_3d);
+    assert!(!state.plot.vector_mode_3d);
+    assert_eq!(state.plot.settings.curve_samples, 2);
+    assert_eq!(state.plot.settings.surface_resolution, 96);
+    assert_eq!(state.plot.settings.line_width, 0.01);
+    assert_eq!(
+        (
+            state.plot.settings.height_min,
+            state.plot.settings.height_max
+        ),
+        (0.0, 1.0)
+    );
+    state.set_plot_kind(PlotKind::VectorField);
+    assert!(!state.mode_3d);
+    storage.set_string(
+        eframe::APP_KEY,
+        format!("(style:{style},view:(plot_kind:UnknownKind,density:12))"),
+    );
+    assert_eq!(load(Some(&storage)), AppSettings::default());
+}
 
 /// The ticket-14 `ViewRecord` shape, before ticket 33 replaced the `normalize`
 /// bool with an arrow-length mode and added `magnitude_scale`. Serializing this

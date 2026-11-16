@@ -134,6 +134,11 @@ impl CasPanelState {
         })
     }
     pub fn apply(&mut self, state: &mut State, dimension: usize) -> bool {
+        // CAS mutates the vector editor only. A direct call in scalar mode is
+        // inert; there is no scalar CAS semantics in this task.
+        if !state.is_vector_mode() {
+            return false;
+        }
         let current_dimension = if state.mode_3d { 3 } else { 2 };
         if dimension != current_dimension {
             return false;
@@ -330,6 +335,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
     }
     panel.refresh(dimension);
     ui.label(format!("Dimension: {}D (current app mode)", dimension));
+    let vector_mode = state.is_vector_mode();
     if let Some(p) = panel.preview.clone() {
         ui.label(format!(
             "Result — {}",
@@ -355,18 +361,31 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
             {
                 ui.ctx().copy_text(p.formula.clone());
             }
-            if p.kind == ResultKind::Vector
-                && ui
-                    .add_enabled(
-                        panel.can_apply(dimension),
-                        egui::Button::new("Apply vector"),
+            if p.kind == ResultKind::Vector {
+                let enabled = vector_mode && panel.can_apply(dimension);
+                let response = ui
+                    .add_enabled(enabled, egui::Button::new("Apply vector"))
+                    .on_hover_text("Replace the plotted field with this valid vector formula");
+                let response = if vector_mode {
+                    response
+                } else {
+                    response.on_disabled_hover_text(
+                        "CAS apply is vector-only; return to Vector field mode",
                     )
-                    .on_hover_text("Replace the plotted field with this valid vector formula")
-                    .clicked()
-            {
-                panel.apply(state, dimension);
+                };
+                if response.clicked() {
+                    panel.apply(state, dimension);
+                }
             }
         });
+    }
+    if !vector_mode
+        && panel
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.kind == ResultKind::Vector)
+    {
+        ui.label("CAS apply is vector-only; return to Vector field mode to apply this result.");
     }
     if let Some(err) = &panel.error {
         ui.colored_label(ui.visuals().error_fg_color, format!("Error: {err}"));

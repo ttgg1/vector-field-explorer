@@ -87,8 +87,7 @@ pub const FLY_HELP_ACTION: &str =
 /// compact overlay does not grow a paragraph.
 pub const SEED_HELP_INPUT: &str = "Seed:";
 pub const SEED_HELP_ACTION: &str = "auto | click";
-pub const SEED_HELP_TOOLTIP: &str =
-    "Off hides both seed sources and disables click seeding";
+pub const SEED_HELP_TOOLTIP: &str = "Off hides both seed sources and disables click seeding";
 
 /// The left-click action selector line (ticket 60): the selector lives in the
 /// Features panel, and each choice is a no-op while its feature is off.
@@ -98,40 +97,133 @@ pub const LEFT_CLICK_HELP_TOOLTIP: &str =
     "Choose the left-click action in Features; each does nothing while its feature is off";
 
 const ROWS_3D: &[HelpRow] = &[
-    HelpRow { input: "Left-drag", action: "Orbit" },
-    HelpRow { input: "Right-drag", action: "Orbit" },
-    HelpRow { input: "Middle-drag", action: "Pan" },
-    HelpRow { input: "Shift + right-drag", action: "Pan" },
-    HelpRow { input: "Wheel / pinch", action: "Zoom" },
-    HelpRow { input: "Double-click", action: "Reset view" },
-    HelpRow { input: "Arrow keys", action: "Orbit" },
-    HelpRow { input: "Shift + arrows", action: "Pan" },
-    HelpRow { input: "+ / -", action: "Zoom in / out" },
-    HelpRow { input: "R", action: "Reset view" },
-    HelpRow { input: "F", action: "Fit domain" },
-    HelpRow { input: "Click", action: "Per Left click setting" },
-    HelpRow { input: LEFT_CLICK_HELP_INPUT, action: LEFT_CLICK_HELP_ACTION },
-    HelpRow { input: "S", action: "Seed streamline at pointer" },
-    HelpRow { input: "P", action: "Particle burst at pointer" },
-    HelpRow { input: SEED_HELP_INPUT, action: SEED_HELP_ACTION },
-    HelpRow { input: FLY_HELP_INPUT, action: FLY_HELP_ACTION },
+    HelpRow {
+        input: "Left-drag",
+        action: "Orbit",
+    },
+    HelpRow {
+        input: "Right-drag",
+        action: "Orbit",
+    },
+    HelpRow {
+        input: "Middle-drag",
+        action: "Pan",
+    },
+    HelpRow {
+        input: "Shift + right-drag",
+        action: "Pan",
+    },
+    HelpRow {
+        input: "Wheel / pinch",
+        action: "Zoom",
+    },
+    HelpRow {
+        input: "Double-click",
+        action: "Reset view",
+    },
+    HelpRow {
+        input: "Arrow keys",
+        action: "Orbit",
+    },
+    HelpRow {
+        input: "Shift + arrows",
+        action: "Pan",
+    },
+    HelpRow {
+        input: "+ / -",
+        action: "Zoom in / out",
+    },
+    HelpRow {
+        input: "R",
+        action: "Reset view",
+    },
+    HelpRow {
+        input: "F",
+        action: "Fit domain",
+    },
+    HelpRow {
+        input: "Click",
+        action: "Per Left click setting",
+    },
+    HelpRow {
+        input: LEFT_CLICK_HELP_INPUT,
+        action: LEFT_CLICK_HELP_ACTION,
+    },
+    HelpRow {
+        input: "S",
+        action: "Seed streamline at pointer",
+    },
+    HelpRow {
+        input: "P",
+        action: "Particle burst at pointer",
+    },
+    HelpRow {
+        input: SEED_HELP_INPUT,
+        action: SEED_HELP_ACTION,
+    },
+    HelpRow {
+        input: FLY_HELP_INPUT,
+        action: FLY_HELP_ACTION,
+    },
 ];
 
 const ROWS_2D: &[HelpRow] = &[
-    HelpRow { input: "Left / right-drag", action: "Pan" },
-    HelpRow { input: "Middle-drag", action: "Pan" },
-    HelpRow { input: "Wheel / pinch", action: "Zoom" },
-    HelpRow { input: "Double-click", action: "Reset view" },
-    HelpRow { input: "Arrow keys", action: "Pan" },
-    HelpRow { input: "Shift + arrows", action: "Pan faster" },
-    HelpRow { input: "+ / -", action: "Zoom in / out" },
-    HelpRow { input: "R", action: "Reset view" },
-    HelpRow { input: "F", action: "Fit domain" },
-    HelpRow { input: "Click", action: "Per Left click setting" },
-    HelpRow { input: LEFT_CLICK_HELP_INPUT, action: LEFT_CLICK_HELP_ACTION },
-    HelpRow { input: "S", action: "Seed streamline at pointer" },
-    HelpRow { input: "P", action: "Particle burst at pointer" },
-    HelpRow { input: SEED_HELP_INPUT, action: SEED_HELP_ACTION },
+    HelpRow {
+        input: "Left / right-drag",
+        action: "Pan",
+    },
+    HelpRow {
+        input: "Middle-drag",
+        action: "Pan",
+    },
+    HelpRow {
+        input: "Wheel / pinch",
+        action: "Zoom",
+    },
+    HelpRow {
+        input: "Double-click",
+        action: "Reset view",
+    },
+    HelpRow {
+        input: "Arrow keys",
+        action: "Pan",
+    },
+    HelpRow {
+        input: "Shift + arrows",
+        action: "Pan faster",
+    },
+    HelpRow {
+        input: "+ / -",
+        action: "Zoom in / out",
+    },
+    HelpRow {
+        input: "R",
+        action: "Reset view",
+    },
+    HelpRow {
+        input: "F",
+        action: "Fit domain",
+    },
+    HelpRow {
+        input: "Click",
+        action: "Per Left click setting",
+    },
+    HelpRow {
+        input: LEFT_CLICK_HELP_INPUT,
+        action: LEFT_CLICK_HELP_ACTION,
+    },
+    HelpRow {
+        input: "S",
+        action: "Seed streamline at pointer",
+    },
+    HelpRow {
+        input: "P",
+        action: "Particle burst at pointer",
+    },
+    HelpRow {
+        input: SEED_HELP_INPUT,
+        action: SEED_HELP_ACTION,
+    },
 ];
 
 const ROWS_GLOBAL: &[HelpRow] = &[
@@ -139,21 +231,88 @@ const ROWS_GLOBAL: &[HelpRow] = &[
         input: "Space",
         action: "Play/pause simulation; particles follow the clock",
     },
-    HelpRow { input: "F1 / ?", action: "Toggle help" },
-    HelpRow { input: "Ctrl+B / Ctrl+P", action: "Toggle panels (not while typing)" },
-    HelpRow { input: "Ctrl+Shift+S", action: "Export screenshot" },
-    HelpRow { input: "Ctrl+Shift+C", action: "Copy formula" },
-    HelpRow { input: "Ctrl+Q", action: "Quit" },
-    HelpRow { input: "Esc", action: "Close dialogs / dismiss help" },
+    HelpRow {
+        input: "F1 / ?",
+        action: "Toggle help",
+    },
+    HelpRow {
+        input: "Ctrl+B / Ctrl+P",
+        action: "Toggle panels (not while typing)",
+    },
+    HelpRow {
+        input: "Ctrl+Shift+S",
+        action: "Export screenshot",
+    },
+    HelpRow {
+        input: "Ctrl+Shift+C",
+        action: "Copy formula",
+    },
+    HelpRow {
+        input: "Ctrl+Q",
+        action: "Quit",
+    },
+    HelpRow {
+        input: "Esc",
+        action: "Close dialogs / dismiss help",
+    },
 ];
+
+/// Scalar-plot-specific notes. Kept as a separate section so the vector
+/// binding table (and its pinned three groups) stays exactly as reviewed; the
+/// Help window appends this section after Global.
+pub static SCALAR_HELP_SECTION: HelpSection = HelpSection {
+    title: "Scalar plots",
+    rows: SCALAR_HELP_ROWS,
+};
+
+pub static SCALAR_HELP_ROWS: &[HelpRow] = &[
+    HelpRow {
+        input: "SVG export",
+        action: crate::screenshot::SCALAR_SVG_MESSAGE,
+    },
+    HelpRow {
+        input: "Surface backfaces",
+        action: "Backface culling: one-sided meshes disappear when viewed from behind",
+    },
+    HelpRow {
+        input: "Coarse mesh",
+        action: "possible holes or false gaps; sampling is a display heuristic, not a continuity proof",
+    },
+    HelpRow {
+        input: "Line width",
+        action: "curve width is in world units, not screen pixels",
+    },
+    HelpRow {
+        input: "Charge examples",
+        action: "epsilon 0.1 regularizes the singularity",
+    },
+    HelpRow {
+        input: "Example formulas",
+        action: "illustrative and dimensionless, not a physical solver or unit system",
+    },
+];
+
+/// The scalar help rows, exposed for the Help window and tests.
+pub fn scalar_help_rows() -> &'static [HelpRow] {
+    SCALAR_HELP_ROWS
+}
 
 /// The three groups, in window order. Both help surfaces read this table, so a
 /// binding is spelled exactly once. A `static` (not a `const`) so the overlay
 /// and the window can be proven to hand back the very same allocation.
 pub static HELP_SECTIONS: &[HelpSection] = &[
-    HelpSection { title: "3D view", rows: ROWS_3D },
-    HelpSection { title: "2D view", rows: ROWS_2D },
-    HelpSection { title: "Global", rows: ROWS_GLOBAL },
+    HelpSection {
+        title: "3D view",
+        rows: ROWS_3D,
+    },
+    HelpSection {
+        title: "2D view",
+        rows: ROWS_2D,
+    },
+    HelpSection {
+        title: "Global",
+        rows: ROWS_GLOBAL,
+    },
 ];
 
 /// Every documented row, across all groups (the Help window's contents).
@@ -196,11 +355,7 @@ fn title_text(text: &str, heading_color: egui::Color32) -> egui::RichText {
         .color(heading_color)
 }
 
-fn table(
-    ui: &mut egui::Ui,
-    sections: &[&'static HelpSection],
-    heading_color: egui::Color32,
-) {
+fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection], heading_color: egui::Color32) {
     let heading_style = section_heading_style();
     for (index, section) in sections.iter().enumerate() {
         if index > 0 {
@@ -292,7 +447,8 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
-            let all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
+            let mut all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
+            all.push(&SCALAR_HELP_SECTION);
             table(ui, &all, heading_color);
         });
 }

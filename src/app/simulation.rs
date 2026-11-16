@@ -3,15 +3,11 @@
 use super::*;
 
 impl VfApp {
-    pub(super) fn advance_clock(&mut self, ctx: &egui::Context) {
-        // One global clock advances once per frame from egui's stable frame
-        // time, but only while something consumes it. `advance_for` clamps to
-        // MAX_STEP, ignores non-finite frames, holds the held time while
-        // particles are off/in 2D or paused, and resumes from that time when a
-        // consumer returns. A long idle gap still cannot make the particle
-        // cloud jump.
-        self.clock
-            .advance_for(&self.state, ctx.input(|input| input.stable_dt));
+    /// Advance the one global clock from the frame's stable dt and mirror the
+    /// resulting time into the state. Scalar plot kinds have no clock consumer,
+    /// so the clock holds instead of advancing an invisible vector simulation.
+    pub(super) fn advance_clock(&mut self, dt: f32) {
+        self.clock.advance_for(&self.state, dt);
         // Mirror the clock's t into the state so a time-dependent field's
         // rebuild follows the clock automatically.
         self.state.set_time(self.clock.time);
@@ -20,13 +16,25 @@ impl VfApp {
     /// Frame phase: scene rebuild on a dirty state, particle advection and dot
     /// rebuild, then the repaint request that keeps particles animating.
     pub(super) fn frame_simulation(&mut self, ctx: &egui::Context) {
-        self.rebuild_scene();
-        self.advance_particles();
+        self.advance_simulation();
 
         // Keep egui painting only while something consumes the clock (particles
         // on in 3D and playing). Paused or consumer-free frames request
         // nothing, so the app goes idle instead of busy-looping.
         crate::ui::transport::request_particle_repaint(ctx, &self.state, &self.clock);
+    }
+
+    /// The device-independent half of simulation, shared with the Task 6 test
+    /// harness: scalar mode refreshes only its plot scene and pauses every
+    /// vector consumer; vector mode rebuilds and advects exactly as before.
+    pub(super) fn advance_simulation(&mut self) {
+        if !self.state.is_vector_mode() {
+            // Pause, never delete: cloud/trail/click/time state is untouched.
+            self.refresh_plot_scene();
+            return;
+        }
+        self.rebuild_scene();
+        self.advance_particles();
     }
 
     fn rebuild_scene(&mut self) {
@@ -35,17 +43,10 @@ impl VfApp {
         // of a rebuilt grid + axes, and the streamline segments the viewmodel
         // seam emitted join them.
         if let Some(fresh) = self.state.snapshot_if_dirty() {
-            self.scene.arrow_style = fresh.arrow_style;
-            self.scene.arrow_style_2d = fresh.arrow_style_2d;
-            self.scene.arrow_params = fresh.arrow_params;
-            self.scene.mode_3d = fresh.mode_3d;
-            self.scene.arrows = fresh.arrows;
-            self.scene.trails = fresh.trails;
-            self.scene.dots = fresh.dots;
-            self.scene.combined = fresh.combined;
-            // A rebuild refreshes the magnitude range the per-frame dots ramp
-            // with (one extra sample pass on rebuild frames only), so dots
-            // keep matching the arrows' colours.
+            let arrow_style = fresh.arrow_style;
+            let arrow_style_2d = fresh.arrow_style_2d;
+            let arrow_params = fresh.arrow_params;
+            let mode_3d = fresh.mode_3d;
             self.dots_range = self.state.color_range(&self.state.sample());
             self.flow_lines = Arc::unwrap_or_clone(fresh.lines);
             // Click bursts outlive the rebuild: they are anchored on the field,
@@ -55,7 +56,7 @@ impl VfApp {
                 .state
                 .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            self.scene.lines = Arc::new(compose_lines(
+            let lines = Arc::new(compose_lines(
                 &self.flow_lines,
                 &self.click_lines,
                 &self.state.domain,
@@ -63,11 +64,28 @@ impl VfApp {
                 self.state.show_grid,
                 self.state.show_coordinate_system,
             ));
+            if let Some(scene) = self.scene.as_vector_mut() {
+                scene.arrow_style = arrow_style;
+                scene.arrow_style_2d = arrow_style_2d;
+                scene.arrow_params = arrow_params;
+                scene.mode_3d = mode_3d;
+                scene.arrows = fresh.arrows;
+                scene.trails = fresh.trails;
+                scene.dots = fresh.dots;
+                scene.combined = fresh.combined;
+                scene.lines = lines;
+            }
             log::trace!(
                 "scene rebuilt: {} arrows, {} streamline segments, {} dots",
-                self.scene.arrows.len(),
+                self.scene
+                    .as_vector()
+                    .map(|scene| scene.arrows.len())
+                    .unwrap_or(0),
                 self.streamline_count,
-                self.scene.dots.len()
+                self.scene
+                    .as_vector()
+                    .map(|scene| scene.dots.len())
+                    .unwrap_or(0)
             );
         }
     }
@@ -113,7 +131,7 @@ impl VfApp {
             // The speed range is observed once per frame and shared by the dots
             // and trails, so both colour modes agree on the same cloud.
             let speeds = speed_range(&self.particles);
-            self.scene.dots = Arc::new(dot_instances_at(
+            let dots = Arc::new(dot_instances_at(
                 &self.particles,
                 &self.state.field,
                 &self.state.domain,
@@ -124,7 +142,7 @@ impl VfApp {
                 self.state.particle_radius(spacing),
                 self.state.time,
             ));
-            self.scene.trails = Arc::new(trail_instances_at(
+            let trails = Arc::new(trail_instances_at(
                 &self.particles,
                 &self.state.field,
                 self.state.colormap,
@@ -134,11 +152,22 @@ impl VfApp {
                 spacing,
                 self.state.time,
             ));
+            let count = particle_count(&self.particles);
+            if let Some(scene) = self.scene.as_vector_mut() {
+                scene.dots = dots;
+                scene.trails = trails;
+            }
             log::trace!(
                 "particles: {} advected, {} dot instances, {} trail segments",
-                particle_count(&self.particles),
-                self.scene.dots.len(),
-                self.scene.trails.len()
+                count,
+                self.scene
+                    .as_vector()
+                    .map(|scene| scene.dots.len())
+                    .unwrap_or(0),
+                self.scene
+                    .as_vector()
+                    .map(|scene| scene.trails.len())
+                    .unwrap_or(0)
             );
         } else if particle_count(&self.particles) > 0 {
             // Toggle off (or the 2D view): drop the cloud so switching back
@@ -146,7 +175,9 @@ impl VfApp {
             // because the toggle marks the state dirty, and the trails reset
             // here because the snapshot never carries per-frame history.
             clear(&mut self.particles);
-            self.scene.trails = Arc::new(Vec::new());
+            if let Some(scene) = self.scene.as_vector_mut() {
+                scene.trails = Arc::new(Vec::new());
+            }
         }
     }
 }

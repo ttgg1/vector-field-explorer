@@ -368,6 +368,23 @@ seams it calls.
 **Limitations.** Click-seed history is app-local and bounded; it survives a
 rebuild but not a restart. The app does not expose a general command/undo stack.
 
+#### `src/app/plot.rs` — scalar plot integration
+
+**Purpose.** Reconciles plot-kind transitions, owns the transient plot camera
+and remembered vector pose, installs the isolated `PlotDrawState` callback,
+routes plot navigation, and guards scalar SVG / dispatches scalar PNG capture.
+
+**Public API.** `VfApp::fit_plot`, the doc-hidden `VfApp::test_harness`
+integration seam, and `SvgExportRoute` for the final SVG execution guard.
+
+**Invariants.** Scalar mode pauses rather than deletes vector particle/trail/
+time state; the live and captured plot share one `PlotScene` Arc and the source
+viewport's frame aspect; Reset cancels tagged capture completions and releases
+plot targets before the next vector frame.
+
+**Pinned by.** `tests/plot_app_test.rs`; `tests/plot_renderer_test.rs` covers
+the renderer configuration this module installs.
+
 #### `src/app/frame.rs` — eframe entry point and save
 
 **Purpose.** Implements `eframe::App` for `VfApp`: the frame phase order and the
@@ -553,6 +570,170 @@ them at a point.
 
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
+
+#### `src/scalar.rs` — static scalar right-hand-side expressions
+
+**Purpose / API.** `ScalarExpr::parse(source, ScalarContext::{Curve, Surface})`
+validates scalar syntax and bindings with existing `meval`; `eval(x, y)` returns
+an optional finite f64 height. `ScalarError` implements `Display` and `Error`,
+preserving the source, underlying error and allowed variables.
+
+**Invariants.** Curves allow `x`; surfaces allow `x, y`. Built-in constants and
+functions remain available. Binding validation does not require a finite value
+at an arbitrary point: `sqrt(x)` and even `sqrt(-1)` are valid syntax. Assignment
+syntax, unknown symbols/functions and static-context `z`/`t` are rejected.
+GPU-coordinate representability belongs to the sampler, not this evaluator.
+
+**Pinned by.** [tests/scalar_test.rs](../tests/scalar_test.rs):
+`scalar_rhs_context_and_errors`, `partly_undefined_is_valid_syntax`.
+
+#### `src/plot.rs` — pure bounded scalar geometry and plot types
+
+**Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable
+and defaults to `VectorField`; `PlotBounds` carries f64 min/max coordinates.
+`sample_curve` delegates to `sample_curve_with_diagnostics`, returning optional
+`(x, f(x), 0)` slots. `curve_edges` returns original adjacent segments and
+`SampleDiagnostics` in `CurveEdges`.
+`sample_surface(expr, domain, UVec2)` returns `SurfaceMesh` positions, normals,
+u32 indices and diagnostics, compacted to vertices used by surviving triangles.
+
+**Invariants.** Requests cap at 4097 slots before allocation; zero requests are
+empty, one samples the midpoint, and larger requests include both X endpoints
+using f64 interpolation. Reversed/non-finite X/Y domains produce absent slots
+and `invalid_domain`; Z is irrelevant, and Y/Z never clip heights. Non-finite
+values and f32-unrepresentable coordinates remain gaps with distinct counters.
+Edges skip missing, zero-length or non-finite geometry. Midpoint probes recurse
+only when f64 height spread exceeds eight times `max(domain Y span, 1)`;
+root level 0 through level 6 permits at most 127 probes per original edge.
+Unresolved edges are omitted, never replaced with subdivisions.
+
+Surface axes cap at 96 before allocation (9,216 slots / 54,150 indices maximum).
+Reversed/non-finite XYZ domains set `invalid_domain`; finite Z never clips
+heights. Zero/one axes or zero XY extent yield empty geometry. A missing corner
+or invalid/unrepresentable center rejects both triangles of a cell; at most one
+center probe runs per complete candidate cell (9,025 maximum). CCW triangles
+`(a,b,c), (b,d,c)` face +Z. Each cell requires strictly positive projected XY
+area for both faces after GPU rounding, preventing cancellation of used vertex
+normals. Cross products and area-weighted accumulation use f64 and surviving
+faces only.
+The graph is open: no walls, caps, fake origin vertices or hole filling.
+
+**Pinned by.** [tests/plot_curve_test.rs](../tests/plot_curve_test.rs): slot counts,
+inclusive/extreme endpoints, holes, representability, pole rejection, input/work
+caps, exact probe depth and threshold equality, and f64 spread arithmetic.
+[tests/plot_surface_test.rs](../tests/plot_surface_test.rs) pins exact counts,
+winding/unit/sloped normals, corner/center holes, domain rejection, degeneracy,
+allocation/probe caps and extreme finite normal arithmetic.
+
+**Limitations.** The conservative display heuristic may omit steep continuous
+edges and cannot prove continuity; surface center probes likewise cannot detect
+every singularity. This foundation has no renderer or bounds computation; later
+consumers must derive bounds from surviving geometry rather than isolated slots.
+
+#### `src/plot_examples.rs` — static scalar example catalogue
+
+**Purpose / API.** `PlotExample { kind, name, source }` and `EXAMPLES` supply the
+eight #12 formulas: three curves and five surfaces. Names and right-hand-side
+sources are stable catalogue data, separate from vector presets.
+
+**Invariants / limitations.** All entries parse in their declared scalar context
+and have finite default-domain evaluations. Charge examples use a dimensionless
+0.1 regularizer; they are illustrations, not physical solvers. The catalogue
+owns no selection cache, UI or persistence framework.
+
+**Pinned by.** [tests/plot_examples_test.rs](../tests/plot_examples_test.rs):
+`catalogue_is_exact_and_unique`, including kind serialization round trips.
+
+#### `src/plot_state.rs` — transient scalar plot data
+
+`ScalarDraft` holds source, error and optional accepted expression and sampled
+cache. `SampledPlot` owns curve slots/edges or a surface mesh. `PlotSettings` and
+`PlotState` hold plot controls, independent drafts, remembered vector projection
+and generation counters. These types are transient and do not persist caches.
+
+#### `src/plot_scene.rs` — immutable scalar scene construction
+
+`build_plot_scene` converts supplied sampled geometry into `PlotScene`, without
+evaluating expressions. `PlotGeometry` carries curve instances or mesh vertices
+and indices; `ViewportScene` distinguishes vector and plot scenes. Bounds and
+automatic signed-height ranges use only rendered segment/triangle participants;
+independent grid and axes references follow the explicit scalar kind. Empty or
+mismatched data has no plot bounds and a status. `tests/plot_state_test.rs`
+covers scene colors, bounds, invalid data and reference visibility.
+
+#### `src/plot_camera.rs` — plot-only framing and navigation
+
+**Purpose / API.** `PlotCamera` keeps f64 `target`, `distance`, full-height
+`ortho_extent`, orbit `yaw`/`pitch`, `fov_y` and retained `fitted_bounds` free of
+the vector camera's distance/near/far limits. `fit` frames supplied `PlotBounds`
+with the current orientation, `frame` recomputes a `PlotFrame { view_proj, eye,
+aspect }`, and `apply_gesture`/`apply_command` reuse the shared pointer and
+view-command seams. `PlotFitError` is displayable and every failure leaves the
+camera untouched.
+
+**Invariants.** Collapsed axes receive `max(largest_span * 1e-6, 1e-6)` padding
+on each side in f64. Fit uses the tighter horizontal/vertical FOV for perspective
+surfaces and aspect-aware extents for orthographic curves, leaving a 10% total
+span margin. Near/far planes are derived from the padded bounds and eye, with a
+positive near plane, then the f64 transform and eye are converted to f32 only
+after finite, positive-w, framing-margin and WebGPU `[0,1]` depth checks.
+Projection fidelity also rejects matrices that erase a finite extent through f32
+rounding. The curve front view keeps the existing +Y-up, look-down -Z convention;
+`ViewCommand::Fit` frames the domain while the separate `fit` seam frames sampled
+plot extrema. No GPU device or vector-camera state is involved.
+
+**Pinned by.** [tests/plot_camera_test.rs](../tests/plot_camera_test.rs):
+tall/wide portrait-landscape framing, collapsed-axis padding, invalid-fit
+transactionality, domain-versus-plot separation, ordinary gesture conventions,
+extreme/close-eye clipping, and unchanged vector fit/F behavior.
+
+#### `src/plot_renderer.rs` — depth-equipped plot renderer and composite
+
+**Purpose / API.** `PlotDrawState` is installed in egui_wgpu callback resources
+per device. It owns the scalar plot pipelines, per-renderer uniform/geometry
+buffers and a single-sample color target in the eframe format plus a
+`Depth32Float` attachment. `PlotTargetKey` identifies extent/format/composite
+sample count within one renderer object; resources are never reused across
+devices. `plot_target_extent` reproduces egui's rounded/clamped viewport pixels
+before a proportional device-edge cap, `plot_draw_order` excludes
+`PlotKind::VectorField` (no scalar fallback), `plot_pipeline_policy` feeds actual
+pipeline creation, and `prepared_matches` gates the paint composite. The live
+prepare records the plot pass into the supplied egui encoder and returns no
+command buffers. `PlotPassResources` plus `record_plot_pass` are shared by live
+preparation and capture. [`src/plot_renderer/capture.rs`](plot_renderer/capture.rs)
+is the separate `PlotCapture` owner: independent pipelines, buffers, color/depth
+targets and readback for native synchronous or wasm event-loop completion.
+`src/shaders.plot.wgsl` is the lit indexed mesh shader (48-byte `PlotVertex`
+stride, ambient + directional diffuse); `src/shaders.plot_composite.wgsl` samples
+the full target without a vertical flip or manual gamma. The unchanged
+`src/shaders.line.wgsl` is used only by the two new depth-enabled reference and
+curve pipelines; vector pipelines and draw plans are untouched.
+
+**Invariants.** Plot color is `RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC`;
+depth is `Depth32Float` with `RENDER_ATTACHMENT`, cleared to 1.0. Mesh is
+CCW/back-culled, depth `LessEqual` with writes; references test without writes;
+the curve tests and writes so it overlays its same-plane reference. Composite has
+no depth, replaces color and takes the incoming sample count. Unsupported format
+usages, non-filterable color, unsupported composite samples, invalid capture
+dimensions, stride/readback overflow and non-PNG formats return errors before
+allocation. The live path never submits independently; capture uses its own
+submission/readback ordering and retains resources until completion.
+
+**Pinned by.** [tests/plot_renderer_test.rs](../tests/plot_renderer_test.rs):
+extent equality with `PaintCallbackInfo::viewport_in_pixels`, proportional caps,
+zero area, the empty vector draw plan, all four pipeline policies and sample
+counts, prepared generation/extent identity, and format/capture preflight
+rejection. These CPU tests create no wgpu device. The required native device gate
+is [tests/plot_gpu_test.rs](../tests/plot_gpu_test.rs): ordinary runs cover CPU
+contracts and print `GPU not requested`; `scripts/test-scalar-gpu.sh` sets
+`VFE_SCALAR_GPU_PROBE=1` only on the child and drives the actual
+`PlotCallback` prepare/paint flow into a no-depth incoming target. It asserts
+near/far depth order, reference occlusion, invalid-cell holes, curve-overlay and
+singularity-gap behavior, backface culling, sRGB/linear targets, fractional-DPI
+viewport/scissor, `129×97 → 257×113` resize, stale-generation and released-target
+non-draws, interleaved capture/live independence, PNG encode/decode, and return
+to the unchanged vector renderer on the same device. Missing device or required
+format configuration is an error, never a noop/fake fallback.
 
 #### `src/cas.rs` — native symbolic transform adapter
 
@@ -789,6 +970,14 @@ tests are in `tests/view_command_test.rs`.
 effective subset. Streamlines are retraced on any scene rebuild. The snapshot
 does not include per-frame particles by design, so a caller that only reads
 `snapshot()` sees an empty dot/trail/combined stream.
+
+#### `src/viewmodel/plot.rs` — scalar state transitions and lazy scenes
+
+**Contract.** `State` keeps independent curve and surface drafts, settings and
+sample caches while preserving vector state. Plot setters reconcile transitions,
+sanitize controls and invalidate relevant caches; `plot_scene` lazily samples
+accepted expressions and delegates scene construction to `plot_scene`.
+`tests/plot_state_test.rs` covers editing, transitions, settings and caching.
 
 #### `src/persistence.rs` — one settings envelope
 
@@ -1518,8 +1707,8 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`layout`, `menu`, `panel_rails`, `presets`, `sidebar`, `status_bar`, `style_panel`, `top_bar`,
-`transport`.
+`layout`, `menu`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
+`status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -1558,6 +1747,28 @@ as an image.
 
 **Limitation.** Per-context cache; no SVG rendering.
 
+#### `src/ui/plot_panel.rs` — scalar plot controls
+
+**Purpose.** The Plot section shared by the wide Controls panel and the compact
+sheet: explicit kind selector, example catalogue, curve samples/line width,
+surface resolution (Advanced), shared colormap, height range, Fit plot and the
+plot-section reset.
+
+**Public API.** `PlotPanelAction::FitPlot`, `PLOT_KINDS`, `kind_label`,
+`source_label`, `source_hint`, `source_help`, `active_example_name`, `show`.
+
+**Invariants.**
+- `show` edits `State` only through existing setters and returns only the Fit
+  action; the app runs the Task 6 `fit_plot` seam with the viewport aspect.
+- Kind choices are exactly Vector field / Curve `y=f(x)` / Surface `z=f(x,y)`;
+  only Curve exposes samples and line width, only Surface exposes resolution.
+- `Custom` is derived from the active draft text, never stored separately.
+- Fit is disabled with a visible explanation when no finite geometry exists.
+- The section reset restores plot settings/draft and preserves the vector
+  formula; no new shortcut or global settings page is added.
+
+**Pinned by.** `tests/plot_ui_test.rs`.
+
 #### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
 
 **Purpose.** The top formula row.
@@ -1566,11 +1777,15 @@ as an image.
 state, bar, compact)`.
 
 **Invariants.**
-- The bar's text mirror is refreshed from `state.formula` when they differ, so
-  a preset or restore updates the field.
-- Every edit is handed to `state.set_formula`; the bar never parses or clamps
-  itself.
-- Clicking 3D/2D calls `state.set_mode`.
+- The bar's text mirror is refreshed from `state.active_source()` when they
+  differ, so presets, restores and kind changes update the field without
+  overwriting a preserved scalar draft.
+- Every edit is handed to `state.set_active_source`; the bar never parses or
+  clamps itself.
+- Scalar kinds show the fixed `y =` or `z =` label and an `x`/`x and y` hint;
+  vector mode keeps comma-separated component syntax.
+- Clicking 3D/2D calls `state.set_mode` (which selects the saved Curve/Surface
+  in plot mode).
 - Compact sets a 44 pt interaction height and uses
   `layout::formula_field_width` (≥ 40 % of the bar); wide lets the field fill
   the remainder.
@@ -1762,7 +1977,8 @@ with a local mirror and a single `apply` handoff.
 `particle_size_enabled`, `particle_fixed_color_enabled`, `fixed_color_rgb`,
 `fixed_color_opaque`, `trail_fade_enabled`, `trail_width_enabled`,
 `stagnation_seconds_enabled`, `particle_count_label`, `Controls` (+ `new`,
-per-section resets, `Default`), `show`, `apply`.
+per-section resets, `Default`), `show`, `show_with_plot_action`,
+`show_compact`, `show_compact_with_plot_action`, `apply`.
 
 **Invariants.**
 - Section order is Display → Camera → Features → Coloring → Domain; the first
@@ -1786,6 +2002,9 @@ per-section resets, `Default`), `show`, `apply`.
 - The Camera section's fly checkbox is a mirror; the app syncs the real camera
   into it before drawing and reconciles a click through
   `fly_camera::sync_fly_mirror`.
+- In scalar mode the Plot section is drawn first; vector-only sections are
+  disabled with explanations and retain their values. Only shared plot controls
+  (grid/axes, domain, palette) reach the seam, and Fit is returned to the app.
 
 **Pinned by.** `tests/sidebar_controls_test.rs` (51), including
 `untouched_frame_rebuilds_nothing_through_apply`,
