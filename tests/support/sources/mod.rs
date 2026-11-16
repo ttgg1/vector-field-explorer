@@ -1,4 +1,4 @@
-//! Independent electric-source references for the source-evaluator tests.
+//! Independent source references for the source-evaluator tests.
 //!
 //! The finite-line helpers implement the approved design's *analytic endpoint
 //! primitive* directly. The committed fixture matrix is generated offline by
@@ -26,7 +26,11 @@
 
 use glam::DVec3;
 
-/// One committed electric fixture row.
+/// One committed source fixture row.
+///
+/// `charge` is the signed electric charge or magnetic current. `dimension` is
+/// the line length or the loop/ring/disc/sphere radius. `length` and `turns`
+/// are used only by solenoid rows.
 #[derive(Debug, Clone)]
 pub struct Fixture {
     pub id: String,
@@ -39,10 +43,12 @@ pub struct Fixture {
     pub softening: f64,
     pub reference: DVec3,
     pub uncertainty: f64,
+    pub length: f64,
+    pub turns: u32,
     pub method: String,
 }
 
-/// Parse every committed electric fixture row.
+/// Parse every committed fixture row.
 pub fn fixtures() -> Vec<Fixture> {
     include_str!("fixtures.csv")
         .lines()
@@ -60,7 +66,7 @@ pub fn fixtures_of(kind: &str) -> impl Iterator<Item = Fixture> {
 
 fn parse_fixture(line: &str) -> Fixture {
     let fields: Vec<&str> = line.split(',').collect();
-    assert_eq!(fields.len(), 19, "malformed fixture row: {line}");
+    assert_eq!(fields.len(), 21, "malformed fixture row: {line}");
     Fixture {
         id: fields[0].to_owned(),
         kind: fields[1].to_owned(),
@@ -76,7 +82,12 @@ fn parse_fixture(line: &str) -> Fixture {
             decimal(fields[16]),
         ),
         uncertainty: decimal(fields[17]),
-        method: fields[18].to_owned(),
+        length: bits(fields[18]),
+        turns: fields[19]
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("bad turns: {}", fields[19])),
+        method: fields[20].to_owned(),
     }
 }
 

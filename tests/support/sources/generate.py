@@ -9,20 +9,27 @@ input bits plus correctly rounded binary64 references.
 
 Methods:
 
-* point   -- closed form ``Q s / (|s|^2 + a^2)^(3/2)``.
-* line    -- the design's analytic endpoint primitive with rationalized
-             same-sign differences.
-* ring    -- complete elliptic integrals ``K``/``E`` for
-             ``S0 = <(1 - delta cos phi)^(-3/2)>`` and
-             ``S1 = <cos phi (1 - delta cos phi)^(-3/2)>``.
-* disc    -- polar ring integration: a disc is a family of charged rings of
-             radius ``rho`` with measure ``Q/R^2 dt``, ``t = rho^2``.
-* sphere  -- slab integration: a solid sphere is a family of discs of radius
-             ``sqrt(R^2 - zeta^2)`` with the uniform volume measure.
+* point    -- closed form ``Q s / (|s|^2 + a^2)^(3/2)``.
+* line     -- the design's analytic endpoint primitive with rationalized
+              same-sign differences.
+* ring     -- complete elliptic integrals ``K``/``E`` for
+              ``S0 = <(1 - delta cos phi)^(-3/2)>`` and
+              ``S1 = <cos phi (1 - delta cos phi)^(-3/2)>``.
+* disc     -- polar ring integration: a disc is a family of charged rings of
+              radius ``rho`` with measure ``Q/R^2 dt``, ``t = rho^2``.
+* sphere   -- slab integration: a solid sphere is a family of discs of radius
+              ``sqrt(R^2 - zeta^2)`` with the uniform volume measure.
+* loop     -- direct current-element angular integration plus an independent
+              complete-elliptic off-axis/reference cross-check.
+* solenoid -- loop-over-z integration: each axial slice is a loop of current
+              ``N I dz/L`` using the elliptic loop field, split at the projected
+              query location.
+* wire     -- direct infinite-wire integral after ``z' = sqrt(r^2+a^2) tan``.
 
 The ring/disc/sphere reductions use only the specified physical distributions;
 none of them follows the production chord, surface-divergence or near-axis
-series decompositions.
+series decompositions. The loop/solenoid references never call the production
+angle quadrature or analytic axial integration.
 
 True ``mp.pi`` is used throughout. Run from the repository root:
 
@@ -154,6 +161,85 @@ def _splits(lo, hi, at):
     return [(cuts[i], cuts[i + 1]) for i in range(len(cuts) - 1)]
 
 
+def loop_components_direct(r, z, radius, current, softening):
+    """Direct current-element integration over the loop angle.
+
+    ``B = I R integral e_phi x s / (|s|^2 + a^2)^(3/2) dphi`` in the local
+    ``(radial, axial)`` plane. This does not use the ``A``/``delta`` series
+    reduction.
+    """
+    a = r * r + radius * radius + z * z + softening * softening
+
+    def radial_integrand(phi):
+        cos = mp.cos(phi)
+        denominator = a - 2 * r * radius * cos
+        return current * radius * z * cos / denominator ** (mp.mpf(3) / 2)
+
+    def axial_integrand(phi):
+        cos = mp.cos(phi)
+        denominator = a - 2 * r * radius * cos
+        return current * radius * (radius - r * cos) / denominator ** (
+            mp.mpf(3) / 2
+        )
+
+    br = mp.quad(radial_integrand, [-mp.pi, 0, mp.pi])
+    bz = mp.quad(axial_integrand, [-mp.pi, 0, mp.pi])
+    return br, bz
+
+
+def loop_components_elliptic(r, z, radius, current, softening):
+    """Exact softened loop field from complete elliptic ``K``/``E`` moments."""
+    a = r * r + radius * radius + z * z + softening * softening
+    delta = 2 * r * radius / a
+    if delta == 0:
+        s0 = mp.mpf(1)
+        s1 = mp.mpf(0)
+    else:
+        k2 = 2 * delta / (1 + delta)
+        elliptic_k = mp.ellipk(k2)
+        elliptic_e = mp.ellipe(k2)
+        root = mp.sqrt(1 + delta)
+        s0 = 2 * elliptic_e / (mp.pi * root * (1 - delta))
+        s1 = 2 / (mp.pi * delta * root) * (elliptic_e / (1 - delta) - elliptic_k)
+    base = 2 * mp.pi * current * radius / a ** (mp.mpf(3) / 2)
+    return base * z * s1, base * (radius * s0 - r * s1)
+
+
+def solenoid_components(r, z, radius, length, current, turns, softening):
+    """Loop-over-z integration of the continuous solenoid."""
+    factor = turns * current / length
+
+    def slice_components(slice_axial):
+        return loop_components_elliptic(
+            r, z - slice_axial, radius, mp.mpf(1), softening
+        )
+
+    br = sum(
+        mp.quad(lambda zp: slice_components(zp)[0], [left, right])
+        for left, right in _splits(-length / 2, length / 2, z)
+    )
+    bz = sum(
+        mp.quad(lambda zp: slice_components(zp)[1], [left, right])
+        for left, right in _splits(-length / 2, length / 2, z)
+    )
+    return factor * br, factor * bz
+
+
+def wire_components(r, current, softening):
+    """Direct infinite-wire integral ``I r integral dz'/(r^2+z'^2+a^2)^(3/2)``."""
+    if r == 0:
+        return mp.mpf(0)
+    # z' = sqrt(r^2+a^2) tan(theta) removes the infinite range; the substitution
+    # is evaluated symbolically for the measure and the cosine integral is
+    # evaluated numerically, not from the known closed form.
+    scale = mp.sqrt(r * r + softening * softening)
+    integral = mp.quad(
+        lambda theta: mp.cos(theta) / (scale * scale),
+        [-mp.pi / 2, 0, mp.pi / 2],
+    )
+    return current * r * integral
+
+
 def ring_radius_for_delta(delta: float, radius: float, z: float, softening: float) -> float:
     """Small off-axis radius with ``delta = 2 r R / (R^2 + z^2 + a^2 + r^2)``."""
     c = radius * radius + z * z + softening * softening
@@ -228,6 +314,59 @@ CASES = [
      (2.0, 0.0, 0.0), 1e-6),
 ]
 
+# Magnetic cases: (id, kind, center, axis, current, radius, length, turns,
+# query, softening). Loop/solenoid fields use the local (radial, axial) frame;
+# every committed row is centered at zero with axis +Z so the world components
+# are (Br, 0, Bz).
+MAGNETIC_CASES = [
+    ("loop_axis_0p7", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0, 0.0,
+     0, (0.0, 0.0, 0.7), 0.1),
+    ("loop_offaxis", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0, 0.0,
+     0, (0.4, 0.0, 0.7), 0.1),
+    ("loop_offaxis_z0p2", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (0.4, 0.0, 0.2), 0.1),
+    ("loop_near_axis_0p7", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (1e-10, 0.0, 0.7), 0.1),
+    ("loop_near_support", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (1.01, 0.0, 0.02), 0.1),
+    ("loop_on_winding", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (1.0, 0.0, 0.0), 0.1),
+    ("loop_nonunit", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), -2.5, 0.3, 0.0,
+     0, (0.2, 0.0, 0.15), 0.001),
+    ("loop_narrow_far", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (0.4, 0.0, 0.7), 1e-6),
+    ("loop_delta_099", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (0.0, 0.0, 0.7), 0.1),
+    ("loop_delta_100", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (0.0, 0.0, 0.7), 0.1),
+    ("loop_delta_101", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (0.0, 0.0, 0.7), 0.1),
+    ("solenoid_axis_center", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (0.0, 0.0, 0.0), 0.1),
+    ("solenoid_axis_end", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (0.0, 0.0, 1.0), 0.1),
+    ("solenoid_axis_outside", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0),
+     1.0, 1.0, 2.0, 1, (0.0, 0.0, 1.2), 0.1),
+    ("solenoid_interior", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (0.5, 0.0, 0.2), 0.1),
+    ("solenoid_on_winding", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (1.0, 0.0, 0.0), 0.1),
+    ("solenoid_near_axis", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (1e-8, 0.0, 0.3), 0.1),
+    ("solenoid_end_effect", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (0.6, 0.0, 0.9), 0.1),
+    ("solenoid_nonunit", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), -2.0,
+     0.3, 0.7, 3, (0.2, 0.0, 0.1), 0.001),
+    ("solenoid_long", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     20.0, 1, (0.7, 0.0, 0.3), 0.1),
+    ("solenoid_narrow_far", "solenoid", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0,
+     1.0, 2.0, 1, (0.4, 0.0, 3.0), 1e-6),
+    ("wire_offaxis", "wire", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 2.0, 0.0, 0.0,
+     0, (1.0, 0.0, 0.4), 0.1),
+    ("wire_on_axis", "wire", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 2.0, 0.0, 0.0,
+     0, (0.0, 0.0, 0.4), 0.1),
+]
+
 
 def evaluate(case, dps):
     with mp.workdps(dps):
@@ -264,6 +403,77 @@ def evaluate(case, dps):
         return er, mp.mpf(0), ez
 
 
+def magnetic_components(case, dps, method=None):
+    """World-frame loop/solenoid/wire reference components.
+
+    Every magnetic row uses ``center = 0`` and ``axis = +Z``. A loop/solenoid
+    returns ``(Br, 0, Bz)``; the infinite wire returns ``(0, Bphi, 0)``.
+    """
+    with mp.workdps(dps):
+        case_id, kind, _, _, current, radius, length, turns, query, softening = case
+        current = mp.mpf(current)
+        softening = mp.mpf(softening)
+        radius = mp.mpf(radius)
+        length = mp.mpf(length)
+        r = mp.mpf(query[0])
+        z = mp.mpf(query[2])
+        if kind == "loop":
+            if method is None:
+                method = (
+                    "elliptic-k-e"
+                    if case_id.startswith(("loop_near_axis", "loop_delta"))
+                    else "current-element"
+                )
+            if method == "elliptic-k-e":
+                br, bz = loop_components_elliptic(r, z, radius, current, softening)
+            else:
+                br, bz = loop_components_direct(r, z, radius, current, softening)
+            return (br, mp.mpf(0), bz), method
+        if kind == "solenoid":
+            br, bz = solenoid_components(
+                r, z, radius, length, current, turns, softening
+            )
+            return (br, mp.mpf(0), bz), "loop-over-z"
+        if kind == "wire":
+            return (mp.mpf(0), wire_components(r, current, softening), mp.mpf(0)), \
+                "direct-wire-integral"
+        raise ValueError(kind)
+
+
+def _append_row(rows, case, low, high, method):
+    case_id, kind, center, axis, charge, dimension, query, softening = case
+    norm = mp.sqrt(sum(v * v for v in high))
+    change = max(abs(a - b) for a, b in zip(low, high))
+    allowed = mp.mpf("1e-12") + mp.mpf("1e-10") * norm
+    if not (change <= allowed):
+        raise SystemExit(
+            f"{case_id}: precision change {mp.nstr(change, 8)} exceeds "
+            f"{mp.nstr(allowed, 8)}"
+        )
+    uncertainty = max(change, mp.mpf("1e-300"))
+    ref = [float(v) for v in high]
+    rows.append(
+        [
+            case_id,
+            kind,
+            bits(center[0]), bits(center[1]), bits(center[2]),
+            bits(axis[0]), bits(axis[1]), bits(axis[2]),
+            bits(charge), bits(dimension),
+            bits(query[0]), bits(query[1]), bits(query[2]),
+            bits(softening),
+            repr(ref[0]), repr(ref[1]), repr(ref[2]),
+            repr(float(uncertainty)),
+            bits(0.0), 0,
+            method,
+        ]
+    )
+    print(
+        f"{case_id:26s} ref=({ref[0]: .17e},{ref[1]: .17e},{ref[2]: .17e}) "
+        f"change={float(change):.3e}",
+        flush=True,
+    )
+
+
 def main():
     rows = []
     for case in CASES:
@@ -277,6 +487,46 @@ def main():
 
         low = evaluate(case, LOW_DPS)
         high = evaluate(case, HIGH_DPS)
+        _append_row(
+            rows,
+            case,
+            low,
+            high,
+            {
+                "point": "closed-form",
+                "line": "endpoint-primitive",
+                "ring": "elliptic-k-e",
+                "disc": "polar-ring",
+                "sphere": "shell-volume",
+            }[case[1]],
+        )
+
+    for case in MAGNETIC_CASES:
+        case_id, kind, center, axis, current, radius, length, turns, query, softening = case
+        if case_id.startswith("loop_delta_"):
+            factor = {"loop_delta_099": 0.99, "loop_delta_100": 1.0,
+                      "loop_delta_101": 1.01}[case_id]
+            query = (ring_radius_for_delta(0.125 * factor, 1.0, 0.7, 0.1), 0.0, 0.7)
+            case = (case_id, kind, center, axis, current, radius, length, turns,
+                    query, softening)
+
+        low, method = magnetic_components(case, LOW_DPS)
+        high, _ = magnetic_components(case, HIGH_DPS, method)
+        if kind == "loop":
+            direct, _ = magnetic_components(case, HIGH_DPS, "current-element")
+            elliptic, _ = magnetic_components(case, HIGH_DPS, "elliptic-k-e")
+            norm = mp.sqrt(sum(v * v for v in high))
+            cross_change = max(abs(a - b) for a, b in zip(direct, elliptic))
+            cross_allowed = mp.mpf("1e-12") + mp.mpf("1e-10") * norm
+            if not (cross_change <= cross_allowed):
+                raise SystemExit(
+                    f"{case_id}: current-element/elliptic change "
+                    f"{mp.nstr(cross_change, 8)} exceeds "
+                    f"{mp.nstr(cross_allowed, 8)}"
+                )
+            method = f"{method}+elliptic" if method == "current-element" else method
+
+        _, kind, center, axis, current, radius, length, turns, query, softening = case
         norm = mp.sqrt(sum(v * v for v in high))
         change = max(abs(a - b) for a, b in zip(low, high))
         allowed = mp.mpf("1e-12") + mp.mpf("1e-10") * norm
@@ -287,25 +537,19 @@ def main():
             )
         uncertainty = max(change, mp.mpf("1e-300"))
         ref = [float(v) for v in high]
-        _, kind, center, axis, charge, dimension, query, softening = case
         rows.append(
             [
                 case_id,
                 kind,
                 bits(center[0]), bits(center[1]), bits(center[2]),
                 bits(axis[0]), bits(axis[1]), bits(axis[2]),
-                bits(charge), bits(dimension),
+                bits(current), bits(radius),
                 bits(query[0]), bits(query[1]), bits(query[2]),
                 bits(softening),
                 repr(ref[0]), repr(ref[1]), repr(ref[2]),
                 repr(float(uncertainty)),
-                {
-                    "point": "closed-form",
-                    "line": "endpoint-primitive",
-                    "ring": "elliptic-k-e",
-                    "disc": "polar-ring",
-                    "sphere": "shell-volume",
-                }[kind],
+                bits(length), turns,
+                method,
             ]
         )
         print(
@@ -320,7 +564,8 @@ def main():
         "axis_x_bits", "axis_y_bits", "axis_z_bits",
         "charge_bits", "dimension_bits",
         "query_x_bits", "query_y_bits", "query_z_bits",
-        "softening_bits", "ref_x", "ref_y", "ref_z", "uncertainty", "method",
+        "softening_bits", "ref_x", "ref_y", "ref_z", "uncertainty",
+        "length_bits", "turns", "method",
     ]
     lines = [",".join(header)]
     lines.extend(",".join(str(value) for value in row) for row in rows)

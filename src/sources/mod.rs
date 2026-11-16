@@ -2,11 +2,12 @@
 //!
 //! This pure CPU module exposes the approved public model, preparation and
 //! evaluation seam. The electric family evaluates point charges, finite lines,
-//! rings, discs and uniform spheres; magnetic loop/solenoid reductions remain
-//! unavailable until their owning task.
+//! rings, discs and uniform spheres; the magnetic family evaluates infinite
+//! wires, current loops and finite continuous solenoids.
 
 mod electric;
 mod evaluate;
+mod magnetic;
 mod model;
 mod numeric;
 mod quadrature;

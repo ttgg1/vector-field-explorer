@@ -92,6 +92,7 @@ mod sidebar_colormap_ui_test;
 mod sidebar_controls_test;
 mod sidebar_sections_test;
 mod sources_electric_test;
+mod sources_magnetic_test;
 mod sources_model_test;
 mod sources_numeric_test;
 mod status_bar_test;

@@ -39,10 +39,10 @@ The field is formula-driven:
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
   screenshots, and persistence are all in this tree.
 - The app is a teaching-grade explorer, not a solver. The pure source-evaluator
-  slice in `src/sources` currently evaluates softened point charges, finite
-  charged lines, charged rings, charged thin discs, uniform solid spheres and
-  infinite straight wires; current loops and solenoids are validated model data
-  only.
+  slice in `src/sources` evaluates all eight softened source geometries: point
+  charges, finite charged lines, charged rings, charged thin discs, uniform
+  solid spheres, infinite straight wires, current loops and finite continuous
+  solenoids.
   Maxwell/ODE work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
@@ -622,8 +622,9 @@ fields. `src/sources/mod.rs` re-exports only the public contract;
 source-local frame and the finite-line kernel/primitive;
 `src/sources/quadrature.rs` owns bounded adaptive Gauss–Kronrod partitions;
 `src/sources/electric.rs` owns the electric ring, disc, sphere and finite-line
-reductions; `src/sources/evaluate.rs` prepares an evaluator and builds family
-results.
+reductions; `src/sources/magnetic.rs` owns the wire, current-loop and finite
+continuous-solenoid reductions; `src/sources/evaluate.rs` prepares an evaluator
+and builds family results.
 
 **Public API.** `SourceKind` (all eight vectors), `Source`, `AccuracyRequest`,
 `EvalOptions`, `WorkLimits`, `SourceSet::new`, `Evaluator::new`,
@@ -661,20 +662,34 @@ ceilings are rejected.
   absolute uncertainty (stable lower-bound tie break) only after child capacity
   and work are confirmed. Work counts every sample and split, polls cancellation
   at most every 32 counted units, and never recurses.
-- A charged ring uses the near-axis binomial series in
+- A charged ring and a current loop share the near-axis binomial series in
   `delta = 2rR/(R^2+z^2+a^2+r^2)` for `delta <= 1/8`, with an explicit positive
   geometric tail added to the absolute uncertainty, and direct symmetric-angle
   integration above that. The series has no division by `r`; below `1e-22`
   radial cancellation the series, not the direct integral, is authoritative.
+  The loop reconstructs its world vector from the same radial/axial basis; its
+  `2 pi I R/A^(3/2)` normalization is magnetic, never the ring's electric `Q`
+  normalization.
   A charged disc uses the exact transverse chord integral off axis and the
   rationalized axial difference exactly on axis. A uniform solid sphere uses the
   centre-stable divergence-theorem surface integral, returns exact zero at the
   centre, and keeps the linear near-centre field; it is not a stack of planar
   rings. All non-axis paths reuse the bounded partition, resolution guard,
   absolute-uncertainty and work accounting above.
-- Nonzero current-loop and solenoid sources currently return
-  `Unavailable(StopReason::UnresolvedFeature)`; Task 4 replaces those branches.
-  Zero-strength sources are skipped and exact.
+- A finite continuous solenoid integrates its loop measure analytically in the
+  axial direction, then one bounded angular integral. Endpoint differences are
+  rationalized when `u = z+L/2` and `v = z-L/2` share a sign; opposite signs use
+  the stable direct sum. The angular kernel forms
+  `R - r cos phi = (R-r) + 2 r sin^2(phi/2)`. Exactly on axis it uses the full
+  analytic finite-solenoid expression and exact radial zero. Its resolution
+  guard compares the cylinder arc width against the softened radial and axial
+  distances to the whole support strip. Interior, on-winding and on-end queries
+  at ordinary softening return complete finite results; an unresolvable narrow
+  feature returns `Unavailable` with no vector.
+- The infinite wire keeps its exact `2I(axis x s_perp)/(|s_perp|^2+a^2)`
+  azimuthal reconstruction and factor 2. A query exactly on the wire axis is
+  exact zero because the azimuthal basis is undefined there. Zero-strength
+  sources are skipped and exact.
 
 **Pinned by.** [tests/sources_model_test.rs](../tests/sources_model_test.rs):
 `validation_is_strict`, `prepare_is_cancellable_before_allocation`,
@@ -686,19 +701,26 @@ ceilings are rejected.
 [tests/sources_electric_test.rs](../tests/sources_electric_test.rs):
 `analytic_axial_fields_and_scaling`, `off_axis_fixtures_meet_requested_target`,
 `tiny_budget_distinguishes_complete_from_unavailable`,
-`ring_near_axis_and_branch_sweep`, `ring_monopole_far_field`. Independent
-finite-line endpoint references, the committed electric fixture matrix and its
-offline `generate.py`/provenance README live in
+`ring_near_axis_and_branch_sweep`, `ring_monopole_far_field`,
+`sphere_near_surface_small_softening_is_stable`,
+`disc_exact_axis_symmetry_is_not_underflow`.
+[tests/sources_magnetic_test.rs](../tests/sources_magnetic_test.rs):
+`analytic_loop_and_solenoid_axial_fields`,
+`off_axis_fixtures_meet_requested_target`, `loop_near_axis_and_branch_sweep`,
+`loop_magnetic_dipole_far_field`, `finite_current_scales_inverse_length`,
+`tiny_budget_distinguishes_complete_from_unavailable`. Independent
+finite-line endpoint references, the committed electric and magnetic fixture
+matrix and its offline `generate.py`/provenance README live in
 [tests/support/sources/](../tests/support/sources/).
 
-**Limitations.** Task 3 still has no current-loop/solenoid reductions,
-family-global refinement, UI, persistence, glyphs, rendering, export or app
-integration. Uncertainty is an empirical absolute allowance accumulated from
-quadrature indicators, series tails and roundoff terms, not a certified interval
-bound. The `1e-6` fixture rows use far queries so the resolution guard can
-resolve the softening scale within the default cell budget; on-support narrow
-features are not claimed. Wasm/browser and manual visual checks remain waived,
-not passed.
+**Limitations.** Family-global refinement remains Task 5; this task keeps the
+per-source `epsilon*S_family/n_active` allocation. There is no UI, persistence,
+glyph, rendering, export or app integration. Uncertainty is an empirical
+absolute allowance accumulated from quadrature indicators, series tails and
+roundoff terms, not a certified interval bound. The `1e-6` fixture rows use far
+queries so the resolution guard can resolve the softening scale within the
+default cell budget; on-support narrow features are not claimed. Wasm/browser
+and manual visual checks remain waived, not passed.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 

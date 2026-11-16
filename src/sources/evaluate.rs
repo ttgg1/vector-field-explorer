@@ -3,10 +3,11 @@
 use glam::DVec3;
 
 use super::electric;
+use super::magnetic;
 use super::model::{
     EvalOptions, FieldFamily, PrepareError, Source, SourceKind, SourceSet, WorkLimits,
 };
-use super::numeric::{NumericRange, stable_norm, wire_field};
+use super::numeric::{NumericRange, stable_norm};
 use super::quadrature::{Cell, Failure as QuadratureFailure};
 
 /// Kernel/version identifier published with every estimate.
@@ -225,20 +226,28 @@ impl Evaluator {
                     }
                 }
                 FieldFamily::Magnetic => {
-                    let SourceKind::StraightWire { current } = source.kind else {
-                        return FamilyResult::Unavailable(StopReason::UnresolvedFeature);
-                    };
-                    work_units += 1;
-                    match wire_field(
+                    let remaining = options.limits.work_per_family - work_units;
+                    match magnetic::contribution(
                         point,
-                        source.center,
-                        source.axis,
+                        source,
                         options.softening,
-                        current,
+                        per_source_target,
+                        remaining,
+                        options.limits.cells_per_family,
+                        options.limits.max_depth,
+                        scratch.cells_mut(),
+                        cancelled,
                     ) {
-                        Ok(contribution) => contribution,
-                        Err(NumericRange::Unrepresentable) => {
-                            return FamilyResult::Unavailable(StopReason::NumericRange);
+                        Ok((contribution, used, cells, stop)) => {
+                            work_units += used;
+                            scratch.note_high_water(cells);
+                            if let Some(reason) = stop {
+                                refinement_stop.get_or_insert(map_quadrature_failure(reason));
+                            }
+                            contribution
+                        }
+                        Err(reason) => {
+                            return FamilyResult::Unavailable(map_quadrature_failure(reason));
                         }
                     }
                 }

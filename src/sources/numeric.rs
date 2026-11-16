@@ -6,7 +6,7 @@
 
 use glam::DVec3;
 
-use super::quadrature::KernelSample;
+use super::quadrature::{Failure, KernelSample};
 
 /// A numerical transformation that cannot be represented in binary64.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,6 +502,115 @@ impl FiniteLineGeometry {
             || (value[1] == 0.0 && axial_scaled != 0.0);
         Ok(KernelSample { value, underflow })
     }
+}
+
+/// Near-axis angular moments of `(1 - delta cos phi)^(-3/2)`.
+///
+/// Shared by the charged ring and the current loop. `s0` is the angular average
+/// and `s1` its cosine-weighted average; the tails are positive geometric
+/// remainder bounds, not signed corrections.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RingSeries {
+    pub s0: f64,
+    pub s1: f64,
+    pub tail0: f64,
+    pub tail1: f64,
+    pub work: u64,
+    pub stop: Option<Failure>,
+}
+
+/// Evaluate the near-axis binomial series for `delta <= 1/8`.
+///
+/// `component_scale` converts the dimensionless tail into an absolute field
+/// allowance. The loop stops once the tail is below `threshold`, or reports a
+/// work/roundoff stop with the complete series state retained.
+pub(crate) fn ring_series(
+    delta: f64,
+    component_scale: f64,
+    threshold: f64,
+    work_remaining: u64,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<RingSeries, Failure> {
+    if work_remaining == 0 {
+        return Err(Failure::WorkLimit);
+    }
+    let mut s0 = 1.0;
+    let mut s1 = 0.75 * delta;
+    let mut b = 1.0;
+    let mut d = 0.75;
+    let mut p0 = 1.0;
+    let mut p1 = delta;
+    let delta_squared = delta * delta;
+    let inverse_ratio = 1.0 / (1.0 - 2.0 * delta);
+    if !inverse_ratio.is_finite() || inverse_ratio <= 0.0 {
+        return Err(Failure::NumericRange);
+    }
+    if !component_scale.is_finite() || !threshold.is_finite() || threshold < 0.0 {
+        return Err(Failure::NumericRange);
+    }
+    let mut tail0 = 0.0;
+    let mut tail1 = 0.0;
+    let mut work = 0u64;
+    let mut converged = false;
+    let mut stop = None;
+    for k in 0..64usize {
+        if k > 0 {
+            b *= ratio_b(k);
+            d *= ratio_d(k);
+            p0 *= delta_squared;
+            p1 *= delta_squared;
+            s0 += b * p0;
+            s1 += d * p1;
+        }
+        work += 1;
+        if work.is_multiple_of(32) && cancelled() {
+            return Err(Failure::Cancelled);
+        }
+        let next_b = b * ratio_b(k + 1);
+        let next_d = d * ratio_d(k + 1);
+        let next_p0 = p0 * delta_squared;
+        let next_p1 = p1 * delta_squared;
+        tail0 = next_b * next_p0 * inverse_ratio;
+        tail1 = next_d * next_p1 * inverse_ratio;
+        let error = component_scale * (tail0 + tail1);
+        if error <= threshold {
+            converged = true;
+            break;
+        }
+        if work >= work_remaining {
+            stop = Some(Failure::WorkLimit);
+            break;
+        }
+    }
+    if !converged && stop.is_none() {
+        stop = Some(Failure::RoundoffLimited);
+    }
+    if !s0.is_finite() || !s1.is_finite() || !tail0.is_finite() || !tail1.is_finite() {
+        return Err(Failure::NumericRange);
+    }
+    Ok(RingSeries {
+        s0,
+        s1,
+        tail0,
+        tail1,
+        work,
+        stop,
+    })
+}
+
+/// `b_k / b_{k-1}` for the even angular moments of `(1 - x)^(-3/2)`.
+fn ratio_b(k: usize) -> f64 {
+    let k = k as f64;
+    (4.0 * k + 1.0) / (4.0 * k) * (4.0 * k - 1.0) / (4.0 * k - 2.0) * (2.0 * (2.0 * k - 1.0) / k)
+        / 4.0
+}
+
+/// `d_k / d_{k-1}` for the cosine-weighted angular moments.
+fn ratio_d(k: usize) -> f64 {
+    let k = k as f64;
+    (4.0 * k + 3.0) / (4.0 * k + 2.0) * (4.0 * k + 1.0) / (4.0 * k)
+        * (2.0 * (2.0 * k + 1.0) / (k + 1.0))
+        / 4.0
 }
 
 /// Analytic finite-line field for an exactly on-axis query.

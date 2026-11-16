@@ -14,7 +14,7 @@ use glam::DVec3;
 use super::model::{Source, SourceKind};
 use super::numeric::{
     FieldContribution, FiniteLineGeometry, NumericRange, allowance_for, finite_line_axial_field,
-    local_frame, point_field, stable_norm,
+    local_frame, point_field, ring_series, stable_norm,
 };
 use super::quadrature::{self, Budget, Cell, Failure, KernelSample, ResolutionGuard};
 
@@ -201,11 +201,8 @@ fn ring(
     if delta <= 0.125 {
         let series = ring_series(
             delta,
-            base,
-            rn,
-            zn,
-            rn_radius,
-            target,
+            base.abs() * (rn.abs() + zn.abs() + rn_radius),
+            0.25 * target,
             work_remaining,
             cancelled,
         )?;
@@ -270,110 +267,6 @@ fn ring(
         cancelled,
     )?;
     from_partition(partition, frame.radial_direction, frame.unit_axis)
-}
-
-struct RingSeries {
-    s0: f64,
-    s1: f64,
-    tail0: f64,
-    tail1: f64,
-    work: u64,
-    stop: Option<Failure>,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn ring_series(
-    delta: f64,
-    base: f64,
-    rn: f64,
-    zn: f64,
-    rn_radius: f64,
-    target: f64,
-    work_remaining: u64,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<RingSeries, Failure> {
-    if work_remaining == 0 {
-        return Err(Failure::WorkLimit);
-    }
-    let mut s0 = 1.0;
-    let mut s1 = 0.75 * delta;
-    let mut b = 1.0;
-    let mut d = 0.75;
-    let mut p0 = 1.0;
-    let mut p1 = delta;
-    let delta_squared = delta * delta;
-    let inverse_ratio = 1.0 / (1.0 - 2.0 * delta);
-    if !inverse_ratio.is_finite() || inverse_ratio <= 0.0 {
-        return Err(Failure::NumericRange);
-    }
-    let component_scale = base.abs() * (rn.abs() + zn.abs() + rn_radius);
-    if !component_scale.is_finite() {
-        return Err(Failure::NumericRange);
-    }
-    let threshold = 0.25 * target;
-    let mut tail0 = 0.0;
-    let mut tail1 = 0.0;
-    let mut work = 0u64;
-    let mut converged = false;
-    let mut stop = None;
-    for k in 0..64usize {
-        if k > 0 {
-            b *= ratio_b(k);
-            d *= ratio_d(k);
-            p0 *= delta_squared;
-            p1 *= delta_squared;
-            s0 += b * p0;
-            s1 += d * p1;
-        }
-        work += 1;
-        if work.is_multiple_of(32) && cancelled() {
-            return Err(Failure::Cancelled);
-        }
-        let next_b = b * ratio_b(k + 1);
-        let next_d = d * ratio_d(k + 1);
-        let next_p0 = p0 * delta_squared;
-        let next_p1 = p1 * delta_squared;
-        tail0 = next_b * next_p0 * inverse_ratio;
-        tail1 = next_d * next_p1 * inverse_ratio;
-        let error = component_scale * (tail0 + tail1);
-        if error <= threshold {
-            converged = true;
-            break;
-        }
-        if work >= work_remaining {
-            stop = Some(Failure::WorkLimit);
-            break;
-        }
-    }
-    if !converged && stop.is_none() {
-        stop = Some(Failure::RoundoffLimited);
-    }
-    if !s0.is_finite() || !s1.is_finite() || !tail0.is_finite() || !tail1.is_finite() {
-        return Err(Failure::NumericRange);
-    }
-    Ok(RingSeries {
-        s0,
-        s1,
-        tail0,
-        tail1,
-        work,
-        stop,
-    })
-}
-
-/// `b_k / b_{k-1}` for the even angular moments of `(1 - x)^(-3/2)`.
-fn ratio_b(k: usize) -> f64 {
-    let k = k as f64;
-    (4.0 * k + 1.0) / (4.0 * k) * (4.0 * k - 1.0) / (4.0 * k - 2.0) * (2.0 * (2.0 * k - 1.0) / k)
-        / 4.0
-}
-
-/// `d_k / d_{k-1}` for the cosine-weighted angular moments.
-fn ratio_d(k: usize) -> f64 {
-    let k = k as f64;
-    (4.0 * k + 3.0) / (4.0 * k + 2.0) * (4.0 * k + 1.0) / (4.0 * k)
-        * (2.0 * (2.0 * k + 1.0) / (k + 1.0))
-        / 4.0
 }
 
 #[allow(clippy::too_many_arguments)]

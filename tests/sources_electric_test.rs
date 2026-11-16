@@ -307,8 +307,16 @@ fn disc_exact_axis_symmetry_is_not_underflow() {
 
 #[test]
 fn off_axis_fixtures_meet_requested_target() {
-    let rows = reference::fixtures();
-    assert_eq!(rows.len(), 30, "fixture matrix changed");
+    let rows: Vec<reference::Fixture> = reference::fixtures()
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row.kind.as_str(),
+                "point" | "line" | "ring" | "disc" | "sphere"
+            )
+        })
+        .collect();
+    assert_eq!(rows.len(), 30, "electric fixture matrix changed");
 
     let mut kinds = std::collections::BTreeSet::new();
     for row in &rows {
