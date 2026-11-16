@@ -1,9 +1,9 @@
 //! The compact simulation transport strip (ticket 26).
 //!
-//! Rendered directly under the formula bar, not as a new panel, and
-//! only while the view has a clock consumer (particles on in 3D today). The
-//! strip owns no state: every control edits [`SimClock`], the app's one time
-//! source.
+//! Rendered directly under the formula bar, not as a new panel, and only while
+//! the view has a time-dependent consumer: particles, a time-dependent vector
+//! field, or a time-dependent scalar plot. The strip owns no state: every
+//! control edits [`SimClock`], the app's one time source.
 //!
 //! The button and time labels take a `compact` flag so ticket 53 can switch to
 //! icon-only buttons and a shorter readout without changing this module's
@@ -41,7 +41,9 @@ pub fn time_label(time: f32, compact: bool) -> String {
     }
 }
 
-/// Draw the strip and apply every edit to `clock`.
+/// Draw the shared strip and apply every edit to `clock`: the same controls
+/// serve particles, time-dependent vector fields, and time-dependent scalar
+/// plots. Loop is visible whenever `state.has_time_dependent_consumer()`.
 pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: bool) {
     let min_size = if compact {
         egui::Vec2::splat(super::layout::TOUCH_TARGET)
@@ -82,8 +84,8 @@ pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: boo
             clock.set_speed(speed);
         }
 
-        // Loop control, shown only for a time-dependent field.
-        if state.field.is_time_dependent() {
+        // Loop control, shown for any time-dependent consumer.
+        if state.has_time_dependent_consumer() {
             let mut looping = clock.loop_period.is_some();
             if ui.checkbox(&mut looping, "Loop").changed() {
                 if looping {

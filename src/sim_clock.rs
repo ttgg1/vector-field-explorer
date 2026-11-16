@@ -1,9 +1,9 @@
 //! One global simulation clock: the only time source for animated features.
 //!
-//! Particles are the first v0.1.0 consumer (ticket 26); time-dependent fields
-//! and plots will read the same clock later. The clock is transient — it is
-//! never persisted — so a fresh session and `Reset all controls` both start at
-//! time 0, playing, at 1x.
+//! Consumers are particles (ticket 26), time-dependent vector fields, and an
+//! active time-dependent scalar plot. The clock is transient — it is never
+//! persisted — so a fresh session and `Reset all controls` both start at time
+//! 0, playing, at 1x.
 //!
 //! The frame step is clamped to [`MAX_STEP`] so a long idle gap or a window
 //! drag cannot make the cloud jump, and a paused clock produces a zero step
@@ -142,13 +142,15 @@ fn sanitized_speed(speed: f32) -> f32 {
     }
 }
 
-/// Whether the current view has a v0.1.0 clock consumer: a live particle cloud
-/// (on for a three-component field — 3D or a 2D plane slice), and
-/// time-dependent vector fields. Scalar plot kinds pause every vector consumer:
-/// static plots have no clock, and an invisible vector simulation must not
-/// advance while a plot is displayed.
+/// Whether the current view has a clock consumer: a live particle cloud (on for
+/// a three-component field — 3D or a 2D plane slice), a time-dependent vector
+/// field, or an active accepted time-dependent scalar expression.
+///
+/// Vector consumers pause while a scalar plot is displayed. A static scalar has
+/// no consumer; an invalid edit of a previously time-dependent scalar keeps the
+/// transport and clock alive but freezes its geometry.
 pub fn has_clock_consumer(state: &State) -> bool {
-    state.is_vector_mode() && (state.particle_target().is_some() || state.field.is_time_dependent())
+    state.has_time_dependent_consumer()
 }
 
 /// Whether the transport strip should be shown. Today that is exactly

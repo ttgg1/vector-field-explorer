@@ -2,8 +2,10 @@
 
 Vector Field Explorer can plot a scalar right-hand side as a 2D curve
 `y = f(x)` or a 3D surface `z = f(x, y)`. Scalar plotting is a desktop GUI and
-native PNG feature. It is not a command-line mode, animation system, physical
-solver, or unit-aware simulation.
+native PNG feature. It is not a command-line mode, physical solver, or
+unit-aware simulation. Curves and surfaces may use the shared simulation time
+`t`, so Play/Pause animates them from the same clock as particles and
+time-dependent vector fields.
 
 The exact built-in examples and the settled design are in the
 [scalar plotting spec](superpowers/specs/2026-11-15-scalar-plotting-design.md);
@@ -15,14 +17,36 @@ the implementation plan is in the
 Choose **Curve** or **Surface** in the Plot panel. The editor holds only the
 right-hand side; the UI supplies a non-editable `y =` or `z =` label.
 
-- Curves use `x` only: `0.5*x^2`, `exp(-x^2)*cos(8*x)`.
-- Surfaces use `x` and `y` only:
-  `1/(sqrt(x^2+y^2)+0.1)`, `exp(-(x^2+y^2))`.
+- Curves use `x`, or `x` and `t`: `0.5*x^2`, `exp(-x^2)*cos(8*x)`,
+  `sin(t)*x`.
+- Surfaces use `x` and `y`, or `x`, `y`, and `t`:
+  `1/(sqrt(x^2+y^2)+0.1)`, `exp(-(x^2+y^2))`, `sin(3*x)*cos(3*y)*sin(t)`.
 - Ordinary `meval` functions and constants are available. Unknown names,
   assignment syntax, and variables outside the active context are rejected with
   an error naming the problem.
-- Expressions are pure and dimensionless. They do not reference time `t`, the
-  vector field, or physical units.
+- Expressions are pure and dimensionless. `t` is the shared elapsed simulation
+  time; there is no separate scalar timer, and expressions never reference the
+  vector field or physical units.
+
+## Time-dependent plots
+
+Curves and surfaces may use the shared simulation variable `t`:
+
+- Curves: `x` or `x` and `t`, for example `sin(t)*x`.
+- Surfaces: `x` and `y`, or `x`, `y`, and `t`, for example
+  `sin(3*x)*cos(3*y)*sin(t)`.
+- `t` is the same elapsed simulation time used by particles and
+  time-dependent vector fields. There is no separate scalar timer.
+- **Play** resamples a time-dependent plot at the current `t`; **Pause**
+  keeps the last mesh. The clock's loop period wraps `t` exactly as it does
+  for other consumers.
+- A static plot does not rebuild or request repaint merely because the clock
+  is running for another consumer.
+- An invalid edit keeps the last valid mesh and shows the parse error. The
+  clock and transport may keep running while the mesh stays frozen until the
+  text becomes valid again.
+- Switching curve/surface kind or 2D/3D mode samples at the current `t`; it
+  does not restart at zero.
 
 The built-in catalogue contains these exact examples:
 

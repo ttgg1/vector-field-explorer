@@ -162,6 +162,12 @@ The single time source for animated formulas, plots, and particles. It owns the
 current simulation time, whether time is playing, and the speed multiplier.
 _Avoid_: animation timer, per-feature clock
 
+**Scalar animation**:
+A time-dependent scalar curve or surface resampled from the one `SimClock` as
+the shared time `t` advances; static plots remain idle and are not rebuilt just
+because the clock runs for another consumer.
+_Avoid_: scalar timer, separate plot clock
+
 **Transport**:
 The Play/Pause, reset-time, time readout, and speed controls for the simulation
 clock; shown when at least one feature consumes the clock.

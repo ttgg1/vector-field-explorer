@@ -23,7 +23,7 @@ pub struct PlotBounds {
     pub max: DVec3,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SampleDiagnostics {
     pub invalid_samples: usize,
     pub unrepresentable_samples: usize,
@@ -39,7 +39,7 @@ pub struct CurveEdges {
     pub diagnostics: SampleDiagnostics,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SurfaceMesh {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
@@ -53,6 +53,16 @@ pub struct SurfaceMesh {
 /// The open, CCW mesh has no walls/caps and retains only used vertices, with
 /// area-weighted normals accumulated in f64 from surviving faces alone.
 pub fn sample_surface(expr: &ScalarExpr, domain: &Domain, resolution: UVec2) -> SurfaceMesh {
+    sample_surface_at(expr, domain, resolution, 0.0)
+}
+
+pub fn sample_surface_at(
+    expr: &ScalarExpr,
+    domain: &Domain,
+    resolution: UVec2,
+    time: f32,
+) -> SurfaceMesh {
+    let time = f64::from(time);
     let mut mesh = SurfaceMesh::default();
     if !domain.min.is_finite() || !domain.max.is_finite() || !domain.min.cmple(domain.max).all() {
         mesh.diagnostics.invalid_domain = true;
@@ -78,7 +88,7 @@ pub fn sample_surface(expr: &ScalarExpr, domain: &Domain, resolution: UVec2) -> 
         let y = axis(j, ny, domain.min.y, domain.max.y);
         for i in 0..nx {
             let x = axis(i, nx, domain.min.x, domain.max.x);
-            if let Some(position) = surface_position(expr, x, y, &mut mesh.diagnostics) {
+            if let Some(position) = surface_position(expr, x, y, time, &mut mesh.diagnostics) {
                 grid[j * nx + i] = Some(positions.len());
                 positions.push(position);
             }
@@ -105,7 +115,7 @@ pub fn sample_surface(expr: &ScalarExpr, domain: &Domain, resolution: UVec2) -> 
             let y = (axis(j, ny, domain.min.y, domain.max.y)
                 + axis(j + 1, ny, domain.min.y, domain.max.y))
                 * 0.5;
-            if surface_position(expr, x, y, &mut mesh.diagnostics).is_none() {
+            if surface_position(expr, x, y, time, &mut mesh.diagnostics).is_none() {
                 mesh.diagnostics.rejected_cells += 1;
                 continue;
             }
@@ -150,9 +160,10 @@ fn surface_position(
     expr: &ScalarExpr,
     x: f64,
     y: f64,
+    time: f64,
     diagnostics: &mut SampleDiagnostics,
 ) -> Option<Vec3> {
-    let Some(z) = expr.eval(x, y) else {
+    let Some(z) = expr.eval_at(x, y, time) else {
         diagnostics.invalid_samples += 1;
         return None;
     };
@@ -167,7 +178,16 @@ fn surface_position(
 /// Inclusive X samples `(x, f(x), 0)`, including absent slots at invalid heights.
 /// Y/Z never clip heights. One requested sample lies at the X midpoint.
 pub fn sample_curve(expr: &ScalarExpr, domain: &Domain, samples: usize) -> Vec<Option<Vec3>> {
-    sample_curve_with_diagnostics(expr, domain, samples).0
+    sample_curve_at(expr, domain, samples, 0.0)
+}
+
+pub fn sample_curve_at(
+    expr: &ScalarExpr,
+    domain: &Domain,
+    samples: usize,
+    time: f32,
+) -> Vec<Option<Vec3>> {
+    sample_curve_with_diagnostics_at(expr, domain, samples, time).0
 }
 
 pub fn sample_curve_with_diagnostics(
@@ -175,6 +195,16 @@ pub fn sample_curve_with_diagnostics(
     domain: &Domain,
     samples: usize,
 ) -> (Vec<Option<Vec3>>, SampleDiagnostics) {
+    sample_curve_with_diagnostics_at(expr, domain, samples, 0.0)
+}
+
+pub fn sample_curve_with_diagnostics_at(
+    expr: &ScalarExpr,
+    domain: &Domain,
+    samples: usize,
+    time: f32,
+) -> (Vec<Option<Vec3>>, SampleDiagnostics) {
+    let time = f64::from(time);
     let samples = samples.min(MAX_CURVE_SLOTS);
     let mut diagnostics = SampleDiagnostics::default();
     if !valid_curve_domain(domain) {
@@ -193,7 +223,7 @@ pub fn sample_curve_with_diagnostics(
             // Weighted f64 interpolation avoids f32 span overflow and cancellation
             // of a small inclusive endpoint against a very large opposite endpoint.
             let x = (1.0 - t) * lo + t * hi;
-            checked_height(expr, x, &mut diagnostics)
+            checked_height(expr, x, time, &mut diagnostics)
                 .map(|height| Vec3::new(x as f32, height as f32, 0.0))
         })
         .collect();
@@ -204,6 +234,16 @@ pub fn sample_curve_with_diagnostics(
 /// This conservative display heuristic can omit steep continuous edges and does
 /// not prove continuity. Root level 0 through level 6 costs at most 127 probes.
 pub fn curve_edges(expr: &ScalarExpr, domain: &Domain, slots: &[Option<Vec3>]) -> CurveEdges {
+    curve_edges_at(expr, domain, slots, 0.0)
+}
+
+pub fn curve_edges_at(
+    expr: &ScalarExpr,
+    domain: &Domain,
+    slots: &[Option<Vec3>],
+    time: f32,
+) -> CurveEdges {
+    let time = f64::from(time);
     let mut result = CurveEdges::default();
     if !valid_curve_domain(domain) {
         result.diagnostics.invalid_domain = true;
@@ -222,6 +262,7 @@ pub fn curve_edges(expr: &ScalarExpr, domain: &Domain, slots: &[Option<Vec3>]) -
             [f64::from(b.x), f64::from(b.y)],
             threshold,
             0,
+            time,
             &mut result.diagnostics,
         ) {
             result.segments.push([*a, *b]);
@@ -242,8 +283,13 @@ fn valid_curve_domain(domain: &Domain) -> bool {
         && domain.min.y <= domain.max.y
 }
 
-fn checked_height(expr: &ScalarExpr, x: f64, diagnostics: &mut SampleDiagnostics) -> Option<f64> {
-    let Some(height) = expr.eval(x, 0.0).filter(|_| x.is_finite()) else {
+fn checked_height(
+    expr: &ScalarExpr,
+    x: f64,
+    time: f64,
+    diagnostics: &mut SampleDiagnostics,
+) -> Option<f64> {
+    let Some(height) = expr.eval_at(x, 0.0, time).filter(|_| x.is_finite()) else {
         diagnostics.invalid_samples += 1;
         return None;
     };
@@ -260,11 +306,12 @@ fn probe_edge(
     b: [f64; 2],
     threshold: f64,
     level: usize,
+    time: f64,
     diagnostics: &mut SampleDiagnostics,
 ) -> bool {
     diagnostics.probes += 1;
     let x = (a[0] + b[0]) * 0.5;
-    let Some(y) = checked_height(expr, x, diagnostics) else {
+    let Some(y) = checked_height(expr, x, time, diagnostics) else {
         return false;
     };
     let spread = a[1].max(b[1]).max(y) - a[1].min(b[1]).min(y);
@@ -275,6 +322,6 @@ fn probe_edge(
         return false;
     }
     let mid = [x, y];
-    probe_edge(expr, a, mid, threshold, level + 1, diagnostics)
-        && probe_edge(expr, mid, b, threshold, level + 1, diagnostics)
+    probe_edge(expr, a, mid, threshold, level + 1, time, diagnostics)
+        && probe_edge(expr, mid, b, threshold, level + 1, time, diagnostics)
 }

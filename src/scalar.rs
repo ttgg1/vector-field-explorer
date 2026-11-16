@@ -1,4 +1,4 @@
-//! Static right-hand-side scalar expressions, separate from vector fields.
+//! Right-hand-side scalar expressions, separate from vector fields.
 
 #[derive(Clone, Copy, Debug)]
 pub enum ScalarContext {
@@ -9,6 +9,7 @@ pub enum ScalarContext {
 #[derive(Clone, Debug)]
 pub struct ScalarExpr {
     expr: meval::Expr,
+    time_dependent: bool,
 }
 
 #[derive(Debug)]
@@ -48,19 +49,47 @@ impl ScalarExpr {
         };
         let expr = source.parse::<meval::Expr>().map_err(error)?;
         // bind checks variables/functions/arity, but does not evaluate the RHS.
-        match context {
+        // Try the static binding first: an expression that binds without `t` is
+        // static, while an expression such as `sin(t)*x` fails here and then
+        // succeeds once `t` is allowed.
+        let static_bind = match context {
             ScalarContext::Curve => expr.clone().bind("x").map(|_| ()),
             ScalarContext::Surface => expr.clone().bind2("x", "y").map(|_| ()),
+        };
+        if static_bind.is_ok() {
+            return Ok(Self {
+                expr,
+                time_dependent: false,
+            });
         }
-        .map_err(error)?;
-        Ok(Self { expr })
+        let static_error = static_bind.expect_err("checked immediately above");
+        let time_bind = match context {
+            ScalarContext::Curve => expr.clone().bind2("x", "t").map(|_| ()),
+            ScalarContext::Surface => expr.clone().bind3("x", "y", "t").map(|_| ()),
+        };
+        // Report the original static error so a curve still says only `x` is
+        // allowed rather than advertising `t` for an unrelated bad source.
+        time_bind.map_err(|_| error(static_error))?;
+        Ok(Self {
+            expr,
+            time_dependent: true,
+        })
     }
 
-    /// Return only finite f64 heights; GPU representability is checked by sampling.
+    pub fn is_time_dependent(&self) -> bool {
+        self.time_dependent
+    }
+
+    /// Compatibility evaluation at `t = 0`.
     pub fn eval(&self, x: f64, y: f64) -> Option<f64> {
+        self.eval_at(x, y, 0.0)
+    }
+
+    /// Return only finite f64 heights at the supplied simulated time.
+    pub fn eval_at(&self, x: f64, y: f64, t: f64) -> Option<f64> {
         let value = self
             .expr
-            .eval_with_context(([("x", x), ("y", y)], meval::Context::new()))
+            .eval_with_context(([("x", x), ("y", y), ("t", t)], meval::Context::new()))
             .ok()?;
         value.is_finite().then_some(value)
     }

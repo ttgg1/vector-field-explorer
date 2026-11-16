@@ -32,7 +32,9 @@ instanced GPU scene:
 
 Scalar **Curve** (`y = f(x)`) and **Surface** (`z = f(x, y)`) plots are
 available from the Plot panel, with signed-height colors, depth-correct
-references, and PNG capture. See the
+references, and PNG capture. Curves and surfaces can read the shared
+simulation time `t`, so Play/Pause animates them from the same clock as
+particles and time-dependent vector fields; static plots stay idle. See the
 [scalar plotting guide](docs/scalar-plotting.md) for syntax, examples,
 draft/restart rules, sampling gaps and platform scope. Scalar SVG and scalar
 CLI output are intentionally unsupported; SVG remains vector-field-only.
