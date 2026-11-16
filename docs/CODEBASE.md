@@ -28,7 +28,8 @@ One Rust crate, `vector-field-explorer`, built two ways:
 
 The crate is both `cdylib` and `rlib` ([Cargo.toml](../Cargo.toml)), so the wasm
 bundle and the integration tests can share it. The only external rendering
-dependency is eframe's re-exported wgpu; the only evaluator is `meval`.
+dependency is eframe's re-exported wgpu; formula evaluation uses `meval`, while
+`src/sources` is a separate pure CPU source-evaluator seam.
 
 The field is formula-driven:
 
@@ -37,9 +38,11 @@ The field is formula-driven:
 - Sampling, arrows, streamlines, particles, colormaps, plane inspection, two
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
   screenshots, and persistence are all in this tree.
-- The app is a teaching-grade explorer, not a solver. Post-v1 physics work
-  (sources, Maxwell, ODE) is described in [ADR 0003](adr/0003-physics-foundations.md)
-  and is not implemented here.
+- The app is a teaching-grade explorer, not a solver. The pure source-evaluator
+  slice in `src/sources` currently evaluates softened point charges and infinite
+  straight wires; the remaining six geometries are validated model data only.
+  Maxwell/ODE work beyond that is described in
+  [ADR 0003](adr/0003-physics-foundations.md).
 
 ### Source control and licence
 
@@ -607,6 +610,54 @@ them at a point.
 
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
+
+#### `src/sources/` — validated source model and scaled elementary fields
+
+**Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for softened source
+fields. `src/sources/mod.rs` re-exports only the public contract;
+`src/sources/model.rs` validates and freezes the input;
+`src/sources/numeric.rs` carries power-of-two-scaled elementary arithmetic;
+`src/sources/evaluate.rs` prepares an evaluator and builds family results.
+
+**Public API.** `SourceKind` (all eight vectors), `Source`, `AccuracyRequest`,
+`EvalOptions`, `WorkLimits`, `SourceSet::new`, `Evaluator::new`,
+`Evaluator::evaluate`, `Sample`, `FamilyResult`, `Estimate`, `Diagnostics`,
+`StopReason`, `InputError`, `PrepareError`, and the hard-ceiling constants.
+Defaults are epsilon `1e-7`, E/B scales `1e-2`, softening `0.1`, 64 sources,
+2,000,000 work units/family/point, 8,192 cells/family, depth 48 and 65,536
+queries/job. Callers may lower these limits; requests above the documented
+ceilings are rejected.
+
+**Invariants.**
+- Every center/axis/strength must be finite; used axes must be nonzero and
+  dimensions positive; turns must be at least one. Negative and zero strengths
+  remain valid. Point/sphere axes are unused, so a finite zero axis is valid.
+- `SourceSet::new` polls cancellation before the source copy, rejects
+  over-limit lists before copying, validates all data before a fallible
+  reservation, and stores a private immutable copy. `Evaluator::new` validates
+  options before its fallible copy and two bounded family scratch reservations.
+- `evaluate` counts invalid queries, publishes no vector for cancelled/invalid/
+  unrepresentable queries, sums E and B separately, and uses compensated
+  component sums. Empty and zero-strength families are exact `ZERO` with zero
+  arithmetic uncertainty and a positive absolute target.
+- Elementary point and wire fields are evaluated with max-scaled norms and
+  mantissa/exponent arithmetic, so huge displacements do not fabricate
+  `NumericRange`; genuine underflow is published with a flag and uncertainty.
+  A wire query exactly on its axis returns exact `ZERO` because the azimuthal
+  basis is undefined there.
+- Nonzero finite-line/ring/disc/sphere/loop/solenoid sources currently return
+  `Unavailable(StopReason::UnresolvedFeature)`; later tasks replace those
+  branches. Zero-strength sources are skipped and exact.
+
+**Pinned by.** [tests/sources_model_test.rs](../tests/sources_model_test.rs):
+`validation_is_strict`, `prepare_is_cancellable_before_allocation`,
+`empty_and_zero_are_exact`, `axis_direction_is_not_squared_norm_limited`.
+[tests/sources_numeric_test.rs](../tests/sources_numeric_test.rs):
+`scaled_elementary_fields`.
+
+**Limitations.** Task 1 has no quadrature, later-task geometry reductions,
+family refinement, UI, persistence, glyphs, rendering, export or app integration.
+Uncertainty is an empirical arithmetic allowance, not a certified bound.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 
@@ -2702,5 +2753,5 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 - Why the layout uses rails and one persisted envelope: [ADR 0001](adr/0001-ui-layout-panel-rails.md).
 - Why one clock owns all animation and what a new time base costs:
   [ADR 0002](adr/0002-single-simulation-clock.md).
-- Why physics is analytic-first, why `meval` is the only evaluator, and the
+- Why physics is analytic-first, why formula evaluation uses `meval`, and the
   post-v1 order: [ADR 0003](adr/0003-physics-foundations.md).

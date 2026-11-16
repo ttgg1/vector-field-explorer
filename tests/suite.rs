@@ -91,6 +91,8 @@ mod sidebar_camera_ui_test;
 mod sidebar_colormap_ui_test;
 mod sidebar_controls_test;
 mod sidebar_sections_test;
+mod sources_model_test;
+mod sources_numeric_test;
 mod status_bar_test;
 mod streamline_count_test;
 mod streamlines_test;
