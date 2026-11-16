@@ -1,0 +1,25 @@
+{
+  "info": {
+    "id": "ses_implementer",
+    "title": "example",
+    "model": {"providerID": "opencode-go", "id": "deepseek-v4.1-flash", "variant": "low"}
+  },
+  "messages": [
+    {
+      "id": "msg-1",
+      "type": "assistant",
+      "agent": "implementer-opencode-go",
+      "model": {"providerID": "opencode-go", "id": "deepseek-v4.1-flash", "variant": "low"},
+      "tokens": {"input": 100, "output": 20, "reasoning": 5, "cache": {"read": 30, "write": 1}},
+      "cost": 0
+    },
+    {
+      "id": "msg-2",
+      "type": "assistant",
+      "agent": "reviewer-opencode-go",
+      "model": {"providerID": "opencode-go", "id": "glm-5.3-flash", "variant": "low"},
+      "tokens": {"output": 8}
+    },
+    {"id": "user-1", "type": "user", "text": "ignored by metrics"}
+  ]
+}

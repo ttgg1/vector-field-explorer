@@ -1,5 +1,7 @@
 # Public-catalog-first OpenCode Go workflow
 
+> **Superseded by owner decision on 2026-11-16.** Its compact metrics ruling remains historical evidence; the Python orchestration/runtime approach is retired. See the active [Markdown-first agent workflow design](2026-11-16-markdown-first-agent-workflow-design.md).
+
 ## Intent
 
 Prioritize a low-friction, efficient OpenCode Go workflow using public OpenCode model catalog facts. No model-generation comparison or personal usage measurement is needed; the owner reports low AI usage and does not want an oversized telemetry/review loop.
