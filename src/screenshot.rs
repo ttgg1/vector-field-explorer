@@ -12,7 +12,7 @@
 //!   DOM downloads. Completion arrives over a channel and shows as a toast.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -81,7 +81,11 @@ pub fn capture_size(
     let cap = f64::from(cap.max(1));
     let to_pixels = |points: f32| -> f64 {
         let pixels = f64::from(points) * scale_factor;
-        if pixels.is_finite() { pixels.round().max(1.0) } else { 1.0 }
+        if pixels.is_finite() {
+            pixels.round().max(1.0)
+        } else {
+            1.0
+        }
     };
     let width = to_pixels(width_points);
     let height = to_pixels(height_points);
@@ -136,7 +140,9 @@ pub fn png_readback_check(format: TextureFormat) -> Result<(), String> {
         | TextureFormat::Rgba8UnormSrgb
         | TextureFormat::Bgra8Unorm
         | TextureFormat::Bgra8UnormSrgb => Ok(()),
-        other => Err(format!("unsupported surface format {other:?} for screenshots")),
+        other => Err(format!(
+            "unsupported surface format {other:?} for screenshots"
+        )),
     }
 }
 
@@ -158,7 +164,9 @@ pub fn to_rgba(format: TextureFormat, mut pixels: Vec<u8>) -> Result<Vec<u8>, St
             .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
             .collect()),
         // Unreachable: `png_readback_check` rejected everything else.
-        other => Err(format!("unsupported surface format {other:?} for screenshots")),
+        other => Err(format!(
+            "unsupported surface format {other:?} for screenshots"
+        )),
     }
 }
 
@@ -235,14 +243,44 @@ fn save_capture(rgba: &[u8], width: u32, height: u32, path: PathBuf) -> SaveOutc
     }
 }
 
+/// A capture completion tagged with the generation that started it. Reset can
+/// invalidate a cancelled generation without the worker thread racing a new
+/// request on the same untagged channel.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureReport {
+    pub generation: u64,
+    pub outcome: SaveOutcome,
+}
+
+/// The sender handed to a PNG capture worker. It stamps every completion with
+/// the capture generation so [`Screenshot::tick`] can discard results from a
+/// request that Reset cancelled.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct CaptureSink {
+    tx: Sender<CaptureReport>,
+    generation: u64,
+}
+
+impl CaptureSink {
+    pub fn send(&self, outcome: SaveOutcome) {
+        let _ = self.tx.send(CaptureReport {
+            generation: self.generation,
+            outcome,
+        });
+    }
+}
+
 /// Show the native save dialog on a worker thread and write the PNG there.
 ///
 /// The dialog and the file write both block, so neither may run on the egui
 /// frame: the thread owns the capture bytes and reports its [`SaveOutcome`]
-/// over `tx`. `ctx` is only used to wake the UI so the toast appears at once.
+/// through the capture-generation [`CaptureSink`]. `ctx` is only used to wake
+/// the UI so the toast appears at once.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_save(
-    tx: Sender<SaveOutcome>,
+    sink: CaptureSink,
     ctx: egui::Context,
     rgba: Vec<u8>,
     width: u32,
@@ -259,19 +297,14 @@ pub fn spawn_save(
             Some(path) => save_capture(&rgba, width, height, path),
             None => SaveOutcome::Cancelled,
         };
-        let _ = tx.send(outcome);
+        sink.send(outcome);
         ctx.request_repaint();
     });
 }
 
 /// Show the native save dialog on a worker thread and write the SVG there.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn spawn_save_svg(
-    tx: Sender<SaveOutcome>,
-    ctx: egui::Context,
-    svg: String,
-    suggested: String,
-) {
+pub fn spawn_save_svg(tx: Sender<SaveOutcome>, ctx: egui::Context, svg: String, suggested: String) {
     std::thread::spawn(move || {
         let outcome = match rfd::FileDialog::new()
             .set_title("Save screenshot (SVG)")
@@ -340,13 +373,15 @@ fn download_png(png: &[u8], filename: &str) -> Result<(), String> {
     let revoke_url = url.clone();
     let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
         if let Err(error) = web_sys::Url::revoke_object_url(&revoke_url) {
-            log::warn!("could not revoke screenshot object URL: {}", js_error(error));
+            log::warn!(
+                "could not revoke screenshot object URL: {}",
+                js_error(error)
+            );
         }
     });
-    if let Err(error) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-        callback.unchecked_ref(),
-        1_000,
-    ) {
+    if let Err(error) = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 1_000)
+    {
         anchor.remove();
         let _ = web_sys::Url::revoke_object_url(&url);
         return Err(js_error(error));
@@ -361,7 +396,9 @@ fn download_png(png: &[u8], filename: &str) -> Result<(), String> {
 pub fn download_svg(svg: &str, filename: &str) -> Result<(), String> {
     use wasm_bindgen::JsCast as _;
     let window = web_sys::window().ok_or_else(|| "browser window unavailable".to_string())?;
-    let document = window.document().ok_or_else(|| "browser document unavailable".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "browser document unavailable".to_string())?;
     let anchor = document
         .create_element("a")
         .map_err(js_error)?
@@ -388,7 +425,8 @@ pub fn download_svg(svg: &str, filename: &str) -> Result<(), String> {
     let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
         let _ = web_sys::Url::revoke_object_url(&revoke_url);
     });
-    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 1_000);
+    let _ = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 1_000);
     anchor.click();
     anchor.remove();
     Ok(())
@@ -415,21 +453,26 @@ pub(crate) fn finish_download(
     width: u32,
     height: u32,
     filename: String,
-    tx: Sender<SaveOutcome>,
+    sink: CaptureSink,
     ctx: egui::Context,
 ) {
     let outcome = match result {
         Ok(rgba) => save_capture(&rgba, width, height, &filename),
         Err(error) => SaveOutcome::Failed(error),
     };
-    let _ = tx.send(outcome);
+    sink.send(outcome);
     ctx.request_repaint();
 }
 
 /// Project a world point through `view_proj` into screen pixels for a
 /// `width`×`height` image. Returns `None` when the point is behind the
 /// camera or outside the view frustum.
-fn world_to_screen(view_proj: Mat4, point: [f32; 3], width: u32, height: u32) -> Option<(f32, f32)> {
+fn world_to_screen(
+    view_proj: Mat4,
+    point: [f32; 3],
+    width: u32,
+    height: u32,
+) -> Option<(f32, f32)> {
     let v = view_proj * glam::Vec4::new(point[0], point[1], point[2], 1.0);
     if !v.w.is_finite() || v.w <= 0.0 {
         return None;
@@ -477,7 +520,8 @@ pub fn scene_to_svg(
         log::warn!(
             "SVG export contains {} elements, exceeding the safe cap of {}; \
              file may be large",
-            element_count, SVG_ELEMENT_CAP
+            element_count,
+            SVG_ELEMENT_CAP
         );
     }
 
@@ -508,10 +552,14 @@ pub fn scene_to_svg(
 
     // Lines (streamlines, trails, backdrop)
     for line in scene.lines.iter().chain(scene.trails.iter()) {
-        let Some((x1, y1)) = world_to_screen(view_proj, [line.a[0], line.a[1], line.a[2]], width, height) else {
+        let Some((x1, y1)) =
+            world_to_screen(view_proj, [line.a[0], line.a[1], line.a[2]], width, height)
+        else {
             continue;
         };
-        let Some((x2, y2)) = world_to_screen(view_proj, [line.b[0], line.b[1], line.b[2]], width, height) else {
+        let Some((x2, y2)) =
+            world_to_screen(view_proj, [line.b[0], line.b[1], line.b[2]], width, height)
+        else {
             continue;
         };
         let color = color_to_hex(line.color);
@@ -541,7 +589,11 @@ pub fn scene_to_svg(
         if tag > 0.5 {
             let dir = [inst.dir_len[0], inst.dir_len[1], inst.dir_len[2]];
             let len = inst.dir_len[3];
-            let end = [pos[0] + dir[0] * len, pos[1] + dir[1] * len, pos[2] + dir[2] * len];
+            let end = [
+                pos[0] + dir[0] * len,
+                pos[1] + dir[1] * len,
+                pos[2] + dir[2] * len,
+            ];
             if let Some((ex, ey)) = world_to_screen(view_proj, end, width, height) {
                 let sw = 1.5f32;
                 out.push_str(&format!(
@@ -620,6 +672,24 @@ pub fn compose_svg_export_message(element_count: usize, download_started: bool) 
     }
 }
 
+/// The exact user-facing reason scalar SVG export is unavailable. The menu,
+/// help/disabled state (Task 7) and every execution guard share this string.
+pub const SCALAR_SVG_MESSAGE: &str = "Scalar plots require PNG; SVG export supports vector mode";
+
+/// Whether SVG export is allowed for an explicit plot kind. Scalar plots have
+/// no SVG contract, so both scalar kinds are rejected at execution, not only
+/// by disabled UI state. Vector mode keeps its existing 2D-only rule in
+/// [`svg_export_enabled`].
+#[doc(hidden)]
+pub fn svg_export_allowed(kind: crate::plot::PlotKind) -> Result<(), &'static str> {
+    match kind {
+        crate::plot::PlotKind::VectorField => Ok(()),
+        crate::plot::PlotKind::Curve2D | crate::plot::PlotKind::Surface3D => {
+            Err(SCALAR_SVG_MESSAGE)
+        }
+    }
+}
+
 /// Whether an SVG export is allowed for the current view mode. SVG export is
 /// 2D only; in 3D the entry is disabled and PNG remains the only raster
 /// export. Promoted as a single `#[doc(hidden)]` seam so the rejection rule
@@ -655,24 +725,59 @@ pub struct Screenshot {
     capturing: bool,
     tx: Sender<SaveOutcome>,
     rx: Receiver<SaveOutcome>,
+    capture_tx: Sender<CaptureReport>,
+    capture_rx: Receiver<CaptureReport>,
+    /// Generations whose completions may still attach a toast. `take_request`
+    /// adds one; Reset clears the set, so an old worker cannot overwrite a
+    /// newer request's state.
+    active_generations: Vec<u64>,
+    next_generation: u64,
     toast: Option<Toast>,
 }
 
 impl Screenshot {
     pub fn new() -> Self {
         let (tx, rx) = channel();
-        Self::with_channel(tx, rx)
+        let (capture_tx, capture_rx) = channel();
+        Self::with_channels(tx, rx, capture_tx, capture_rx)
     }
 
     /// Test seam: the caller owns both channel ends, so a test can play the
-    /// finisher's part and watch the toast lifecycle without a dialog.
+    /// finisher's part and watch the toast lifecycle without a dialog. This
+    /// plain channel keeps the historical untagged outcome API.
     pub fn with_channel(tx: Sender<SaveOutcome>, rx: Receiver<SaveOutcome>) -> Self {
+        let (capture_tx, capture_rx) = channel();
+        Self::with_channels(tx, rx, capture_tx, capture_rx)
+    }
+
+    /// Test seam for the generation-tagged capture channel. The app's real
+    /// constructor uses an internal tagged channel; this lets a test deliver a
+    /// completion for a specific (possibly cancelled) generation.
+    #[doc(hidden)]
+    pub fn with_capture_channel(
+        capture_tx: Sender<CaptureReport>,
+        capture_rx: Receiver<CaptureReport>,
+    ) -> Self {
+        let (tx, rx) = channel();
+        Self::with_channels(tx, rx, capture_tx, capture_rx)
+    }
+
+    fn with_channels(
+        tx: Sender<SaveOutcome>,
+        rx: Receiver<SaveOutcome>,
+        capture_tx: Sender<CaptureReport>,
+        capture_rx: Receiver<CaptureReport>,
+    ) -> Self {
         Self {
             pending: false,
             svg_pending: false,
             capturing: false,
             tx,
             rx,
+            capture_tx,
+            capture_rx,
+            active_generations: Vec::new(),
+            next_generation: 0,
             toast: None,
         }
     }
@@ -693,6 +798,12 @@ impl Screenshot {
         std::mem::take(&mut self.svg_pending)
     }
 
+    /// Whether an SVG request is still waiting for the viewport dispatch.
+    #[doc(hidden)]
+    pub fn svg_request_pending(&self) -> bool {
+        self.svg_pending
+    }
+
     /// Consume the click; true means "capture this frame".
     ///
     /// Wasm only: while an async capture is in flight the slot stays closed, so
@@ -705,26 +816,62 @@ impl Screenshot {
             return false;
         }
         self.capturing = true;
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.wrapping_add(1);
+        self.active_generations.push(generation);
         true
     }
 
-    /// A sender for the saver thread spawned by this capture.
+    /// The generation of the capture just claimed by [`Self::take_request`].
+    #[doc(hidden)]
+    pub fn capture_generation(&self) -> Option<u64> {
+        self.active_generations.last().copied()
+    }
+
+    /// A sender for the saver thread spawned by this capture. The sink stamps
+    /// the completion with the current capture generation.
+    #[doc(hidden)]
+    pub fn capture_sink(&self) -> Option<CaptureSink> {
+        Some(CaptureSink {
+            tx: self.capture_tx.clone(),
+            generation: self.capture_generation()?,
+        })
+    }
+
+    /// A sender for the historical untagged channel (SVG and tests).
     pub fn sender(&self) -> Sender<SaveOutcome> {
         self.tx.clone()
     }
 
+    /// Cancel every pending/requested capture and invalidate in-flight
+    /// completions. Used by Reset; the worker may still finish, but its tagged
+    /// result is ignored.
+    pub fn cancel_pending(&mut self) {
+        self.pending = false;
+        self.svg_pending = false;
+        self.capturing = false;
+        self.active_generations.clear();
+        self.toast = None;
+    }
+
     /// Drain the capture's report, clear the in-flight slot on success or
-    /// failure, and expire the toast.
+    /// failure, and expire the toast. A tagged report is accepted only while
+    /// its generation is active; anything from a cancelled capture is dropped.
     pub fn tick(&mut self, now: Instant) {
-        loop {
-            match self.rx.try_recv() {
-                Ok(outcome) => {
-                    self.capturing = false;
-                    self.set_outcome(outcome, now);
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
+        while let Ok(report) = self.capture_rx.try_recv() {
+            if let Some(index) = self
+                .active_generations
+                .iter()
+                .position(|generation| *generation == report.generation)
+            {
+                self.active_generations.swap_remove(index);
+                self.capturing = !self.active_generations.is_empty();
+                self.set_outcome(report.outcome, now);
             }
+        }
+        while let Ok(outcome) = self.rx.try_recv() {
+            self.capturing = false;
+            self.set_outcome(outcome, now);
         }
         if let Some(toast) = &self.toast
             && now >= toast.until
@@ -737,7 +884,8 @@ impl Screenshot {
     /// example a surface format the PNG path cannot describe). Clears the
     /// in-flight slot so the next click can try again.
     pub fn fail(&mut self, message: String) {
-        self.capturing = false;
+        self.active_generations.pop();
+        self.capturing = !self.active_generations.is_empty();
         self.set_outcome(SaveOutcome::Failed(message), Instant::now());
     }
 
@@ -804,4 +952,3 @@ impl Default for Screenshot {
         Self::new()
     }
 }
-

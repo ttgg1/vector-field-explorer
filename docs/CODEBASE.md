@@ -368,6 +368,23 @@ seams it calls.
 **Limitations.** Click-seed history is app-local and bounded; it survives a
 rebuild but not a restart. The app does not expose a general command/undo stack.
 
+#### `src/app/plot.rs` — scalar plot integration
+
+**Purpose.** Reconciles plot-kind transitions, owns the transient plot camera
+and remembered vector pose, installs the isolated `PlotDrawState` callback,
+routes plot navigation, and guards scalar SVG / dispatches scalar PNG capture.
+
+**Public API.** `VfApp::fit_plot`, the doc-hidden `VfApp::test_harness`
+integration seam, and `SvgExportRoute` for the final SVG execution guard.
+
+**Invariants.** Scalar mode pauses rather than deletes vector particle/trail/
+time state; the live and captured plot share one `PlotScene` Arc and the source
+viewport's frame aspect; Reset cancels tagged capture completions and releases
+plot targets before the next vector frame.
+
+**Pinned by.** `tests/plot_app_test.rs`; `tests/plot_renderer_test.rs` covers
+the renderer configuration this module installs.
+
 #### `src/app/frame.rs` — eframe entry point and save
 
 **Purpose.** Implements `eframe::App` for `VfApp`: the frame phase order and the

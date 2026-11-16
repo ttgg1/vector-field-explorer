@@ -225,16 +225,20 @@ impl VfApp {
         // FOV and the 2D zoom are untouched, and the Presets panel below still
         // applies an explicit preset/Reset/Fit command afterwards, so those win.
         if self.state.domain != domain_before {
-            if self.state.mode_3d {
-                self.orbit.recentre_on(&self.state.domain);
+            let delta = view_command::domain_centre_delta(&domain_before, &self.state.domain);
+            if !self.state.is_vector_mode() {
+                // Scalar domain edits move the plot camera, never the saved
+                // vector orbit that a return to vector mode restores.
+                self.plot_camera.target += delta.as_dvec3();
             } else {
-                self.orbit.recentre_on_2d(&self.state.domain);
-            }
-            if let Some(fly) = self.fly.as_mut() {
-                fly.translate(view_command::domain_centre_delta(
-                    &domain_before,
-                    &self.state.domain,
-                ));
+                if self.state.mode_3d {
+                    self.orbit.recentre_on(&self.state.domain);
+                } else {
+                    self.orbit.recentre_on_2d(&self.state.domain);
+                }
+                if let Some(fly) = self.fly.as_mut() {
+                    fly.translate(delta);
+                }
             }
         }
     }
@@ -320,11 +324,24 @@ impl VfApp {
         // Counts come from the snapshot being painted, so they move exactly
         // when the scene does. Streamlines stay the app's field-geometry
         // segment count: `scene.lines` also holds the decorative backdrop.
-        self.status.parse_message = self.state.parse_error.clone();
-        self.status.arrow_count = self.scene.arrows.len();
-        self.status.streamline_count = self.streamline_count;
-        self.status.particle_count = self.scene.dots.len();
-        self.status.trail_count = self.scene.trails.len();
+        // Scalar mode reports its own status, never stale vector parse/counts.
+        if let Some(scene) = self.scene.as_vector() {
+            self.status.parse_message = self.state.parse_error.clone();
+            self.status.arrow_count = scene.arrows.len();
+            self.status.streamline_count = self.streamline_count;
+            self.status.particle_count = scene.dots.len();
+            self.status.trail_count = scene.trails.len();
+        } else if let Some(plot) = self.scene.as_plot() {
+            self.status.parse_message = if self.plot_status.is_empty() {
+                plot.status.clone()
+            } else {
+                self.plot_status.clone()
+            };
+            self.status.arrow_count = 0;
+            self.status.streamline_count = 0;
+            self.status.particle_count = 0;
+            self.status.trail_count = 0;
+        }
         self.status.density = self.state.density;
         self.status.is_3d = self.state.is_3d();
         self.status.sim_time = if crate::sim_clock::transport_visible(&self.state) {

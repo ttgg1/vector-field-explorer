@@ -143,10 +143,12 @@ fn sanitized_speed(speed: f32) -> f32 {
 }
 
 /// Whether the current view has a v0.1.0 clock consumer: the particle cloud
-/// exists only in the 3D view. Ticket 39 extends this with time-dependent
-/// fields and ticket 38 with plots.
+/// exists only in the 3D vector view, and time-dependent vector fields. Scalar
+/// plot kinds pause every vector consumer: static plots have no clock, and an
+/// invisible vector simulation must not advance while a plot is displayed.
 pub fn has_clock_consumer(state: &State) -> bool {
-    (state.particles && state.mode_3d) || state.field.is_time_dependent()
+    state.is_vector_mode()
+        && ((state.particles && state.mode_3d) || state.field.is_time_dependent())
 }
 
 /// Whether the transport strip should be shown. Today that is exactly

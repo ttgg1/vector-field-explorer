@@ -12,6 +12,12 @@ impl VfApp {
         // them up here so the toast reflects the latest attempt this frame.
         self.screenshot.tick(Instant::now());
 
+        // Task 6: reconcile an external/programmatic plot transition before any
+        // input or simulation consumer runs. Capture release follows in the
+        // same frame through the existing edge-triggered path.
+        self.reconcile_plot_transition();
+        self.sync_fly_capture(ctx);
+
         // Menu shortcuts (ticket 15): one table in `ui::menu`, consumed before
         // any widget so a focused text field never receives a key the menu
         // owns. Ctrl+Q is the one global shortcut (it quits from anywhere);
@@ -46,7 +52,10 @@ impl VfApp {
         // (web), mirroring `FlyKeys::apply_key`. This is what makes the
         // toggle fire on the key physically in the C position instead of on
         // whatever key happens to report logical C on a non-QWERTY layout.
-        if !ctx.text_edit_focused() && layout::fly_allowed(self.layout_mode) {
+        if !ctx.text_edit_focused()
+            && self.state.is_vector_mode()
+            && layout::fly_allowed(self.layout_mode)
+        {
             // Ticket 70: match on the physical key when the backend provides it
             // (native), falling back to the logical key (web). Ignore key-repeat
             // events so a held key cannot toggle fly on/off/on. Consume the
@@ -82,7 +91,7 @@ impl VfApp {
         // particles are off/in 2D or paused, and resumes from that time when a
         // consumer returns. A long idle gap still cannot make the particle
         // cloud jump.
-        self.advance_clock(ctx);
+        self.advance_clock(ctx.input(|input| input.stable_dt));
 
         // Camera keys (ticket 18): arrows, `+`/`-`, `R` and `F` feed the same
         // view-command seam as the double-click and the camera buttons. The
@@ -165,9 +174,8 @@ impl VfApp {
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.screenshot.request(),
             menu::SideEffect::ScreenshotSvg => {
-                if !crate::screenshot::svg_export_enabled(self.state.mode_3d) {
-                    self.screenshot
-                        .notify("SVG export is 2D only; use PNG in 3D".to_string(), true);
+                if let Some(reason) = self.svg_block_reason() {
+                    self.screenshot.notify(reason, true);
                 } else {
                     self.screenshot.request_svg();
                 }
@@ -187,13 +195,18 @@ impl VfApp {
             }
             menu::SideEffect::ResetCamera => self.presets.clear_active(),
         }
+        if action == MenuAction::ResetAllControls {
+            // Task 6: the menu reset owns controls/clock; the app-owned half
+            // cancels captures, returns to vector mode and empties plot state.
+            self.reset_plot_state();
+        }
     }
 
     /// The current view context for the command seam: which projection is
     /// showing, which domain it frames, and the viewport's aspect ratio. The
     /// aspect comes from the last painted viewport (keyboard and panel buttons
     /// run before the central panel), so a resize takes effect one frame later.
-    fn view_context(&self) -> ViewContext {
+    pub(super) fn view_context(&self) -> ViewContext {
         let aspect = self
             .last_viewport_rect
             .map(|rect| rect.width().max(1.0) / rect.height().max(1.0))
@@ -205,6 +218,10 @@ impl VfApp {
     /// camera buttons, menu). Reset and fit invalidate the highlighted preset:
     /// the camera no longer matches the saved view.
     pub(super) fn apply_view_command(&mut self, command: ViewCommand) {
+        if !self.state.is_vector_mode() {
+            self.apply_plot_view_command(command);
+            return;
+        }
         let context = self.view_context();
         self.orbit =
             view_command::apply_view_command_with_fly(self.orbit, &mut self.fly, context, command);
@@ -278,7 +295,7 @@ impl VfApp {
             self.fly_keys.clear();
         }
 
-        let desired = self.fly.is_some() && self.state.is_3d();
+        let desired = self.state.is_vector_mode() && self.fly.is_some() && self.state.is_3d();
         if let Some((grabs, visible)) = capture_transition(self.capture_active, desired) {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -323,6 +340,10 @@ impl VfApp {
     /// record: it is not the first half of a double-click and must never let a
     /// later double-click take back an unrelated earlier mouse click.
     pub(super) fn apply_seed_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.state.is_vector_mode() {
+            // Scalar mode has no vector seeding or particle bursts.
+            return;
+        }
         let text_focused = ctx.text_edit_focused();
         let flying = self.fly.is_some();
         let shortcut = ctx.input(|input| {
@@ -387,6 +408,12 @@ impl VfApp {
         aspect: f32,
         time: f64,
     ) {
+        if !self.state.is_vector_mode() {
+            // Plot mode never seeds or bursts, including the captured-pointer
+            // and S/P routes that share this wrapper.
+            self.last_click_seed = None;
+            return;
+        }
         match view_command::click_action_plan(
             action,
             self.state.streamlines,
@@ -415,14 +442,16 @@ impl VfApp {
                     .state
                     .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
                 self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-                self.scene.lines = Arc::new(compose_lines(
-                    &self.flow_lines,
-                    &self.click_lines,
-                    &self.state.domain,
-                    self.state.is_3d(),
-                    self.state.show_grid,
-                    self.state.show_coordinate_system,
-                ));
+                if let Some(scene) = self.scene.as_vector_mut() {
+                    scene.lines = Arc::new(compose_lines(
+                        &self.flow_lines,
+                        &self.click_lines,
+                        &self.state.domain,
+                        self.state.is_3d(),
+                        self.state.show_grid,
+                        self.state.show_coordinate_system,
+                    ));
+                }
                 log::trace!(
                     "click seed {} of {} at {seed:?}: {} click streamline segments",
                     self.click_seeds.len(),
@@ -525,13 +554,15 @@ impl VfApp {
             .state
             .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-        self.scene.lines = Arc::new(compose_lines(
-            &self.flow_lines,
-            &self.click_lines,
-            &self.state.domain,
-            self.state.is_3d(),
-            self.state.show_grid,
-            self.state.show_coordinate_system,
-        ));
+        if let Some(scene) = self.scene.as_vector_mut() {
+            scene.lines = Arc::new(compose_lines(
+                &self.flow_lines,
+                &self.click_lines,
+                &self.state.domain,
+                self.state.is_3d(),
+                self.state.show_grid,
+                self.state.show_coordinate_system,
+            ));
+        }
     }
 }
