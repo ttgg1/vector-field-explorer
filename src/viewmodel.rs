@@ -12,7 +12,7 @@ use super::domain::Domain;
 use super::field::FieldExpr;
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
-use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at};
+use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace_at};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::particles::{
@@ -869,8 +869,20 @@ impl State {
         }
     }
 
-    /// Resample the field with this state's grid and colour settings.
+    /// Resample the field with this state's grid and colour settings. A 2D
+    /// slice of a three-component field samples its flat local plane frame, so
+    /// positions, directions and magnitudes are all local; every other view
+    /// keeps sampling the world domain exactly as before.
     pub fn sample(self: &State) -> Vec<ArrowData> {
+        if let Some(frame) = self.plane_frame() {
+            return sample_plane_at(
+                &self.field,
+                &frame,
+                self.grid().x,
+                &self.view_options(),
+                self.time,
+            );
+        }
         sample_field_at(
             &self.field,
             &self.domain,
@@ -885,7 +897,7 @@ impl State {
     /// size instead of piling them up.
     pub fn spacing(self: &State) -> f32 {
         let grid = self.grid();
-        let size = self.domain.domain_size();
+        let size = self.scene_domain().domain_size();
         let cell = |extent, n| {
             if n <= 1 {
                 extent

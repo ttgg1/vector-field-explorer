@@ -247,9 +247,9 @@ impl VfApp {
                 self.plot_camera.target += delta.as_dvec3();
             } else {
                 if self.state.mode_3d {
-                    self.orbit.recentre_on(&self.state.domain);
+                    self.orbit.recentre_on(&self.state.scene_domain());
                 } else {
-                    self.orbit.recentre_on_2d(&self.state.domain);
+                    self.orbit.recentre_on_2d(&self.state.scene_domain());
                 }
                 if let Some(fly) = self.fly.as_mut() {
                     fly.translate(delta);

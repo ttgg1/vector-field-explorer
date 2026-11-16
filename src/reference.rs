@@ -13,6 +13,7 @@
 use glam::Vec3;
 
 use crate::domain::Domain;
+use crate::plane::PlaneFrame;
 use crate::renderer::LineInstanceGPU;
 
 /// Subdivisions per face direction; 10 gives the 11 lines that matched the old
@@ -66,6 +67,71 @@ pub(crate) fn reference_lines_visible(
         }
     }
     lines
+}
+
+/// Reference lines for one selected slice, in the frame's local `(u, v, 0)`
+/// coordinates: a flat grid and the two in-plane axes. The axes take the
+/// world-axis colour of `frame.right` and `frame.up`, so an X slice shows the
+/// Z and Y axes while a Z slice shows X and Y. Deliberately no cube: the slice
+/// scene is flat.
+pub fn reference_plane_lines(
+    frame: &PlaneFrame,
+    show_grid: bool,
+    show_coordinate_system: bool,
+) -> Vec<LineInstanceGPU> {
+    let mut lines = Vec::new();
+    let half_u = frame.half_u;
+    let half_v = frame.half_v;
+    if show_grid {
+        for k in 0..=REFERENCE_DIVISIONS {
+            let v = lerp(-half_v, half_v, k);
+            push(
+                &mut lines,
+                Vec3::new(-half_u, v, 0.0),
+                Vec3::new(half_u, v, 0.0),
+                GRID_COLOR,
+                GRID_WIDTH,
+            );
+            let u = lerp(-half_u, half_u, k);
+            push(
+                &mut lines,
+                Vec3::new(u, -half_v, 0.0),
+                Vec3::new(u, half_v, 0.0),
+                GRID_COLOR,
+                GRID_WIDTH,
+            );
+        }
+    }
+    if show_coordinate_system {
+        push(
+            &mut lines,
+            Vec3::new(-half_u, 0.0, 0.0),
+            Vec3::new(half_u, 0.0, 0.0),
+            world_axis_color(frame.right),
+            AXIS_WIDTH,
+        );
+        push(
+            &mut lines,
+            Vec3::new(0.0, -half_v, 0.0),
+            Vec3::new(0.0, half_v, 0.0),
+            world_axis_color(frame.up),
+            AXIS_WIDTH,
+        );
+    }
+    lines
+}
+
+/// The colour of the world axis a frame basis vector points along, ignoring
+/// the sign (the X and Y slice bases point along `-Z` and `-X`).
+fn world_axis_color(basis: Vec3) -> [f32; 4] {
+    let abs = basis.abs();
+    if abs.x >= abs.y && abs.x >= abs.z {
+        AXIS_X_COLOR
+    } else if abs.y >= abs.z {
+        AXIS_Y_COLOR
+    } else {
+        AXIS_Z_COLOR
+    }
 }
 
 fn push(lines: &mut Vec<LineInstanceGPU>, a: Vec3, b: Vec3, color: [f32; 4], width: f32) {

@@ -56,11 +56,12 @@ impl VfApp {
                 .state
                 .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            let lines = Arc::new(compose_lines(
+            let lines = Arc::new(compose_lines_with_frame(
                 &self.flow_lines,
                 &self.click_lines,
-                &self.state.domain,
+                &self.state.scene_domain(),
                 self.state.is_3d(),
+                self.state.plane_frame(),
                 self.state.show_grid,
                 self.state.show_coordinate_system,
             ));

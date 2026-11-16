@@ -6,9 +6,10 @@
 //! plane in 2D. These tests pin the counts, bounds, axis colours and the plane
 //! the flat grid sits on.
 
-use glam::Vec3;
-use vector_field_explorer::app::compose_lines;
+use glam::{UVec3, Vec3};
+use vector_field_explorer::app::{compose_lines, compose_lines_with_frame};
 use vector_field_explorer::domain::Domain;
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::reference::{
     AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, EDGE_COLOR, GRID_COLOR, REFERENCE_DIVISIONS,
     reference_lines,
@@ -468,4 +469,40 @@ fn reference_visibility_recomposition_preserves_real_grid_and_click_segments() {
     assert_eq!(visible[0].color, AXIS_X_COLOR);
     assert_eq!(visible[1].color, AXIS_Y_COLOR);
     same_lines(&visible[2..], &rebuilt.lines);
+}
+
+#[test]
+fn plane_frame_composition_is_local_flat_and_keeps_flow_and_clicks_after_references() {
+    let domain = Domain::new(Vec3::new(-2.0, -1.0, -3.0), Vec3::new(2.0, 1.0, 3.0));
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::X,
+            index: 2,
+            ..Default::default()
+        },
+        UVec3::splat(5),
+    );
+    let flow = [sentinel(AXIS_X_COLOR, 101.0), sentinel(GRID_COLOR, 103.0)];
+    let clicks = [sentinel(GRID_COLOR, 105.0)];
+
+    let lines = compose_lines_with_frame(&flow, &clicks, &domain, false, Some(frame), true, true);
+    let reference_count = 2 * (REFERENCE_DIVISIONS as usize + 1) + 2;
+    assert_eq!(lines.len(), reference_count + flow.len() + clicks.len());
+
+    let reference = &lines[..reference_count];
+    assert!(
+        reference
+            .iter()
+            .all(|line| line.a[2].abs() < 1e-6 && line.b[2].abs() < 1e-6),
+        "a plane-frame reference is flat in local z, never a cube"
+    );
+    assert!(
+        reference.iter().all(|line| line.color == GRID_COLOR
+            || line.color == AXIS_Z_COLOR
+            || line.color == AXIS_Y_COLOR),
+        "only the local grid and its two world-axis-coloured axes"
+    );
+    same_lines(&lines[reference_count..reference_count + flow.len()], &flow);
+    same_lines(&lines[reference_count + flow.len()..], &clicks);
 }

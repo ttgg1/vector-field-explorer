@@ -11,10 +11,11 @@ use crate::fly_camera::{
     sync_fly, sync_fly_mirror,
 };
 use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
 use crate::plot_camera::PlotCamera;
 use crate::plot_scene::{PlotScene, ViewportScene};
-use crate::reference::reference_lines_visible;
+use crate::reference::{reference_lines_visible, reference_plane_lines};
 use crate::render::Camera;
 use crate::renderer::{
     DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
@@ -255,15 +256,16 @@ impl VfApp {
         // domain's centre is the origin, so a fresh session is unchanged.
         let mut orbit = OrbitCamera::default();
         if state.mode_3d {
-            orbit.recentre_on(&state.domain);
+            orbit.recentre_on(&state.scene_domain());
         } else {
-            orbit.recentre_on_2d(&state.domain);
+            orbit.recentre_on_2d(&state.scene_domain());
         }
-        let backdrop = compose_lines(
+        let backdrop = compose_lines_with_frame(
             &[],
             &[],
-            &state.domain,
+            &state.scene_domain(),
             state.is_3d(),
+            state.plane_frame(),
             state.show_grid,
             state.show_coordinate_system,
         );
@@ -362,7 +364,35 @@ pub fn compose_lines(
     show_grid: bool,
     show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
-    let mut lines = reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system);
+    compose_lines_with_frame(
+        flow,
+        clicks,
+        domain,
+        sampling_3d,
+        None,
+        show_grid,
+        show_coordinate_system,
+    )
+}
+
+/// As [`compose_lines`], but a plane slice supplies its local [`PlaneFrame`]:
+/// the backdrop is then the flat local grid and its two world-axis-coloured
+/// axes instead of the world cube or mid-z plane. `domain` is ignored for a
+/// plane frame, which carries its own origin and extents.
+#[doc(hidden)]
+pub fn compose_lines_with_frame(
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+    domain: &Domain,
+    sampling_3d: bool,
+    frame: Option<PlaneFrame>,
+    show_grid: bool,
+    show_coordinate_system: bool,
+) -> Vec<LineInstanceGPU> {
+    let mut lines = match frame {
+        Some(frame) => reference_plane_lines(&frame, show_grid, show_coordinate_system),
+        None => reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system),
+    };
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
     lines

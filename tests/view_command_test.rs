@@ -6,14 +6,15 @@ use eframe::egui;
 use glam::{Vec2, Vec3};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::domain::Domain;
+use vector_field_explorer::plane::PlaneAxis;
 use vector_field_explorer::ui::presets::CAMERA_BUTTONS;
 use vector_field_explorer::view_command::{
     self, KEY_ORBIT_STEP, KEY_ZOOM_FACTOR, ViewCommand, ViewContext, apply_view_command,
     command_for_key, domain_center, fit_distance,
 };
 use vector_field_explorer::viewmodel::{
-    ClickOutcome, DOUBLE_CLICK_WINDOW, DragButtons, DragChannel, LastClickSeed, ViewGesture,
-    CapturedClickOutcome, apply_camera_input, captured_click_outcome, click_outcome,
+    CapturedClickOutcome, ClickOutcome, DOUBLE_CLICK_WINDOW, DragButtons, DragChannel,
+    LastClickSeed, State, ViewGesture, apply_camera_input, captured_click_outcome, click_outcome,
     drag_channel, undo_click_seed,
 };
 
@@ -591,4 +592,25 @@ fn camera_buttons_run_the_same_commands_as_their_keys() {
             "{label} and {key:?} produce the same camera",
         );
     }
+}
+
+#[test]
+fn plane_slice_state_routes_the_view_context_through_its_local_domain() {
+    let mut state = State::new(false);
+    assert!(state.set_formula("(x, y, z)".into()));
+    assert!(state.set_density(5));
+    assert!(state.set_plane_axis(PlaneAxis::X));
+    assert!(state.set_plane_index(1));
+    let frame = state
+        .plane_frame()
+        .expect("2D of a 3D field is a plane slice");
+    assert_eq!(state.scene_domain(), frame.local_domain());
+
+    let camera = apply_view_command(
+        OrbitCamera::default(),
+        ViewContext::new(false, state.scene_domain(), 1.0),
+        ViewCommand::Fit,
+    );
+    assert_eq!(camera.target, Vec3::ZERO);
+    assert!(camera.ortho_zoom > 0.0);
 }

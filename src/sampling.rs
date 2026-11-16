@@ -5,6 +5,7 @@ use glam::UVec3;
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
+use crate::plane::PlaneFrame;
 
 /// How arrows are colored: either a fixed magnitude range, or auto-fit to
 /// the magnitudes actually sampled.
@@ -82,8 +83,57 @@ pub fn sample_field_at(
         .collect()
 }
 
-/// Delegate to [`sample_field_at`] at `t = 0.0`.
-pub fn sample_field(field: &FieldExpr, domain: &Domain, grid: UVec3, view: &ViewOptions) -> Vec<ArrowData> {
-    sample_field_at(field, domain, grid, view, 0.0)
+/// Sample `field` over the flat local plane of `frame`: positions and
+/// directions are local `(u, v, w)` values on the selected slice, and the
+/// world field vector is projected onto the frame before normalising. Arrows
+/// whose projection is non-finite or nearly zero (the field is purely normal
+/// to the slice) are dropped, like any other degenerate sample. Colour
+/// auto-ranging uses the projected magnitudes.
+pub fn sample_plane_at(
+    field: &FieldExpr,
+    frame: &PlaneFrame,
+    n: u32,
+    view: &ViewOptions,
+    t: f32,
+) -> Vec<ArrowData> {
+    let mut sampled: Vec<(glam::Vec3, glam::Vec3, f32)> = Vec::new();
+    for local in frame.local_domain().grid_points(UVec3::new(n, n, 1)) {
+        let Some(world_vector) = field.eval3_at(frame.to_world(local), t) else {
+            continue;
+        };
+        let projected = frame.project(world_vector);
+        let mag = projected.length();
+        if mag < 1e-6 || !mag.is_finite() {
+            continue;
+        }
+        sampled.push((local, projected / mag, mag));
+    }
+
+    let (cmin, cmax) = view.color_range.unwrap_or_else(|| {
+        let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+        for &(_, _, m) in &sampled {
+            min = min.min(m);
+            max = max.max(m);
+        }
+        (min, max)
+    });
+    sampled
+        .into_iter()
+        .map(|(position, dir, mag)| ArrowData {
+            position,
+            dir,
+            mag,
+            color: view.colormap.colormap(mag, cmin, cmax),
+        })
+        .collect()
 }
 
+/// Delegate to [`sample_field_at`] at `t = 0.0`.
+pub fn sample_field(
+    field: &FieldExpr,
+    domain: &Domain,
+    grid: UVec3,
+    view: &ViewOptions,
+) -> Vec<ArrowData> {
+    sample_field_at(field, domain, grid, view, 0.0)
+}
