@@ -67,8 +67,9 @@ pub struct Source {
     pub kind: SourceKind,
 }
 
-/// The eight supported source distributions. Only point charges and infinite
-/// straight wires evaluate in this task; other nonzero kinds are unavailable.
+/// The eight supported source distributions: point charge, finite line charge,
+/// charged ring, charged disc, solid sphere, straight wire, current loop and
+/// finite solenoid. Each kind contributes to its own field family.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SourceKind {
     PointCharge {

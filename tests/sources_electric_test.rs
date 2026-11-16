@@ -255,9 +255,60 @@ fn analytic_axial_fields_and_scaling() {
 }
 
 #[test]
+fn sphere_near_surface_small_softening_is_stable() {
+    // Regression for the cancellation-prone A - B u sphere kernel: the softened
+    // distance is dominated by a = 1e-6 while (s - R) = 1e-9, so forming
+    // A - B u near u = 1 destroys the small-distance term. The committed
+    // reference comes from the independent two-precision shell-volume generator.
+    let row = reference::fixtures()
+        .into_iter()
+        .find(|row| row.id == "sphere_near_surface_tiny")
+        .expect("near-surface tiny-softening sphere fixture");
+    assert_eq!(row.softening, 1e-6);
+    assert_eq!(row.dimension, 1.0);
+    assert_eq!(row.query.x, 1.0 + 1e-9);
+
+    let mut runner = evaluator_with(&[source_for(&row)], options_for(&row));
+    let estimate = estimate(runner.evaluate(row.query, &|| false).electric);
+    // The A - B u form published a value ~6.6e-11 from the independent
+    // reference here (larger than its own reported uncertainty); the stable
+    // form agrees to roughly machine precision. Keep this pin tighter than the
+    // generic fixture contract so the regression actually catches the old form.
+    let tolerance = 1e-12 + 1e-12 * row.reference.length();
+    let error = (estimate.value - row.reference).length();
+    assert!(
+        error <= tolerance,
+        "{}: got {:?}, reference {:?}, error {error:e} > {tolerance:e}",
+        row.id,
+        estimate.value,
+        row.reference
+    );
+    assert!(
+        estimate.uncertainty <= estimate.target,
+        "{}: uncertainty {:e} exceeds target {:e}",
+        row.id,
+        estimate.uncertainty,
+        estimate.target
+    );
+}
+
+#[test]
+fn disc_exact_axis_symmetry_is_not_underflow() {
+    // The disc axial branch at z = 0 returns exact zero by symmetry, not by
+    // rounded cancellation; that must not raise the underflow flag.
+    let mut runner = evaluator(&[disc(1.0, 1.0)]);
+    let estimate = estimate(runner.evaluate(DVec3::ZERO, &|| false).electric);
+    assert_eq!(estimate.value, DVec3::ZERO);
+    assert!(
+        !estimate.diagnostics.underflow,
+        "exact central symmetry was flagged as underflow"
+    );
+}
+
+#[test]
 fn off_axis_fixtures_meet_requested_target() {
     let rows = reference::fixtures();
-    assert_eq!(rows.len(), 29, "fixture matrix changed");
+    assert_eq!(rows.len(), 30, "fixture matrix changed");
 
     let mut kinds = std::collections::BTreeSet::new();
     for row in &rows {

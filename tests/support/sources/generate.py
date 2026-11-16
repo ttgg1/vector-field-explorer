@@ -217,6 +217,11 @@ CASES = [
      (0.5, 0.0, 0.2), 0.1),
     ("sphere_near_surface", "sphere", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 1.0, 1.0,
      (0.99, 0.0, 0.0), 0.1),
+    # Near-surface with tiny softening: s = 1 + 1e-9, R = 1, a = 1e-6. The
+    # softened distance is dominated by a, so the cancellation-prone A - B u
+    # form loses the small (s - R) term; this row pins the stable reduction.
+    ("sphere_near_surface_tiny", "sphere", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+     1.0, 1.0, (1.0 + 1e-9, 0.0, 0.0), 1e-6),
     ("sphere_nonunit", "sphere", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), -2.0, 0.3,
      (0.2, 0.0, 0.1), 0.001),
     ("sphere_narrow_far", "sphere", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 1.0, 1.0,

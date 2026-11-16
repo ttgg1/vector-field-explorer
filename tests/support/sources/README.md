@@ -42,7 +42,10 @@ The matrix spans on-axis (`r = 0`), near-axis (`r = 1e-10`), near-center
 and `z = 0.7`, unit and non-unit radii/lengths, softening `0.1`, `0.001` and
 selected `1e-6`, and signed strengths. `ring_delta_*` rows pin
 `delta = 1/8 * {0.99, 1.00, 1.01}` for the near-axis-series/direct angular
-branch sweep.
+branch sweep. `sphere_near_surface_tiny` additionally pins a near-surface
+small-softening case (`s = 1 + 1e-9`, `R = 1`, `a = 1e-6`) where the small
+`(s - R)` term is much smaller than `a`; it must be evaluated with the
+cancellation-safe `(s - R)^2 + a^2 + 2sR(1 - u)` form rather than `A - B u`.
 
 ## Retained limitations
 

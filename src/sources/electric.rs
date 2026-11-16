@@ -414,7 +414,8 @@ fn disc(
             return Err(Failure::NumericRange);
         }
         let value = frame.unit_axis * axial;
-        let underflow = charge != 0.0 && axial == 0.0;
+        // z = 0 on the axis is an exact symmetry zero, not rounded underflow.
+        let underflow = charge != 0.0 && zn != 0.0 && axial == 0.0;
         let allowance = allowance_for(value, underflow).map_err(numeric_failure)?;
         return Ok((
             FieldContribution {
@@ -540,7 +541,12 @@ fn sphere(
         if !u.is_finite() || !(0.0..=1.0).contains(&u) {
             return Err(NumericRange::Unrepresentable);
         }
-        let d_minus = (a_n - b_n * u).sqrt();
+        // d_minus^2 = (s - R)^2 + a^2 + 2sR(1 - u). Forming this directly keeps
+        // the small near-surface term away from the O(s^2) subtraction in
+        // A - B u, which otherwise destroys it when a is tiny. d_plus has no
+        // cancellation, so its A + B u form stays stable.
+        let difference = sn - rn;
+        let d_minus = (difference * difference + an * an + 2.0 * sn * rn * (1.0 - u)).sqrt();
         let d_plus = (a_n + b_n * u).sqrt();
         if !d_minus.is_finite() || !d_plus.is_finite() || d_minus <= 0.0 || d_plus <= 0.0 {
             return Err(NumericRange::Unrepresentable);
@@ -713,16 +719,21 @@ impl ResolutionGuard for SphereGuard {
         if width <= 0.0 || !width.is_finite() {
             return false;
         }
-        // D^2 = A - B u decreases with u, so the minimum softened distance
-        // over [lo, hi] is at hi.
-        let a = self.distance * self.distance
-            + self.radius * self.radius
-            + self.softening * self.softening;
-        let b = 2.0 * self.distance * self.radius;
-        let squared = a - b * hi;
+        // d_minus^2 decreases with u, so the minimum softened distance over
+        // [lo, hi] is at hi. Use the cancellation-safe normalized form
+        // (s - R)^2 + a^2 + 2sR(1 - hi), matching the kernel.
+        let scale = self.distance.max(self.radius).max(self.softening);
+        if !scale.is_finite() || scale <= 0.0 {
+            return false;
+        }
+        let sn = self.distance / scale;
+        let rn = self.radius / scale;
+        let an = self.softening / scale;
+        let difference = sn - rn;
+        let squared = difference * difference + an * an + 2.0 * sn * rn * (1.0 - hi);
         if !squared.is_finite() || squared <= 0.0 {
             return false;
         }
-        width <= 0.5 * squared.sqrt()
+        width <= 0.5 * squared.sqrt() * scale
     }
 }
