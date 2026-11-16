@@ -377,7 +377,7 @@ pub fn combined_instances(
     combined
 }
 
-const LIGHT_DIR: [f32; 4] = [0.4211, 0.8521, 0.3108, 0.0]; // normalize(0.42, 0.85, 0.31)
+pub(crate) const LIGHT_DIR: [f32; 4] = [0.4211, 0.8521, 0.3108, 0.0]; // normalize(0.42, 0.85, 0.31)
 
 /// The arrow pipeline's blend state: straight alpha, so an instance's
 /// `color.a` is honoured. Plane-by-plane mode relies on this; opaque arrows
@@ -1093,7 +1093,7 @@ impl DrawState {
 /// Turn a wasm map callback into RGBA bytes, unmapping the buffer on every
 /// path. Kept outside the callback so the failure paths stay readable.
 #[cfg(target_arch = "wasm32")]
-fn readback_result(
+pub(crate) fn readback_result(
     result: Result<(), wgpu::BufferAsyncError>,
     buffer: &wgpu::Buffer,
     format: wgpu::TextureFormat,

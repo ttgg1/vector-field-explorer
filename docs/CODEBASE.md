@@ -670,6 +670,45 @@ tall/wide portrait-landscape framing, collapsed-axis padding, invalid-fit
 transactionality, domain-versus-plot separation, ordinary gesture conventions,
 extreme/close-eye clipping, and unchanged vector fit/F behavior.
 
+#### `src/plot_renderer.rs` — depth-equipped plot renderer and composite
+
+**Purpose / API.** `PlotDrawState` is installed in egui_wgpu callback resources
+per device. It owns the scalar plot pipelines, per-renderer uniform/geometry
+buffers and a single-sample color target in the eframe format plus a
+`Depth32Float` attachment. `PlotTargetKey` identifies extent/format/composite
+sample count within one renderer object; resources are never reused across
+devices. `plot_target_extent` reproduces egui's rounded/clamped viewport pixels
+before a proportional device-edge cap, `plot_draw_order` excludes
+`PlotKind::VectorField` (no scalar fallback), `plot_pipeline_policy` feeds actual
+pipeline creation, and `prepared_matches` gates the paint composite. The live
+prepare records the plot pass into the supplied egui encoder and returns no
+command buffers. `PlotPassResources` plus `record_plot_pass` are shared by live
+preparation and capture. [`src/plot_renderer/capture.rs`](plot_renderer/capture.rs)
+is the separate `PlotCapture` owner: independent pipelines, buffers, color/depth
+targets and readback for native synchronous or wasm event-loop completion.
+`src/shaders.plot.wgsl` is the lit indexed mesh shader (48-byte `PlotVertex`
+stride, ambient + directional diffuse); `src/shaders.plot_composite.wgsl` samples
+the full target without a vertical flip or manual gamma. The unchanged
+`src/shaders.line.wgsl` is used only by the two new depth-enabled reference and
+curve pipelines; vector pipelines and draw plans are untouched.
+
+**Invariants.** Plot color is `RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC`;
+depth is `Depth32Float` with `RENDER_ATTACHMENT`, cleared to 1.0. Mesh is
+CCW/back-culled, depth `LessEqual` with writes; references test without writes;
+the curve tests and writes so it overlays its same-plane reference. Composite has
+no depth, replaces color and takes the incoming sample count. Unsupported format
+usages, non-filterable color, unsupported composite samples, invalid capture
+dimensions, stride/readback overflow and non-PNG formats return errors before
+allocation. The live path never submits independently; capture uses its own
+submission/readback ordering and retains resources until completion.
+
+**Pinned by.** [tests/plot_renderer_test.rs](../tests/plot_renderer_test.rs):
+extent equality with `PaintCallbackInfo::viewport_in_pixels`, proportional caps,
+zero area, the empty vector draw plan, all four pipeline policies and sample
+counts, prepared generation/extent identity, and format/capture preflight
+rejection. These tests create no wgpu device; device/render-pixel proof is the
+Task 8 native probe.
+
 #### `src/cas.rs` — native symbolic transform adapter
 
 **Purpose.** Differentiate scalar meval formulas and compose gradient,

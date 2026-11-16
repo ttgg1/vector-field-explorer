@@ -65,6 +65,7 @@ mod plane_test;
 mod plot_camera_test;
 mod plot_curve_test;
 mod plot_examples_test;
+mod plot_renderer_test;
 mod plot_state_test;
 mod plot_surface_test;
 mod pointer_lock_test;
