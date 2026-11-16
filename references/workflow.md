@@ -167,7 +167,14 @@ repair known regressions, and never infer success. Standing authority excludes
 releases, visibility changes, destructive/security-sensitive operations, and
 work beyond an explicit stop point. Never force-push main.
 
-At phase boundaries, use DCP `compress` when available, preserving paths,
-rulings, hashes and blockers. Final handoff records verified HEAD/merge, gates
-and waivers, GitHub work/claim links, open findings, active/parked seats and the
-resume boundary.
+At each phase boundary (a task closes and the next is not yet dispatched), run
+a DCP compression pass (the model `compress` tool, or `/dcp-compress` from the
+TUI) and direct its focus to preserving paths, rulings, hashes, blockers,
+reviewed HEADs and open findings; re-read the plan ledger before dispatching the
+next task. DCP is configured globally as `@tarquinen/opencode-dcp`; if neither
+entry point is available, install it with
+`opencode plugin add @tarquinen/opencode-dcp@latest` and restart OpenCode
+rather than silently skipping compression. Compression supplements, never
+replaces, the durable plan ledger and evidence files, which remain recovery
+authority. Final handoff records verified HEAD/merge, gates and waivers, GitHub
+work/claim links, open findings, active/parked seats and the resume boundary.
