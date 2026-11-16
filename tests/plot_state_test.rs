@@ -63,6 +63,18 @@ fn settings_sanitize_at_seam() {
     assert_eq!(s.plot.settings.surface_resolution, 96);
     s.set_plot_width(f32::NAN);
     assert_eq!(s.plot.settings.line_width, 0.01);
+    s.set_plot_width(1e6);
+    assert_eq!(s.plot.settings.line_width, 0.2);
+    s.set_plot_width(1.0);
+    assert_eq!(s.plot.settings.line_width, 0.2);
+    s.set_plot_width(0.0001);
+    assert_eq!(s.plot.settings.line_width, 0.001);
+    s.set_plot_width(0.001);
+    assert_eq!(s.plot.settings.line_width, 0.001);
+    s.set_plot_width(0.2);
+    assert_eq!(s.plot.settings.line_width, 0.2);
+    s.set_plot_width(0.01);
+    assert_eq!(s.plot.settings.line_width, 0.01);
     s.set_plot_height_range(3., -2.);
     assert_eq!(
         (s.plot.settings.height_min, s.plot.settings.height_max),
@@ -210,6 +222,7 @@ fn reset_surface_preserves_curve_and_vector_and_restores_settings() {
     s.set_plot_samples(2);
     s.set_plot_resolution(2);
     s.set_plot_width(1.0);
+    assert_eq!(s.plot.settings.line_width, 0.2);
     s.set_plot_auto_height(false);
     s.set_plot_height_range(-4., 4.);
     assert!(s.reset_plot_section());

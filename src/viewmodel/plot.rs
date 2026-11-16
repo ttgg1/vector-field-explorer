@@ -134,7 +134,7 @@ impl State {
     }
     pub fn set_plot_width(&mut self, width: f32) -> bool {
         let width = if width.is_finite() && width > 0.0 {
-            width
+            width.clamp(0.001, 0.2)
         } else {
             0.01
         };

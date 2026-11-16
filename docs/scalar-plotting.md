@@ -48,8 +48,8 @@ other, the vector formula, or a persisted vector preset.
 
 - Typing a valid expression replaces that context's accepted expression and
   resamples it.
-- An invalid edit in the active context keeps that context's last valid plot
-  visible with `Invalid expression — displaying last valid plot`.
+- An invalid edit in the active context shows the parse error while that
+  context's last valid plot remains visible.
 - Switching to a context whose draft is invalid shows that context's error and
   no plot. It never borrows another kind's cached geometry.
 - Returning to **Vector Field** restores the preserved vector expression,
