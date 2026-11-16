@@ -1,6 +1,6 @@
 # Agent workflow modes and measurable routing
 
-**Status: PROPOSED — awaiting owner approval.**
+**Status: SUPERSEDED by owner decision on 2026-11-16.** Historical record retained; the Python-runtime implementation approach is no longer active. See [Markdown-first design](2026-11-16-markdown-first-agent-workflow-design.md).
 
 Date: 2026-11-15. Scope: extend the already-reviewed bounded OpenCode workflow on `feature/token-efficient-workflow`; no scalar/product changes.
 

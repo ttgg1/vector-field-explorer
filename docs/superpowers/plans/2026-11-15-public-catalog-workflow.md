@@ -1,5 +1,7 @@
 # Public-Catalog-First Workflow Integration Plan
 
+> **Superseded by owner decision on 2026-11-16.** Retained as historical evidence for the metrics-only scope and review record. Active plan: [Markdown-First Agent Workflow](2026-11-16-markdown-first-agent-workflow.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans or the bounded workflow runtime. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Keep selectable OpenCode Go routing straightforward and use public catalog data for model availability and published-rate estimates without claiming measured savings.

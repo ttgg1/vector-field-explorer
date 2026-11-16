@@ -1,5 +1,7 @@
 # Agent Workflow Modes Implementation Plan
 
+> **Superseded by owner decision on 2026-11-16.** Retained as historical evidence of the Python runtime approach and its review findings. Active plan: [Markdown-First Agent Workflow](2026-11-16-markdown-first-agent-workflow.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add explicit OpenAI and OpenCode Go routing, task-sensitive classification, and honest per-task token/cost measurement to the existing bounded workflow.
