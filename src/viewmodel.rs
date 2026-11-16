@@ -10,7 +10,7 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
-use super::plane::{DIM_ALPHA, PlaneAxis, PlaneView, dim_color, on_plane};
+use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at};
 use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace_at};
@@ -376,7 +376,7 @@ impl State {
         self.formula = formula;
         match parsed {
             Ok(field) => {
-                let previous_grid = self.grid();
+                let previous_grid = self.plane_grid();
                 self.field = field;
                 self.parse_error = String::new();
                 self.sync_plane(previous_grid);
@@ -405,7 +405,7 @@ impl State {
         if self.mode_3d == mode_3d {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
         self.plot.vector_mode_3d = mode_3d;
         self.sync_plane(previous_grid);
@@ -423,7 +423,7 @@ impl State {
         if self.density == density {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         self.density = density;
         self.sync_plane(previous_grid);
         self.mark_dirty()
@@ -437,7 +437,7 @@ impl State {
         if self.domain == domain {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         if self.domain.min.x != domain.min.x
             || self.domain.max.x != domain.max.x
             || self.domain.min.y != domain.min.y
@@ -733,7 +733,13 @@ impl State {
     /// is a user choice once the grid has more than one slice, so toggling the
     /// mode keeps it; only a grid change recentres it (see [`sync_plane`]).
     pub fn set_plane(self: &mut State, plane: PlaneView) -> bool {
-        let plane = plane.clamped(self.grid());
+        let mut plane = plane.clamped(self.plane_grid());
+        // A 2D slice of a three-component field shares the plane selection
+        // with 3D, but the dim toggle itself is a 3D-only control: 2D may not
+        // change it.
+        if self.is_plane_slice() {
+            plane.enabled = self.plane.enabled;
+        }
         if self.plane == plane {
             return false;
         }
@@ -778,9 +784,9 @@ impl State {
     /// and — leaving a one-slice axis — start at the middle plane, because
     /// index 0 on a single slice was never a choice. Called by every setter
     /// that changes the grid (density, mode, formula dimension, domain) with
-    /// the grid that was in force before the change.
+    /// the plane grid that was in force before the change.
     fn sync_plane(self: &mut State, previous_grid: UVec3) {
-        let grid = self.grid();
+        let grid = self.plane_grid();
         let count = self.plane.axis.count(grid);
         let previous_count = self.plane.axis.count(previous_grid);
         if count <= 1 {
@@ -790,11 +796,52 @@ impl State {
         }
     }
 
-    /// The world half-height the 2D orthographic window covers: the domain's
-    /// larger horizontal extent, padded so the field fills the window.
+    /// The half-height the 2D orthographic window covers: the visible scene
+    /// domain's larger in-plane extent, padded so the field fills the window.
     pub fn plane_size(self: &State) -> f32 {
-        let size = self.domain.domain_size();
+        let size = self.scene_domain().domain_size();
         size.x.max(size.y) * PLANE_MARGIN
+    }
+
+    /// The grid the plane selection indexes into. A three-component field has
+    /// a real volume in both view modes, so its plane grid stays `n`×`n`×`n`
+    /// even while 2D renders one `n`×`n` layer; a two-component field keeps
+    /// the flat `n`×`n`×`1` grid it has always had.
+    pub fn plane_grid(self: &State) -> UVec3 {
+        let n = self.density.max(MIN_DENSITY);
+        if self.field.dimension == 3 {
+            UVec3::new(n, n, n)
+        } else {
+            UVec3::new(n, n, 1)
+        }
+    }
+
+    /// Whether 2D is showing a slice of a three-component field.
+    pub fn is_plane_slice(self: &State) -> bool {
+        self.field.dimension == 3 && !self.mode_3d
+    }
+
+    /// The local frame of the selected slice, when 2D is showing one.
+    pub fn plane_frame(self: &State) -> Option<PlaneFrame> {
+        self.is_plane_slice()
+            .then(|| PlaneFrame::new(&self.domain, self.plane, self.plane_grid()))
+    }
+
+    /// The domain the visible scene covers. A plane slice uses its flat local
+    /// domain; 3D uses the world domain; ordinary two-component 2D keeps the
+    /// world X/Y box with z collapsed to its midpoint.
+    pub fn scene_domain(self: &State) -> Domain {
+        if let Some(frame) = self.plane_frame() {
+            frame.local_domain()
+        } else if self.mode_3d {
+            self.domain
+        } else {
+            let z = self.domain.center().z;
+            Domain::new(
+                Vec3::new(self.domain.min.x, self.domain.min.y, z),
+                Vec3::new(self.domain.max.x, self.domain.max.y, z),
+            )
+        }
     }
 
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,

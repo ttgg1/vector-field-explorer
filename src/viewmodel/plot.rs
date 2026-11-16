@@ -40,7 +40,7 @@ impl State {
         if self.plot.kind == kind {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         if self.is_vector_mode() {
             self.plot.vector_mode_3d = self.mode_3d;
         }

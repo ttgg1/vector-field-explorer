@@ -2,7 +2,7 @@
 // edits and the mode toggle route through the viewmodel State, which owns
 // parsing, the dirty flag and the scene snapshots the viewport paints.
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, UVec3, Vec3};
 use crate::support;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
@@ -174,7 +174,10 @@ fn plane_index_recentres_when_the_grid_shrinks_past_it() {
     assert!(st.set_density(4), "a coarser grid has only 4 z samples");
     assert_eq!(st.plane.index, 1, "the vanished plane recentres to the middle sample");
     assert!(st.set_mode(false), "2D mode samples one z slice");
-    assert_eq!(st.plane.index, 0, "a one-slice axis collapses to index 0");
+    assert_eq!(
+        st.plane.index, 1,
+        "a three-component field keeps its plane grid in 2D, so the selected plane survives"
+    );
 }
 
 #[test]
@@ -1239,6 +1242,47 @@ fn no_rebuild_when_paused() {
     assert!(!state.dirty, "paused view must not mark dirty");
     vector_field_explorer::ui::transport::request_particle_repaint(&ctx, &state, &clock);
     assert!(!ctx.has_requested_repaint(), "paused view must not request repaint");
+}
+
+#[test]
+fn plane_grid_stays_volumetric_for_3d_fields_in_2d() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    assert_eq!(state.plane_grid(), UVec3::splat(state.density));
+    assert_eq!(state.grid().z, 1);
+    state.set_mode(true);
+    assert_eq!(state.plane_grid(), UVec3::splat(state.density));
+}
+
+#[test]
+fn plane_grid_is_flat_for_two_component_fields() {
+    let state = State::new(false);
+    assert_eq!(
+        state.plane_grid(),
+        UVec3::new(state.density, state.density, 1)
+    );
+}
+
+#[test]
+fn sync_plane_uses_the_plane_grid() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_plane_axis(PlaneAxis::X);
+    state.set_plane_index(3);
+    state.set_mode(true);
+    assert_eq!(state.plane.index, 3);
+    assert_eq!(state.plane.clamped(state.plane_grid()).index, 3);
+}
+
+#[test]
+fn set_plane_preserves_dim_toggle_in_2d() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_mode(true);
+    state.set_plane_enabled(true);
+    state.set_mode(false);
+    state.set_plane_axis(PlaneAxis::X);
+    assert!(state.plane.enabled);
 }
 
 #[test]

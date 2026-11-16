@@ -45,13 +45,20 @@ fn sources_and_projection_are_independent() {
 }
 
 #[test]
-fn kind_switches_synchronize_vector_slice_with_projection() {
+fn kind_switches_preserve_the_vector_slice_index() {
     let mut s = State::new(true);
-    assert!(s.plane.index > 0);
+    let middle = s.plane.index;
+    assert!(middle > 0);
     s.set_plot_kind(PlotKind::Curve2D);
-    assert_eq!(s.plane.index, 0);
+    assert_eq!(
+        s.plane.index, middle,
+        "a three-component field keeps its plane grid in 2D, so the selected slice survives"
+    );
     s.set_plot_kind(PlotKind::VectorField);
-    assert_eq!(s.plane.index, (s.grid().z - 1) / 2);
+    assert_eq!(
+        s.plane.index, middle,
+        "returning to 3D keeps the same slice"
+    );
 }
 
 #[test]
