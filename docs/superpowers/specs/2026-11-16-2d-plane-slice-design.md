@@ -1,15 +1,16 @@
 # 2D views as selected slices of a 3D field — design
 
-**Status: PROPOSED — awaiting owner approval of this document.**
+**Status: APPROVED by owner on 2026-11-16 in conversation.**
 
 Date: 2026-11-16. Owning requirement:
 [GitHub #13](https://github.com/ttgg1/vector-field-explorer/issues/13).
 Inspected baseline: main `819e025` (after issue #12 merged).
 
 Approval provenance: the owner chose **all three plane axes** and **projected
-flow**, selected **Approach A** (“looks good”), and approved the behavior calls
-summarized below. Those choices are binding on this design. This document is the
-full written design required before planning; it is not approval to implement.
+flow**, selected **Approach A** (“looks good”), approved the behavior calls
+summarized below, and then approved this full written design as written after
+the builder check. Implementation still requires the separate plan's approval
+and Workflow's dispatch/review/evidence gates.
 
 ## Intent and success
 
