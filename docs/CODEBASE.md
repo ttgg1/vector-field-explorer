@@ -644,6 +644,32 @@ independent grid and axes references follow the explicit scalar kind. Empty or
 mismatched data has no plot bounds and a status. `tests/plot_state_test.rs`
 covers scene colors, bounds, invalid data and reference visibility.
 
+#### `src/plot_camera.rs` — plot-only framing and navigation
+
+**Purpose / API.** `PlotCamera` keeps f64 `target`, `distance`, full-height
+`ortho_extent`, orbit `yaw`/`pitch`, `fov_y` and retained `fitted_bounds` free of
+the vector camera's distance/near/far limits. `fit` frames supplied `PlotBounds`
+with the current orientation, `frame` recomputes a `PlotFrame { view_proj, eye,
+aspect }`, and `apply_gesture`/`apply_command` reuse the shared pointer and
+view-command seams. `PlotFitError` is displayable and every failure leaves the
+camera untouched.
+
+**Invariants.** Collapsed axes receive `max(largest_span * 1e-6, 1e-6)` padding
+on each side in f64. Fit uses the tighter horizontal/vertical FOV for perspective
+surfaces and aspect-aware extents for orthographic curves, leaving a 10% total
+span margin. Near/far planes are derived from the padded bounds and eye, with a
+positive near plane, then the f64 transform and eye are converted to f32 only
+after finite, positive-w, framing-margin and WebGPU `[0,1]` depth checks.
+Projection fidelity also rejects matrices that erase a finite extent through f32
+rounding. The curve front view keeps the existing +Y-up, look-down -Z convention;
+`ViewCommand::Fit` frames the domain while the separate `fit` seam frames sampled
+plot extrema. No GPU device or vector-camera state is involved.
+
+**Pinned by.** [tests/plot_camera_test.rs](../tests/plot_camera_test.rs):
+tall/wide portrait-landscape framing, collapsed-axis padding, invalid-fit
+transactionality, domain-versus-plot separation, ordinary gesture conventions,
+extreme/close-eye clipping, and unchanged vector fit/F behavior.
+
 #### `src/cas.rs` — native symbolic transform adapter
 
 **Purpose.** Differentiate scalar meval formulas and compose gradient,

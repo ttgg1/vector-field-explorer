@@ -16,6 +16,7 @@ pub mod particles;
 pub mod persistence;
 pub mod plane;
 pub mod plot;
+pub mod plot_camera;
 pub mod plot_examples;
 pub mod plot_scene;
 pub mod plot_state;
