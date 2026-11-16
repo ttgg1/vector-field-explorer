@@ -136,6 +136,10 @@ pub struct ViewRecord {
     /// did not carry it; the container default loads them as Auto.
     #[serde(default)]
     pub seed_mode: StreamlineSeedMode,
+    /// The explicit streamline seed count; `0` is Auto. Missing on records
+    /// written before the count existed; the serde default loads them as Auto.
+    #[serde(default)]
+    pub streamline_count: u32,
     /// What one explicit left click does (ticket 60). Older records did not
     /// carry it; they load as SeedStreamline. An unknown spelling also falls
     /// back to the default instead of failing the whole envelope.
@@ -224,6 +228,7 @@ impl ViewRecord {
             arrow_params: state.arrow_params,
             streamlines: state.streamlines,
             seed_mode: state.seed_mode,
+            streamline_count: state.streamline_count,
             left_click_action: state.left_click_action,
             particles: state.particles,
             particle_size: state.particle_size,
@@ -280,6 +285,7 @@ impl ViewRecord {
         controls.arrow_params = self.arrow_params.sanitized();
         controls.streamlines = self.streamlines;
         controls.seed_mode = self.seed_mode;
+        controls.streamline_count = self.streamline_count;
         controls.left_click_action = self.left_click_action;
         controls.particles = self.particles;
         controls.particle_size = finite_or(self.particle_size, defaults.particle_size);

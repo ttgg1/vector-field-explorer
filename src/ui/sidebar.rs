@@ -41,9 +41,10 @@ use crate::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
     DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction, MAX_ARROW_OPACITY, MAX_ARROW_SCALE,
     MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE,
-    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MIN_ARROW_OPACITY, MIN_ARROW_SCALE,
-    MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE, MIN_PLANE_DIM_OPACITY,
-    MIN_PROPORTIONAL_EXPONENT, State, StreamlineSeedMode, clamp_domain_extent,
+    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MAX_STREAMLINES, MIN_ARROW_OPACITY,
+    MIN_ARROW_SCALE, MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE,
+    MIN_PLANE_DIM_OPACITY, MIN_PROPORTIONAL_EXPONENT, State, StreamlineSeedMode,
+    clamp_domain_extent,
 };
 use glam::Vec3;
 
@@ -246,6 +247,24 @@ pub fn seed_mode_enabled(streamlines: bool) -> bool {
     streamlines
 }
 
+/// Whether the explicit streamline-count control applies: the explicit count
+/// only replaces Auto's density-derived lattice, so Click-only seeding (which
+/// paints click bursts, not a count of lines) leaves it disabled.
+pub fn streamline_count_enabled(streamlines: bool, seed_mode: StreamlineSeedMode) -> bool {
+    streamlines && seed_mode == StreamlineSeedMode::Auto
+}
+
+/// The streamline-count drag value's text: `0` is the Auto sentinel, any other
+/// value shows its number so the widget can both display "Auto" and accept a
+/// typed count.
+pub fn streamline_count_label(count: u32) -> String {
+    if count == 0 {
+        "Auto".to_owned()
+    } else {
+        count.to_string()
+    }
+}
+
 /// Whether the particle size slider applies. With Particles off there are no
 /// dots, so the slider is disabled rather than silently ignored (ticket 30).
 pub fn particle_size_enabled(particles: bool) -> bool {
@@ -332,6 +351,8 @@ pub struct Controls {
     pub streamlines: bool,
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
+    /// Explicit streamline seed count; `0` means Auto (density-derived).
+    pub streamline_count: u32,
     /// What one explicit left click does (ticket 60).
     pub left_click_action: LeftClickAction,
     pub particles: bool,
@@ -383,6 +404,7 @@ impl Controls {
             color_max: 1.0,
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
+            streamline_count: 0,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -426,6 +448,7 @@ impl Controls {
         let defaults = Controls::new();
         self.streamlines = defaults.streamlines;
         self.seed_mode = defaults.seed_mode;
+        self.streamline_count = defaults.streamline_count;
         self.left_click_action = defaults.left_click_action;
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
@@ -773,6 +796,32 @@ fn show_inner(
         })
         .response
         .on_disabled_hover_text("Turn Streamlines on to choose Auto or Click seeding");
+        // The explicit count only replaces Auto's density-derived lattice:
+        // Click-only seeding paints click bursts instead, so the control is
+        // disabled there rather than silently ignored.
+        ui.add_enabled_ui(
+            streamline_count_enabled(controls.streamlines, controls.seed_mode),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Streamline count");
+                    ui.add(
+                        egui::DragValue::new(&mut controls.streamline_count)
+                            .range(0..=MAX_STREAMLINES)
+                            .speed(1.0)
+                            .custom_formatter(|value, _| {
+                                streamline_count_label(value.max(0.0).round() as u32)
+                            }),
+                    )
+                    .on_hover_text(
+                        "0 = Auto (density-derived); a value seeds exactly that many lines.",
+                    );
+                });
+            },
+        )
+        .response
+        .on_disabled_hover_text(
+            "Click-only seeding uses click bursts; turn Streamlines on and choose Auto to set a count",
+        );
         // Ticket 60: the left click action stays visible even while its feature
         // is off; the click is then a hinted no-op rather than a dead control.
         button_row(ui, |ui| {
@@ -1266,6 +1315,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
     state.set_seed_mode(controls.seed_mode);
+    state.set_streamline_count(controls.streamline_count);
     state.set_left_click_action(controls.left_click_action);
     state.set_particles(controls.particles);
     state.set_particle_size(controls.particle_size);
@@ -1304,6 +1354,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
     controls.seed_mode = state.seed_mode;
+    controls.streamline_count = state.streamline_count;
     controls.left_click_action = state.left_click_action;
     controls.particles = state.particles;
     controls.particle_size = state.particle_size;

@@ -357,6 +357,46 @@ fn unit_triple(z: u64) -> (f32, f32, f32) {
     (a * SCALE - 1.0, b * SCALE - 1.0, c * SCALE - 1.0)
 }
 
+/// Seeds for an explicit streamline count: `count` seeds from a jittered
+/// lattice sized to cover them, independent of the sampling density.
+///
+/// `three_dimensional` picks the lattice's nominal dimensionality: `n =
+/// ceil(count^(1/3))` in 3D, `ceil(sqrt(count))` in 2D. [`seed_grid`] collapses
+/// zero-extent axes to one layer, so a flat domain (and a fully degenerate one)
+/// may produce fewer than `n^d` points; the axis count grows until the lattice
+/// holds at least `count`, then the result is truncated to exactly `count`.
+/// Returns an empty vector for `count == 0`.
+pub fn explicit_streamline_seeds(
+    domain: &Domain,
+    count: u32,
+    three_dimensional: bool,
+    salt: u64,
+) -> Vec<Vec3> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let nominal = if three_dimensional {
+        (count as f32).cbrt()
+    } else {
+        (count as f32).sqrt()
+    };
+    let mut per_axis = (nominal.ceil() as u32).max(1);
+    let mut previous = 0;
+    loop {
+        let mut seeds = seed_grid(domain, per_axis, crate::viewmodel::STREAMLINE_JITTER, salt);
+        if seeds.len() >= count as usize {
+            seeds.truncate(count as usize);
+            return seeds;
+        }
+        // A fully degenerate domain cannot grow: return what one point can be.
+        if seeds.len() == previous {
+            return seeds;
+        }
+        previous = seeds.len();
+        per_axis += 1;
+    }
+}
+
 /// Jittered volume lattice, with one layer on each zero-extent axis.
 /// A flat XY domain therefore retains a 2D grid without duplicate layers.
 /// Endpoints are included for `per_axis > 1`. Each point is displaced by at

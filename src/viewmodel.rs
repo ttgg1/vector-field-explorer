@@ -14,7 +14,9 @@ use super::flow::{Flow, SceneFlow};
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
-use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace_at};
+use super::streamlines::{
+    CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
+};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
@@ -84,6 +86,9 @@ pub const STREAMLINE_MAX_LEN: usize = 120;
 /// Seed jitter as a fraction of a seed-grid cell (`seed_grid` caps it below
 /// half a cell so lattice neighbours never swap).
 pub const STREAMLINE_JITTER: f32 = 0.45;
+/// Hard cap on the explicit streamline seed count; `0` means Auto
+/// (density-derived).
+pub const MAX_STREAMLINES: u32 = 4096;
 
 /// The starting field for each mode: the Pump preset (2D) and the 3D radial
 /// preset, so a fresh app shows something immediately.
@@ -264,6 +269,8 @@ pub struct State {
     /// Which seeds the on state paints (ticket 50): the automatic grid, the
     /// click bursts, or both.
     pub seed_mode: StreamlineSeedMode,
+    /// Explicit streamline seed count; `0` means Auto (density-derived).
+    pub streamline_count: u32,
     /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
     /// it and always run their own action.
     pub left_click_action: LeftClickAction,
@@ -354,6 +361,7 @@ impl State {
             arrow_params: ArrowParams::default(),
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
+            streamline_count: 0,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -650,6 +658,20 @@ impl State {
             return false;
         }
         self.seed_mode = mode;
+        self.mark_dirty()
+    }
+
+    /// The explicit streamline seed count, clamped to
+    /// [`MAX_STREAMLINES`]. `0` means Auto: the historical density-derived
+    /// lattice. Any other value seeds exactly that many lines from a lattice
+    /// that does not follow the sampling density, so the scene dirty flag is
+    /// the only rebuild trigger.
+    pub fn set_streamline_count(self: &mut State, count: u32) -> bool {
+        let count = count.min(MAX_STREAMLINES);
+        if self.streamline_count == count {
+            return false;
+        }
+        self.streamline_count = count;
         self.mark_dirty()
     }
 
@@ -1036,11 +1058,17 @@ impl State {
             return Vec::new();
         }
         // Half the grid density seeds the plane: enough lines to read the flow
-        // without tracing one per sampled point.
-        let axis = (self.density / 3).clamp(1, 24);
+        // without tracing one per sampled point. An explicit count instead uses
+        // a density-independent lattice; its fixed salt keeps the seeds stable
+        // as the density changes.
         let grid = self.grid();
-        let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
-        let seeds = seed_grid(&self.scene_domain(), axis, STREAMLINE_JITTER, salt);
+        let seeds = if self.streamline_count == 0 {
+            let axis = (self.density / 3).clamp(1, 24);
+            let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
+            seed_grid(&self.scene_domain(), axis, STREAMLINE_JITTER, salt)
+        } else {
+            explicit_streamline_seeds(&self.scene_domain(), self.streamline_count, self.is_3d(), 0)
+        };
         let opts = self.streamline_opts();
         let range = self.color_range(sampled);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();

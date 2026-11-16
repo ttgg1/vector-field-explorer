@@ -1875,3 +1875,20 @@ fn restore_clamps_and_sanitizes_hostile_particle_appearance() {
         "the mirror follows"
     );
 }
+
+#[test]
+fn streamline_count_round_trips_and_missing_field_defaults_to_auto() {
+    let mut state = State::new(false);
+    state.set_streamline_count(37);
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.streamline_count, 37);
+
+    let mut restored = State::new(false);
+    let mut controls = Controls::new();
+    record.restore(&mut restored, &mut controls);
+    assert_eq!(restored.streamline_count, 37);
+    assert_eq!(controls.streamline_count, 37);
+
+    let missing: ViewRecord = serde_json::from_str("{}").expect("all fields default");
+    assert_eq!(missing.streamline_count, 0);
+}

@@ -89,6 +89,7 @@ mod sidebar_colormap_ui_test;
 mod sidebar_controls_test;
 mod sidebar_sections_test;
 mod status_bar_test;
+mod streamline_count_test;
 mod streamlines_test;
 mod svg_export_test;
 mod test_layout_test;

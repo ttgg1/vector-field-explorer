@@ -9,7 +9,8 @@ use vector_field_explorer::ui::sidebar::{
     domain_summary, fixed_color_opaque, fixed_color_rgb, head_control_enabled,
     magnitude_scale_enabled, particle_count_label, particle_fixed_color_enabled,
     particle_size_enabled, proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
-    stagnation_seconds_enabled, trail_fade_enabled, trail_width_enabled,
+    stagnation_seconds_enabled, streamline_count_enabled, streamline_count_label,
+    trail_fade_enabled, trail_width_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
@@ -1127,4 +1128,20 @@ fn fixed_colour_picker_round_trip_stores_opaque_rgb_unchanged() {
     assert_eq!(picker, [10, 20, 30], "the picker sees the true RGB");
     let round_trip = fixed_color_opaque(picker);
     assert_eq!(round_trip, [10, 20, 30, 255], "alpha is forced opaque");
+}
+
+#[test]
+fn streamline_count_control_is_auto_only_and_mirrors_the_state() {
+    assert_eq!(streamline_count_label(0), "Auto");
+    assert_eq!(streamline_count_label(37), "37");
+    assert!(!streamline_count_enabled(false, StreamlineSeedMode::Auto));
+    assert!(streamline_count_enabled(true, StreamlineSeedMode::Auto));
+    assert!(!streamline_count_enabled(true, StreamlineSeedMode::Click));
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    controls.streamline_count = 37;
+    apply(&mut state, &mut controls);
+    assert_eq!(state.streamline_count, 37);
+    assert_eq!(controls.streamline_count, 37);
 }
