@@ -1,14 +1,24 @@
-//! Task 1 scaled elementary point and infinite-wire fields.
+//! Task 1 scaled elementary point and infinite-wire fields; Task 2 finite-line
+//! quadrature, resolution and bounded-work integration.
+
+use std::cell::Cell;
 
 use glam::DVec3;
 use vector_field_explorer::sources::{
-    Estimate, EvalOptions, Evaluator, FamilyResult, Source, SourceKind, SourceSet, StopReason,
-    WorkLimits,
+    AccuracyRequest, Estimate, EvalOptions, Evaluator, FamilyResult, Source, SourceKind, SourceSet,
+    StopReason, WorkLimits,
 };
+
+use crate::support::sources as reference;
 
 fn evaluator(sources: &[Source]) -> Evaluator {
     let set = SourceSet::new(sources, &WorkLimits::default(), &|| false).expect("source set");
     Evaluator::new(&set, EvalOptions::default(), &|| false).expect("evaluator")
+}
+
+fn evaluator_with(sources: &[Source], options: EvalOptions) -> Evaluator {
+    let set = SourceSet::new(sources, &WorkLimits::default(), &|| false).expect("source set");
+    Evaluator::new(&set, options, &|| false).expect("evaluator")
 }
 
 fn point(center: DVec3, charge: f64) -> Source {
@@ -167,5 +177,399 @@ fn scaled_elementary_fields() {
         (tilted_estimate.value - expected_tilted).length() <= 2e-13,
         "tilted wire gave {:?}, expected {expected_tilted:?}",
         tilted_estimate.value
+    );
+}
+
+fn line(center: DVec3, axis: DVec3, charge: f64, length: f64) -> Source {
+    Source {
+        center,
+        axis,
+        kind: SourceKind::FiniteLineCharge { charge, length },
+    }
+}
+
+fn assert_component_close(actual: f64, expected: f64, tolerance: f64, label: &str) {
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "{label}: got {actual:e}, expected {expected:e}, tolerance {tolerance:e}"
+    );
+}
+
+fn unresolved_or_work_limit(result: &FamilyResult) -> bool {
+    matches!(
+        result,
+        FamilyResult::Unavailable(StopReason::UnresolvedFeature | StopReason::WorkLimit)
+    )
+}
+
+#[test]
+fn line_against_closed_form() {
+    // L=2, Q=1, a=0.1 at radial 1, z 0: the axial component cancels and the
+    // analytic answer is Er = 1/(1.01*sqrt(2.01)).
+    let mut runner = evaluator(&[line(DVec3::ZERO, DVec3::Z, 1.0, 2.0)]);
+    let line_estimate = estimate(
+        runner
+            .evaluate(DVec3::new(1.0, 0.0, 0.0), &|| false)
+            .electric,
+    );
+    let expected_er = 1.0 / (1.01 * 2.01f64.sqrt());
+    assert_component_close(line_estimate.value.x, expected_er, 2e-13, "radial");
+    assert_component_close(line_estimate.value.y, 0.0, 2e-13, "azimuthal");
+    assert_component_close(line_estimate.value.z, 0.0, 2e-13, "axial");
+    assert!(
+        line_estimate.diagnostics.work_units > 31,
+        "integrated path should cost more than one elementary probe, got {}",
+        line_estimate.diagnostics.work_units
+    );
+
+    // Axial off-center/end and off-axis queries against the independent spec
+    // primitive.
+    for (radial, axial) in [(0.0, 0.3), (0.0, 1.0), (0.0, -1.0), (0.4, 0.35), (0.4, 0.9)] {
+        let (er, ez) = reference::line_components(radial, axial, 2.0, 1.0, 0.1);
+        let actual = estimate(
+            runner
+                .evaluate(DVec3::new(radial, 0.0, axial), &|| false)
+                .electric,
+        );
+        let expected = DVec3::new(er, 0.0, ez);
+        let tolerance = 2e-13 * expected.length().max(1.0);
+        assert!(
+            (actual.value - expected).length() <= tolerance,
+            "r={radial}, z={axial}: got {:?}, expected {expected:?}",
+            actual.value
+        );
+    }
+
+    // Sign, scale and frame normalization.
+    let mut reversed = evaluator(&[line(DVec3::ZERO, DVec3::Z, -1.0, 2.0)]);
+    let reversed_estimate = estimate(
+        reversed
+            .evaluate(DVec3::new(1.0, 0.0, 0.0), &|| false)
+            .electric,
+    );
+    assert_component_close(reversed_estimate.value.x, -expected_er, 2e-13, "negated Q");
+
+    // Scaling every length (L, a, query) by two scales the field by 1/4.
+    let a = 0.1;
+    let scale = 2.0;
+    let mut scaled = evaluator_with(
+        &[line(DVec3::ZERO, DVec3::Z, 1.0, 2.0 * scale)],
+        EvalOptions {
+            softening: a * scale,
+            ..EvalOptions::default()
+        },
+    );
+    let scaled_estimate = estimate(
+        scaled
+            .evaluate(DVec3::new(scale, 0.0, 0.0), &|| false)
+            .electric,
+    );
+    let (expected_scaled_er, expected_scaled_ez) =
+        reference::line_components(scale, 0.0, 2.0 * scale, 1.0, a * scale);
+    let expected_scaled = DVec3::new(expected_scaled_er, 0.0, expected_scaled_ez);
+    assert!(
+        (scaled_estimate.value - expected_scaled).length() <= 2e-13,
+        "scaled line gave {:?}, expected {expected_scaled:?}",
+        scaled_estimate.value
+    );
+
+    let center = DVec3::new(0.5, -0.25, 2.0);
+    let axis = DVec3::new(1.0, 2.0, 3.0).normalize();
+    let seed = DVec3::X - axis * axis.dot(DVec3::X);
+    let radial_dir = seed.normalize();
+    let query = center + radial_dir * 0.7 + axis * 0.4;
+    let (tilted_er, tilted_ez) = reference::line_components(0.7, 0.4, 2.0, 1.0, 0.1);
+    let expected_tilted = radial_dir * tilted_er + axis * tilted_ez;
+    let mut tilted = evaluator(&[line(center, axis, 1.0, 2.0)]);
+    let tilted_estimate = estimate(tilted.evaluate(query, &|| false).electric);
+    assert!(
+        (tilted_estimate.value - expected_tilted).length() <= 2e-12,
+        "tilted line gave {:?}, expected {expected_tilted:?}",
+        tilted_estimate.value
+    );
+
+    // Far same-sign endpoint cases against committed high-precision values.
+    for case in reference::FAR_SAME_SIGN_REFERENCES {
+        let mut runner = evaluator_with(
+            &[line(DVec3::ZERO, DVec3::Z, case.charge, case.length)],
+            EvalOptions {
+                softening: case.softening,
+                ..EvalOptions::default()
+            },
+        );
+        let actual = estimate(
+            runner
+                .evaluate(DVec3::new(case.radial, 0.0, case.axial), &|| false)
+                .electric,
+        );
+        let expected = DVec3::new(case.er, 0.0, case.ez);
+        let tolerance = 2e-13 * expected.length().max(1.0);
+        assert!(
+            (actual.value - expected).length() <= tolerance,
+            "far case radial={} axial={}: got {:?}, expected {expected:?}",
+            case.radial,
+            case.axial,
+            actual.value
+        );
+        assert!(
+            actual.diagnostics.work_units > 31,
+            "far case should still integrate, got {} work units",
+            actual.diagnostics.work_units
+        );
+    }
+}
+
+#[test]
+fn narrow_displaced_line() {
+    let softening = 1e-6;
+    let length = 2.0;
+    let charge = 2.0 * softening;
+    let source = line(DVec3::ZERO, DVec3::Z, charge, length);
+    let narrow_options = EvalOptions {
+        softening,
+        ..EvalOptions::default()
+    };
+    let mut runner = evaluator_with(&[source], narrow_options);
+
+    for axial in [0.0, 0.123, 0.431271] {
+        let (er, ez) = reference::line_components(softening, axial, length, charge, softening);
+        let actual = estimate(
+            runner
+                .evaluate(DVec3::new(softening, 0.0, axial), &|| false)
+                .electric,
+        );
+        let expected = DVec3::new(er, 0.0, ez);
+        let tolerance = 1e-9 + 1e-7 * expected.length();
+        assert!(
+            (actual.value - expected).length() <= tolerance,
+            "narrow line z={axial}: got {:?}, expected {expected:?}",
+            actual.value
+        );
+        assert!(
+            actual.diagnostics.cells_high_water > 1,
+            "resolution guard should have produced multiple leaves for z={axial}"
+        );
+        assert!(actual.uncertainty <= actual.target);
+    }
+
+    // A tighter request exercises the largest-uncertainty refinement loop.
+    let mut default = evaluator_with(&[source], narrow_options);
+    let default_estimate = estimate(
+        default
+            .evaluate(DVec3::new(softening, 0.0, 0.431271), &|| false)
+            .electric,
+    );
+    let tight_options = EvalOptions {
+        softening,
+        accuracy: AccuracyRequest {
+            epsilon: 1e-9,
+            ..AccuracyRequest::default()
+        },
+        ..EvalOptions::default()
+    };
+    let mut tight = evaluator_with(&[source], tight_options);
+    let tight_estimate = estimate(
+        tight
+            .evaluate(DVec3::new(softening, 0.0, 0.431271), &|| false)
+            .electric,
+    );
+    let (tight_er, tight_ez) =
+        reference::line_components(softening, 0.431271, length, charge, softening);
+    let tight_expected = DVec3::new(tight_er, 0.0, tight_ez);
+    assert!(
+        (tight_estimate.value - tight_expected).length() <= 1e-9 + 1e-7 * tight_expected.length()
+    );
+    assert!(tight_estimate.uncertainty <= tight_estimate.target);
+    assert!(
+        tight_estimate.diagnostics.work_units > default_estimate.diagnostics.work_units,
+        "tight request should refine beyond the default coarse partition: {} <= {}",
+        tight_estimate.diagnostics.work_units,
+        default_estimate.diagnostics.work_units
+    );
+    assert!(
+        tight_estimate.diagnostics.cells_high_water > default_estimate.diagnostics.cells_high_water
+    );
+
+    // Lower the cell budget so the displaced feature cannot be resolved. The
+    // result must publish no finite partial vector.
+    let limited = EvalOptions {
+        softening,
+        limits: WorkLimits {
+            cells_per_family: 4,
+            ..WorkLimits::default()
+        },
+        ..EvalOptions::default()
+    };
+    let mut cell_limited = evaluator_with(&[source], limited);
+    let result = cell_limited
+        .evaluate(DVec3::new(softening, 0.0, 0.0), &|| false)
+        .electric;
+    assert!(
+        unresolved_or_work_limit(&result),
+        "expected no publishable estimate, got {result:?}"
+    );
+
+    let limited = EvalOptions {
+        softening,
+        limits: WorkLimits {
+            work_per_family: 40,
+            ..WorkLimits::default()
+        },
+        ..EvalOptions::default()
+    };
+    let mut work_limited = evaluator_with(&[source], limited);
+    let result = work_limited
+        .evaluate(DVec3::new(softening, 0.0, 0.0), &|| false)
+        .electric;
+    assert!(
+        unresolved_or_work_limit(&result),
+        "expected WorkLimit or UnresolvedFeature, got {result:?}"
+    );
+}
+
+#[test]
+fn budget_and_cancellation_are_bounded() {
+    let source = line(DVec3::ZERO, DVec3::Z, 1.0, 2.0);
+    let limits = WorkLimits::default();
+
+    let mut runner = evaluator(&[source]);
+    let line_estimate = estimate(
+        runner
+            .evaluate(DVec3::new(1.0, 0.0, 0.0), &|| false)
+            .electric,
+    );
+    assert!(
+        line_estimate.diagnostics.work_units <= limits.work_per_family,
+        "work {} exceeded limit {}",
+        line_estimate.diagnostics.work_units,
+        limits.work_per_family
+    );
+    assert!(
+        line_estimate.diagnostics.work_units >= 93,
+        "parent plus half probes should cost at least 93 samples, got {}",
+        line_estimate.diagnostics.work_units
+    );
+    assert!(
+        line_estimate.diagnostics.cells_high_water <= limits.cells_per_family,
+        "cells {} exceeded limit {}",
+        line_estimate.diagnostics.cells_high_water,
+        limits.cells_per_family
+    );
+    assert!(line_estimate.diagnostics.cells_high_water >= 1);
+
+    // Successful run with a poll counter: work may not advance more than 32
+    // counted units between cancellation polls.
+    let polls = Cell::new(0u64);
+    let counting = || {
+        polls.set(polls.get() + 1);
+        false
+    };
+    let mut runner = evaluator(&[source]);
+    let line_estimate = estimate(
+        runner
+            .evaluate(DVec3::new(1.0, 0.0, 0.0), &counting)
+            .electric,
+    );
+    let poll_count = polls.get();
+    assert!(poll_count >= 1);
+    assert!(
+        line_estimate.diagnostics.work_units <= 32 * poll_count,
+        "work {} over {} polls exceeds a 32-unit polling gap",
+        line_estimate.diagnostics.work_units,
+        poll_count
+    );
+
+    // Cancellation observed mid-integration publishes no estimate.
+    let calls = Cell::new(0u32);
+    let cancel_on_second = || {
+        let next = calls.get() + 1;
+        calls.set(next);
+        next >= 2
+    };
+    let mut runner = evaluator(&[source]);
+    let cancelled = runner.evaluate(DVec3::new(1.0, 0.0, 0.0), &cancel_on_second);
+    assert!(
+        matches!(
+            cancelled.electric,
+            FamilyResult::Unavailable(StopReason::Cancelled)
+        ),
+        "expected Cancelled, got {:?}",
+        cancelled.electric
+    );
+
+    // A work budget too small even for the first resolved cell.
+    let limited = EvalOptions {
+        limits: WorkLimits {
+            work_per_family: 40,
+            ..WorkLimits::default()
+        },
+        ..EvalOptions::default()
+    };
+    let mut runner = evaluator_with(&[source], limited);
+    let result = runner
+        .evaluate(DVec3::new(1.0, 0.0, 0.0), &|| false)
+        .electric;
+    assert!(
+        matches!(result, FamilyResult::Unavailable(StopReason::WorkLimit)),
+        "expected WorkLimit with no vector, got {result:?}"
+    );
+
+    // Scratch preparation cannot hold the initial partition: no estimate.
+    let limited = EvalOptions {
+        limits: WorkLimits {
+            cells_per_family: 1,
+            ..WorkLimits::default()
+        },
+        ..EvalOptions::default()
+    };
+    let mut runner = evaluator_with(&[source], limited);
+    let result = runner
+        .evaluate(DVec3::new(1.0, 0.0, 0.0), &|| false)
+        .electric;
+    assert!(
+        unresolved_or_work_limit(&result),
+        "expected no publishable estimate with a one-cell scratch, got {result:?}"
+    );
+
+    // Depth refusal on a feature that cannot be resolved inside one split.
+    let narrow_source = line(DVec3::ZERO, DVec3::Z, 2e-6, 2.0);
+    let limited = EvalOptions {
+        softening: 1e-6,
+        limits: WorkLimits {
+            max_depth: 1,
+            ..WorkLimits::default()
+        },
+        ..EvalOptions::default()
+    };
+    let mut runner = evaluator_with(&[narrow_source], limited);
+    let result = runner
+        .evaluate(DVec3::new(1e-6, 0.0, 0.0), &|| false)
+        .electric;
+    assert!(
+        matches!(
+            result,
+            FamilyResult::Unavailable(StopReason::UnresolvedFeature)
+        ),
+        "expected depth refusal, got {result:?}"
+    );
+
+    // A line shorter than half the smallest subnormal has a zero-width domain;
+    // no midpoint makes representable progress, so refuse explicitly.
+    let degenerate_length = f64::from_bits(1);
+    let mut runner = evaluator(&[line(
+        DVec3::ZERO,
+        DVec3::Z,
+        degenerate_length,
+        degenerate_length,
+    )]);
+    let result = runner
+        .evaluate(DVec3::new(0.1, 0.0, 0.0), &|| false)
+        .electric;
+    assert!(
+        matches!(
+            result,
+            FamilyResult::Unavailable(StopReason::UnresolvedFeature)
+        ),
+        "expected repeated-midpoint refusal, got {result:?}"
     );
 }

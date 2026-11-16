@@ -39,8 +39,9 @@ The field is formula-driven:
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
   screenshots, and persistence are all in this tree.
 - The app is a teaching-grade explorer, not a solver. The pure source-evaluator
-  slice in `src/sources` currently evaluates softened point charges and infinite
-  straight wires; the remaining six geometries are validated model data only.
+  slice in `src/sources` currently evaluates softened point charges, finite
+  charged lines and infinite straight wires; the remaining five geometries are
+  validated model data only.
   Maxwell/ODE work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
@@ -611,13 +612,15 @@ them at a point.
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
 
-#### `src/sources/` — validated source model and scaled elementary fields
+#### `src/sources/` — validated source model and bounded quadrature
 
 **Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for softened source
 fields. `src/sources/mod.rs` re-exports only the public contract;
 `src/sources/model.rs` validates and freezes the input;
-`src/sources/numeric.rs` carries power-of-two-scaled elementary arithmetic;
-`src/sources/evaluate.rs` prepares an evaluator and builds family results.
+`src/sources/numeric.rs` carries power-of-two-scaled elementary arithmetic and
+the finite-line kernel/primitive; `src/sources/quadrature.rs` owns bounded
+adaptive Gauss–Kronrod partitions; `src/sources/evaluate.rs` prepares an
+evaluator and builds family results.
 
 **Public API.** `SourceKind` (all eight vectors), `Source`, `AccuracyRequest`,
 `EvalOptions`, `WorkLimits`, `SourceSet::new`, `Evaluator::new`,
@@ -645,7 +648,17 @@ ceilings are rejected.
   `NumericRange`; genuine underflow is published with a flag and uncertainty.
   A wire query exactly on its axis returns exact `ZERO` because the azimuthal
   basis is undefined there.
-- Nonzero finite-line/ring/disc/sphere/loop/solenoid sources currently return
+- A finite line covers its whole segment with finite cells. Every unresolved
+  cell is split at the projected support location or midpoint until its physical
+  width is at most half the conservative softened distance to the segment; an
+  exhausted depth/cell/work budget publishes `Unavailable`, never a partial
+  vector. Off-axis evaluation uses GK15/31 and both half-cell GK31 estimates;
+  the half-cell sum is the estimate and `8*max(|K31-G15|, |K31-halfsum|)` is the
+  absolute uncertainty indicator. Refinement replaces the leaf with the largest
+  absolute uncertainty (stable lower-bound tie break) only after child capacity
+  and work are confirmed. Work counts every sample and split, polls cancellation
+  at most every 32 counted units, and never recurses.
+- Nonzero ring/disc/sphere/loop/solenoid sources currently return
   `Unavailable(StopReason::UnresolvedFeature)`; later tasks replace those
   branches. Zero-strength sources are skipped and exact.
 
@@ -653,11 +666,17 @@ ceilings are rejected.
 `validation_is_strict`, `prepare_is_cancellable_before_allocation`,
 `empty_and_zero_are_exact`, `axis_direction_is_not_squared_norm_limited`.
 [tests/sources_numeric_test.rs](../tests/sources_numeric_test.rs):
-`scaled_elementary_fields`.
+`scaled_elementary_fields`, `huge_near_axis_wire_is_refused_not_confidently_wrong`,
+`line_against_closed_form`, `narrow_displaced_line`,
+`budget_and_cancellation_are_bounded`. Independent finite-line endpoint
+references and committed high-precision values live in
+[tests/support/sources/](../tests/support/sources/).
 
-**Limitations.** Task 1 has no quadrature, later-task geometry reductions,
-family refinement, UI, persistence, glyphs, rendering, export or app integration.
-Uncertainty is an empirical arithmetic allowance, not a certified bound.
+**Limitations.** Task 2 has no ring/disc/sphere/loop/solenoid reductions,
+family-global refinement, UI, persistence, glyphs, rendering, export or app
+integration. Uncertainty is an empirical absolute allowance accumulated from
+quadrature indicators and roundoff terms, not a certified interval bound.
+Wasm/browser and manual visual checks remain waived, not passed.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 

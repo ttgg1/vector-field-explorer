@@ -6,6 +6,8 @@
 
 use glam::DVec3;
 
+use super::quadrature::KernelSample;
+
 /// A numerical transformation that cannot be represented in binary64.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NumericRange {
@@ -350,4 +352,167 @@ fn pow2(exponent: i32) -> Option<f64> {
     } else {
         Some(0.0)
     }
+}
+
+/// Source-local finite-line geometry and its direct segment kernel.
+///
+/// The line is centred on `center`. The kernel integrates
+/// `(Q/L) * (r, z - t) / (r^2 + (z - t)^2 + a^2)^(3/2)` over the segment in
+/// source-local cylindrical coordinates.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FiniteLineGeometry {
+    pub radial: f64,
+    pub axial: f64,
+    pub radial_direction: DVec3,
+    pub unit_axis: DVec3,
+    softening: f64,
+    factor: f64,
+    factor_underflow: bool,
+}
+
+impl FiniteLineGeometry {
+    pub(crate) fn new(
+        point: DVec3,
+        center: DVec3,
+        axis: DVec3,
+        softening: f64,
+        charge: f64,
+        length: f64,
+    ) -> Result<Self, NumericRange> {
+        let displacement = point - center;
+        if !displacement.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let unit_axis = normalize_axis(axis)?;
+        let scale = displacement.abs().max_element();
+        let axial = if scale == 0.0 {
+            0.0
+        } else {
+            (displacement / scale).dot(unit_axis) * scale
+        };
+        if !axial.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let radial_vector = displacement - unit_axis * axial;
+        if !radial_vector.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let radial = stable_norm(radial_vector)?;
+        let radial_direction = if radial == 0.0 {
+            DVec3::ZERO
+        } else {
+            radial_vector / radial
+        };
+        let factor = charge / length;
+        if !factor.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        Ok(Self {
+            radial,
+            axial,
+            radial_direction,
+            unit_axis,
+            softening,
+            factor,
+            factor_underflow: factor == 0.0 && charge != 0.0,
+        })
+    }
+
+    /// One source-local segment sample, already scaled by `Q/L`.
+    pub(crate) fn sample(&self, parameter: f64) -> Result<KernelSample, NumericRange> {
+        if !parameter.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let axial_delta = self.axial - parameter;
+        if !axial_delta.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let scale = self.radial.abs().max(axial_delta.abs()).max(self.softening);
+        if scale <= 0.0 || !scale.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let radial_scaled = self.radial / scale;
+        let axial_scaled = axial_delta / scale;
+        let softening_scaled = self.softening / scale;
+        let distance_squared = radial_scaled * radial_scaled
+            + axial_scaled * axial_scaled
+            + softening_scaled * softening_scaled;
+        let distance = distance_squared.sqrt();
+        let inverse_scale = 1.0 / scale;
+        let coefficient =
+            self.factor * inverse_scale * inverse_scale / (distance_squared * distance);
+        if !coefficient.is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let value = [radial_scaled * coefficient, axial_scaled * coefficient];
+        if !value[0].is_finite() || !value[1].is_finite() {
+            return Err(NumericRange::Unrepresentable);
+        }
+        let underflow = self.factor_underflow
+            || (value[0] == 0.0 && radial_scaled != 0.0)
+            || (value[1] == 0.0 && axial_scaled != 0.0);
+        Ok(KernelSample { value, underflow })
+    }
+}
+
+/// Analytic finite-line field for an exactly on-axis query.
+///
+/// Uses the design's stable endpoint primitive. For a same-sign far query the
+/// endpoint difference is rationalized before evaluation.
+pub(crate) fn finite_line_axial_field(
+    point: DVec3,
+    center: DVec3,
+    axis: DVec3,
+    softening: f64,
+    charge: f64,
+    length: f64,
+) -> Result<FieldContribution, NumericRange> {
+    let displacement = point - center;
+    if !displacement.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    if charge == 0.0 {
+        return Ok(FieldContribution::zero());
+    }
+    let unit_axis = normalize_axis(axis)?;
+    let scale = displacement.abs().max_element();
+    let axial = if scale == 0.0 {
+        0.0
+    } else {
+        (displacement / scale).dot(unit_axis) * scale
+    };
+    if !axial.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let u = axial + 0.5 * length;
+    let v = axial - 0.5 * length;
+    if !u.is_finite() || !v.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let a = v.hypot(softening);
+    let b = u.hypot(softening);
+    let factor = charge / length;
+    if !factor.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let same_sign = (u > 0.0 && v > 0.0) || (u < 0.0 && v < 0.0);
+    let difference = if same_sign {
+        2.0 * axial * length / (a * b * (a + b))
+    } else {
+        1.0 / a - 1.0 / b
+    };
+    let axial_field = factor * difference;
+    if !axial_field.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let value = unit_axis * axial_field;
+    if !value.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let underflow = axial_field == 0.0 && factor != 0.0;
+    Ok(FieldContribution {
+        value,
+        allowance: allowance_for(value, underflow)?,
+        underflow,
+    })
 }

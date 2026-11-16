@@ -7,6 +7,7 @@
 mod evaluate;
 mod model;
 mod numeric;
+mod quadrature;
 
 pub use evaluate::{Diagnostics, Estimate, Evaluator, FamilyResult, KERNEL_ID, Sample, StopReason};
 pub use model::{
