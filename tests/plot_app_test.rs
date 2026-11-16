@@ -437,6 +437,41 @@ fn global_reset_clears_plot_and_capture() {
     assert!(!app.screenshot.take_request(), "pending capture cancelled");
 }
 
+#[test]
+fn plot_install_failure_fails_pending_png() {
+    // A live renderer installation failure must consume the pending PNG
+    // request, report a readable toast, and reopen the slot; it may not leave
+    // the request deferred to a later successful install.
+    let mut shot = Screenshot::new();
+    shot.request();
+    shot.fail_pending("plot renderer unavailable: no suitable adapter".into());
+
+    assert!(
+        !shot.take_request(),
+        "the pending request is consumed, not deferred"
+    );
+    let toast = shot.toast_text().expect("install failure reports a toast");
+    assert!(
+        toast.contains("plot renderer unavailable"),
+        "the toast carries the install error: {toast}"
+    );
+
+    shot.request();
+    assert!(
+        shot.take_request(),
+        "the slot reopens after an install failure"
+    );
+
+    // No pending PNG means no toast and no capture-slot churn.
+    let mut idle = Screenshot::new();
+    idle.fail_pending("nothing pending".into());
+    assert!(
+        idle.toast_text().is_none(),
+        "a no-op must not report a failure"
+    );
+    assert!(!idle.take_request());
+}
+
 trait CameraBits {
     fn bits(&self) -> Vec<u64>;
 }

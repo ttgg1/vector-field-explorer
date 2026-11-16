@@ -889,6 +889,17 @@ impl Screenshot {
         self.set_outcome(SaveOutcome::Failed(message), Instant::now());
     }
 
+    /// Fail a pending PNG request that cannot be dispatched (for example,
+    /// because the live plot renderer could not be installed). Consumes the
+    /// request through the normal take/generation lifecycle, reports through
+    /// the existing failure toast, and reopens the capture slot. A no-op when
+    /// no PNG request is pending; an in-flight capture is left untouched.
+    pub fn fail_pending(&mut self, message: String) {
+        if self.take_request() {
+            self.fail(message);
+        }
+    }
+
     /// Show a toast without a save-dialog outcome (used by the SVG path and
     /// by the 3D-not-supported notice).
     pub fn notify(&mut self, text: String, failed: bool) {

@@ -404,6 +404,11 @@ impl VfApp {
                     Err(error) => {
                         self.plot_status = error.clone();
                         log::error!("plot renderer installation failed: {error}");
+                        // Installation left the renderer unusable, so a queued
+                        // PNG cannot be dispatched now or deferred to a later
+                        // successful install: fail it and reopen the slot.
+                        self.screenshot
+                            .fail_pending(format!("plot renderer unavailable: {error}"));
                     }
                 }
             }
