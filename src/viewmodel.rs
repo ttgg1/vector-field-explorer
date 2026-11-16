@@ -299,17 +299,36 @@ impl State {
         true
     }
 
-    /// Mirror the clock's time into the state. Marks the state dirty only when
-    /// the field is time-dependent and `t` actually changed.
+    /// Mirror the clock's time into the state. Returns whether `t` changed.
+    ///
+    /// Vector mode keeps its field-dependent behavior: a time-dependent field
+    /// dirties the state. Scalar mode invalidates only a valid, active
+    /// time-dependent draft; a static scalar is untouched, and an invalid edit
+    /// of a previously time-dependent source freezes its retained mesh.
     pub fn set_time(self: &mut State, t: f32) -> bool {
         if self.time == t {
             return false;
         }
         self.time = t;
-        if self.field.is_time_dependent() {
-            self.mark_dirty();
+        if self.is_vector_mode() {
+            if self.field.is_time_dependent() {
+                self.mark_dirty();
+            }
+        } else {
+            self.scalar_time_changed();
         }
         true
+    }
+
+    /// Whether anything in the current view consumes simulated time: a live
+    /// particle cloud or a time-dependent vector field in vector mode, or an
+    /// active accepted time-dependent scalar expression.
+    pub fn has_time_dependent_consumer(self: &State) -> bool {
+        if self.is_vector_mode() {
+            self.particle_target().is_some() || self.field.is_time_dependent()
+        } else {
+            self.active_scalar_is_time_dependent()
+        }
     }
 
     /// Sampling runs three-dimensional only when the mode is 3D and the
@@ -453,7 +472,9 @@ impl State {
             || self.domain.max.y != domain.max.y
         {
             self.plot.curve.samples = None;
+            self.plot.curve.sampled_at = None;
             self.plot.surface.samples = None;
+            self.plot.surface.sampled_at = None;
         }
         self.plot.generation += 1;
         self.domain = domain;

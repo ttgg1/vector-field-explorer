@@ -14,6 +14,9 @@ pub struct ScalarDraft {
     pub error: Option<String>,
     pub accepted: Option<ScalarExpr>,
     pub samples: Option<Arc<SampledPlot>>,
+    /// Simulated time the current `samples` were generated at; `None` until
+    /// the first successful sample.
+    pub sampled_at: Option<f32>,
 }
 
 #[derive(Clone, Debug)]

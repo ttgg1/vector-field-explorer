@@ -5,7 +5,7 @@ use glam::UVec2;
 
 use super::State;
 use crate::{
-    plot::{PlotKind, curve_edges, sample_curve, sample_surface},
+    plot::{PlotKind, curve_edges_at, sample_curve_at, sample_surface_at},
     plot_examples::PlotExample,
     plot_scene::{PlotScene, build_plot_scene},
     plot_state::{PlotSettings, SampledPlot, ScalarDraft},
@@ -61,6 +61,7 @@ impl State {
             let draft = self.scalar_draft_mut(context);
             draft.accepted = None;
             draft.samples = None;
+            draft.sampled_at = None;
             match ScalarExpr::parse(&draft.source, context) {
                 Ok(expr) => {
                     draft.accepted = Some(expr);
@@ -91,6 +92,7 @@ impl State {
             Ok(expr) => {
                 draft.accepted = Some(expr);
                 draft.samples = None;
+                draft.sampled_at = None;
                 draft.error = None;
             }
             Err(err) => draft.error = Some(err.to_string()),
@@ -121,6 +123,7 @@ impl State {
         }
         self.plot.settings.curve_samples = count;
         self.plot.curve.samples = None;
+        self.plot.curve.sampled_at = None;
         self.plot_changed()
     }
     pub fn set_plot_resolution(&mut self, resolution: u32) -> bool {
@@ -130,6 +133,7 @@ impl State {
         }
         self.plot.settings.surface_resolution = resolution;
         self.plot.surface.samples = None;
+        self.plot.surface.sampled_at = None;
         self.plot_changed()
     }
     pub fn set_plot_width(&mut self, width: f32) -> bool {
@@ -193,37 +197,99 @@ impl State {
             let draft = self.scalar_draft_mut(context);
             draft.accepted = None;
             draft.samples = None;
+            draft.sampled_at = None;
         }
         self.update_scalar_source(ScalarContext::Curve, curve, true);
         self.update_scalar_source(ScalarContext::Surface, surface, true);
     }
+    /// Whether the active scalar plot's accepted expression reads time.
+    ///
+    /// Deliberately ignores `error`: while a previously time-dependent source
+    /// is mid-edit and invalid, the plot keeps its clock consumer visible so
+    /// the clock can run while the retained mesh stays frozen.
+    pub(super) fn active_scalar_is_time_dependent(&self) -> bool {
+        match self.plot.kind {
+            PlotKind::Curve2D => self
+                .plot
+                .curve
+                .accepted
+                .as_ref()
+                .is_some_and(ScalarExpr::is_time_dependent),
+            PlotKind::Surface3D => self
+                .plot
+                .surface
+                .accepted
+                .as_ref()
+                .is_some_and(ScalarExpr::is_time_dependent),
+            PlotKind::VectorField => false,
+        }
+    }
+
+    /// Invalidate the active scalar plot after a time change, but only when its
+    /// current edit is valid and the accepted expression is time-dependent.
+    /// Returns whether generation advanced.
+    pub(super) fn scalar_time_changed(&mut self) -> bool {
+        let context = match self.plot.kind {
+            PlotKind::Curve2D => Some(ScalarContext::Curve),
+            PlotKind::Surface3D => Some(ScalarContext::Surface),
+            PlotKind::VectorField => None,
+        };
+        let Some(context) = context else {
+            return false;
+        };
+        let draft = self.scalar_draft(context);
+        if draft.error.is_some()
+            || !draft
+                .accepted
+                .as_ref()
+                .is_some_and(ScalarExpr::is_time_dependent)
+        {
+            return false;
+        }
+        self.plot.generation += 1;
+        self.mark_dirty()
+    }
+
     pub fn plot_scene(&mut self) -> Arc<PlotScene> {
         let context = match self.plot.kind {
             PlotKind::Curve2D => Some(ScalarContext::Curve),
             PlotKind::Surface3D => Some(ScalarContext::Surface),
             PlotKind::VectorField => None,
         };
-        if let Some(context) = context
-            && self.scalar_draft(context).samples.is_none()
-        {
-            let samples = self
-                .scalar_draft(context)
-                .accepted
-                .as_ref()
-                .map(|expr| match context {
+        if let Some(context) = context {
+            let draft = self.scalar_draft(context);
+            let needs_sample = draft.samples.is_none()
+                || (draft.error.is_none()
+                    && draft
+                        .accepted
+                        .as_ref()
+                        .is_some_and(ScalarExpr::is_time_dependent)
+                    && draft.sampled_at != Some(self.time));
+            if needs_sample {
+                let time = self.time;
+                let samples = draft.accepted.as_ref().map(|expr| match context {
                     ScalarContext::Curve => {
-                        let slots =
-                            sample_curve(expr, &self.domain, self.plot.settings.curve_samples);
-                        let edges = curve_edges(expr, &self.domain, &slots);
+                        let slots = sample_curve_at(
+                            expr,
+                            &self.domain,
+                            self.plot.settings.curve_samples,
+                            time,
+                        );
+                        let edges = curve_edges_at(expr, &self.domain, &slots, time);
                         SampledPlot::Curve { slots, edges }
                     }
-                    ScalarContext::Surface => SampledPlot::Surface(sample_surface(
+                    ScalarContext::Surface => SampledPlot::Surface(sample_surface_at(
                         expr,
                         &self.domain,
                         UVec2::splat(self.plot.settings.surface_resolution),
+                        time,
                     )),
                 });
-            self.scalar_draft_mut(context).samples = samples.map(Arc::new);
+                let draft = self.scalar_draft_mut(context);
+                let sampled_at = samples.as_ref().map(|_| time);
+                draft.samples = samples.map(Arc::new);
+                draft.sampled_at = sampled_at;
+            }
         }
         let draft = context.map(|c| self.scalar_draft(c));
         let mut scene = build_plot_scene(
