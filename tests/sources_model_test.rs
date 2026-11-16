@@ -186,6 +186,17 @@ fn validation_is_strict() {
                 DVec3::ZERO,
                 DVec3::Z,
                 SourceKind::ChargedDisc {
+                    charge: bad,
+                    radius: 1.0,
+                },
+            ),
+            SourceParameter::Charge,
+        );
+        assert_invalid(
+            source(
+                DVec3::ZERO,
+                DVec3::Z,
+                SourceKind::ChargedDisc {
                     charge: 1.0,
                     radius: bad,
                 },
@@ -219,6 +230,17 @@ fn validation_is_strict() {
                 DVec3::ZERO,
                 DVec3::Z,
                 SourceKind::StraightWire { current: bad },
+            ),
+            SourceParameter::Current,
+        );
+        assert_invalid(
+            source(
+                DVec3::ZERO,
+                DVec3::Z,
+                SourceKind::CurrentLoop {
+                    current: bad,
+                    radius: 1.0,
+                },
             ),
             SourceParameter::Current,
         );

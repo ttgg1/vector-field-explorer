@@ -150,6 +150,12 @@ pub(crate) fn wire_field(
     }
 
     let radius = stable_norm(perpendicular)?;
+    // Subtracting two near-equal huge vectors loses the perpendicular to
+    // rounding at the scale of the displacement itself. Refuse rather than
+    // fabricate a direction or magnitude from that cancellation.
+    if radius <= 64.0 * f64::EPSILON * scale {
+        return Err(NumericRange::Unrepresentable);
+    }
     if radius == 0.0 {
         return Ok(FieldContribution::zero());
     }

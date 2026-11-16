@@ -41,6 +41,37 @@ fn relative_error(actual: DVec3, expected: DVec3) -> f64 {
 }
 
 #[test]
+fn huge_near_axis_wire_is_refused_not_confidently_wrong() {
+    // Nearly parallel to the axis at extreme scale: the projected perpendicular
+    // (here truly (0, 0, 1)) lies far below the rounding scale of the
+    // displacement, so no direction or magnitude can be trusted. Refuse
+    // explicitly rather than publishing a fabricated TargetMet.
+    let axis = DVec3::new(1.0, 1.0, 0.0);
+    let mut evaluator = evaluator(&[wire(axis, 1.0)]);
+    let refused = evaluator.evaluate(DVec3::new(1e300, 1e300, 1.0), &|| false);
+    assert!(
+        matches!(
+            refused.magnetic,
+            FamilyResult::Unavailable(StopReason::NumericRange)
+        ),
+        "expected NumericRange, got {:?}",
+        refused.magnetic
+    );
+
+    // An ordinary off-axis query on the same wire still evaluates.
+    let unit = axis.normalize();
+    let displacement = DVec3::new(1.0, 0.0, 0.0);
+    let perpendicular = displacement - unit * displacement.dot(unit);
+    let expected = 2.0 * unit.cross(perpendicular) / (perpendicular.length_squared() + 0.01);
+    let ordinary = estimate(evaluator.evaluate(displacement, &|| false).magnetic);
+    assert!(
+        (ordinary.value - expected).length() <= 2e-13,
+        "ordinary wire gave {:?}, expected {expected:?}",
+        ordinary.value
+    );
+}
+
+#[test]
 fn scaled_elementary_fields() {
     let mut point_evaluator = evaluator(&[point(DVec3::ZERO, 1.0)]);
     let point_sample = point_evaluator.evaluate(DVec3::new(1.0, 0.0, 0.0), &|| false);
