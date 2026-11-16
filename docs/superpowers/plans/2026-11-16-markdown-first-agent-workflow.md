@@ -67,7 +67,7 @@
 - [x] Replace runtime guide with a concise human workflow, safety boundary, and metrics invocation.
 - [x] Remove stale runtime pointers from `AGENTS.md`, workflow, and fix-loop docs while preserving all extant quality/owner requirements.
 - [x] Validate with `opencode debug agents` and `opencode debug config` (no model generation), `python3 scripts/check-docs.py`, and `git diff --check`.
-- [ ] Commit `feat:` with `Generated-by: OpenCode`.
+- [x] Commit `feat:` with `Generated-by: OpenCode`.
 
 ### Task 2: Retain metrics only and retire runtime implementation
 
@@ -93,7 +93,7 @@
 - [x] Run the metrics tests and Python compilation.
 - [x] Remove runtime-only implementation and tests after confirming no remaining repository references.
 - [x] Run `python3 -m unittest discover -s scripts/tests -v`, changed-file `py_compile`, `python3 scripts/check-docs.py`, and `git diff --check`.
-- [ ] Commit `fix:` with `Generated-by: OpenCode`.
+- [x] Commit `fix:` with `Generated-by: OpenCode`.
 
 ### Task 3: Reconcile historical design, CI, and future plugin inputs
 
@@ -110,7 +110,9 @@
 - [x] Validate CI's Python test command covers the metrics tests and remains offline.
 - [x] Run docs checks, Python tests, OpenCode agent discovery, and final `git diff --check`.
 - [x] Prepare actual diff and verification evidence for the required independent review; no push/merge in this plan.
-- [ ] Commit `docs:` with `Generated-by: OpenCode`.
+- [x] Commit `docs:` with `Generated-by: OpenCode`.
+
+Independent reviewer result: a fresh `reviewer-openai` pass returned no actionable findings after the first-round blockers and suggestion were corrected. See the local SDD ledger for the review trail and final verification evidence.
 
 ## Integration
 
