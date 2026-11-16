@@ -307,7 +307,7 @@ fn eligibility_combined_tags_and_stable_camera_order() {
     for (mode, formula, arrows, expected_dots) in [
         ("2d", "(x,y)", true, 0),
         ("3d", "(x,y,z)", false, 9),
-        ("3d", "(x,y)", true, 9),
+        ("3d", "(x,y)", true, 0),
         ("3d", "(x,y,z)", true, 9),
     ] {
         let o = options(&format!(

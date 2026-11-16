@@ -722,11 +722,12 @@ impl State {
         true
     }
 
-    /// This frame's particle target: `Some(count)` while particles are on in
-    /// the 3D view, `None` otherwise. The simulation only spawns/trims when a
-    /// target exists, so the off state spawns nothing.
+    /// This frame's particle target: `Some(count)` while particles are on for
+    /// a three-component field — in the 3D view or as a 2D plane slice — and
+    /// `None` otherwise. Ordinary two-component fields have no depth or slice
+    /// flow for a dot to ride, so the off state still spawns nothing.
     pub fn particle_target(self: &State) -> Option<usize> {
-        (self.particles && self.mode_3d)
+        (self.particles && self.field.dimension == 3)
             .then(|| effective_particle_count(self.density, self.particle_count) as usize)
     }
 

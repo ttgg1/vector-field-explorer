@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::colormap::Colormap;
 use crate::domain::Domain;
-use crate::field::FieldExpr;
+use crate::flow::Flow;
 use crate::renderer::{ArrowInstanceGPU, LineInstanceGPU, PARTICLE_KIND};
 
 /// Hard cap on the particle cloud, whatever the density slider asks for.
@@ -389,10 +389,10 @@ fn inside(domain: &Domain, p: Vec3) -> bool {
         && p.z >= domain.min.z && p.z <= domain.max.z
 }
 
-/// Field flow at `p` and time `t`. A missing or non-finite evaluation reads as
-/// the zero vector, which [`advect`] treats as zero velocity and respawns.
-fn flow_at(field: &FieldExpr, p: Vec3, t: f32) -> Vec3 {
-    match field.eval3_at(p, t) {
+/// Flow at `p` and time `t`. A missing or non-finite evaluation reads as the
+/// zero vector, which [`advect`] treats as zero velocity and respawns.
+fn flow_at<F: Flow + ?Sized>(flow: &F, p: Vec3, t: f32) -> Vec3 {
+    match flow.eval(p, t) {
         Some(v) if v.is_finite() => v,
         _ => Vec3::splat(0.0),
     }
@@ -443,18 +443,18 @@ fn spawn_box(domain: &Domain) -> SpawnBox {
 /// streamline tracer's `integrate`, but with a per-frame time step rather than
 /// a fixed arc-length one. The NaN sentinel marks zero or non-finite velocity,
 /// which [`advect`] respawns.
-fn rk4_step(field: &FieldExpr, p: Vec3, h: f32, t: f32) -> Vec3 {
-    let f0 = flow_at(field, p, t);
+fn rk4_step<F: Flow + ?Sized>(flow: &F, p: Vec3, h: f32, t: f32) -> Vec3 {
+    let f0 = flow_at(flow, p, t);
     let mag = f0.length();
     if mag <= 0.0 || mag.is_nan() {
         return Vec3::splat(NAN_F32);
     }
     let k1 = p + f0 * (h * 0.5);
-    let f1 = flow_at(field, k1, t + h * 0.5);
+    let f1 = flow_at(flow, k1, t + h * 0.5);
     let k2 = p + f1 * (h * 0.5);
-    let f2 = flow_at(field, k2, t + h * 0.5);
+    let f2 = flow_at(flow, k2, t + h * 0.5);
     let k3 = p + f2 * h;
-    let f3 = flow_at(field, k3, t + h);
+    let f3 = flow_at(flow, k3, t + h);
     p + (f0 + f1 * 2.0 + f2 * 2.0 + f3) * (h / 6.0)
 }
 
@@ -674,9 +674,9 @@ fn stagnated_respawn(
 /// respawns once it reaches the threshold. A respawn resets that particle's
 /// trail, stuck time and speed. An exact zero-velocity point still takes the
 /// pre-existing RK4 NaN respawn immediately, in both loop toggle states.
-pub fn advect(
+pub fn advect<F: Flow + ?Sized>(
     particles: &mut Particles,
-    field: &FieldExpr,
+    flow: &F,
     domain: &Domain,
     settings: AdvectSettings,
 ) {
@@ -700,7 +700,7 @@ pub fn advect(
     for i in 0..particles.pos.len() {
         state = lcg_next(state);
         let p = particles.pos[i];
-        let q = if inside(domain, p) { rk4_step(field, p, dt, settings.time) } else { Vec3::splat(NAN_F32) };
+        let q = if inside(domain, p) { rk4_step(flow, p, dt, settings.time) } else { Vec3::splat(NAN_F32) };
         if !q.is_finite() || !inside(domain, q) {
             let point = jittered_point(region.center, region.band, state);
             particles.pos[i] = point;
@@ -751,9 +751,9 @@ pub fn speed_range(particles: &Particles) -> (f32, f32) {
 /// `alpha` is applied by the caller; the RGB rules are shared so dots and
 /// trails always agree for a given mode.
 #[allow(clippy::too_many_arguments)]
-fn particle_rgb(
+fn particle_rgb<F: Flow + ?Sized>(
     mode: ParticleColorMode,
-    field: &FieldExpr,
+    flow: &F,
     point: Vec3,
     speed: f32,
     colormap: Colormap,
@@ -764,7 +764,7 @@ fn particle_rgb(
 ) -> [f32; 3] {
     match mode {
         ParticleColorMode::Magnitude => {
-            let mag = match field.eval3_at(point, time) {
+            let mag = match flow.eval(point, time) {
                 Some(v) if v.is_finite() => v.length(),
                 _ => 0.0,
             };
@@ -796,9 +796,9 @@ fn particle_rgb(
 /// instance layout — the dot shader reads `origin` as the center and
 /// `dir_len.w` as the radius.
 #[allow(clippy::too_many_arguments)]
-pub fn dot_instances_at(
+pub fn dot_instances_at<F: Flow + ?Sized>(
     particles: &Particles,
-    field: &FieldExpr,
+    flow: &F,
     domain: &Domain,
     colormap: Colormap,
     color_range: (f32, f32),
@@ -819,7 +819,7 @@ pub fn dot_instances_at(
         let speed = particles.speeds.get(i).copied().unwrap_or(0.0);
         let [r, g, b] = particle_rgb(
             appearance.color_mode,
-            field,
+            flow,
             p,
             speed,
             colormap,
@@ -846,9 +846,9 @@ pub fn dot_instances_at(
 /// hard-capped at [`MAX_TRAIL_SEGMENTS`].
 #[allow(clippy::too_many_arguments)]
 /// Delegate to [`trail_instances_at`] at `t = 0.0`.
-pub fn dot_instances(
+pub fn dot_instances<F: Flow + ?Sized>(
     particles: &Particles,
-    field: &FieldExpr,
+    flow: &F,
     domain: &Domain,
     colormap: Colormap,
     color_range: (f32, f32),
@@ -857,14 +857,14 @@ pub fn dot_instances(
     radius: f32,
 ) -> Vec<ArrowInstanceGPU> {
     dot_instances_at(
-        particles, field, domain, colormap, color_range, appearance, speed_range, radius, 0.0,
+        particles, flow, domain, colormap, color_range, appearance, speed_range, radius, 0.0,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn trail_instances_at(
+pub fn trail_instances_at<F: Flow + ?Sized>(
     particles: &Particles,
-    field: &FieldExpr,
+    flow: &F,
     colormap: Colormap,
     color_range: (f32, f32),
     appearance: &ParticleAppearance,
@@ -895,7 +895,7 @@ pub fn trail_instances_at(
         let midpoint = points[points.len() - 2].lerp(points[points.len() - 1], 0.5);
         let [r, g, b] = particle_rgb(
             appearance.color_mode,
-            field,
+            flow,
             midpoint,
             speed,
             colormap,
@@ -922,9 +922,9 @@ pub fn trail_instances_at(
 }
 
 /// Delegate to [`trail_instances_at`] at `t = 0.0`.
-pub fn trail_instances(
+pub fn trail_instances<F: Flow + ?Sized>(
     particles: &Particles,
-    field: &FieldExpr,
+    flow: &F,
     colormap: Colormap,
     color_range: (f32, f32),
     appearance: &ParticleAppearance,
@@ -932,7 +932,7 @@ pub fn trail_instances(
     spacing: f32,
 ) -> Vec<LineInstanceGPU> {
     trail_instances_at(
-        particles, field, colormap, color_range, appearance, speed_range, spacing, 0.0,
+        particles, flow, colormap, color_range, appearance, speed_range, spacing, 0.0,
     )
 }
 

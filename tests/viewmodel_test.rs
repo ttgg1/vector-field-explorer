@@ -1119,18 +1119,40 @@ fn particle_size_and_count_do_not_redirty_the_scene() {
 }
 
 #[test]
-fn particle_target_is_none_while_off_or_in_2d() {
+fn particle_target_follows_the_field_dimension_not_the_projection() {
     let mut s = State::new(true);
     s.set_density(8);
     assert_eq!(s.particle_target(), None, "particles off spawns nothing");
     assert!(s.set_particles(true));
-    assert_eq!(s.particle_target(), Some(128), "Auto follows the density (8 x 16)");
+    assert_eq!(
+        s.particle_target(),
+        Some(128),
+        "Auto follows the density (8 x 16)"
+    );
     assert!(s.set_particle_count(100));
-    assert_eq!(s.particle_target(), Some(100), "an explicit count overrides Auto");
+    assert_eq!(
+        s.particle_target(),
+        Some(100),
+        "an explicit count overrides Auto"
+    );
     assert!(s.set_mode(false));
-    assert_eq!(s.particle_target(), None, "the 2D view has no depth for the cloud");
-    assert!(s.set_mode(true));
-    assert_eq!(s.particle_target(), Some(100), "returning to 3D restores the target");
+    assert_eq!(
+        s.particle_target(),
+        Some(100),
+        "a three-component field in 2D is a plane slice, so it still has a cloud",
+    );
+    assert!(s.set_formula("x, y".into()));
+    assert_eq!(
+        s.particle_target(),
+        None,
+        "ordinary two-component 2D has no depth"
+    );
+    assert!(s.set_formula("x, y, z".into()));
+    assert_eq!(
+        s.particle_target(),
+        Some(100),
+        "returning to a 3D field restores the target"
+    );
     assert!(s.set_particles(false));
     assert_eq!(s.particle_target(), None);
 }
@@ -1150,13 +1172,24 @@ fn snapshots_never_carry_trail_history() {
 }
 
 #[test]
-fn trails_only_exist_when_particles_run_in_three_d() {
+fn trails_only_exist_when_particles_run_over_a_three_component_field() {
     let mut state = State::new(true);
-    assert!(state.particle_target().is_none(), "particles off have no cloud");
+    assert!(
+        state.particle_target().is_none(),
+        "particles off have no cloud"
+    );
     state.set_particles(true);
-    assert!(state.particle_target().is_some(), "3D particles have a target");
+    assert!(
+        state.particle_target().is_some(),
+        "3D particles have a target"
+    );
     state.set_mode(false);
-    assert!(state.particle_target().is_none(), "2D has no particle cloud, so no trails");
+    assert!(
+        state.particle_target().is_some(),
+        "a 3D field in 2D is a plane slice with a cloud",
+    );
+    state.set_formula("x, y".into());
+    assert!(state.particle_target().is_none(), "ordinary 2D has no particle cloud");
 }
 
 #[test]

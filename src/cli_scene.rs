@@ -70,14 +70,17 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
     state.show_coordinate_system = options.references.world_axes;
     state.time = options.start_time_seconds as f32;
 
+    let dimension = if state.mode_3d { 3 } else { 2 };
     let cloud = state.particle_target().map(|target| {
+        let domain = state.scene_domain();
+        let flow = state.scene_flow();
         let mut cloud = Particles::with_seed(options.seed);
-        particles::spawn(&mut cloud, &state.domain, target, 3);
+        particles::spawn(&mut cloud, &domain, target, dimension);
         for &(time, dt) in &steps {
             particles::advect(
                 &mut cloud,
-                &state.field,
-                &state.domain,
+                &flow,
+                &domain,
                 AdvectSettings {
                     time,
                     dt,
@@ -104,10 +107,12 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         let range = state.color_range(&state.sample());
         let speeds = particles::speed_range(&cloud);
         let spacing = state.spacing();
+        let domain = state.scene_domain();
+        let flow = state.scene_flow();
         scene.dots = Arc::new(particles::dot_instances_at(
             &cloud,
-            &state.field,
-            &state.domain,
+            &flow,
+            &domain,
             state.colormap,
             range,
             &state.particle_appearance,
@@ -117,7 +122,7 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         ));
         let mut trails = particles::trail_instances_at(
             &cloud,
-            &state.field,
+            &flow,
             state.colormap,
             range,
             &state.particle_appearance,

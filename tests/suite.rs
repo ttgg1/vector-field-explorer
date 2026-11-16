@@ -61,6 +61,7 @@ mod panel_rails_test;
 mod particle_playback_test;
 mod particles_test;
 mod persistence_test;
+mod plane_particles_test;
 mod plane_scene_test;
 mod plane_test;
 mod plot_app_test;

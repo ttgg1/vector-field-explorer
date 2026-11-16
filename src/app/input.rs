@@ -417,7 +417,7 @@ impl VfApp {
         match view_command::click_action_plan(
             action,
             self.state.streamlines,
-            self.state.particles,
+            self.state.particle_target().is_some(),
             self.state.mode_3d,
         ) {
             view_command::ClickActionPlan::Ignore(hint) => {
@@ -473,22 +473,25 @@ impl VfApp {
                     self.last_click_seed = None;
                     return;
                 };
-                // Particles only exist in the 3D view (the plan already gated
-                // this). If the cloud has not spawned yet, fill it first so the
-                // click does not leave a cloud of just this burst. The count
-                // after that ambient spawn is what a double-click truncates to.
+                // Particles exist for any three-component field: the 3D view or
+                // a 2D plane slice (the plan already gated this). If the cloud
+                // has not spawned yet, fill it first so the click does not
+                // leave a cloud of just this burst. The count after that
+                // ambient spawn is what a double-click truncates to.
                 let mut particles_before = particle_count(&self.particles);
                 if let Some(target) = self.state.particle_target() {
+                    let domain = self.state.scene_domain();
+                    let dimension = if self.state.mode_3d { 3 } else { 2 };
                     if particle_count(&self.particles) == 0 {
-                        spawn(&mut self.particles, &self.state.domain, target, 3);
+                        spawn(&mut self.particles, &domain, target, dimension);
                     }
                     particles_before = particle_count(&self.particles);
                     spawn_at(
                         &mut self.particles,
-                        &self.state.domain,
+                        &domain,
                         seed,
                         CLICK_BURST_PARTICLES,
-                        3,
+                        dimension,
                     );
                 }
                 // No streamline seed. `stored = false` still models the burst so
@@ -541,8 +544,7 @@ impl VfApp {
         // The particle rollback is independent of the seed edit: an unstored
         // click still burst particles and must still truncate them, even
         // though it removed no list entry.
-        if self.state.particles
-            && self.state.mode_3d
+        if self.state.particle_target().is_some()
             && let Some(before) = undo.particles
         {
             self.particles.truncate(before);

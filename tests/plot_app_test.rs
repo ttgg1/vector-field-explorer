@@ -130,7 +130,9 @@ fn plot_mode_freezes_vector_consumers_and_restores() {
     );
 
     // Returning to vector restores the saved pose/projection and resumes from
-    // the held time without catch-up.
+    // the held time without catch-up. The field needs its third component back:
+    // particles only exist for a three-component field.
+    app.state.set_formula("(x+t, y, z)".into());
     let resumed_from = app.clock.time;
     app.state.set_plot_kind(PlotKind::VectorField);
     step(&mut app, 0.05);

@@ -781,7 +781,7 @@ fn show_inner(
                 let hover = match click_action_plan(
                     action,
                     controls.streamlines,
-                    controls.particles,
+                    controls.particles && state.field.dimension == 3,
                     view_3d,
                 ) {
                     ClickActionPlan::Ignore(reason) => {
@@ -794,7 +794,7 @@ fn show_inner(
             }
         });
         ui.checkbox(&mut controls.particles, "Particles")
-            .on_hover_text("Animate dots carried by the field (3D view)");
+            .on_hover_text("Animate dots carried by the field (3D or a 2D plane slice)");
         ui.horizontal(|ui| {
             ui.label("Particle count");
             ui.add(

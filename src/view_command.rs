@@ -315,8 +315,9 @@ pub fn view_key_commands(
 pub const CLICK_HINT_STREAMLINES_OFF: &str = "Streamlines are off";
 /// The one-line status hint for AddParticles with the feature off.
 pub const CLICK_HINT_PARTICLES_OFF: &str = "Particles are off";
-/// The one-line status hint for AddParticles in the 2D view.
-pub const CLICK_HINT_PARTICLES_NEED_3D: &str = "Particles need the 3D view";
+/// The one-line status hint for AddParticles when no particle cloud can exist:
+/// the field has no third component to slice or orbit.
+pub const CLICK_HINT_PARTICLES_NEED_3D: &str = "Particles need a 3D field";
 
 /// What one explicit click action should do after the feature gates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,32 +326,33 @@ pub enum ClickActionPlan {
     SeedStreamline,
     /// Add the existing particle burst; never store a click seed.
     AddParticles,
-    /// The action's feature is off or the view lacks depth: do nothing and show
-    /// `hint` in the status bar.
+    /// The action's feature is off or the field has no particle view: do
+    /// nothing and show `hint` in the status bar.
     Ignore(&'static str),
 }
 
-/// Decide what one click does from the selected action and the two Feature
-/// toggles (ticket 60). Pure so the mouse click and both keyboard shortcuts
-/// share exactly one rule.
+/// Decide what one click does from the selected action, the Streamlines toggle
+/// and particle availability (ticket 60; plane slices in ticket 13). Pure so
+/// the mouse click and both keyboard shortcuts share exactly one rule.
 ///
-/// `mode_3d` is the projection gate, matching
-/// [`State::particle_target`](crate::viewmodel::State::particle_target), not the
-/// sampled dimension: a flat formula in 3D mode is still not a particle view and
-/// gets the hint.
+/// `particles_available` is the whole particle gate — the toggle is on *and*
+/// the field has three components — so a 2D plane slice allows a burst just
+/// like the 3D view. `mode_3d` only picks the no-op hint when availability is
+/// false: in the 3D view the toggle is off, while in 2D the field itself lacks
+/// a third component.
 pub fn click_action_plan(
     action: LeftClickAction,
     streamlines: bool,
-    particles: bool,
+    particles_available: bool,
     mode_3d: bool,
 ) -> ClickActionPlan {
     match action {
         LeftClickAction::SeedStreamline if streamlines => ClickActionPlan::SeedStreamline,
         LeftClickAction::SeedStreamline => ClickActionPlan::Ignore(CLICK_HINT_STREAMLINES_OFF),
-        LeftClickAction::AddParticles if !particles => {
+        LeftClickAction::AddParticles if !particles_available && mode_3d => {
             ClickActionPlan::Ignore(CLICK_HINT_PARTICLES_OFF)
         }
-        LeftClickAction::AddParticles if !mode_3d => {
+        LeftClickAction::AddParticles if !particles_available => {
             ClickActionPlan::Ignore(CLICK_HINT_PARTICLES_NEED_3D)
         }
         LeftClickAction::AddParticles => ClickActionPlan::AddParticles,
