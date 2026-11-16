@@ -296,7 +296,7 @@ fn analytic_loop_and_solenoid_axial_fields() {
 #[test]
 fn off_axis_fixtures_meet_requested_target() {
     let rows = magnetic_fixture_rows();
-    assert_eq!(rows.len(), 23, "magnetic fixture matrix changed");
+    assert_eq!(rows.len(), 24, "magnetic fixture matrix changed");
 
     let mut kinds = std::collections::BTreeSet::new();
     for row in &rows {
@@ -355,6 +355,35 @@ fn off_axis_fixtures_meet_requested_target() {
         near_axis_estimate.value.z
     );
     assert!(near_axis_estimate.uncertainty <= near_axis_estimate.target);
+
+    // The same near-axis query on the negative world-x half-plane exercises
+    // the azimuthal sign reversal. The reported uncertainty must remain an
+    // upper bound on the error against the independent reference, not just
+    // below the target.
+    let negative_axis = rows
+        .iter()
+        .find(|row| row.id == "loop_near_axis_neg_x")
+        .expect("negative near-axis loop fixture");
+    let mut runner = evaluator_with(&[source_for(negative_axis)], options_for(negative_axis));
+    let negative_estimate = estimate(runner.evaluate(negative_axis.query, &|| false).magnetic);
+    let expected_bx = -2.3940930163021465e-10;
+    assert!(
+        (negative_estimate.value.x - expected_bx).abs() <= 1e-20,
+        "loop negative-radial Bx: got {:e}, expected {expected_bx:e}",
+        negative_estimate.value.x
+    );
+    assert!(
+        (negative_estimate.value.z - expected_bz).abs() <= 2e-14,
+        "loop negative-radial Bz: got {:e}, expected {expected_bz:e}",
+        negative_estimate.value.z
+    );
+    assert!(negative_estimate.uncertainty <= negative_estimate.target);
+    let negative_error = (negative_estimate.value - negative_axis.reference).length();
+    assert!(
+        negative_error <= negative_estimate.uncertainty,
+        "loop negative-radial uncertainty {:e} under-bounds error {negative_error:e}",
+        negative_estimate.uncertainty
+    );
 
     // An ordinary off-axis loop row at z = 0.2 keeps the radial term away from
     // the nearly vanishing near-axis leading contribution.

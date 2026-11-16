@@ -327,6 +327,11 @@ MAGNETIC_CASES = [
      0.0, 0, (0.4, 0.0, 0.2), 0.1),
     ("loop_near_axis_0p7", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
      0.0, 0, (1e-10, 0.0, 0.7), 0.1),
+    # Same near-axis query on the negative world-x half-plane: the radial
+    # direction is -x, so the world radial component is the negative of the
+    # positive-x row while Bz is unchanged.
+    ("loop_near_axis_neg_x", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
+     0.0, 0, (-1e-10, 0.0, 0.7), 0.1),
     ("loop_near_support", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,
      0.0, 0, (1.01, 0.0, 0.02), 0.1),
     ("loop_on_winding", "loop", (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0,

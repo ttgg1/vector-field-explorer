@@ -62,7 +62,9 @@ small-softening case (`s = 1 + 1e-9`, `R = 1`, `a = 1e-6`) where the small
 cancellation-safe `(s - R)^2 + a^2 + 2sR(1 - u)` form rather than `A - B u`.
 
 The magnetic coverage includes ordinary `z = 0.2` loop rows (so the pinned
-radial near-axis term is not the only evidence), loop/solenoid on-winding and
+radial near-axis term is not the only evidence), a negative world-x near-axis
+loop row (`loop_near_axis_neg_x`) that exercises the flipped radial direction
+with the same reference and uncertainty contract, loop/solenoid on-winding and
 solenoid end rows at ordinary softening, interior and exterior solenoid rows,
 `N = 3` and signed current, non-unit radius/length, and far `a = 1e-6` rows.
 

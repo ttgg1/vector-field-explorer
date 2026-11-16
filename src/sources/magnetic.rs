@@ -127,15 +127,15 @@ fn current_loop(
     if delta <= 0.125 {
         let series = ring_series(
             delta,
-            base.abs() * (zn.abs() + rn_radius + rn),
+            base.abs() * (zn.abs() + rn_radius + rn.abs()),
             0.25 * target,
             work_remaining,
             cancelled,
         )?;
         let radial = base * zn * series.s1;
         let axial = base * (rn_radius * series.s0 - rn * series.s1);
-        let tail =
-            base.abs() * (zn.abs() * series.tail1 + rn_radius * series.tail0 + rn * series.tail1);
+        let tail = base.abs()
+            * (zn.abs() * series.tail1 + rn_radius * series.tail0 + rn.abs() * series.tail1);
         let underflow = current != 0.0
             && (base == 0.0
                 || (radial == 0.0 && zn * series.s1 != 0.0)

@@ -59,7 +59,7 @@ pub fn fixtures() -> Vec<Fixture> {
 }
 
 /// Fixtures restricted to one source kind (`point`, `line`, `ring`, `disc`,
-/// `sphere`).
+/// `sphere`, `loop`, `solenoid`, `wire`).
 pub fn fixtures_of(kind: &str) -> impl Iterator<Item = Fixture> {
     fixtures().into_iter().filter(move |row| row.kind == kind)
 }
