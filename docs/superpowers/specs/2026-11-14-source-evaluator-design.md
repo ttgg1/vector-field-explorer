@@ -1,8 +1,8 @@
 # All-eight source evaluator — accuracy-first design
 
-**PROPOSED IMPLEMENTATION DESIGN — pending owner review; not implementation
-authorization.** Owns [GitHub #24](https://github.com/ttgg1/vector-field-explorer/issues/24),
-under [#17](https://github.com/ttgg1/vector-field-explorer/issues/17).
+**APPROVED IMPLEMENTATION DESIGN — owner approved 2026-11-16.** Owns
+[GitHub #24](https://github.com/ttgg1/vector-field-explorer/issues/24), under
+[#17](https://github.com/ttgg1/vector-field-explorer/issues/17).
 [Implementation plan](../plans/2026-11-14-source-evaluator.md).
 
 ## Authority and intent
@@ -175,16 +175,19 @@ and analytic axial formulas. Do not snap merely small r to zero.
   terms initially. Retain the series state/tail as a refinable contribution;
   the global family test can demand more terms, up to that cap. At
   larger δ integrate the direct charge/current elements over symmetric angles.
+  *Implementation note (Task 5):* the direct angular domain is `[-π, π]`, which
+  is exactly equivalent to `[0, 2π]` for these even, periodic kernels.
 - **Disc:** put `x=R sinθ`, `H=R cosθ`, `C=(r-x)²+z²+a²`.
   The exact y-integrated vector is
   `Q/(πR²) * (r-x,z) * 2H/[C sqrt(C+H²)]`, times `dx=R cosθ dθ`,
   `θ∈[-π/2,π/2]`. Pair ±θ contributions with compensated sums; exact axis uses
   `Ez=2Qz/R²[1/sqrt(z²+a²)-1/sqrt(R²+z²+a²)]`, rationalized.
 - **Sphere center-stable reduction:** let query radius be s, source radius R,
-  `A=s²+R²+a²`, `B=2sR`, `d±=sqrt(A±Bu)`. The radial field is
-  `3Q/(2R) * ∫[0,1] 2B u²/[d- d+ (d-+d+)] du`.
-  This follows from `ρ∮n/|s-Rn|_a dS`, not planar rings. Form
-  `d-²=(s-R)²+a²+2sR(1-u)` to avoid cancellation. At s=0 return exact zero;
+  `A=s²+R²+a²`, `B=2sR`, `d₋=sqrt(A-Bu)`, `d₊=sqrt(A+Bu)`. The radial field is
+  `3Q/(2R) * ∫[0,1] 2B u² / (d₋ d₊ (d₋ + d₊)) du`.
+  This follows from `ρ∮n/|s-Rn|_a dS`, not planar rings. The integrand is the
+  half-range identity `u(1/d₋ - 1/d₊) = 2B u²/(d₋ d₊ (d₋ + d₊))`.
+  Form `d₋²=(s-R)²+a²+2sR(1-u)` to avoid cancellation. At s=0 return exact zero;
   near center this retains the linear field rather than subtracting primitives.
   Use `u=cosθ` if needed for the surface-resolution guard.
 - **Solenoid:** for angle φ set `C=(r-R)²+4rR sin²(φ/2)+a²`,
@@ -227,9 +230,20 @@ compensated family sum V. Refine the leaf with largest absolute uncertainty
 limit/roundoff floor stops progress. Analytic contributions also carry modeled
 roundoff. Changing traversal order must not change reserved E/B resources.
 
+**Implementation note (delivered).** The delivered refinement granularity is
+**source-granular**: complete per-source estimates are retained, and the source
+with the largest absolute allowance is re-run at the remaining family allowance
+with a stable source-index tie break. This implements the terminal family
+criterion above while preserving the bounded family scratch and the
+no-allocation `evaluate` contract; leaf-level global refinement is not used in
+this delivery. It does not change the numerical criterion or any acceptance
+threshold.
+
 For family f the exact requested criterion is
 `T_f = epsilon*S_f + epsilon*norm(V_f)` and `U_f <= T_f`, using overflow-safe
-norm/comparison. `S_E` and `S_B` are **separate positive field-magnitude scales**
+norm/comparison. Because `T_f` depends on the current family estimate `V_f`,
+re-evaluate the criterion with the terminal post-refinement `V_f` before
+classifying the final status. `S_E` and `S_B` are **separate positive field-magnitude scales**
 in their respective display-only units, caller supplied, independent of source
 strength and evaluation order. Thus absolute tolerance is `epsilon*S_f` and
 relative tolerance is epsilon. Near cancellation use the resulting family norm,

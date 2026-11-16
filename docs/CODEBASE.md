@@ -28,7 +28,8 @@ One Rust crate, `vector-field-explorer`, built two ways:
 
 The crate is both `cdylib` and `rlib` ([Cargo.toml](../Cargo.toml)), so the wasm
 bundle and the integration tests can share it. The only external rendering
-dependency is eframe's re-exported wgpu; the only evaluator is `meval`.
+dependency is eframe's re-exported wgpu; formula evaluation uses `meval`, while
+`src/sources` is a separate pure CPU source-evaluator seam.
 
 The field is formula-driven:
 
@@ -37,9 +38,13 @@ The field is formula-driven:
 - Sampling, arrows, streamlines, particles, colormaps, plane inspection, two
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
   screenshots, and persistence are all in this tree.
-- The app is a teaching-grade explorer, not a solver. Post-v1 physics work
-  (sources, Maxwell, ODE) is described in [ADR 0003](adr/0003-physics-foundations.md)
-  and is not implemented here.
+- The app is a teaching-grade explorer, not a solver. The pure source-evaluator
+  slice in `src/sources` evaluates all eight softened source geometries: point
+  charges, finite charged lines, charged rings, charged thin discs, uniform
+  solid spheres, infinite straight wires, current loops and finite continuous
+  solenoids.
+  Maxwell/ODE work beyond that is described in
+  [ADR 0003](adr/0003-physics-foundations.md).
 
 ### Source control and licence
 
@@ -607,6 +612,146 @@ them at a point.
 
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
+
+#### `src/sources/` — validated source model and bounded quadrature
+
+**Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for softened source
+fields. `src/sources/mod.rs` re-exports only the public contract;
+`src/sources/model.rs` validates and freezes the input;
+`src/sources/numeric.rs` carries power-of-two-scaled elementary arithmetic, the
+source-local frame and the finite-line kernel/primitive;
+`src/sources/quadrature.rs` owns bounded adaptive Gauss–Kronrod partitions;
+`src/sources/electric.rs` owns the electric ring, disc, sphere and finite-line
+reductions; `src/sources/magnetic.rs` owns the wire, current-loop and finite
+continuous-solenoid reductions; `src/sources/evaluate.rs` prepares an evaluator
+and builds family results.
+
+**Public API.** `SourceKind` (all eight vectors), `Source`, `AccuracyRequest`,
+`EvalOptions`, `WorkLimits`, `SourceSet::new`, `Evaluator::new`,
+`Evaluator::evaluate`, `Sample`, `FamilyResult`, `Estimate`, `Diagnostics`,
+`StopReason`, `InputError`, `PrepareError`, and the hard-ceiling constants.
+Defaults are epsilon `1e-7`, E/B scales `1e-2`, softening `0.1`, 64 sources,
+2,000,000 work units/family/point, 8,192 cells/family, depth 48 and 65,536
+queries/job. Callers may lower these limits; requests above the documented
+ceilings are rejected.
+
+**Invariants.**
+- Every center/axis/strength must be finite; used axes must be nonzero and
+  dimensions positive; turns must be at least one. Negative and zero strengths
+  remain valid. Point/sphere axes are unused, so a finite zero axis is valid.
+- `SourceSet::new` polls cancellation before the source copy, rejects
+  over-limit lists before copying, validates all data before a fallible
+  reservation, and stores a private immutable copy. `Evaluator::new` validates
+  options before its fallible copy and two bounded family scratch reservations.
+- `evaluate` counts invalid queries, publishes no vector for cancelled/invalid/
+  unrepresentable queries, sums E and B separately, and uses compensated
+  component, uncertainty and absolute-contribution sums. Empty and zero-strength
+  families are exact `ZERO` with zero arithmetic uncertainty and a positive
+  absolute target. Every accepted call consumes one hard job-query slot,
+  including invalid queries; the call after `max_queries` is
+  `Unavailable(QueryLimit)` for both families.
+- Each family keeps one complete per-source estimate and refines against the
+  terminal family criterion `T = epsilon*S_f + epsilon*norm(V_f)`, never
+  `epsilon*sum(|v_i|)`. An epsilon-dependent accuracy pass first targets a share
+  of the coarse family target, then the source with the largest absolute
+  uncertainty is re-evaluated at the remaining allowance until the criterion
+  passes or every source reaches its work/storage/depth/roundoff floor. Failed
+  refinements retain the previous complete contribution; no partial integral is
+  published. `AccuracyNotMet` therefore carries complete finite coverage, while
+  incomplete preparation, an unresolved feature, `NumericRange`, or
+  cancellation is `Unavailable`.
+- Electric and magnetic families own separate scratch and separate
+  `work_per_family` reservations; neither can borrow from or starve the other.
+  A difficult family failing does not prevent the other family from completing.
+  The `Diagnostics` provenance repeats the kernel ID, family, softening,
+  epsilon, family scale, family source count (including zero-strength sources),
+  total counted work, cell high-water mark, regularization, roundoff-limitation
+  and underflow flags. `source_count` is family-local, not the whole mixed set.
+- Elementary point and wire fields are evaluated with max-scaled norms and
+  mantissa/exponent arithmetic, so huge displacements do not fabricate
+  `NumericRange`; genuine underflow is published with a flag and uncertainty.
+  A wire query exactly on its axis returns exact `ZERO` because the azimuthal
+  basis is undefined there.
+- A finite line covers its whole segment with finite cells. Every unresolved
+  cell is split at the projected support location or midpoint until its physical
+  width is at most half the conservative softened distance to the segment; an
+  exhausted depth/cell/work budget publishes `Unavailable`, never a partial
+  vector. Off-axis evaluation uses GK15/31 and both half-cell GK31 estimates;
+  the half-cell sum is the estimate and `8*max(|K31-G15|, |K31-halfsum|)` is the
+  absolute uncertainty indicator. Refinement replaces the leaf with the largest
+  absolute uncertainty (stable lower-bound tie break) only after child capacity
+  and work are confirmed. Work counts every sample and split, polls cancellation
+  at most every 32 counted units, and never recurses.
+- A charged ring and a current loop share the near-axis binomial series in
+  `delta = 2rR/(R^2+z^2+a^2+r^2)` for `delta <= 1/8`, with an explicit positive
+  geometric tail added to the absolute uncertainty, and direct symmetric-angle
+  integration above that. The series has no division by `r`; below `1e-22`
+  radial cancellation the series, not the direct integral, is authoritative.
+  The loop reconstructs its world vector from the same radial/axial basis; its
+  `2 pi I R/A^(3/2)` normalization is magnetic, never the ring's electric `Q`
+  normalization.
+  A charged disc uses the exact transverse chord integral off axis and the
+  rationalized axial difference exactly on axis. A uniform solid sphere uses the
+  centre-stable divergence-theorem surface integral, returns exact zero at the
+  centre, and keeps the linear near-centre field; it is not a stack of planar
+  rings. All non-axis paths reuse the bounded partition, resolution guard,
+  absolute-uncertainty and work accounting above.
+- A finite continuous solenoid integrates its loop measure analytically in the
+  axial direction, then one bounded angular integral. Endpoint differences are
+  rationalized when `u = z+L/2` and `v = z-L/2` share a sign; opposite signs use
+  the stable direct sum. The angular kernel forms
+  `R - r cos phi = (R-r) + 2 r sin^2(phi/2)`. Exactly on axis it uses the full
+  analytic finite-solenoid expression and exact radial zero. Its resolution
+  guard compares the cylinder arc width against the softened radial and axial
+  distances to the whole support strip. Interior, on-winding and on-end queries
+  at ordinary softening return complete finite results; an unresolvable narrow
+  feature returns `Unavailable` with no vector.
+- The infinite wire keeps its exact `2I(axis x s_perp)/(|s_perp|^2+a^2)`
+  azimuthal reconstruction and factor 2. A query exactly on the wire axis is
+  exact zero because the azimuthal basis is undefined there. Zero-strength
+  sources are skipped and exact.
+
+**Pinned by.** [tests/sources_model_test.rs](../tests/sources_model_test.rs):
+`validation_is_strict`, `prepare_is_cancellable_before_allocation`,
+`empty_and_zero_are_exact`, `axis_direction_is_not_squared_norm_limited`.
+[tests/sources_numeric_test.rs](../tests/sources_numeric_test.rs):
+`scaled_elementary_fields`, `huge_near_axis_wire_is_refused_not_confidently_wrong`,
+`line_against_closed_form`, `narrow_displaced_line`,
+`budget_and_cancellation_are_bounded`.
+[tests/sources_electric_test.rs](../tests/sources_electric_test.rs):
+`analytic_axial_fields_and_scaling`, `off_axis_fixtures_meet_requested_target`,
+`tiny_budget_distinguishes_complete_from_unavailable`,
+`ring_near_axis_and_branch_sweep`, `ring_monopole_far_field`,
+`sphere_near_surface_small_softening_is_stable`,
+`disc_exact_axis_symmetry_is_not_underflow`.
+[tests/sources_magnetic_test.rs](../tests/sources_magnetic_test.rs):
+`analytic_loop_and_solenoid_axial_fields`,
+`off_axis_fixtures_meet_requested_target`, `loop_near_axis_and_branch_sweep`,
+`loop_magnetic_dipole_far_field`, `finite_current_scales_inverse_length`,
+`tiny_budget_distinguishes_complete_from_unavailable`.
+[tests/sources_evaluate_test.rs](../tests/sources_evaluate_test.rs):
+`family_target_uses_cancelled_total`,
+`both_family_orders_have_reserved_work`,
+`all_eight_kinds_have_committed_references`,
+`finite_inaccurate_is_complete_only`,
+`convergence_tracks_requested_accuracy`,
+`point_dipole_grid_matches_analytic_sums`,
+`underflow_and_numeric_range_are_distinct`. Independent finite-line endpoint
+references, the committed electric and magnetic fixture matrix and its offline
+`generate.py`/provenance README live in
+[tests/support/sources/](../tests/support/sources/).
+
+**Limitations.** Uncertainty is an empirical absolute allowance accumulated from
+quadrature indicators, series tails and roundoff terms, not a certified interval
+bound. Cancellation-heavy families can honestly miss a tight target when the
+per-source modeled rounding exceeds it. The `1e-6` fixture rows use far queries
+so the resolution guard can resolve the softening scale within the default cell
+budget; on-support narrow features are not claimed. Tight requests may return
+complete finite `AccuracyNotMet` or `Unavailable` when a refinement cap is
+reached. There is no UI, persistence, glyph, rendering, export or app
+integration. Wasm/browser and manual visual checks remain waived, not passed.
+See [sources accuracy notes](sources-accuracy.md) for tested cases and
+timings.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 
@@ -2702,5 +2847,5 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 - Why the layout uses rails and one persisted envelope: [ADR 0001](adr/0001-ui-layout-panel-rails.md).
 - Why one clock owns all animation and what a new time base costs:
   [ADR 0002](adr/0002-single-simulation-clock.md).
-- Why physics is analytic-first, why `meval` is the only evaluator, and the
+- Why physics is analytic-first, why formula evaluation uses `meval`, and the
   post-v1 order: [ADR 0003](adr/0003-physics-foundations.md).
