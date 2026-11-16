@@ -18,6 +18,7 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 | [Native CLI plot export plan](plans/2026-11-11-cli-plot-export.md) | Ticket 78 implementation tasks and verification handoffs; consult live workflow/ledger before dispatch. |
 | [Accuracy-first source evaluator design](specs/2026-11-14-source-evaluator-design.md) | GitHub #24 all-eight pure model/evaluator; owner-approved 2026-11-16. Supersedes isolated 2026-11-10 source drafts. |
 | [Accuracy-first source evaluator plan](plans/2026-11-14-source-evaluator.md) | Five bounded TDD/review units, provisional numerical defaults and separate E/B diagnostics; owner-approved 2026-11-16 implementation basis. |
+| [Sources panel design](specs/2026-11-16-sources-panel-design.md) | GitHub #25 proposed dedicated source CRUD panel, explicit Formula/Sources modes, accuracy opt-in and persistence; pending owner approval. |
 | [Public-catalog workflow design](specs/2026-11-15-public-catalog-workflow-design.md) | Superseded historical ruling: public rates only, no benchmark or accepted-work efficiency ratios. |
 | [Public-catalog workflow plan](plans/2026-11-15-public-catalog-workflow.md) | Superseded historical report-surface change; see Markdown-first workflow records. |
 | [Markdown-first agent workflow design](specs/2026-11-16-markdown-first-agent-workflow-design.md) | Owner-approved retirement of Python orchestration; native OpenCode Markdown roles and Python metrics only. |
