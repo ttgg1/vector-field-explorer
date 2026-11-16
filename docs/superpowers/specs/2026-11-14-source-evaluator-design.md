@@ -230,6 +230,15 @@ compensated family sum V. Refine the leaf with largest absolute uncertainty
 limit/roundoff floor stops progress. Analytic contributions also carry modeled
 roundoff. Changing traversal order must not change reserved E/B resources.
 
+**Implementation note (delivered).** The delivered refinement granularity is
+**source-granular**: complete per-source estimates are retained, and the source
+with the largest absolute allowance is re-run at the remaining family allowance
+with a stable source-index tie break. This implements the terminal family
+criterion above while preserving the bounded family scratch and the
+no-allocation `evaluate` contract; leaf-level global refinement is not used in
+this delivery. It does not change the numerical criterion or any acceptance
+threshold.
+
 For family f the exact requested criterion is
 `T_f = epsilon*S_f + epsilon*norm(V_f)` and `U_f <= T_f`, using overflow-safe
 norm/comparison. Because `T_f` depends on the current family estimate `V_f`,
