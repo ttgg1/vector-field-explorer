@@ -181,10 +181,11 @@ and analytic axial formulas. Do not snap merely small r to zero.
   `θ∈[-π/2,π/2]`. Pair ±θ contributions with compensated sums; exact axis uses
   `Ez=2Qz/R²[1/sqrt(z²+a²)-1/sqrt(R²+z²+a²)]`, rationalized.
 - **Sphere center-stable reduction:** let query radius be s, source radius R,
-  `A=s²+R²+a²`, `B=2sR`, `d±=sqrt(A±Bu)`. The radial field is
-  `3Q/(2R) * ∫[0,1] 2B u²/[d- d+ (d-+d+)] du`.
-  This follows from `ρ∮n/|s-Rn|_a dS`, not planar rings. Form
-  `d-²=(s-R)²+a²+2sR(1-u)` to avoid cancellation. At s=0 return exact zero;
+  `A=s²+R²+a²`, `B=2sR`, `d₋=sqrt(A-Bu)`, `d₊=sqrt(A+Bu)`. The radial field is
+  `3Q/(2R) * ∫[0,1] 2B u² / (d₋ d₊ (d₋ + d₊)) du`.
+  This follows from `ρ∮n/|s-Rn|_a dS`, not planar rings. The integrand is the
+  half-range identity `u(1/d₋ - 1/d₊) = 2B u²/(d₋ d₊ (d₋ + d₊))`.
+  Form `d₋²=(s-R)²+a²+2sR(1-u)` to avoid cancellation. At s=0 return exact zero;
   near center this retains the linear field rather than subtracting primitives.
   Use `u=cosθ` if needed for the surface-resolution guard.
 - **Solenoid:** for angle φ set `C=(r-R)²+4rR sin²(φ/2)+a²`,
@@ -229,7 +230,9 @@ roundoff. Changing traversal order must not change reserved E/B resources.
 
 For family f the exact requested criterion is
 `T_f = epsilon*S_f + epsilon*norm(V_f)` and `U_f <= T_f`, using overflow-safe
-norm/comparison. `S_E` and `S_B` are **separate positive field-magnitude scales**
+norm/comparison. Because `T_f` depends on the current family estimate `V_f`,
+re-evaluate the criterion with the terminal post-refinement `V_f` before
+classifying the final status. `S_E` and `S_B` are **separate positive field-magnitude scales**
 in their respective display-only units, caller supplied, independent of source
 strength and evaluation order. Thus absolute tolerance is `epsilon*S_f` and
 relative tolerance is epsilon. Near cancellation use the resulting family norm,
