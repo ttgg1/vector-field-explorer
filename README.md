@@ -42,6 +42,10 @@ CLI output are intentionally unsupported; SVG remains vector-field-only.
 For scriptable, window-free 2D SVG or 2D/3D GPU PNG output, see the
 [native CLI guide](docs/cli.md) (flags, strict JSON schema and examples).
 
+The source-evaluator API (eight softened source kinds, family-local accuracy
+and diagnostics) is summarized in the
+[source accuracy notes](docs/sources-accuracy.md).
+
 It is a teaching-grade explorer, not a numerical solver: there is no
 differentiation, divergence, curl, or field-equation solver in this release.
 The architecture and module map are in [docs/CODEBASE.md](docs/CODEBASE.md);

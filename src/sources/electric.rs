@@ -95,7 +95,9 @@ pub(crate) fn contribution(
         ),
         SourceKind::StraightWire { .. }
         | SourceKind::CurrentLoop { .. }
-        | SourceKind::Solenoid { .. } => Err(Failure::UnresolvedFeature),
+        | SourceKind::Solenoid { .. } => {
+            unreachable!("electric evaluator received a magnetic source")
+        }
     }
 }
 

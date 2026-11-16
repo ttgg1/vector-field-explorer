@@ -3,7 +3,10 @@
 //! This pure CPU module exposes the approved public model, preparation and
 //! evaluation seam. The electric family evaluates point charges, finite lines,
 //! rings, discs and uniform spheres; the magnetic family evaluates infinite
-//! wires, current loops and finite continuous solenoids.
+//! wires, current loops and finite continuous solenoids. Each family publishes
+//! an independent result against its own terminal target
+//! `epsilon*scale + epsilon*norm(value)`, with separate work reservations and
+//! immutable provenance for downstream stale-generation/warning handling.
 
 mod electric;
 mod evaluate;

@@ -175,6 +175,8 @@ and analytic axial formulas. Do not snap merely small r to zero.
   terms initially. Retain the series state/tail as a refinable contribution;
   the global family test can demand more terms, up to that cap. At
   larger δ integrate the direct charge/current elements over symmetric angles.
+  *Implementation note (Task 5):* the direct angular domain is `[-π, π]`, which
+  is exactly equivalent to `[0, 2π]` for these even, periodic kernels.
 - **Disc:** put `x=R sinθ`, `H=R cosθ`, `C=(r-x)²+z²+a²`.
   The exact y-integrated vector is
   `Q/(πR²) * (r-x,z) * 2H/[C sqrt(C+H²)]`, times `dx=R cosθ dθ`,

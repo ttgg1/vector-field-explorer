@@ -362,7 +362,7 @@ fn narrow_displaced_line() {
     let tight_options = EvalOptions {
         softening,
         accuracy: AccuracyRequest {
-            epsilon: 1e-9,
+            epsilon: 1e-11,
             ..AccuracyRequest::default()
         },
         ..EvalOptions::default()

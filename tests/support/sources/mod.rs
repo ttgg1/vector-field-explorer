@@ -186,3 +186,87 @@ pub const FAR_SAME_SIGN_REFERENCES: &[EndpointReference] = &[
         ez: -0.04035158117169962,
     },
 ];
+
+/// The softened Plummer point field, `Q s / (|s|^2 + a^2)^(3/2)`.
+pub fn point_field(query: DVec3, center: DVec3, charge: f64, softening: f64) -> DVec3 {
+    let displacement = query - center;
+    let squared = displacement.length_squared() + softening * softening;
+    charge * displacement / (squared * squared.sqrt())
+}
+
+/// Complete elliptic integral of the first kind `K(m)` by the arithmetic-geometric
+/// mean, with the parameter convention `m` used by the fixture generator.
+pub fn elliptic_k(m: f64) -> f64 {
+    elliptic_k_e(m).0
+}
+
+/// Complete elliptic integral of the second kind `E(m)` by the arithmetic-geometric
+/// mean, with the parameter convention `m` used by the fixture generator.
+pub fn elliptic_e(m: f64) -> f64 {
+    elliptic_k_e(m).1
+}
+
+fn elliptic_k_e(m: f64) -> (f64, f64) {
+    assert!((0.0..1.0).contains(&m), "elliptic parameter {m}");
+    let mut a = 1.0;
+    let mut b = (1.0 - m).sqrt();
+    let mut sum = 0.0;
+    // Coefficient 2^(n-1) on a_n^2 - b_n^2; the n = 0 coefficient is 1/2.
+    let mut coefficient = 0.5;
+    for _ in 0..64 {
+        if (a - b).abs() <= 1e-15 * a {
+            break;
+        }
+        sum += coefficient * (a * a - b * b);
+        let next_a = 0.5 * (a + b);
+        b = (a * b).sqrt();
+        a = next_a;
+        coefficient *= 2.0;
+    }
+    let k = std::f64::consts::PI / (2.0 * a);
+    (k, k * (1.0 - sum))
+}
+
+/// Independent world-frame softened current-loop field from the complete
+/// elliptic `K`/`E` moments.
+///
+/// `axis` is normalized internally and the query is reduced to the source-local
+/// `(r, z)` frame, mirroring the formula used by the committed fixture
+/// generator without calling production code.
+pub fn loop_field(
+    query: DVec3,
+    center: DVec3,
+    axis: DVec3,
+    radius: f64,
+    current: f64,
+    softening: f64,
+) -> DVec3 {
+    let unit_axis = axis / axis.length();
+    let displacement = query - center;
+    let axial = displacement.dot(unit_axis);
+    let radial_vector = displacement - unit_axis * axial;
+    let radial = radial_vector.length();
+    let a = radial * radial + radius * radius + axial * axial + softening * softening;
+    let delta = 2.0 * radial * radius / a;
+    let (s0, s1) = if delta == 0.0 {
+        (1.0, 0.0)
+    } else {
+        let m = 2.0 * delta / (1.0 + delta);
+        let elliptic_k = elliptic_k(m);
+        let elliptic_e = elliptic_e(m);
+        let root = (1.0 + delta).sqrt();
+        (
+            2.0 * elliptic_e / (std::f64::consts::PI * root * (1.0 - delta)),
+            2.0 / (std::f64::consts::PI * delta * root) * (elliptic_e / (1.0 - delta) - elliptic_k),
+        )
+    };
+    let base = 2.0 * std::f64::consts::PI * current * radius / (a * a.sqrt());
+    let radial_field = base * axial * s1;
+    let axial_field = base * (radius * s0 - radial * s1);
+    let radial_direction = if radial == 0.0 {
+        DVec3::ZERO
+    } else {
+        radial_vector / radial
+    };
+    radial_direction * radial_field + unit_axis * axial_field
+}

@@ -39,6 +39,10 @@ radial term; the existing exact-cancellation ring row is `3.3e-32`). Loop rows
 additionally cross-check the direct current-element integral against the
 elliptic reduction at the higher precision.
 
+The runtime support module also carries independent closed-form point-field and
+AGM complete-elliptic loop helpers for the `5 x 5 x 5` grid test. They do not
+read this CSV and do not call production numeric, quadrature or geometry code.
+
 | Kind | Independent reference method |
 | --- | --- |
 | point | Closed-form `Q s / (|s|^2 + a^2)^(3/2)`. |
@@ -67,6 +71,20 @@ loop row (`loop_near_axis_neg_x`) that exercises the flipped radial direction
 with the same reference and uncertainty contract, loop/solenoid on-winding and
 solenoid end rows at ordinary softening, interior and exterior solenoid rows,
 `N = 3` and signed current, non-unit radius/length, and far `a = 1e-6` rows.
+
+Every row remains a single-source reference. The family evaluator sums complete
+per-source estimates; `tests/sources_evaluate_test.rs` consumes this matrix for
+all-eight coverage and adds independent closed-form point sums, the elliptic
+loop reduction for a `5 x 5 x 5` point/dipole grid, cancellation targets, and
+tighter/looser epsilon comparisons. No runtime test reads the generator or
+needs Python.
+
+## Equivalent angular domains
+
+The production ring and loop kernels integrate over `[-pi, pi]` rather than
+`[0, 2 pi]`. Both kernels are even and periodic in the azimuth, so the two
+domains are exactly equivalent; the fixture generator may use either. This is
+an implementation choice, not a different physical normalization.
 
 ## Retained limitations
 

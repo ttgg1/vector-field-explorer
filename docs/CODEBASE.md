@@ -645,8 +645,28 @@ ceilings are rejected.
   options before its fallible copy and two bounded family scratch reservations.
 - `evaluate` counts invalid queries, publishes no vector for cancelled/invalid/
   unrepresentable queries, sums E and B separately, and uses compensated
-  component sums. Empty and zero-strength families are exact `ZERO` with zero
-  arithmetic uncertainty and a positive absolute target.
+  component, uncertainty and absolute-contribution sums. Empty and zero-strength
+  families are exact `ZERO` with zero arithmetic uncertainty and a positive
+  absolute target. Every accepted call consumes one hard job-query slot,
+  including invalid queries; the call after `max_queries` is
+  `Unavailable(QueryLimit)` for both families.
+- Each family keeps one complete per-source estimate and refines against the
+  terminal family criterion `T = epsilon*S_f + epsilon*norm(V_f)`, never
+  `epsilon*sum(|v_i|)`. An epsilon-dependent accuracy pass first targets a share
+  of the coarse family target, then the source with the largest absolute
+  uncertainty is re-evaluated at the remaining allowance until the criterion
+  passes or every source reaches its work/storage/depth/roundoff floor. Failed
+  refinements retain the previous complete contribution; no partial integral is
+  published. `AccuracyNotMet` therefore carries complete finite coverage, while
+  incomplete preparation, an unresolved feature, `NumericRange`, or
+  cancellation is `Unavailable`.
+- Electric and magnetic families own separate scratch and separate
+  `work_per_family` reservations; neither can borrow from or starve the other.
+  A difficult family failing does not prevent the other family from completing.
+  The `Diagnostics` provenance repeats the kernel ID, family, softening,
+  epsilon, family scale, family source count (including zero-strength sources),
+  total counted work, cell high-water mark, regularization, roundoff-limitation
+  and underflow flags. `source_count` is family-local, not the whole mixed set.
 - Elementary point and wire fields are evaluated with max-scaled norms and
   mantissa/exponent arithmetic, so huge displacements do not fabricate
   `NumericRange`; genuine underflow is published with a flag and uncertainty.
@@ -708,19 +728,30 @@ ceilings are rejected.
 `analytic_loop_and_solenoid_axial_fields`,
 `off_axis_fixtures_meet_requested_target`, `loop_near_axis_and_branch_sweep`,
 `loop_magnetic_dipole_far_field`, `finite_current_scales_inverse_length`,
-`tiny_budget_distinguishes_complete_from_unavailable`. Independent
-finite-line endpoint references, the committed electric and magnetic fixture
-matrix and its offline `generate.py`/provenance README live in
+`tiny_budget_distinguishes_complete_from_unavailable`.
+[tests/sources_evaluate_test.rs](../tests/sources_evaluate_test.rs):
+`family_target_uses_cancelled_total`,
+`both_family_orders_have_reserved_work`,
+`all_eight_kinds_have_committed_references`,
+`finite_inaccurate_is_complete_only`,
+`convergence_tracks_requested_accuracy`,
+`point_dipole_grid_matches_analytic_sums`,
+`underflow_and_numeric_range_are_distinct`. Independent finite-line endpoint
+references, the committed electric and magnetic fixture matrix and its offline
+`generate.py`/provenance README live in
 [tests/support/sources/](../tests/support/sources/).
 
-**Limitations.** Family-global refinement remains Task 5; this task keeps the
-per-source `epsilon*S_family/n_active` allocation. There is no UI, persistence,
-glyph, rendering, export or app integration. Uncertainty is an empirical
-absolute allowance accumulated from quadrature indicators, series tails and
-roundoff terms, not a certified interval bound. The `1e-6` fixture rows use far
-queries so the resolution guard can resolve the softening scale within the
-default cell budget; on-support narrow features are not claimed. Wasm/browser
-and manual visual checks remain waived, not passed.
+**Limitations.** Uncertainty is an empirical absolute allowance accumulated from
+quadrature indicators, series tails and roundoff terms, not a certified interval
+bound. Cancellation-heavy families can honestly miss a tight target when the
+per-source modeled rounding exceeds it. The `1e-6` fixture rows use far queries
+so the resolution guard can resolve the softening scale within the default cell
+budget; on-support narrow features are not claimed. Tight requests may return
+complete finite `AccuracyNotMet` or `Unavailable` when a refinement cap is
+reached. There is no UI, persistence, glyph, rendering, export or app
+integration. Wasm/browser and manual visual checks remain waived, not passed.
+See [sources accuracy notes](sources-accuracy.md) for tested cases and
+timings.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 

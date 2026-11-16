@@ -73,7 +73,13 @@ pub(crate) fn contribution(
             scratch,
             cancelled,
         ),
-        _ => Err(Failure::UnresolvedFeature),
+        SourceKind::PointCharge { .. }
+        | SourceKind::FiniteLineCharge { .. }
+        | SourceKind::ChargedRing { .. }
+        | SourceKind::ChargedDisc { .. }
+        | SourceKind::SolidSphere { .. } => {
+            unreachable!("magnetic evaluator received an electric source")
+        }
     }
 }
 
