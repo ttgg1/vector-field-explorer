@@ -4,8 +4,10 @@ use super::*;
 
 impl VfApp {
     /// Advance the one global clock from the frame's stable dt and mirror the
-    /// resulting time into the state. Scalar plot kinds have no clock consumer,
-    /// so the clock holds instead of advancing an invisible vector simulation.
+    /// resulting time into the state. Scalar mode still skips vector particle
+    /// advection, but a time-dependent scalar is itself a clock consumer: the
+    /// shared clock advances and the plot resamples at the new `t`. A static
+    /// scalar has no consumer, so the clock holds.
     pub(super) fn advance_clock(&mut self, dt: f32) {
         self.clock.advance_for(&self.state, dt);
         // Mirror the clock's t into the state so a time-dependent field's
@@ -25,7 +27,8 @@ impl VfApp {
     }
 
     /// The device-independent half of simulation, shared with the Task 6 test
-    /// harness: scalar mode refreshes only its plot scene and pauses every
+    /// harness: scalar mode refreshes only its plot scene (resampling a
+    /// time-dependent source at the mirrored `state.time`) and pauses every
     /// vector consumer; vector mode rebuilds and advects exactly as before.
     pub(super) fn advance_simulation(&mut self) {
         if !self.state.is_vector_mode() {

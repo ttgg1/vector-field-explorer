@@ -41,7 +41,9 @@ pub fn time_label(time: f32, compact: bool) -> String {
     }
 }
 
-/// Draw the strip and apply every edit to `clock`.
+/// Draw the shared strip and apply every edit to `clock`: the same controls
+/// serve particles, time-dependent vector fields, and time-dependent scalar
+/// plots. Loop is visible whenever `state.has_time_dependent_consumer()`.
 pub fn show(ui: &mut egui::Ui, clock: &mut SimClock, state: &State, compact: bool) {
     let min_size = if compact {
         egui::Vec2::splat(super::layout::TOUCH_TARGET)

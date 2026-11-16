@@ -267,6 +267,22 @@ pub static SCALAR_HELP_SECTION: HelpSection = HelpSection {
 
 pub static SCALAR_HELP_ROWS: &[HelpRow] = &[
     HelpRow {
+        input: "t",
+        action: "shared simulated time in curve/surface formulas",
+    },
+    HelpRow {
+        input: "Space",
+        action: "play/pause the shared clock (animated scalar or other consumer)",
+    },
+    HelpRow {
+        input: "Loop",
+        action: "wrap shared time at the transport period",
+    },
+    HelpRow {
+        input: "Invalid edit",
+        action: "last mesh stays; the clock may keep running until the text is valid",
+    },
+    HelpRow {
         input: "SVG export",
         action: crate::screenshot::SCALAR_SVG_MESSAGE,
     },
