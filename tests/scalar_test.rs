@@ -8,7 +8,7 @@ fn scalar_rhs_context_and_errors() {
             assert_eq!(expr.clone().eval(2.0, 3.0), Some(expected));
             assert!(!format!("{expr:?}").is_empty());
         }
-        for source in ["z", "t", "mystery", "foo(x)", "y=x", "x+"] {
+        for source in ["z", "mystery", "foo(x)", "y=x", "x+"] {
             let error = ScalarExpr::parse(source, context).unwrap_err();
             let _: &dyn std::error::Error = &error;
             let message = error.to_string();
@@ -17,7 +17,7 @@ fn scalar_rhs_context_and_errors() {
             if matches!(context, ScalarContext::Surface) {
                 assert!(message.contains('y'), "{message}");
             }
-            for symbol in ["z", "t", "mystery", "foo"] {
+            for symbol in ["z", "mystery", "foo"] {
                 if source.starts_with(symbol) {
                     assert!(message.contains(symbol), "{message}");
                 }

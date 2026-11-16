@@ -80,6 +80,7 @@ mod presets_test;
 mod reference_lines_test;
 mod responsive_test;
 mod sampling_test;
+mod scalar_animation_test;
 mod scalar_test;
 mod scene_flow_test;
 mod screenshot_test;
