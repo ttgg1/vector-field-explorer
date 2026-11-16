@@ -845,10 +845,14 @@ impl State {
         self.field.dimension == 3 && !self.mode_3d
     }
 
-    /// The local frame of the selected slice, when 2D is showing one.
+    /// The local frame of the selected slice, when 2D is showing one. The
+    /// selection is re-clamped against the plane grid so a stale index written
+    /// before the grid shrank can never build a frame past the last sample.
     pub fn plane_frame(self: &State) -> Option<PlaneFrame> {
-        self.is_plane_slice()
-            .then(|| PlaneFrame::new(&self.domain, self.plane, self.plane_grid()))
+        self.is_plane_slice().then(|| {
+            let grid = self.plane_grid();
+            PlaneFrame::new(&self.domain, self.plane.clamped(grid), grid)
+        })
     }
 
     /// The domain the visible scene covers. A plane slice uses its flat local

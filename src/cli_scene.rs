@@ -5,7 +5,7 @@ use glam::{Mat4, Vec3};
 
 use super::{CameraKind, CliError, CliOptions, Mode, validate_effective};
 use crate::{
-    app::compose_lines,
+    app::compose_lines_with_frame,
     camera::OrbitCamera,
     fly_camera::FlyCamera,
     particles::{self, AdvectSettings, Particles},
@@ -95,11 +95,12 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
     state.time = endpoint;
     // Snapshot owns flow tracing. Compose references onto those lines exactly once.
     let mut scene = state.snapshot();
-    scene.lines = Arc::new(compose_lines(
+    scene.lines = Arc::new(compose_lines_with_frame(
         scene.lines.as_ref(),
         &[],
-        &state.domain,
+        &state.scene_domain(),
         state.is_3d(),
+        state.plane_frame(),
         state.show_grid,
         state.show_coordinate_system,
     ));

@@ -672,8 +672,10 @@ fn stagnated_respawn(
 /// (speed at or below [`STAGNATION_SPEED_EPSILON`] of the smallest extent per
 /// simulated second) accumulates simulated `dt` and, when looping is on,
 /// respawns once it reaches the threshold. A respawn resets that particle's
-/// trail, stuck time and speed. An exact zero-velocity point still takes the
-/// pre-existing RK4 NaN respawn immediately, in both loop toggle states.
+/// trail, stuck time and speed. An exact zero-velocity point in the world flow
+/// still takes the pre-existing RK4 NaN respawn immediately, in both loop
+/// toggle states; a projected plane flow instead stays stationary in place,
+/// because a purely normal field has no in-plane motion to follow.
 pub fn advect<F: Flow + ?Sized>(
     particles: &mut Particles,
     flow: &F,
@@ -702,6 +704,16 @@ pub fn advect<F: Flow + ?Sized>(
         let p = particles.pos[i];
         let q = if inside(domain, p) { rk4_step(flow, p, dt, settings.time) } else { Vec3::splat(NAN_F32) };
         if !q.is_finite() || !inside(domain, q) {
+            // A plane slice is a lower-dimensional space: a purely normal
+            // field has exactly zero in-plane velocity, which must leave the
+            // dot where it is rather than respawn it at a random slice point.
+            if inside(domain, p)
+                && flow.zero_velocity_is_stationary()
+                && matches!(flow.eval(p, settings.time), Some(v) if v.is_finite() && v.length() == 0.0)
+            {
+                particles.speeds[i] = 0.0;
+                continue;
+            }
             let point = jittered_point(region.center, region.band, state);
             particles.pos[i] = point;
             particles.trails[i].clear();
@@ -750,8 +762,9 @@ pub fn speed_range(particles: &Particles) -> (f32, f32) {
 /// The colour one dot or trail segment gets (ticket 48), in RGBA `0..1`.
 /// `alpha` is applied by the caller; the RGB rules are shared so dots and
 /// trails always agree for a given mode.
+#[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
-fn particle_rgb<F: Flow + ?Sized>(
+pub fn particle_rgb<F: Flow + ?Sized>(
     mode: ParticleColorMode,
     flow: &F,
     point: Vec3,

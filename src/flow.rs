@@ -16,6 +16,15 @@ pub trait Flow {
     /// Velocity at `point` at time `t`; `None` where the field cannot be
     /// evaluated (the trace stops there).
     fn eval(&self, point: Vec3, t: f32) -> Option<Vec3>;
+
+    /// Whether an exact zero velocity means "stationary in this space" rather
+    /// than "cannot move, respawn". A plane slice is a lower-dimensional
+    /// space: a purely normal world field has no in-plane motion, so its dots
+    /// should stay put instead of jumping to a new random spot every frame.
+    /// The world flow keeps the historical respawn behavior.
+    fn zero_velocity_is_stationary(&self) -> bool {
+        false
+    }
 }
 
 impl Flow for FieldExpr {
@@ -42,6 +51,10 @@ impl Flow for PlaneFlow<'_> {
             .eval3_at(world, t)
             .map(|velocity| self.frame.project(velocity))
     }
+
+    fn zero_velocity_is_stationary(&self) -> bool {
+        true
+    }
 }
 
 /// The field the current scene traces: the world field or a projected slice.
@@ -56,6 +69,13 @@ impl Flow for SceneFlow<'_> {
         match self {
             SceneFlow::World(field) => field.eval(point, t),
             SceneFlow::Plane(flow) => flow.eval(point, t),
+        }
+    }
+
+    fn zero_velocity_is_stationary(&self) -> bool {
+        match self {
+            SceneFlow::World(_) => false,
+            SceneFlow::Plane(flow) => flow.zero_velocity_is_stationary(),
         }
     }
 }

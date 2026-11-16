@@ -30,11 +30,26 @@ fn explicit_streamline_seeds_returns_exactly_n_in_3d() {
 }
 
 #[test]
-fn explicit_seed_lattice_is_density_independent() {
+fn explicit_seed_lattice_is_deterministic_and_density_independent() {
     let domain = Domain::new(Vec3::splat(-1.0), Vec3::splat(1.0));
+    let mut state = State::new(false);
+    state.set_streamline_count(26);
+    let before = explicit_streamline_seeds(&domain, state.streamline_count, false, 3);
     assert_eq!(
+        before,
         explicit_streamline_seeds(&domain, 26, false, 3),
-        explicit_streamline_seeds(&domain, 26, false, 3)
+        "the lattice is deterministic"
+    );
+
+    assert!(state.set_density(12));
+    assert_eq!(
+        state.streamline_count, 26,
+        "changing density leaves an explicit count unchanged"
+    );
+    assert_eq!(
+        explicit_streamline_seeds(&domain, state.streamline_count, false, 3),
+        before,
+        "the same domain and count give the same explicit seeds"
     );
 }
 

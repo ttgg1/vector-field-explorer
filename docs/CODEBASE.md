@@ -101,8 +101,8 @@ per-frame simulation state beside it.
            }
         │
         │ VfApp::rebuild_scene (app/simulation.rs)
-         │  - compose_lines(reference_lines_visible(domain, is_3d,
-         │      show_grid, show_coordinate_system) + flow lines + click lines)
+         │  - compose_lines_with_frame(scene_domain, is_3d, plane_frame,
+         │      reference lines + flow lines + click lines)
         │  - cache dots_range from the freshly sampled magnitudes
         │  - retrace click bursts on every dirty rebuild
         ▼
@@ -131,12 +131,13 @@ Why the seam matters:
 - `snapshot_if_dirty` is the only rebuild trigger for arrows and grid
   streamlines. Particle dots and trails are deliberately *not* in that snapshot:
   they change every frame and are rebuilt by the app from the live cloud.
-- The app owns reference lines (2D grid and axes or 3D face grids, box and axes)
-  and clicks. `show_grid` selects the grid and 3D box; `show_coordinate_system`
-  selects only the coloured axes. The two independent `State` flags filter
-  reference geometry before `compose_lines` appends flow and click lines; the
-  snapshot's `lines` holds grid-seeded streamlines only. The resulting
-  `SceneGPU.lines` is shared by both viewport modes and screenshot capture.
+- The app owns reference lines (2D grid and axes, 3D face grids/box/axes, or a
+  plane slice's flat local grid and two axes) and clicks. `show_grid` selects
+  the grid and 3D box; `show_coordinate_system` selects only the coloured axes.
+  `compose_lines_with_frame` consumes the active `scene_domain`/`plane_frame`, so
+  a 2D slice never gets world-cube references; the snapshot's `lines` holds
+  grid-seeded streamlines only. The resulting `SceneGPU.lines` is shared by both
+  viewport modes, CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -337,7 +338,9 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `clock`, `screenshot`, and private scene/click/particle caches.
+  `clock`, `screenshot`, and private scene/click/particle caches, including the
+  `scene_frame` key and particle-availability flag reconciled by
+  [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
 - `StatusBarState` (parse message, fps/frame ms, arrow/streamline/particle/trail
   counts, density, `is_3d`, sim time, flying, hint).
@@ -348,13 +351,13 @@ and the helpers that belong to no single frame phase.
 - `new_with_storage` restores `AppSettings` through the viewmodel setters before
   the first frame; a restored non-default domain is recentred on the correct
   camera (`recentre_on` in 3D, `recentre_on_2d` in 2D). It passes the restored
-  reference flags into `compose_lines` for the initial private scene; dirty
-  rebuilds and click recompositions use that same composition path.
+  reference flags into `compose_lines_with_frame` for the initial private scene;
+  dirty rebuilds and click recompositions use that same frame-aware path.
 - `MAX_CLICK_SEEDS = 6`: click seeds are oldest-first and the oldest is dropped
   when a seventh is added.
-- `compose_lines` prepends only the enabled reference groups and then the
-  cached flow and click segments; the status bar's streamline count is
-  `flow_lines + click_lines`, not the full scene line count.
+- `compose_lines_with_frame` prepends only the enabled reference groups (world
+  or local slice) and then the cached flow and click segments; the status bar's
+  streamline count is `flow_lines + click_lines`, not the full scene line count.
 - `scene` is a cache; `State` remains the source of truth.
 - `camera` is the 2D preset mirror (`Camera { position, scale }`), not the live
   painting camera; `orbit` is live.
@@ -367,6 +370,36 @@ seams it calls.
 
 **Limitations.** Click-seed history is app-local and bounded; it survives a
 rebuild but not a restart. The app does not expose a general command/undo stack.
+
+#### `src/app/plane.rs` — scene-frame transitions
+
+**Purpose.** Keep the cached vector scene and its click seeds attached to the
+right frame, and clear/refit when that frame changes.
+
+**Public API.** `SceneFrameKey { World3D, World2D, Plane { axis, index,
+plane_grid, domain } }` with `of(&State)`; crate-visible
+`VfApp::sync_scene_frame`; doc-hidden `VfApp::pending_burst` test seam.
+
+**Invariants.**
+- `advance_simulation` calls `sync_scene_frame` before `rebuild_scene` and
+  `advance_particles`, so a transition builds and advects in the new frame in
+  the same step.
+- When either the previous or next key is a plane and the keys differ, the app
+  clears click seeds, the last-seed undo record, `flow_lines`/`click_lines`, the
+  streamline segment count, and the particle cloud/target, then marks the state
+  dirty. An ordinary 3D or two-component 2D formula change keeps click seeds.
+- A three-component-to-two-component formula change (`World3D` to `World3D`)
+  still loses particle availability; that path clears the cloud and only a
+  particle-burst undo record, leaving streamline seeds intact.
+- `Fit` runs only on plane entry or an axis/index change, through the local
+  `view_context` and `apply_view_command` (which leaves fly); density/domain
+  edits inside the same plane keep the current camera.
+
+**Pinned by.** `tests/plane_particles_test.rs`
+(`plane_transition_clears_seeds_and_refills_particles`,
+`plane_axis_change_clears_stale_click_seeds`,
+`world_mode_keeps_existing_click_seeds`, `plane_enter_fits_local_camera`,
+`losing_particle_availability_clears_the_cloud_and_burst_undo`).
 
 #### `src/app/plot.rs` — scalar plot integration
 
@@ -487,6 +520,8 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
 **Public API (crate-visible).** `advance_clock`, `frame_simulation`.
 
 **Invariants.**
+- `advance_simulation` runs `sync_scene_frame` first (see `src/app/plane.rs`),
+  then the dirty rebuild, then particle advection.
 - `rebuild_scene` calls `snapshot_if_dirty`; `None` leaves the last scene
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
@@ -494,8 +529,9 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   with the backdrop.
 - `advance_particles` calls `retarget` only with the current target. A changed
   target trims or spawns only the difference; a click burst above the count
-  survives until the count changes. Off/2D produces `None`, clears the cloud,
-  and empties trails.
+  survives until the count changes. Off or a two-component field produces
+  `None`, clears the cloud, and empties trails; a 2D plane slice is a valid
+  target and advects through the local projected flow.
 - Advection uses `clock.step_dt()`; a paused clock is a zero step and leaves the
   cloud exactly where it was.
 - Dots and trails use the same `dots_range` and the same `speed_range` so colour
@@ -878,7 +914,8 @@ instance colour.
 
 **Public API.** `PlaneAxis { X, Y, Z }` with `ALL`, `label`, `count`,
 `middle_index`; `PlaneView { enabled, axis, index }` with `middle`, `clamped`,
-`active`, `count`; constants `DIM_FACTOR`, `DIM_GREY`, `DIM_ALPHA`;
+`active`, `count`; `PlaneFrame` with `new`, `local_domain`, `to_world`,
+`to_local`, `project`; constants `DIM_FACTOR`, `DIM_GREY`, `DIM_ALPHA`;
 `plane_coordinate`, `on_plane`, `dim_color`.
 
 **Invariants.**
@@ -894,8 +931,10 @@ instance colour.
 `a_one_slice_axis_puts_every_point_on_the_plane`,
 `dim_color_lerps_three_quarters_toward_neutral_grey`, and the axis/clamp tests.
 
-**Limitations.** Plane dimming applies to arrows only. Streamlines, particles,
-and reference lines are not sliced or dimmed.
+**Limitations.** Plane dimming applies to arrows only. In the 2D slice view,
+arrows, streamlines, particles and references are all local to the selected
+plane; the out-of-plane flow component is omitted, so a purely normal field has
+no slice flow (particles stay put rather than respawning).
 
 ### 3.3 Viewmodel and persistence
 
@@ -962,8 +1001,9 @@ decisions that do not need a window.
   Tracing is RK4 with step `0.5 * spacing`, budget 120, both directions.
 - Click bursts: 5 seeds, 8 % of the smallest positive extent, deterministic from
   the clicked bits; 2D pins z, 3D jitters depth.
-- `particle_target()` is `Some` only when `particles && mode_3d` (note: raw
-  projection, not `is_3d`), so a flat formula in 3D mode still gets a cloud.
+- `particle_target()` is `Some` only when `particles && field.dimension == 3`,
+  independent of the view mode, so a two-component formula gets no cloud in 3D
+  while a three-component field gets one in the 2D plane slice.
 - `drag_channel`: middle always pans; secondary orbits in 3D unless Shift, pans
   in 2D; primary orbits in 3D and pans in 2D.
 - `apply_camera_input`: 3D orbit/pan/zoom uses orbit distance and FOV; 2D pans
@@ -1258,7 +1298,7 @@ own time base require a new ADR. It is not persisted.
 **Public API.** `StreamlineOpts { max_len, step_scale, both_directions }`,
 `MAX_STREAMLINE_POINTS = 400`, `CLICK_BURST_SEEDS = 5`,
 `CLICK_BURST_REACH = 0.08`; `trace`, `ray_seed`, `click_seed`, `burst_seeds`,
-`seed_grid`.
+`seed_grid`, `explicit_streamline_seeds`.
 
 **Invariants.**
 - RK4 with adaptive `h = step_scale / |f|`; each step advances about
@@ -1275,6 +1315,10 @@ own time base require a new ADR. It is not persisted.
 - `seed_grid` is a deterministic jittered lattice (jitter ≤ 0.45 cell) keyed by
   `salt`; `burst_seeds` is deterministic from the clicked point's bits and pins
   z for 2D.
+- `explicit_streamline_seeds` grows the lattice until it holds the requested
+  count, then truncates to exactly that count, independent of sampling density.
+  A fully degenerate domain can only yield one seed even for `count > 1`; that
+  intentional exception is unreachable through the UI's clamped extents.
 - `trace` returns at least `[start]` for a valid seed, or empty for a bad seed.
 
 **Pinned by.** `tests/streamlines_test.rs` (19 tests):
@@ -1307,7 +1351,9 @@ test seams); `target_count`, `effective_particle_count`, `count`,
 **Invariants.**
 - The cloud has a constant size between target changes. A particle that leaves
   the domain, hits zero/non-finite flow, or becomes non-finite respawns inside
-  the inset box; the count never drifts and never exceeds `MAX_PARTICLES`.
+  the inset box; the count never drifts and never exceeds `MAX_PARTICLES`
+  (except a projected plane flow, whose exact zero velocity keeps the dot
+  stationary in the slice instead of respawning).
 - Spawn/respawn jitter is deterministic from an inline Park/Miller LCG, so a
   fresh session reproduces the same cloud. `clear` rewinds the stream.
 - `resize` trims from the end or spawns only the difference; existing particles
@@ -1993,7 +2039,8 @@ No rename; name field is free text.
 with a local mirror and a single `apply` handoff.
 
 **Public API.** `Section` + `SECTIONS`, `domain_summary`, `DomainAxis`,
-`domain_axes`, `magnitude_scale_enabled`, `arrow_scale_enabled`,
+`domain_axes`, `PlaneControlMode`, `plane_control_mode`,
+`magnitude_scale_enabled`, `arrow_scale_enabled`,
 `proportional_exponent_enabled`, `ArrowStyleSet`, `arrow_style_set`,
 `sides_control_enabled`, `head_control_enabled`, `seed_mode_enabled`,
 `particle_size_enabled`, `particle_fixed_color_enabled`, `fixed_color_rgb`,
@@ -2012,11 +2059,17 @@ per-section resets, `Default`), `show`, `show_with_plot_action`,
   independently in both modes, and return to on with the Display reset.
 - Density range keys to the sampling dimension (`is_3d`): 4..=200 flat,
   4..=40 for n³.
+- `plane_control_mode(field.dimension, mode_3d)` is the one selector-visibility
+  rule: `Hidden` for a two-component field, `SliceOnly` (axis + position, no
+  enable/opacity) for a 3D field in 2D, and `Full` in the 3D view. The plane
+  index always clamps against `state.plane_grid()`, never the render `grid()`.
+- Domain rows gate on `field.dimension == 3`, so a 3D field in 2D keeps its z
+  row; density still labels `n²` because the slice renders one n×n layer.
 - Disabled controls are disabled for a reason: arrow scale in Magnitude,
   magnitude scale outside Magnitude, contrast outside Proportional, head/sides
   for headless families, seed mode with streamlines off, particle controls with
   particles off, trail controls below length 2, stagnation time with looping
-  off, z row in 2D.
+  off, z row for a two-component field.
 - Domain extents are clamped before `set_domain`; NaN keeps the previous value;
   reversed pairs swap in the seam and mirror back.
 - Plane index commits on toggle/axis/click or slider release, not during a live

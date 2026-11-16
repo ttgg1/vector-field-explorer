@@ -1308,6 +1308,51 @@ fn sync_plane_uses_the_plane_grid() {
 }
 
 #[test]
+fn plane_frame_clamps_a_stale_index_to_the_plane_grid() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_density(5);
+    // Simulate a stale selection written before the grid shrank: the seam
+    // must clamp it rather than building a frame past the last sample.
+    state.plane.index = 999;
+    let frame = state
+        .plane_frame()
+        .expect("2D of a three-component field is a plane slice");
+    let last_z = plane_coordinate(&state.domain, state.plane_grid(), PlaneAxis::Z, 4);
+    assert!((frame.origin.z - last_z).abs() < 1e-5);
+    assert!((frame.origin.z - state.domain.max.z).abs() < 1e-5);
+
+    assert!(state.set_mode(true));
+    assert!(state.plane_frame().is_none(), "3D is not a plane slice");
+}
+
+#[test]
+fn xy_plane_index_survives_mode_switches_and_clamps_to_the_plane_grid() {
+    for axis in [PlaneAxis::X, PlaneAxis::Y] {
+        let mut state = State::new(false);
+        state.set_formula("x, y, z".into());
+        state.set_density(5);
+        state.set_plane_axis(axis);
+        state.set_plane_index(4);
+        assert_eq!(state.plane.axis, axis);
+        assert_eq!(state.plane.index, 4);
+
+        assert!(state.set_mode(true));
+        assert_eq!(state.plane.index, 4, "a 3D view keeps the {axis:?} index");
+        assert!(state.set_mode(false));
+        assert_eq!(state.plane.index, 4, "returning to 2D keeps the {axis:?} index");
+
+        assert!(state.set_plane_index(0));
+        assert!(state.set_plane_index(999));
+        assert_eq!(
+            state.plane.index,
+            axis.count(state.plane_grid()) - 1,
+            "the index clamps against the n-cubed plane grid, not the render grid"
+        );
+    }
+}
+
+#[test]
 fn set_plane_preserves_dim_toggle_in_2d() {
     let mut state = State::new(false);
     state.set_formula("x, y, z".into());

@@ -20,6 +20,13 @@ the rest, so the cube keeps its shape while a single plane reads clearly. The
 slice is chosen by axis and grid index.
 _Avoid_: slice mode, cross-section
 
+**Plane slice**:
+The 2D rendering of a three-component field: one selected plane in its own flat
+local frame, with arrows, streamlines and particles tracing the field projected
+onto that plane. The out-of-plane (normal) component is omitted. The 2D selector
+and the 3D plane-by-plane mode share the same axis/index selection.
+_Avoid_: 2D field, flattened cube
+
 **Camera state**:
 The live orientation, target, and zoom of the orbit camera. Resets to the
 default on launch; changed by mouse gestures or by applying a camera preset.
@@ -170,6 +177,12 @@ How streamlines get their seeds: Auto uses the sampling grid and also accepts
 click seeds; Click uses only click seeds.
 _Avoid_: seed source, seeding toggle
 
+**Streamline count**:
+The requested number of Auto-seeded streamlines. `0` means Auto, using the
+density-derived lattice; `1–4096` seeds exactly that many lines from a
+density-independent lattice. Click seeds are additional.
+_Avoid_: streamline density, line count
+
 **Left-click action**:
 What a single left click in the viewport does: seed a streamline or add a
 particle burst. The two are exclusive.
@@ -209,9 +222,10 @@ The marker drawn at a source's position and orientation in the viewport.
 _Avoid_: icon, marker
 
 **2D slice**:
-The z coordinate sampled in 2D mode; v1 exposes the z slice only, and x/y slice
-selection comes later.
-_Avoid_: plane, cross-section
+The plane of a three-component field rendered in 2D, selected by axis and grid
+index (x, y, or z). Existing two-component fields keep their ordinary flat X/Y
+view and have no slice selection.
+_Avoid_: plane-by-plane mode
 
 **2D approximation**:
 A field preset whose 2D form is a simplified formula rather than the z slice of

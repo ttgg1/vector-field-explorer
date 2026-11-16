@@ -910,8 +910,10 @@ pub fn resolve_config(config: Option<CliConfig>, flags: CliFlags) -> Result<CliO
         Axis::Y => PlaneAxis::Y,
         Axis::Z => PlaneAxis::Z,
     };
-    let index = p.index.unwrap_or_else(|| axis.middle_index(state.grid()));
-    if index >= axis.count(state.grid()) {
+    let index = p
+        .index
+        .unwrap_or_else(|| axis.middle_index(state.plane_grid()));
+    if index >= axis.count(state.plane_grid()) {
         return Err(CliError::Validation(
             "plane.index exceeds final grid axis".into(),
         ));
@@ -1058,7 +1060,7 @@ pub fn validate_effective(o: &CliOptions) -> Result<(), CliError> {
             "domain min must be less than max".into(),
         ));
     }
-    if o.plane.index >= o.plane.axis.count(state.grid()) {
+    if o.plane.index >= o.plane.axis.count(state.plane_grid()) {
         return Err(CliError::Validation(
             "plane.index exceeds final grid axis".into(),
         ));

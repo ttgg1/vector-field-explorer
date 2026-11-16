@@ -26,7 +26,8 @@ instanced GPU scene:
 - animated particles with trails and speed or magnitude colouring;
 - a 2D orthographic view and a 3D orbit camera, plus a free-fly camera;
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
-  plane-by-plane inspection, with independent grid and coordinate guides;
+  plane-by-plane inspection, including 2D slices of three-component fields,
+  with independent grid and coordinate guides;
 - native PNG screenshots and persisted view, layout, and appearance settings.
 
 Scalar **Curve** (`y = f(x)`) and **Surface** (`z = f(x, y)`) plots are
@@ -276,14 +277,17 @@ formula and its 2D/3D dimension into the scene; the formula remains editable.
 | `F` | Fit domain | Fit domain |
 | Double-click | Reset view | Reset view |
 | `S` | Seed a streamline at the pointer | Seed a streamline at the pointer |
-| `P` | Add a particle burst at the pointer | Shows the 3D-only hint |
+| `P` | Add a particle burst at the pointer | Add a burst when the field has three components |
 | `C` | Enter/leave the fly camera | Inert |
 | Space | Play/pause when the transport is visible | Inert |
 
 A single left click follows the **Features → Left click** setting: seed a
 streamline or add a particle burst. The two are exclusive, and each does
-nothing while its feature is off. Particles exist in the 3D view only;
-streamlines work in both views. The last six click seeds are kept.
+nothing while its feature is off. Particles need a three-component field: in
+2D they ride the selected plane slice, while ordinary two-component 2D has no
+particles. Streamlines work in both views. The last six click seeds are kept.
+Changing the plane selection clears those click seeds, because they belong to
+the previous slice's local frame.
 
 Fly mode is 3D-only: `W`/`A`/`S`/`D` move, `Q`/`E` move down/up, Shift boosts,
 the mouse looks, the wheel changes flight speed, and `Esc` exits. While flying,
@@ -306,6 +310,22 @@ the domain's face grids and wireframe box; the second shows only the coloured
 X/Y/Z axes. They use the same settings in both modes; hiding either guide does
 not hide arrows, streamlines, or click-seeded lines. The Display section's
 **Reset** button restores both guides to visible.
+
+When a three-component field is shown in **2D**, the viewport renders one
+selected plane rather than the world X/Y box. The Display section shows **Slice
+axis** and **Position**; the flat local grid and its two world-axis-coloured
+axes replace the world guides. Arrows, streamlines and particles trace the
+field projected onto that plane, so the out-of-plane (normal) component is
+deliberately omitted—a purely normal field has zero slice flow. `F` fits the
+flat slice locally, and entering a plane or changing its axis/position does the
+same. The 3D **Plane by plane** toggle and **Off-plane opacity** remain 3D-only
+controls; the 2D selector reuses the same axis/index and keeps the saved dim
+toggle when you return to 3D.
+
+Under **Features**, **Streamline count** follows the seed mode. `0` keeps the
+density-driven Auto lattice; an explicit `1–4096` seeds exactly that many flow
+lines from a density-independent lattice, so changing density does not change
+the requested count.
 
 The top menu bar contains:
 
@@ -372,9 +392,10 @@ camera presets use `localStorage`.
 - **NaN and infinite samples are skipped.** A pole inside the domain leaves a
   hole in the arrows rather than crashing or blanking the scene; a parse error
   keeps the last valid field. Built-in singular-looking presets are softened.
-- **Particles are 3D-only.** Streamlines and arrows work in both views. The 2D
-  view samples one z slice; the 3D plane inspector steps through x, y, or z
-  slices.
+- **Particles need a three-component field.** In 3D they fill the volume; in 2D
+  they ride the selected plane slice. Ordinary two-component 2D has no depth or
+  slice flow for a dot, so the toggle stays inert there. The 2D slice selector
+  and the 3D plane inspector share one axis/index and step through x, y, or z.
 - **No WebGL2 fallback.** The browser build requires WebGPU, and an unsupported
   browser gets the app's explanation panel.
 - **No signing, notarization, auto-update, or telemetry.** macOS builds are

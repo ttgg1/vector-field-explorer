@@ -362,10 +362,12 @@ fn unit_triple(z: u64) -> (f32, f32, f32) {
 ///
 /// `three_dimensional` picks the lattice's nominal dimensionality: `n =
 /// ceil(count^(1/3))` in 3D, `ceil(sqrt(count))` in 2D. [`seed_grid`] collapses
-/// zero-extent axes to one layer, so a flat domain (and a fully degenerate one)
-/// may produce fewer than `n^d` points; the axis count grows until the lattice
-/// holds at least `count`, then the result is truncated to exactly `count`.
-/// Returns an empty vector for `count == 0`.
+/// zero-extent axes to one layer, so a flat domain may produce fewer than
+/// `n^d` points; the axis count grows until the lattice holds at least
+/// `count`, then the result is truncated to exactly `count`. A fully
+/// degenerate domain (every extent zero) can only produce a single seed even
+/// when `count > 1`; that exception is intentional and unreachable through the
+/// UI's clamped extents. Returns an empty vector for `count == 0`.
 pub fn explicit_streamline_seeds(
     domain: &Domain,
     count: u32,

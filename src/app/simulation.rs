@@ -33,6 +33,7 @@ impl VfApp {
             self.refresh_plot_scene();
             return;
         }
+        self.sync_scene_frame();
         self.rebuild_scene();
         self.advance_particles();
     }

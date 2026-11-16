@@ -346,6 +346,15 @@ pub fn rows_for(mode_3d: bool) -> Vec<HelpRow> {
 /// is not an input. Both help surfaces show it under the Global group.
 pub const FORMULA_HINT: &str = "Formula: (fx, fy) or (fx, fy, fz), e.g. (-y, x)";
 
+/// The 2D plane-slice note: a three-component field in 2D shows the selected
+/// plane, traces its projected flow (the normal component is omitted), and `F`
+/// fits the flat local frame. Changing the plane drops the old click seeds.
+pub const PLANE_SLICE_HINT: &str = "3D field in 2D: selected plane slice · projected flow (normal component omitted) · F fits the slice · changing the plane clears click seeds";
+
+/// The streamline-count note: `0` keeps the density-driven Auto lattice, any
+/// explicit count seeds that many lines independently of density.
+pub const STREAMLINE_COUNT_HINT: &str = "Streamline count: 0 = Auto (density-driven); 1–4096 seeds exactly that many lines independent of density";
+
 /// A help title, in the same 16 pt emphasized style on both help surfaces.
 /// The caller passes the surface's heading colour: the fixed overlay grey or
 /// the Help window's theme strong colour.
@@ -392,11 +401,16 @@ fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection], heading_color: eg
             });
     }
     ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(FORMULA_HINT)
-            .size(11.0)
-            .color(egui::Color32::from_gray(150)),
-    );
+    for note in [FORMULA_HINT, PLANE_SLICE_HINT, STREAMLINE_COUNT_HINT] {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(note)
+                    .size(11.0)
+                    .color(egui::Color32::from_gray(150)),
+            )
+            .wrap(),
+        );
+    }
 }
 
 /// Draw the compact overlay anchored at `anchor` (the viewport's bottom-left

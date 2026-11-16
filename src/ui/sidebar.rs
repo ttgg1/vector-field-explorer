@@ -166,6 +166,29 @@ pub fn domain_axes(is_3d: bool) -> &'static [DomainAxis] {
     }
 }
 
+/// How much of the plane selector to show: hidden for a two-component field,
+/// axis/index only for a 2D slice, and the full 3D plane-by-plane controls in
+/// the 3D view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneControlMode {
+    Hidden,
+    SliceOnly,
+    Full,
+}
+
+/// The single plane-selector visibility rule. A plane needs a three-component
+/// field to have a third axis; only the 3D view may also dim the rest of the
+/// cube and toggle the mode.
+pub fn plane_control_mode(field_dimension: usize, mode_3d: bool) -> PlaneControlMode {
+    if field_dimension != 3 {
+        PlaneControlMode::Hidden
+    } else if mode_3d {
+        PlaneControlMode::Full
+    } else {
+        PlaneControlMode::SliceOnly
+    }
+}
+
 /// Whether the Magnitude-scale control applies. Only `Magnitude` uses it, so
 /// the widget is disabled everywhere else: no dead control that looks
 /// adjustable but changes nothing. Pure so the rule is testable without a
@@ -541,12 +564,13 @@ fn show_inner(
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
     let view_3d = state.mode_3d;
+    let field_dimension = state.field.dimension;
+    let plane_mode = plane_control_mode(field_dimension, view_3d);
     let max_density = if sampling_3d {
         MAX_DENSITY_3D
     } else {
         MAX_DENSITY_2D
     };
-    let grid = state.grid();
     let domain = state.domain;
     let vector_mode = state.is_vector_mode();
 
@@ -739,8 +763,9 @@ fn show_inner(
                         controls.arrow_params = ArrowParams::default();
                     }
                 });
-            if sampling_3d {
-                commit_plane |= plane_controls(ui, controls, &domain, grid);
+            if plane_mode != PlaneControlMode::Hidden {
+                commit_plane |=
+                    plane_controls(ui, controls, &domain, state.plane_grid(), plane_mode);
             }
         });
     });
@@ -843,7 +868,10 @@ fn show_inner(
             }
         });
         ui.checkbox(&mut controls.particles, "Particles")
-            .on_hover_text("Animate dots carried by the field (3D or a 2D plane slice)");
+            .on_hover_text(
+                "Animate dots carried by the field; 2D needs a three-component field and \
+                 shows the selected slice",
+            );
         ui.horizontal(|ui| {
             ui.label("Particle count");
             ui.add(
@@ -1022,13 +1050,13 @@ fn show_inner(
         ui,
         Section::Domain,
         controls,
-        Some(domain_summary(&state.domain, sampling_3d)),
+        Some(domain_summary(&state.domain, field_dimension == 3)),
         |ui, controls| {
             // Only the axes the current sampling dimension can use: the z row
             // vanishes in 2D rather than sitting greyed out (ticket 50). The
             // stored z survives for the next 3D switch; the reset below still
             // resets all three axes.
-            for axis in domain_axes(sampling_3d) {
+            for axis in domain_axes(field_dimension == 3) {
                 let (min, max) = match axis {
                     DomainAxis::X => (&mut controls.domain_min.x, &mut controls.domain_max.x),
                     DomainAxis::Y => (&mut controls.domain_min.y, &mut controls.domain_max.y),
@@ -1093,25 +1121,35 @@ fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
     controls.domain_max = state.domain.max;
 }
 
-/// Draw the plane-by-plane controls (3D sampling only) and report whether the
-/// selection should be committed to the seam this frame. The slider commits on
-/// `drag_stopped` (or a click/keyboard change), not on every dragged frame.
+/// Draw the plane selector and report whether the selection should be
+/// committed to the seam this frame. `Full` keeps the 3D plane-by-plane mode
+/// with its enable toggle and off-plane opacity; `SliceOnly` is the 2D slice
+/// selector (axis and position only). The slider commits on `drag_stopped` (or
+/// a click/keyboard change), not on every dragged frame.
 fn plane_controls(
     ui: &mut egui::Ui,
     controls: &mut Controls,
     domain: &Domain,
     grid: glam::UVec3,
+    mode: PlaneControlMode,
 ) -> bool {
-    let mut commit = ui
-        .checkbox(&mut controls.plane.enabled, "Plane by plane")
-        .on_hover_text("Highlight one sampled slice and fade the rest of the cube")
-        .changed();
-    if !controls.plane.enabled {
-        return commit;
+    if mode == PlaneControlMode::Hidden {
+        return false;
+    }
+    let full = mode == PlaneControlMode::Full;
+    let mut commit = false;
+    if full {
+        commit = ui
+            .checkbox(&mut controls.plane.enabled, "Plane by plane")
+            .on_hover_text("Highlight one sampled slice and fade the rest of the cube")
+            .changed();
+        if !controls.plane.enabled {
+            return commit;
+        }
     }
 
     button_row(ui, |ui| {
-        ui.label("Axis");
+        ui.label(if full { "Axis" } else { "Slice axis" });
         for axis in PlaneAxis::ALL {
             commit |= ui
                 .selectable_value(&mut controls.plane.axis, axis, axis.label().to_uppercase())
@@ -1134,7 +1172,7 @@ fn plane_controls(
 
     let response = ui.add(
         egui::Slider::new(&mut controls.plane.index, 0..=count - 1)
-            .text("Plane")
+            .text(if full { "Plane" } else { "Position" })
             .integer(),
     );
     if response.drag_started() {
@@ -1157,15 +1195,17 @@ fn plane_controls(
         index + 1,
         count,
     ));
-    ui.add(
-        egui::Slider::new(
-            &mut controls.plane_dim_opacity,
-            MIN_PLANE_DIM_OPACITY..=MAX_PLANE_DIM_OPACITY,
+    if full {
+        ui.add(
+            egui::Slider::new(
+                &mut controls.plane_dim_opacity,
+                MIN_PLANE_DIM_OPACITY..=MAX_PLANE_DIM_OPACITY,
+            )
+            .text("Off-plane opacity")
+            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
         )
-        .text("Off-plane opacity")
-        .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-    )
-    .on_hover_text("Opacity of arrows outside the selected plane");
+        .on_hover_text("Opacity of arrows outside the selected plane");
+    }
     commit
 }
 

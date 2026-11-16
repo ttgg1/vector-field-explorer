@@ -5,10 +5,11 @@
 // bar would count a scene the user never asked for).
 
 use vector_field_explorer::ui::sidebar::{
-    ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
-    domain_summary, fixed_color_opaque, fixed_color_rgb, head_control_enabled,
-    magnitude_scale_enabled, particle_count_label, particle_fixed_color_enabled,
-    particle_size_enabled, proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
+    ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, apply, arrow_scale_enabled,
+    arrow_style_set, domain_axes, domain_summary, fixed_color_opaque, fixed_color_rgb,
+    head_control_enabled, magnitude_scale_enabled, particle_count_label,
+    particle_fixed_color_enabled, particle_size_enabled, plane_control_mode,
+    proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
     stagnation_seconds_enabled, streamline_count_enabled, streamline_count_label,
     trail_fade_enabled, trail_width_enabled,
 };
@@ -897,6 +898,41 @@ fn seed_mode_defaults_to_auto_and_flows_through_apply() {
     assert_eq!(s.seed_mode, StreamlineSeedMode::Click, "Click lands on the seam");
     assert_eq!(c.seed_mode, s.seed_mode, "the mirror follows the seam");
     assert!(s.snapshot_if_dirty().is_some(), "a seed-mode change re-instances the scene");
+}
+
+#[test]
+fn plane_selector_is_available_in_2d_and_preserves_the_dim_toggle() {
+    assert_eq!(plane_control_mode(3, false), PlaneControlMode::SliceOnly);
+    assert_eq!(plane_control_mode(3, true), PlaneControlMode::Full);
+    assert_eq!(plane_control_mode(2, false), PlaneControlMode::Hidden);
+
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_mode(true);
+    state.set_plane_enabled(true);
+    state.set_mode(false);
+    state.set_plane_axis(PlaneAxis::X);
+    assert!(state.plane.enabled);
+}
+
+#[test]
+fn domain_axes_include_z_for_a_3d_field_in_2d() {
+    assert!(domain_axes(true).contains(&DomainAxis::Z));
+    assert!(!domain_axes(false).contains(&DomainAxis::Z));
+}
+
+#[test]
+fn features_reset_returns_the_streamline_count_to_auto() {
+    let mut c = Controls::new();
+    c.streamline_count = 37;
+    let mut s = State::new(false);
+    apply(&mut s, &mut c);
+    assert_eq!(s.streamline_count, 37, "the count lands on the seam");
+
+    c.reset_features();
+    assert_eq!(c.streamline_count, 0, "the Features reset returns the count to Auto");
+    apply(&mut s, &mut c);
+    assert_eq!(s.streamline_count, 0, "and the seam follows the reset");
 }
 
 #[test]

@@ -51,7 +51,10 @@ use crate::particles::{
 mod frame;
 mod input;
 mod panels;
+mod plane;
 pub mod plot;
+
+use plane::SceneFrameKey;
 mod simulation;
 mod viewport;
 
@@ -233,6 +236,12 @@ pub struct VfApp {
     /// The screenshot action (ticket 08): the pending capture request, the
     /// channel its save thread reports on, and the completion toast.
     pub screenshot: Screenshot,
+    /// The visible frame the cached scene and click seeds belong to (issue 13
+    /// task 6); reconciled at the start of every vector simulation frame.
+    scene_frame: SceneFrameKey,
+    /// Whether the previous frame had particle availability (a three-component
+    /// field); a true-to-false transition drops the cloud and burst undo.
+    particle_available: bool,
 }
 impl VfApp {
     /// App with no persistent storage (defaults for every persisted record).
@@ -273,6 +282,8 @@ impl VfApp {
         let arrow_style_2d = state.arrow_style_2d;
         let arrow_params = state.arrow_params;
         let mode_3d = state.mode_3d;
+        let scene_frame = SceneFrameKey::of(&state);
+        let particle_available = state.field.dimension == 3;
         let last_plot_epoch = state.plot.transition_epoch;
         let last_plot_was_vector = state.is_vector_mode();
         let saved_vector_orbit = if last_plot_was_vector {
@@ -339,6 +350,8 @@ impl VfApp {
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             screenshot: Screenshot::new(),
+            scene_frame,
+            particle_available,
         }
     }
 }

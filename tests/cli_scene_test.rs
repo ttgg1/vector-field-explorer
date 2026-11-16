@@ -1,4 +1,5 @@
 use glam::{Mat4, Vec3};
+use vector_field_explorer::app::compose_lines_with_frame;
 use vector_field_explorer::{
     camera::OrbitCamera,
     cli::{
@@ -274,6 +275,37 @@ fn snapshot_flows_and_selected_references_appear_exactly_once() {
             same_gpu(p.scene.arrows.as_slice(), snapshot.arrows.as_slice());
         }
     }
+}
+
+#[test]
+fn three_component_field_in_2d_uses_slice_local_references() {
+    let o = options(
+        r#"{"mode":"2d","density":4,"formula":"(x,y,z)","streamlines":true,"references":{"grid_and_domain_box":true,"world_axes":true}}"#,
+    );
+    let mut state = State::new(false);
+    state.set_formula(o.formula.clone());
+    state.set_density(o.density);
+    state.set_plane(o.plane);
+    state.streamlines = o.streamlines;
+    let snapshot = state.snapshot();
+    let expected = compose_lines_with_frame(
+        snapshot.lines.as_ref(),
+        &[],
+        &state.scene_domain(),
+        state.is_3d(),
+        state.plane_frame(),
+        o.references.grid_and_domain_box,
+        o.references.world_axes,
+    );
+    let p = prepare_scene(&o, output_frame(&o).unwrap()).unwrap();
+    same_gpu(p.scene.lines.as_slice(), &expected);
+    assert!(
+        p.scene
+            .lines
+            .iter()
+            .all(|line| line.a[2].abs() < 1e-5 && line.b[2].abs() < 1e-5),
+        "a 2D slice must use its flat local frame for references, not the world cube"
+    );
 }
 
 #[test]
