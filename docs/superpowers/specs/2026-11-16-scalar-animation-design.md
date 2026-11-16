@@ -1,6 +1,6 @@
 # Scalar Plot Animation with the Shared Clock
 
-**Status:** PROPOSED — owner review pending; implementation plan and sub-issues follow approval
+**Status:** APPROVED by owner on 2026-11-16; implementation plan and sub-issues follow
 
 **Issue:** [#16](https://github.com/ttgg1/vector-field-explorer/issues/16)
 
