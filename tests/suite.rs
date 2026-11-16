@@ -66,6 +66,8 @@ mod plot_app_test;
 mod plot_camera_test;
 mod plot_curve_test;
 mod plot_examples_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod plot_gpu_test;
 mod plot_renderer_test;
 mod plot_state_test;
 mod plot_surface_test;

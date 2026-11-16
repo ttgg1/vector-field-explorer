@@ -29,6 +29,13 @@ instanced GPU scene:
   plane-by-plane inspection, with independent grid and coordinate guides;
 - native PNG screenshots and persisted view, layout, and appearance settings.
 
+Scalar **Curve** (`y = f(x)`) and **Surface** (`z = f(x, y)`) plots are
+available from the Plot panel, with signed-height colors, depth-correct
+references, and PNG capture. See the
+[scalar plotting guide](docs/scalar-plotting.md) for syntax, examples,
+draft/restart rules, sampling gaps and platform scope. Scalar SVG and scalar
+CLI output are intentionally unsupported; SVG remains vector-field-only.
+
 For scriptable, window-free 2D SVG or 2D/3D GPU PNG output, see the
 [native CLI guide](docs/cli.md) (flags, strict JSON schema and examples).
 

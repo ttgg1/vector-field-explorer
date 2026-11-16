@@ -723,8 +723,17 @@ submission/readback ordering and retains resources until completion.
 extent equality with `PaintCallbackInfo::viewport_in_pixels`, proportional caps,
 zero area, the empty vector draw plan, all four pipeline policies and sample
 counts, prepared generation/extent identity, and format/capture preflight
-rejection. These tests create no wgpu device; device/render-pixel proof is the
-Task 8 native probe.
+rejection. These CPU tests create no wgpu device. The required native device gate
+is [tests/plot_gpu_test.rs](../tests/plot_gpu_test.rs): ordinary runs cover CPU
+contracts and print `GPU not requested`; `scripts/test-scalar-gpu.sh` sets
+`VFE_SCALAR_GPU_PROBE=1` only on the child and drives the actual
+`PlotCallback` prepare/paint flow into a no-depth incoming target. It asserts
+near/far depth order, reference occlusion, invalid-cell holes, curve-overlay and
+singularity-gap behavior, backface culling, sRGB/linear targets, fractional-DPI
+viewport/scissor, `129×97 → 257×113` resize, stale-generation and released-target
+non-draws, interleaved capture/live independence, PNG encode/decode, and return
+to the unchanged vector renderer on the same device. Missing device or required
+format configuration is an error, never a noop/fake fallback.
 
 #### `src/cas.rs` — native symbolic transform adapter
 
