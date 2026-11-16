@@ -1,9 +1,11 @@
 //! Validated all-eight source model and scaled field evaluation facade.
 //!
 //! This pure CPU module exposes the approved public model, preparation and
-//! evaluation seam. Task 1 dispatches the elementary point and infinite-wire
-//! families; nonzero later-task geometries report `Unavailable`.
+//! evaluation seam. The electric family evaluates point charges, finite lines,
+//! rings, discs and uniform spheres; magnetic loop/solenoid reductions remain
+//! unavailable until their owning task.
 
+mod electric;
 mod evaluate;
 mod model;
 mod numeric;

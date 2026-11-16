@@ -1,8 +1,9 @@
-//! Independent finite-line endpoint references for the source-evaluator tests.
+//! Independent electric-source references for the source-evaluator tests.
 //!
-//! These helpers implement the approved design's *analytic endpoint primitive*
-//! directly. They never call production numeric or quadrature code, so the
-//! finite-line integration tests compare against independent arithmetic.
+//! The finite-line helpers implement the approved design's *analytic endpoint
+//! primitive* directly. The committed fixture matrix is generated offline by
+//! `generate.py` with mpmath at two decimal precisions and read here only as
+//! data. Neither path calls production numeric, quadrature or electric code.
 //!
 //! The primitive, with `c = r^2 + a^2`, `u = z + L/2` and `v = z - L/2`, is
 //!
@@ -22,6 +23,73 @@
 //! experiment missed the narrow displaced line by `4.639761e-10` against a value
 //! near `1`; that number is retained here as provenance only, never as this
 //! solver's expected value.
+
+use glam::DVec3;
+
+/// One committed electric fixture row.
+#[derive(Debug, Clone)]
+pub struct Fixture {
+    pub id: String,
+    pub kind: String,
+    pub center: DVec3,
+    pub axis: DVec3,
+    pub charge: f64,
+    pub dimension: f64,
+    pub query: DVec3,
+    pub softening: f64,
+    pub reference: DVec3,
+    pub uncertainty: f64,
+    pub method: String,
+}
+
+/// Parse every committed electric fixture row.
+pub fn fixtures() -> Vec<Fixture> {
+    include_str!("fixtures.csv")
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .map(parse_fixture)
+        .collect()
+}
+
+/// Fixtures restricted to one source kind (`point`, `line`, `ring`, `disc`,
+/// `sphere`).
+pub fn fixtures_of(kind: &str) -> impl Iterator<Item = Fixture> {
+    fixtures().into_iter().filter(move |row| row.kind == kind)
+}
+
+fn parse_fixture(line: &str) -> Fixture {
+    let fields: Vec<&str> = line.split(',').collect();
+    assert_eq!(fields.len(), 19, "malformed fixture row: {line}");
+    Fixture {
+        id: fields[0].to_owned(),
+        kind: fields[1].to_owned(),
+        center: DVec3::new(bits(fields[2]), bits(fields[3]), bits(fields[4])),
+        axis: DVec3::new(bits(fields[5]), bits(fields[6]), bits(fields[7])),
+        charge: bits(fields[8]),
+        dimension: bits(fields[9]),
+        query: DVec3::new(bits(fields[10]), bits(fields[11]), bits(fields[12])),
+        softening: bits(fields[13]),
+        reference: DVec3::new(
+            decimal(fields[14]),
+            decimal(fields[15]),
+            decimal(fields[16]),
+        ),
+        uncertainty: decimal(fields[17]),
+        method: fields[18].to_owned(),
+    }
+}
+
+fn bits(text: &str) -> f64 {
+    let digits = text.trim().trim_start_matches("0x");
+    let raw = u64::from_str_radix(digits, 16).unwrap_or_else(|_| panic!("bad bits: {text}"));
+    f64::from_bits(raw)
+}
+
+fn decimal(text: &str) -> f64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("bad reference value: {text}"))
+}
 
 /// Independent softened finite-line endpoint components in source-local
 /// cylindrical coordinates.

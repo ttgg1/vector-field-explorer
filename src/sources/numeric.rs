@@ -67,6 +67,55 @@ pub(crate) fn normalize_axis(axis: DVec3) -> Result<DVec3, NumericRange> {
     Ok(scaled / norm)
 }
 
+/// Source-local cylindrical frame: `radial` is the perpendicular distance to
+/// `axis`, `axial` is the projection onto the unit axis, and
+/// `radial_direction` is the unit world direction (zero exactly on axis).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalFrame {
+    pub radial: f64,
+    pub axial: f64,
+    pub radial_direction: DVec3,
+    pub unit_axis: DVec3,
+}
+
+/// Project a world displacement into a source-local cylindrical frame.
+pub(crate) fn local_frame(
+    point: DVec3,
+    center: DVec3,
+    axis: DVec3,
+) -> Result<LocalFrame, NumericRange> {
+    let displacement = point - center;
+    if !displacement.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let unit_axis = normalize_axis(axis)?;
+    let scale = displacement.abs().max_element();
+    let axial = if scale == 0.0 {
+        0.0
+    } else {
+        (displacement / scale).dot(unit_axis) * scale
+    };
+    if !axial.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let radial_vector = displacement - unit_axis * axial;
+    if !radial_vector.is_finite() {
+        return Err(NumericRange::Unrepresentable);
+    }
+    let radial = stable_norm(radial_vector)?;
+    let radial_direction = if radial == 0.0 {
+        DVec3::ZERO
+    } else {
+        radial_vector / radial
+    };
+    Ok(LocalFrame {
+        radial,
+        axial,
+        radial_direction,
+        unit_axis,
+    })
+}
+
 /// Softened point kernel `Q * s / (|s|^2 + a^2)^(3/2)`.
 pub(crate) fn point_field(
     displacement: DVec3,
@@ -202,7 +251,7 @@ pub(crate) fn wire_field(
     })
 }
 
-fn allowance_for(value: DVec3, underflow: bool) -> Result<f64, NumericRange> {
+pub(crate) fn allowance_for(value: DVec3, underflow: bool) -> Result<f64, NumericRange> {
     let norm = stable_norm(value)?;
     let mut allowance = 64.0 * f64::EPSILON * norm;
     if underflow {

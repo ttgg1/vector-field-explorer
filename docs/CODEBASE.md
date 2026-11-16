@@ -40,8 +40,9 @@ The field is formula-driven:
   screenshots, and persistence are all in this tree.
 - The app is a teaching-grade explorer, not a solver. The pure source-evaluator
   slice in `src/sources` currently evaluates softened point charges, finite
-  charged lines and infinite straight wires; the remaining five geometries are
-  validated model data only.
+  charged lines, charged rings, charged thin discs, uniform solid spheres and
+  infinite straight wires; current loops and solenoids are validated model data
+  only.
   Maxwell/ODE work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
@@ -617,10 +618,12 @@ multiplication (`2x` is invalid), and no symbolic differentiation.
 **Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for softened source
 fields. `src/sources/mod.rs` re-exports only the public contract;
 `src/sources/model.rs` validates and freezes the input;
-`src/sources/numeric.rs` carries power-of-two-scaled elementary arithmetic and
-the finite-line kernel/primitive; `src/sources/quadrature.rs` owns bounded
-adaptive Gauss–Kronrod partitions; `src/sources/evaluate.rs` prepares an
-evaluator and builds family results.
+`src/sources/numeric.rs` carries power-of-two-scaled elementary arithmetic, the
+source-local frame and the finite-line kernel/primitive;
+`src/sources/quadrature.rs` owns bounded adaptive Gauss–Kronrod partitions;
+`src/sources/electric.rs` owns the electric ring, disc, sphere and finite-line
+reductions; `src/sources/evaluate.rs` prepares an evaluator and builds family
+results.
 
 **Public API.** `SourceKind` (all eight vectors), `Source`, `AccuracyRequest`,
 `EvalOptions`, `WorkLimits`, `SourceSet::new`, `Evaluator::new`,
@@ -658,9 +661,20 @@ ceilings are rejected.
   absolute uncertainty (stable lower-bound tie break) only after child capacity
   and work are confirmed. Work counts every sample and split, polls cancellation
   at most every 32 counted units, and never recurses.
-- Nonzero ring/disc/sphere/loop/solenoid sources currently return
-  `Unavailable(StopReason::UnresolvedFeature)`; later tasks replace those
-  branches. Zero-strength sources are skipped and exact.
+- A charged ring uses the near-axis binomial series in
+  `delta = 2rR/(R^2+z^2+a^2+r^2)` for `delta <= 1/8`, with an explicit positive
+  geometric tail added to the absolute uncertainty, and direct symmetric-angle
+  integration above that. The series has no division by `r`; below `1e-22`
+  radial cancellation the series, not the direct integral, is authoritative.
+  A charged disc uses the exact transverse chord integral off axis and the
+  rationalized axial difference exactly on axis. A uniform solid sphere uses the
+  centre-stable divergence-theorem surface integral, returns exact zero at the
+  centre, and keeps the linear near-centre field; it is not a stack of planar
+  rings. All non-axis paths reuse the bounded partition, resolution guard,
+  absolute-uncertainty and work accounting above.
+- Nonzero current-loop and solenoid sources currently return
+  `Unavailable(StopReason::UnresolvedFeature)`; Task 4 replaces those branches.
+  Zero-strength sources are skipped and exact.
 
 **Pinned by.** [tests/sources_model_test.rs](../tests/sources_model_test.rs):
 `validation_is_strict`, `prepare_is_cancellable_before_allocation`,
@@ -668,15 +682,23 @@ ceilings are rejected.
 [tests/sources_numeric_test.rs](../tests/sources_numeric_test.rs):
 `scaled_elementary_fields`, `huge_near_axis_wire_is_refused_not_confidently_wrong`,
 `line_against_closed_form`, `narrow_displaced_line`,
-`budget_and_cancellation_are_bounded`. Independent finite-line endpoint
-references and committed high-precision values live in
+`budget_and_cancellation_are_bounded`.
+[tests/sources_electric_test.rs](../tests/sources_electric_test.rs):
+`analytic_axial_fields_and_scaling`, `off_axis_fixtures_meet_requested_target`,
+`tiny_budget_distinguishes_complete_from_unavailable`,
+`ring_near_axis_and_branch_sweep`, `ring_monopole_far_field`. Independent
+finite-line endpoint references, the committed electric fixture matrix and its
+offline `generate.py`/provenance README live in
 [tests/support/sources/](../tests/support/sources/).
 
-**Limitations.** Task 2 has no ring/disc/sphere/loop/solenoid reductions,
+**Limitations.** Task 3 still has no current-loop/solenoid reductions,
 family-global refinement, UI, persistence, glyphs, rendering, export or app
 integration. Uncertainty is an empirical absolute allowance accumulated from
-quadrature indicators and roundoff terms, not a certified interval bound.
-Wasm/browser and manual visual checks remain waived, not passed.
+quadrature indicators, series tails and roundoff terms, not a certified interval
+bound. The `1e-6` fixture rows use far queries so the resolution guard can
+resolve the softening scale within the default cell budget; on-support narrow
+features are not claimed. Wasm/browser and manual visual checks remain waived,
+not passed.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 

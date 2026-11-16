@@ -2,14 +2,12 @@
 
 use glam::DVec3;
 
+use super::electric;
 use super::model::{
     EvalOptions, FieldFamily, PrepareError, Source, SourceKind, SourceSet, WorkLimits,
 };
-use super::numeric::{
-    FieldContribution, FiniteLineGeometry, NumericRange, finite_line_axial_field, point_field,
-    stable_norm, wire_field,
-};
-use super::quadrature::{self, Budget, Cell, Failure as QuadratureFailure, ResolutionGuard};
+use super::numeric::{NumericRange, stable_norm, wire_field};
+use super::quadrature::{Cell, Failure as QuadratureFailure};
 
 /// Kernel/version identifier published with every estimate.
 pub const KERNEL_ID: &str = "plummer-v1";
@@ -199,40 +197,46 @@ impl Evaluator {
                 return FamilyResult::Unavailable(StopReason::WorkLimit);
             }
 
-            let contribution = match source.kind {
-                SourceKind::FiniteLineCharge { charge, length } => {
+            let contribution = match family {
+                FieldFamily::Electric => {
                     let remaining = options.limits.work_per_family - work_units;
-                    let result = line_contribution(
+                    match electric::contribution(
                         point,
                         source,
-                        charge,
-                        length,
                         options.softening,
                         per_source_target,
                         remaining,
                         options.limits.cells_per_family,
                         options.limits.max_depth,
-                        scratch,
+                        scratch.cells_mut(),
                         cancelled,
-                    );
-                    match result {
-                        Ok((contribution, used, stop)) => {
+                    ) {
+                        Ok((contribution, used, cells, stop)) => {
                             work_units += used;
+                            scratch.note_high_water(cells);
                             if let Some(reason) = stop {
-                                refinement_stop.get_or_insert(reason);
+                                refinement_stop.get_or_insert(map_quadrature_failure(reason));
                             }
                             contribution
                         }
-                        Err(reason) => return FamilyResult::Unavailable(reason),
+                        Err(reason) => {
+                            return FamilyResult::Unavailable(map_quadrature_failure(reason));
+                        }
                     }
                 }
-                _ => {
+                FieldFamily::Magnetic => {
+                    let SourceKind::StraightWire { current } = source.kind else {
+                        return FamilyResult::Unavailable(StopReason::UnresolvedFeature);
+                    };
                     work_units += 1;
-                    match contribution_for(family, point, source, options.softening) {
-                        Ok(Some(contribution)) => contribution,
-                        Ok(None) => {
-                            return FamilyResult::Unavailable(StopReason::UnresolvedFeature);
-                        }
+                    match wire_field(
+                        point,
+                        source.center,
+                        source.axis,
+                        options.softening,
+                        current,
+                    ) {
+                        Ok(contribution) => contribution,
                         Err(NumericRange::Unrepresentable) => {
                             return FamilyResult::Unavailable(StopReason::NumericRange);
                         }
@@ -315,77 +319,6 @@ impl Evaluator {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn line_contribution(
-    point: DVec3,
-    source: &Source,
-    charge: f64,
-    length: f64,
-    softening: f64,
-    target: f64,
-    work_remaining: u64,
-    cells_per_family: usize,
-    max_depth: u8,
-    scratch: &mut FamilyScratch,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<(FieldContribution, u64, Option<StopReason>), StopReason> {
-    let geometry =
-        FiniteLineGeometry::new(point, source.center, source.axis, softening, charge, length)
-            .map_err(|NumericRange::Unrepresentable| StopReason::NumericRange)?;
-
-    if geometry.radial == 0.0 {
-        let contribution =
-            finite_line_axial_field(point, source.center, source.axis, softening, charge, length)
-                .map_err(|NumericRange::Unrepresentable| StopReason::NumericRange)?;
-        return Ok((contribution, 1, None));
-    }
-
-    let half_length = 0.5 * length;
-    if !half_length.is_finite() {
-        return Err(StopReason::NumericRange);
-    }
-    let guard = LineGuard {
-        radial: geometry.radial,
-        axial: geometry.axial,
-        softening,
-    };
-    let mut kernel = |parameter: f64| geometry.sample(parameter);
-    let mut budget = Budget::new(work_remaining, cells_per_family, max_depth, target);
-    let seeds = [geometry.axial];
-    let partition = quadrature::integrate(
-        (-half_length, half_length),
-        &seeds,
-        &guard,
-        &mut kernel,
-        &mut budget,
-        scratch.cells_mut(),
-        cancelled,
-    )
-    .map_err(map_quadrature_failure)?;
-    scratch.note_high_water(partition.cells_high_water);
-
-    let world =
-        geometry.radial_direction * partition.value[0] + geometry.unit_axis * partition.value[1];
-    if !world.is_finite() {
-        return Err(StopReason::NumericRange);
-    }
-    let norm =
-        stable_norm(world).map_err(|NumericRange::Unrepresentable| StopReason::NumericRange)?;
-    let allowance = partition.uncertainty + 64.0 * f64::EPSILON * norm;
-    if !allowance.is_finite() {
-        return Err(StopReason::NumericRange);
-    }
-    Ok((
-        FieldContribution {
-            value: world,
-            allowance,
-            underflow: partition.underflow,
-        },
-        partition.work_used,
-        partition.stop.map(map_quadrature_failure),
-    ))
-}
-
 fn map_quadrature_failure(failure: QuadratureFailure) -> StopReason {
     match failure {
         QuadratureFailure::WorkLimit => StopReason::WorkLimit,
@@ -394,30 +327,6 @@ fn map_quadrature_failure(failure: QuadratureFailure) -> StopReason {
         QuadratureFailure::RoundoffLimited => StopReason::RoundoffLimited,
         QuadratureFailure::NumericRange => StopReason::NumericRange,
         QuadratureFailure::Cancelled => StopReason::Cancelled,
-    }
-}
-
-struct LineGuard {
-    radial: f64,
-    axial: f64,
-    softening: f64,
-}
-
-impl ResolutionGuard for LineGuard {
-    fn resolved(&self, lo: f64, hi: f64) -> bool {
-        let width = hi - lo;
-        if width <= 0.0 || !width.is_finite() {
-            return false;
-        }
-        let distance = if self.axial < lo {
-            lo - self.axial
-        } else if self.axial > hi {
-            self.axial - hi
-        } else {
-            0.0
-        };
-        let minimum_distance = self.radial.hypot(distance).hypot(self.softening);
-        width <= 0.5 * minimum_distance
     }
 }
 
@@ -444,24 +353,6 @@ fn strength_of(kind: SourceKind) -> f64 {
         SourceKind::StraightWire { current }
         | SourceKind::CurrentLoop { current, .. }
         | SourceKind::Solenoid { current, .. } => current,
-    }
-}
-
-fn contribution_for(
-    family: FieldFamily,
-    point: DVec3,
-    source: &Source,
-    softening: f64,
-) -> Result<Option<FieldContribution>, NumericRange> {
-    match (family, source.kind) {
-        (FieldFamily::Electric, SourceKind::PointCharge { charge }) => {
-            point_field(point - source.center, softening, charge).map(Some)
-        }
-        (FieldFamily::Magnetic, SourceKind::StraightWire { current }) => {
-            wire_field(point, source.center, source.axis, softening, current).map(Some)
-        }
-        // Later tasks replace these branches with real geometry reductions.
-        (FieldFamily::Electric, _) | (FieldFamily::Magnetic, _) => Ok(None),
     }
 }
 
