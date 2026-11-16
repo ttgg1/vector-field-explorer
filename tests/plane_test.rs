@@ -8,7 +8,8 @@
 use glam::{UVec3, Vec3};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{
-    DIM_ALPHA, DIM_FACTOR, DIM_GREY, PlaneAxis, PlaneView, dim_color, on_plane, plane_coordinate,
+    DIM_ALPHA, DIM_FACTOR, DIM_GREY, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane,
+    plane_coordinate,
 };
 
 const EPS: f32 = 1e-5;
@@ -143,4 +144,111 @@ fn dim_alpha_is_translucent_but_visible() {
         (0.15..=0.25).contains(&DIM_ALPHA),
         "the dimmed pass targets alpha 0.15..=0.25, got {DIM_ALPHA}",
     );
+}
+
+#[test]
+fn plane_frame_basis_matches_the_design_table() {
+    let domain = Domain::new(Vec3::new(-2.0, -3.0, -4.0), Vec3::new(2.0, 3.0, 4.0));
+    let grid = UVec3::new(5, 5, 5);
+    let z = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::Z,
+            index: 2,
+            ..Default::default()
+        },
+        grid,
+    );
+    assert_eq!(z.right, Vec3::X);
+    assert_eq!(z.up, Vec3::Y);
+    assert_eq!(z.normal, Vec3::Z);
+    assert_eq!(z.origin, Vec3::new(0.0, 0.0, 0.0));
+    let x = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::X,
+            index: 2,
+            ..Default::default()
+        },
+        grid,
+    );
+    assert_eq!(x.right, -Vec3::Z);
+    assert_eq!(x.up, Vec3::Y);
+    assert_eq!(x.normal, Vec3::X);
+    assert_eq!(
+        x.origin,
+        Vec3::ZERO,
+        "a centred x slice passes through the domain centre"
+    );
+    assert!(
+        (x.half_u - 4.0).abs() < 1e-6,
+        "x-slice u extent is the z half-extent"
+    );
+    assert!(
+        (x.half_v - 3.0).abs() < 1e-6,
+        "x-slice v extent is the y half-extent"
+    );
+    let y = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::Y,
+            index: 2,
+            ..Default::default()
+        },
+        grid,
+    );
+    assert_eq!(y.right, -Vec3::X);
+    assert_eq!(y.up, Vec3::Z);
+    assert_eq!(y.normal, Vec3::Y);
+    assert_eq!(
+        y.origin,
+        Vec3::ZERO,
+        "a centred y slice passes through the domain centre"
+    );
+    assert!(
+        (y.half_u - 2.0).abs() < 1e-6,
+        "y-slice u extent is the x half-extent"
+    );
+    assert!(
+        (y.half_v - 4.0).abs() < 1e-6,
+        "y-slice v extent is the z half-extent"
+    );
+    assert_eq!(x.half_u, 4.0);
+    assert_eq!(y.half_v, 4.0);
+}
+
+#[test]
+fn x_axis_frame_follows_the_plane_grid_count() {
+    let domain = Domain::new(Vec3::new(-2.0, -3.0, -4.0), Vec3::new(2.0, 3.0, 4.0));
+    let plane = PlaneView {
+        axis: PlaneAxis::X,
+        index: 2,
+        ..Default::default()
+    };
+    let five = PlaneFrame::new(&domain, plane, UVec3::new(5, 5, 5));
+    assert_eq!(five.origin.x, 0.0, "index 2 of 5 samples is the centre");
+    let three = PlaneFrame::new(&domain, plane, UVec3::new(3, 5, 5));
+    assert_eq!(
+        three.origin.x, 2.0,
+        "index 2 of 3 x samples is the far x face; a render-grid z count would not move it"
+    );
+}
+
+#[test]
+fn plane_frame_round_trips_local_points_and_has_a_flat_domain() {
+    let domain = Domain::new(Vec3::new(-4.0, -1.0, -6.0), Vec3::new(4.0, 1.0, 6.0));
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::X,
+            index: 2,
+            ..Default::default()
+        },
+        UVec3::splat(5),
+    );
+    let local = Vec3::new(1.25, -0.5, 0.0);
+    assert!((frame.to_local(frame.to_world(local)) - local).length() < 1e-5);
+    assert_eq!(frame.local_domain().domain_size().z, 0.0);
+    assert!((frame.local_domain().domain_size().x - 12.0).abs() < 1e-5);
+    assert!((frame.local_domain().domain_size().y - 2.0).abs() < 1e-5);
 }

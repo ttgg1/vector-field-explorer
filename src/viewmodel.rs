@@ -10,10 +10,13 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
-use super::plane::{DIM_ALPHA, PlaneAxis, PlaneView, dim_color, on_plane};
+use super::flow::{Flow, SceneFlow};
+use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
-use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at};
-use super::streamlines::{CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, seed_grid, trace_at};
+use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
+use super::streamlines::{
+    CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
+};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
@@ -83,6 +86,9 @@ pub const STREAMLINE_MAX_LEN: usize = 120;
 /// Seed jitter as a fraction of a seed-grid cell (`seed_grid` caps it below
 /// half a cell so lattice neighbours never swap).
 pub const STREAMLINE_JITTER: f32 = 0.45;
+/// Hard cap on the explicit streamline seed count; `0` means Auto
+/// (density-derived).
+pub const MAX_STREAMLINES: u32 = 4096;
 
 /// The starting field for each mode: the Pump preset (2D) and the 3D radial
 /// preset, so a fresh app shows something immediately.
@@ -263,6 +269,8 @@ pub struct State {
     /// Which seeds the on state paints (ticket 50): the automatic grid, the
     /// click bursts, or both.
     pub seed_mode: StreamlineSeedMode,
+    /// Explicit streamline seed count; `0` means Auto (density-derived).
+    pub streamline_count: u32,
     /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
     /// it and always run their own action.
     pub left_click_action: LeftClickAction,
@@ -353,6 +361,7 @@ impl State {
             arrow_params: ArrowParams::default(),
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
+            streamline_count: 0,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -376,7 +385,7 @@ impl State {
         self.formula = formula;
         match parsed {
             Ok(field) => {
-                let previous_grid = self.grid();
+                let previous_grid = self.plane_grid();
                 self.field = field;
                 self.parse_error = String::new();
                 self.sync_plane(previous_grid);
@@ -405,7 +414,7 @@ impl State {
         if self.mode_3d == mode_3d {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
         self.plot.vector_mode_3d = mode_3d;
         self.sync_plane(previous_grid);
@@ -423,7 +432,7 @@ impl State {
         if self.density == density {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         self.density = density;
         self.sync_plane(previous_grid);
         self.mark_dirty()
@@ -437,7 +446,7 @@ impl State {
         if self.domain == domain {
             return false;
         }
-        let previous_grid = self.grid();
+        let previous_grid = self.plane_grid();
         if self.domain.min.x != domain.min.x
             || self.domain.max.x != domain.max.x
             || self.domain.min.y != domain.min.y
@@ -652,6 +661,20 @@ impl State {
         self.mark_dirty()
     }
 
+    /// The explicit streamline seed count, clamped to
+    /// [`MAX_STREAMLINES`]. `0` means Auto: the historical density-derived
+    /// lattice. Any other value seeds exactly that many lines from a lattice
+    /// that does not follow the sampling density, so the scene dirty flag is
+    /// the only rebuild trigger.
+    pub fn set_streamline_count(self: &mut State, count: u32) -> bool {
+        let count = count.min(MAX_STREAMLINES);
+        if self.streamline_count == count {
+            return false;
+        }
+        self.streamline_count = count;
+        self.mark_dirty()
+    }
+
     /// Choose what an explicit left click does (ticket 60). The keyboard
     /// shortcuts are independent of this setting.
     pub fn set_left_click_action(self: &mut State, action: LeftClickAction) -> bool {
@@ -721,11 +744,12 @@ impl State {
         true
     }
 
-    /// This frame's particle target: `Some(count)` while particles are on in
-    /// the 3D view, `None` otherwise. The simulation only spawns/trims when a
-    /// target exists, so the off state spawns nothing.
+    /// This frame's particle target: `Some(count)` while particles are on for
+    /// a three-component field — in the 3D view or as a 2D plane slice — and
+    /// `None` otherwise. Ordinary two-component fields have no depth or slice
+    /// flow for a dot to ride, so the off state still spawns nothing.
     pub fn particle_target(self: &State) -> Option<usize> {
-        (self.particles && self.mode_3d)
+        (self.particles && self.field.dimension == 3)
             .then(|| effective_particle_count(self.density, self.particle_count) as usize)
     }
 
@@ -733,7 +757,13 @@ impl State {
     /// is a user choice once the grid has more than one slice, so toggling the
     /// mode keeps it; only a grid change recentres it (see [`sync_plane`]).
     pub fn set_plane(self: &mut State, plane: PlaneView) -> bool {
-        let plane = plane.clamped(self.grid());
+        let mut plane = plane.clamped(self.plane_grid());
+        // A 2D slice of a three-component field shares the plane selection
+        // with 3D, but the dim toggle itself is a 3D-only control: 2D may not
+        // change it.
+        if self.is_plane_slice() {
+            plane.enabled = self.plane.enabled;
+        }
         if self.plane == plane {
             return false;
         }
@@ -778,9 +808,9 @@ impl State {
     /// and — leaving a one-slice axis — start at the middle plane, because
     /// index 0 on a single slice was never a choice. Called by every setter
     /// that changes the grid (density, mode, formula dimension, domain) with
-    /// the grid that was in force before the change.
+    /// the plane grid that was in force before the change.
     fn sync_plane(self: &mut State, previous_grid: UVec3) {
-        let grid = self.grid();
+        let grid = self.plane_grid();
         let count = self.plane.axis.count(grid);
         let previous_count = self.plane.axis.count(previous_grid);
         if count <= 1 {
@@ -790,11 +820,69 @@ impl State {
         }
     }
 
-    /// The world half-height the 2D orthographic window covers: the domain's
-    /// larger horizontal extent, padded so the field fills the window.
+    /// The half-height the 2D orthographic window covers: the visible scene
+    /// domain's larger in-plane extent, padded so the field fills the window.
     pub fn plane_size(self: &State) -> f32 {
-        let size = self.domain.domain_size();
+        let size = self.scene_domain().domain_size();
         size.x.max(size.y) * PLANE_MARGIN
+    }
+
+    /// The grid the plane selection indexes into. A three-component field has
+    /// a real volume in both view modes, so its plane grid stays `n`×`n`×`n`
+    /// even while 2D renders one `n`×`n` layer; a two-component field keeps
+    /// the flat `n`×`n`×`1` grid it has always had.
+    pub fn plane_grid(self: &State) -> UVec3 {
+        let n = self.density.max(MIN_DENSITY);
+        if self.field.dimension == 3 {
+            UVec3::new(n, n, n)
+        } else {
+            UVec3::new(n, n, 1)
+        }
+    }
+
+    /// Whether 2D is showing a slice of a three-component field.
+    pub fn is_plane_slice(self: &State) -> bool {
+        self.field.dimension == 3 && !self.mode_3d
+    }
+
+    /// The local frame of the selected slice, when 2D is showing one. The
+    /// selection is re-clamped against the plane grid so a stale index written
+    /// before the grid shrank can never build a frame past the last sample.
+    pub fn plane_frame(self: &State) -> Option<PlaneFrame> {
+        self.is_plane_slice().then(|| {
+            let grid = self.plane_grid();
+            PlaneFrame::new(&self.domain, self.plane.clamped(grid), grid)
+        })
+    }
+
+    /// The domain the visible scene covers. A plane slice uses its flat local
+    /// domain; 3D uses the world domain; ordinary two-component 2D keeps the
+    /// world X/Y box with z collapsed to its midpoint.
+    pub fn scene_domain(self: &State) -> Domain {
+        if let Some(frame) = self.plane_frame() {
+            frame.local_domain()
+        } else if self.mode_3d {
+            self.domain
+        } else {
+            let z = self.domain.center().z;
+            Domain::new(
+                Vec3::new(self.domain.min.x, self.domain.min.y, z),
+                Vec3::new(self.domain.max.x, self.domain.max.y, z),
+            )
+        }
+    }
+
+    /// The flow the visible scene traces. A plane slice projects the world
+    /// field onto its local frame; every other view traces the world field
+    /// over [`scene_domain`](State::scene_domain).
+    pub fn scene_flow(self: &State) -> SceneFlow<'_> {
+        match self.plane_frame() {
+            Some(frame) => SceneFlow::Plane(super::flow::PlaneFlow {
+                field: &self.field,
+                frame,
+            }),
+            None => SceneFlow::World(&self.field),
+        }
     }
 
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
@@ -822,8 +910,20 @@ impl State {
         }
     }
 
-    /// Resample the field with this state's grid and colour settings.
+    /// Resample the field with this state's grid and colour settings. A 2D
+    /// slice of a three-component field samples its flat local plane frame, so
+    /// positions, directions and magnitudes are all local; every other view
+    /// keeps sampling the world domain exactly as before.
     pub fn sample(self: &State) -> Vec<ArrowData> {
+        if let Some(frame) = self.plane_frame() {
+            return sample_plane_at(
+                &self.field,
+                &frame,
+                self.grid().x,
+                &self.view_options(),
+                self.time,
+            );
+        }
         sample_field_at(
             &self.field,
             &self.domain,
@@ -838,7 +938,7 @@ impl State {
     /// size instead of piling them up.
     pub fn spacing(self: &State) -> f32 {
         let grid = self.grid();
-        let size = self.domain.domain_size();
+        let size = self.scene_domain().domain_size();
         let cell = |extent, n| {
             if n <= 1 {
                 extent
@@ -962,11 +1062,17 @@ impl State {
             return Vec::new();
         }
         // Half the grid density seeds the plane: enough lines to read the flow
-        // without tracing one per sampled point.
-        let axis = (self.density / 3).clamp(1, 24);
+        // without tracing one per sampled point. An explicit count instead uses
+        // a density-independent lattice; its fixed salt keeps the seeds stable
+        // as the density changes.
         let grid = self.grid();
-        let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
-        let seeds = seed_grid(&self.domain, axis, STREAMLINE_JITTER, salt);
+        let seeds = if self.streamline_count == 0 {
+            let axis = (self.density / 3).clamp(1, 24);
+            let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
+            seed_grid(&self.scene_domain(), axis, STREAMLINE_JITTER, salt)
+        } else {
+            explicit_streamline_seeds(&self.scene_domain(), self.streamline_count, self.is_3d(), 0)
+        };
         let opts = self.streamline_opts();
         let range = self.color_range(sampled);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
@@ -990,8 +1096,10 @@ impl State {
 
     /// Trace one seed and push its coloured segments: one instance per segment,
     /// coloured at the segment's start by the same [`color_range`] the arrows
-    /// use. Shared by the grid seeds and the click bursts so both paint
-    /// identically.
+    /// use. The trace and the colour magnitude both come from
+    /// [`scene_flow`](State::scene_flow), so a slice stays in its local frame
+    /// and colours by projected magnitude. Shared by the grid seeds and the
+    /// click bursts so both paint identically.
     fn push_line(
         self: &State,
         lines: &mut Vec<LineInstanceGPU>,
@@ -1000,11 +1108,12 @@ impl State {
         range: (f32, f32),
     ) {
         let (lo, hi) = range;
-        let path = trace_at(&self.field, seed, &self.domain, opts, self.time);
+        let flow = self.scene_flow();
+        let path = trace_at(&flow, seed, &self.scene_domain(), opts, self.time);
         for i in 0..path.len().saturating_sub(1) {
             let pa = path[i];
             let pb = path[i + 1];
-            let mag = match self.field.eval3_at(pa, self.time) {
+            let mag = match flow.eval(pa, self.time) {
                 Some(v) => v.length(),
                 None => 0.0,
             };
@@ -1040,7 +1149,7 @@ impl State {
         let dimension = if self.mode_3d { 3 } else { 2 };
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for click in clicks {
-            for seed in burst_seeds(*click, &self.domain, CLICK_BURST_SEEDS, dimension) {
+            for seed in burst_seeds(*click, &self.scene_domain(), CLICK_BURST_SEEDS, dimension) {
                 self.push_line(&mut lines, seed, &opts, color_range);
             }
         }

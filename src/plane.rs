@@ -103,6 +103,87 @@ impl PlaneView {
     }
 }
 
+/// The local orthonormal frame of one selected slice: world origin on the
+/// plane, `(right, up, normal)` basis, and the in-plane half extents the local
+/// scene spans. `right x up == normal` for every axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaneFrame {
+    pub axis: PlaneAxis,
+    pub origin: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+    pub normal: Vec3,
+    pub half_u: f32,
+    pub half_v: f32,
+}
+
+impl PlaneFrame {
+    /// Build the frame for `plane` of `domain` on `grid`. The origin is the
+    /// plane centre (the selected world coordinate on the normal axis, the
+    /// domain centre on the other two); the extents are measured from the
+    /// domain's projected corners rather than assumed from the X/Y box.
+    pub fn new(domain: &Domain, plane: PlaneView, grid: UVec3) -> PlaneFrame {
+        let center = domain.center();
+        let along = plane_coordinate(domain, grid, plane.axis, plane.index);
+        let (origin, right, up) = match plane.axis {
+            PlaneAxis::Z => (Vec3::new(center.x, center.y, along), Vec3::X, Vec3::Y),
+            PlaneAxis::X => (Vec3::new(along, center.y, center.z), -Vec3::Z, Vec3::Y),
+            PlaneAxis::Y => (Vec3::new(center.x, along, center.z), -Vec3::X, Vec3::Z),
+        };
+        // Extents are the largest projected corner offsets, so an
+        // axis-aligned box gives exactly half of its two in-plane extents and
+        // an unexpectedly inverted domain still gives a finite positive box.
+        let mut half_u: f32 = 0.0;
+        let mut half_v: f32 = 0.0;
+        for x in [domain.min.x, domain.max.x] {
+            for y in [domain.min.y, domain.max.y] {
+                for z in [domain.min.z, domain.max.z] {
+                    let offset = Vec3::new(x, y, z) - origin;
+                    half_u = half_u.max(offset.dot(right).abs());
+                    half_v = half_v.max(offset.dot(up).abs());
+                }
+            }
+        }
+        PlaneFrame {
+            axis: plane.axis,
+            origin,
+            right,
+            up,
+            normal: right.cross(up),
+            half_u,
+            half_v,
+        }
+    }
+
+    /// The flat `z == 0` box the local scene covers.
+    pub fn local_domain(&self) -> Domain {
+        Domain::new(
+            Vec3::new(-self.half_u, -self.half_v, 0.0),
+            Vec3::new(self.half_u, self.half_v, 0.0),
+        )
+    }
+
+    /// Local `(u, v, w)` to world.
+    pub fn to_world(&self, local: Vec3) -> Vec3 {
+        self.origin + self.right * local.x + self.up * local.y + self.normal * local.z
+    }
+
+    /// World to local; the normal component is the out-of-plane offset.
+    pub fn to_local(&self, world: Vec3) -> Vec3 {
+        let offset = world - self.origin;
+        Vec3::new(
+            offset.dot(self.right),
+            offset.dot(self.up),
+            offset.dot(self.normal),
+        )
+    }
+
+    /// Project a world vector onto the plane, as a local `(u, v, 0)` vector.
+    pub fn project(&self, world_vector: Vec3) -> Vec3 {
+        Vec3::new(world_vector.dot(self.right), world_vector.dot(self.up), 0.0)
+    }
+}
+
 /// How far a dimmed colour moves toward neutral grey, 0..1.
 pub const DIM_FACTOR: f32 = 0.75;
 /// The neutral grey dimmed colours lerp toward (8-bit).

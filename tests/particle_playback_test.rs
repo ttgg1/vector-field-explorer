@@ -95,18 +95,24 @@ fn the_clock_holds_without_a_consumer_and_resumes_from_the_held_time() {
     // Enabling particles resumes from the held time, not from zero.
     state.set_particles(true);
     clock.advance_for(&state, 0.05);
-    assert!(close(clock.time, 0.05), "the consumer resumes from the held time");
+    assert!(
+        close(clock.time, 0.05),
+        "the consumer resumes from the held time"
+    );
 
-    // A 2D view hides the consumer again; time holds where it was.
-    state.set_mode(false);
+    // Ordinary two-component 2D hides the consumer again; time holds.
+    state.set_formula("x, y".to_string());
     clock.advance_for(&state, 0.05);
-    assert!(close(clock.time, 0.05), "2D holds the clock");
+    assert!(close(clock.time, 0.05), "ordinary 2D holds the clock");
     assert_eq!(clock.step_dt(), 0.0);
 
-    // Returning to 3D resumes from the held time.
-    state.set_mode(true);
+    // Returning to a three-component field resumes from the held time.
+    state.set_formula("x, y, z".to_string());
     clock.advance_for(&state, 0.05);
-    assert!(close(clock.time, 0.10), "3D resumes from the held time");
+    assert!(
+        close(clock.time, 0.10),
+        "a 3D field resumes from the held time"
+    );
 }
 
 #[test]
@@ -193,16 +199,29 @@ fn should_animate_needs_playing_and_a_particles_3d_consumer() {
     paused.set_playing(false);
 
     let mut state = State::new(true);
-    assert!(!should_animate(&state, &clock), "particles off: nothing consumes the clock");
+    assert!(
+        !should_animate(&state, &clock),
+        "particles off: nothing consumes the clock"
+    );
     assert!(!has_clock_consumer(&state));
 
     state.set_particles(true);
-    assert!(should_animate(&state, &clock), "particles on in 3D animates");
+    assert!(
+        should_animate(&state, &clock),
+        "particles on in 3D animates"
+    );
     assert!(has_clock_consumer(&state));
     assert!(!should_animate(&state, &paused), "paused never animates");
 
     state.set_mode(false);
-    assert!(!should_animate(&state, &clock), "2D has no particle cloud");
+    assert!(
+        should_animate(&state, &clock),
+        "a 3D field in 2D is a plane slice"
+    );
+    assert!(has_clock_consumer(&state));
+
+    state.set_formula("x, y".to_string());
+    assert!(!should_animate(&state, &clock), "ordinary 2D has no particle cloud");
     assert!(!has_clock_consumer(&state));
 }
 

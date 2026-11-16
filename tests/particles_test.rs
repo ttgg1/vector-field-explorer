@@ -9,17 +9,19 @@
 //! literal outside the crate. Otherwise only the imports moved, from `super::*`
 //! / `crate::` to `vector_field_explorer::`.
 
-use glam::Vec3;
+use glam::{UVec3, Vec3};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
+use vector_field_explorer::flow::PlaneFlow;
 use vector_field_explorer::particles::{
-    AdvectSettings, CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, DOT_SPACING_FRACTION,
-    MAX_PARTICLES, MAX_TRAIL_LEN, MAX_TRAIL_SEGMENTS, PARTICLES_PER_DENSITY,
-    ParticleAppearance, ParticleColorMode, Particles, advect, clear, count, dot_instances,
-    effective_particle_count, effective_trail_len, resize, retarget, spawn, spawn_at,
-    speed_range, target_count, trail_instances,
+    AdvectSettings, CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, DOT_SPACING_FRACTION, MAX_PARTICLES,
+    MAX_TRAIL_LEN, MAX_TRAIL_SEGMENTS, PARTICLES_PER_DENSITY, ParticleAppearance,
+    ParticleColorMode, Particles, advect, clear, count, dot_instances, effective_particle_count,
+    effective_trail_len, particle_rgb, resize, retarget, spawn, spawn_at, speed_range,
+    target_count, trail_instances,
 };
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::viewmodel::State;
 
 /// The cloud's positions, for the assertions below.
@@ -1180,5 +1182,46 @@ fn rk4_substeps_see_intermediate_times() {
         cloud.pos[0].x > -0.5 + 0.55,
         "RK4 must thread intermediate times, got {}",
         cloud.pos[0].x
+    );
+}
+
+#[test]
+fn magnitude_colour_uses_the_projected_plane_magnitude() {
+    let field = FieldExpr::parse("1, 0, 100").unwrap();
+    let domain = Domain::new(Vec3::splat(-1.0), Vec3::splat(1.0));
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            axis: PlaneAxis::Z,
+            index: 2,
+            ..Default::default()
+        },
+        UVec3::splat(5),
+    );
+    let flow = PlaneFlow {
+        field: &field,
+        frame,
+    };
+    let colormap = Colormap::Viridis;
+    let expected = colormap.colormap(1.0, 0.0, 100.0);
+    let expected = [
+        expected[0] as f32 / 255.0,
+        expected[1] as f32 / 255.0,
+        expected[2] as f32 / 255.0,
+    ];
+    let rgb = particle_rgb(
+        ParticleColorMode::Magnitude,
+        &flow,
+        Vec3::ZERO,
+        0.0,
+        colormap,
+        (0.0, 100.0),
+        (0.0, 1.0),
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        rgb, expected,
+        "the normal component is projected out, so colour uses magnitude 1, not 100"
     );
 }

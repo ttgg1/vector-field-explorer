@@ -75,10 +75,10 @@ impl SimClock {
     }
 
     /// Advance one frame only while [`should_animate`] holds. With no clock
-    /// consumer (particles off or the 2D view) the clock *holds*: time stays
-    /// where it was and the step is cleared, so re-enabling the consumer
-    /// resumes from the held time rather than replaying or accumulating the
-    /// hidden frames. Paused frames hold the same way.
+    /// consumer (particles off or a field without three components) the clock
+    /// *holds*: time stays where it was and the step is cleared, so re-enabling
+    /// the consumer resumes from the held time rather than replaying or
+    /// accumulating the hidden frames. Paused frames hold the same way.
     pub fn advance_for(&mut self, state: &State, dt: f32) {
         if should_animate(state, self) {
             self.advance(dt);
@@ -142,13 +142,13 @@ fn sanitized_speed(speed: f32) -> f32 {
     }
 }
 
-/// Whether the current view has a v0.1.0 clock consumer: the particle cloud
-/// exists only in the 3D vector view, and time-dependent vector fields. Scalar
-/// plot kinds pause every vector consumer: static plots have no clock, and an
-/// invisible vector simulation must not advance while a plot is displayed.
+/// Whether the current view has a v0.1.0 clock consumer: a live particle cloud
+/// (on for a three-component field — 3D or a 2D plane slice), and
+/// time-dependent vector fields. Scalar plot kinds pause every vector consumer:
+/// static plots have no clock, and an invisible vector simulation must not
+/// advance while a plot is displayed.
 pub fn has_clock_consumer(state: &State) -> bool {
-    state.is_vector_mode()
-        && ((state.particles && state.mode_3d) || state.field.is_time_dependent())
+    state.is_vector_mode() && (state.particle_target().is_some() || state.field.is_time_dependent())
 }
 
 /// Whether the transport strip should be shown. Today that is exactly

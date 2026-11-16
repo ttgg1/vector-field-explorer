@@ -5,7 +5,7 @@ use glam::{Mat4, Vec3};
 
 use super::{CameraKind, CliError, CliOptions, Mode, validate_effective};
 use crate::{
-    app::compose_lines,
+    app::compose_lines_with_frame,
     camera::OrbitCamera,
     fly_camera::FlyCamera,
     particles::{self, AdvectSettings, Particles},
@@ -70,14 +70,17 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
     state.show_coordinate_system = options.references.world_axes;
     state.time = options.start_time_seconds as f32;
 
+    let dimension = if state.mode_3d { 3 } else { 2 };
     let cloud = state.particle_target().map(|target| {
+        let domain = state.scene_domain();
+        let flow = state.scene_flow();
         let mut cloud = Particles::with_seed(options.seed);
-        particles::spawn(&mut cloud, &state.domain, target, 3);
+        particles::spawn(&mut cloud, &domain, target, dimension);
         for &(time, dt) in &steps {
             particles::advect(
                 &mut cloud,
-                &state.field,
-                &state.domain,
+                &flow,
+                &domain,
                 AdvectSettings {
                     time,
                     dt,
@@ -92,11 +95,12 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
     state.time = endpoint;
     // Snapshot owns flow tracing. Compose references onto those lines exactly once.
     let mut scene = state.snapshot();
-    scene.lines = Arc::new(compose_lines(
+    scene.lines = Arc::new(compose_lines_with_frame(
         scene.lines.as_ref(),
         &[],
-        &state.domain,
+        &state.scene_domain(),
         state.is_3d(),
+        state.plane_frame(),
         state.show_grid,
         state.show_coordinate_system,
     ));
@@ -104,10 +108,12 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         let range = state.color_range(&state.sample());
         let speeds = particles::speed_range(&cloud);
         let spacing = state.spacing();
+        let domain = state.scene_domain();
+        let flow = state.scene_flow();
         scene.dots = Arc::new(particles::dot_instances_at(
             &cloud,
-            &state.field,
-            &state.domain,
+            &flow,
+            &domain,
             state.colormap,
             range,
             &state.particle_appearance,
@@ -117,7 +123,7 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         ));
         let mut trails = particles::trail_instances_at(
             &cloud,
-            &state.field,
+            &flow,
             state.colormap,
             range,
             &state.particle_appearance,
@@ -222,7 +228,16 @@ pub fn output_frame(options: &CliOptions) -> Result<OutputFrame, CliError> {
         (Mode::TwoD, CameraKind::Orbit) => {
             orbit.target = Vec3::from_array(camera.target);
             orbit.ortho_zoom = camera.ortho_zoom;
-            let extent = options.domain.max - options.domain.min;
+            // Frame what the 2D scene actually renders. For a three-component
+            // field that is the selected plane's local frame, whose horizontal
+            // extent can differ from the world x/y box; ordinary two-component
+            // 2D keeps the world extents.
+            let mut local = State::new(false);
+            local.set_formula(options.formula.clone());
+            local.set_density(options.density);
+            local.set_domain(options.domain.min, options.domain.max);
+            local.set_plane(options.plane);
+            let extent = local.scene_domain().domain_size();
             let plane_height = (extent.x / aspect).max(extent.y) * 1.35;
             (
                 orbit.front_view(),

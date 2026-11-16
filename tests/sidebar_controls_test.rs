@@ -5,11 +5,13 @@
 // bar would count a scene the user never asked for).
 
 use vector_field_explorer::ui::sidebar::{
-    ArrowStyleSet, Controls, DomainAxis, apply, arrow_scale_enabled, arrow_style_set, domain_axes,
-    domain_summary, fixed_color_opaque, fixed_color_rgb, head_control_enabled,
-    magnitude_scale_enabled, particle_count_label, particle_fixed_color_enabled,
-    particle_size_enabled, proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
-    stagnation_seconds_enabled, trail_fade_enabled, trail_width_enabled,
+    ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, apply, arrow_scale_enabled,
+    arrow_style_set, domain_axes, domain_summary, fixed_color_opaque, fixed_color_rgb,
+    head_control_enabled, magnitude_scale_enabled, particle_count_label,
+    particle_fixed_color_enabled, particle_size_enabled, plane_control_mode,
+    proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
+    stagnation_seconds_enabled, streamline_count_enabled, streamline_count_label,
+    trail_fade_enabled, trail_width_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
@@ -899,6 +901,41 @@ fn seed_mode_defaults_to_auto_and_flows_through_apply() {
 }
 
 #[test]
+fn plane_selector_is_available_in_2d_and_preserves_the_dim_toggle() {
+    assert_eq!(plane_control_mode(3, false), PlaneControlMode::SliceOnly);
+    assert_eq!(plane_control_mode(3, true), PlaneControlMode::Full);
+    assert_eq!(plane_control_mode(2, false), PlaneControlMode::Hidden);
+
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_mode(true);
+    state.set_plane_enabled(true);
+    state.set_mode(false);
+    state.set_plane_axis(PlaneAxis::X);
+    assert!(state.plane.enabled);
+}
+
+#[test]
+fn domain_axes_include_z_for_a_3d_field_in_2d() {
+    assert!(domain_axes(true).contains(&DomainAxis::Z));
+    assert!(!domain_axes(false).contains(&DomainAxis::Z));
+}
+
+#[test]
+fn features_reset_returns_the_streamline_count_to_auto() {
+    let mut c = Controls::new();
+    c.streamline_count = 37;
+    let mut s = State::new(false);
+    apply(&mut s, &mut c);
+    assert_eq!(s.streamline_count, 37, "the count lands on the seam");
+
+    c.reset_features();
+    assert_eq!(c.streamline_count, 0, "the Features reset returns the count to Auto");
+    apply(&mut s, &mut c);
+    assert_eq!(s.streamline_count, 0, "and the seam follows the reset");
+}
+
+#[test]
 fn features_reset_returns_the_seed_mode_to_auto() {
     let mut c = Controls::new();
     c.streamlines = true;
@@ -1127,4 +1164,20 @@ fn fixed_colour_picker_round_trip_stores_opaque_rgb_unchanged() {
     assert_eq!(picker, [10, 20, 30], "the picker sees the true RGB");
     let round_trip = fixed_color_opaque(picker);
     assert_eq!(round_trip, [10, 20, 30, 255], "alpha is forced opaque");
+}
+
+#[test]
+fn streamline_count_control_is_auto_only_and_mirrors_the_state() {
+    assert_eq!(streamline_count_label(0), "Auto");
+    assert_eq!(streamline_count_label(37), "37");
+    assert!(!streamline_count_enabled(false, StreamlineSeedMode::Auto));
+    assert!(streamline_count_enabled(true, StreamlineSeedMode::Auto));
+    assert!(!streamline_count_enabled(true, StreamlineSeedMode::Click));
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    controls.streamline_count = 37;
+    apply(&mut state, &mut controls);
+    assert_eq!(state.streamline_count, 37);
+    assert_eq!(controls.streamline_count, 37);
 }

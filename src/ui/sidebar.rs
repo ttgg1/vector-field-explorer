@@ -41,9 +41,10 @@ use crate::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
     DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction, MAX_ARROW_OPACITY, MAX_ARROW_SCALE,
     MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE,
-    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MIN_ARROW_OPACITY, MIN_ARROW_SCALE,
-    MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE, MIN_PLANE_DIM_OPACITY,
-    MIN_PROPORTIONAL_EXPONENT, State, StreamlineSeedMode, clamp_domain_extent,
+    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MAX_STREAMLINES, MIN_ARROW_OPACITY,
+    MIN_ARROW_SCALE, MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE,
+    MIN_PLANE_DIM_OPACITY, MIN_PROPORTIONAL_EXPONENT, State, StreamlineSeedMode,
+    clamp_domain_extent,
 };
 use glam::Vec3;
 
@@ -155,13 +156,37 @@ impl DomainAxis {
 }
 
 /// The rows the Domain editor renders. Pure so the 2D/3D gating is testable
-/// without a window; `is_3d` is the sampling dimension, not raw `mode_3d`, so a
-/// flat formula in 3D mode still hides z.
-pub fn domain_axes(is_3d: bool) -> &'static [DomainAxis] {
-    if is_3d {
+/// without a window. `three_component` is whether the field itself has a z
+/// component, not the sampling mode: a 3D field in 2D keeps its z rows, while a
+/// flat formula in 3D mode hides z.
+pub fn domain_axes(three_component: bool) -> &'static [DomainAxis] {
+    if three_component {
         &[DomainAxis::X, DomainAxis::Y, DomainAxis::Z]
     } else {
         &[DomainAxis::X, DomainAxis::Y]
+    }
+}
+
+/// How much of the plane selector to show: hidden for a two-component field,
+/// axis/index only for a 2D slice, and the full 3D plane-by-plane controls in
+/// the 3D view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneControlMode {
+    Hidden,
+    SliceOnly,
+    Full,
+}
+
+/// The single plane-selector visibility rule. A plane needs a three-component
+/// field to have a third axis; only the 3D view may also dim the rest of the
+/// cube and toggle the mode.
+pub fn plane_control_mode(field_dimension: usize, mode_3d: bool) -> PlaneControlMode {
+    if field_dimension != 3 {
+        PlaneControlMode::Hidden
+    } else if mode_3d {
+        PlaneControlMode::Full
+    } else {
+        PlaneControlMode::SliceOnly
     }
 }
 
@@ -244,6 +269,24 @@ pub fn head_control_enabled(view_3d: bool, style_3d: ArrowStyle, style_2d: Arrow
 /// dead control; it is disabled rather than silently ignored.
 pub fn seed_mode_enabled(streamlines: bool) -> bool {
     streamlines
+}
+
+/// Whether the explicit streamline-count control applies: the explicit count
+/// only replaces Auto's density-derived lattice, so Click-only seeding (which
+/// paints click bursts, not a count of lines) leaves it disabled.
+pub fn streamline_count_enabled(streamlines: bool, seed_mode: StreamlineSeedMode) -> bool {
+    streamlines && seed_mode == StreamlineSeedMode::Auto
+}
+
+/// The streamline-count drag value's text: `0` is the Auto sentinel, any other
+/// value shows its number so the widget can both display "Auto" and accept a
+/// typed count.
+pub fn streamline_count_label(count: u32) -> String {
+    if count == 0 {
+        "Auto".to_owned()
+    } else {
+        count.to_string()
+    }
 }
 
 /// Whether the particle size slider applies. With Particles off there are no
@@ -332,6 +375,8 @@ pub struct Controls {
     pub streamlines: bool,
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
+    /// Explicit streamline seed count; `0` means Auto (density-derived).
+    pub streamline_count: u32,
     /// What one explicit left click does (ticket 60).
     pub left_click_action: LeftClickAction,
     pub particles: bool,
@@ -383,6 +428,7 @@ impl Controls {
             color_max: 1.0,
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
+            streamline_count: 0,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -426,6 +472,7 @@ impl Controls {
         let defaults = Controls::new();
         self.streamlines = defaults.streamlines;
         self.seed_mode = defaults.seed_mode;
+        self.streamline_count = defaults.streamline_count;
         self.left_click_action = defaults.left_click_action;
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
@@ -518,12 +565,13 @@ fn show_inner(
     // ruling): n³ only when the mode is 3D and the field carries z.
     let sampling_3d = state.is_3d();
     let view_3d = state.mode_3d;
+    let field_dimension = state.field.dimension;
+    let plane_mode = plane_control_mode(field_dimension, view_3d);
     let max_density = if sampling_3d {
         MAX_DENSITY_3D
     } else {
         MAX_DENSITY_2D
     };
-    let grid = state.grid();
     let domain = state.domain;
     let vector_mode = state.is_vector_mode();
 
@@ -716,8 +764,9 @@ fn show_inner(
                         controls.arrow_params = ArrowParams::default();
                     }
                 });
-            if sampling_3d {
-                commit_plane |= plane_controls(ui, controls, &domain, grid);
+            if plane_mode != PlaneControlMode::Hidden {
+                commit_plane |=
+                    plane_controls(ui, controls, &domain, state.plane_grid(), plane_mode);
             }
         });
     });
@@ -773,6 +822,32 @@ fn show_inner(
         })
         .response
         .on_disabled_hover_text("Turn Streamlines on to choose Auto or Click seeding");
+        // The explicit count only replaces Auto's density-derived lattice:
+        // Click-only seeding paints click bursts instead, so the control is
+        // disabled there rather than silently ignored.
+        ui.add_enabled_ui(
+            streamline_count_enabled(controls.streamlines, controls.seed_mode),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Streamline count");
+                    ui.add(
+                        egui::DragValue::new(&mut controls.streamline_count)
+                            .range(0..=MAX_STREAMLINES)
+                            .speed(1.0)
+                            .custom_formatter(|value, _| {
+                                streamline_count_label(value.max(0.0).round() as u32)
+                            }),
+                    )
+                    .on_hover_text(
+                        "0 = Auto (density-derived); a value seeds exactly that many lines.",
+                    );
+                });
+            },
+        )
+        .response
+        .on_disabled_hover_text(
+            "Click-only seeding uses click bursts; turn Streamlines on and choose Auto to set a count",
+        );
         // Ticket 60: the left click action stays visible even while its feature
         // is off; the click is then a hinted no-op rather than a dead control.
         button_row(ui, |ui| {
@@ -781,7 +856,7 @@ fn show_inner(
                 let hover = match click_action_plan(
                     action,
                     controls.streamlines,
-                    controls.particles,
+                    controls.particles && state.field.dimension == 3,
                     view_3d,
                 ) {
                     ClickActionPlan::Ignore(reason) => {
@@ -794,7 +869,10 @@ fn show_inner(
             }
         });
         ui.checkbox(&mut controls.particles, "Particles")
-            .on_hover_text("Animate dots carried by the field (3D view)");
+            .on_hover_text(
+                "Animate dots carried by the field; 2D needs a three-component field and \
+                 shows the selected slice",
+            );
         ui.horizontal(|ui| {
             ui.label("Particle count");
             ui.add(
@@ -973,13 +1051,13 @@ fn show_inner(
         ui,
         Section::Domain,
         controls,
-        Some(domain_summary(&state.domain, sampling_3d)),
+        Some(domain_summary(&state.domain, field_dimension == 3)),
         |ui, controls| {
             // Only the axes the current sampling dimension can use: the z row
             // vanishes in 2D rather than sitting greyed out (ticket 50). The
             // stored z survives for the next 3D switch; the reset below still
             // resets all three axes.
-            for axis in domain_axes(sampling_3d) {
+            for axis in domain_axes(field_dimension == 3) {
                 let (min, max) = match axis {
                     DomainAxis::X => (&mut controls.domain_min.x, &mut controls.domain_max.x),
                     DomainAxis::Y => (&mut controls.domain_min.y, &mut controls.domain_max.y),
@@ -1044,25 +1122,35 @@ fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
     controls.domain_max = state.domain.max;
 }
 
-/// Draw the plane-by-plane controls (3D sampling only) and report whether the
-/// selection should be committed to the seam this frame. The slider commits on
-/// `drag_stopped` (or a click/keyboard change), not on every dragged frame.
+/// Draw the plane selector and report whether the selection should be
+/// committed to the seam this frame. `Full` keeps the 3D plane-by-plane mode
+/// with its enable toggle and off-plane opacity; `SliceOnly` is the 2D slice
+/// selector (axis and position only). The slider commits on `drag_stopped` (or
+/// a click/keyboard change), not on every dragged frame.
 fn plane_controls(
     ui: &mut egui::Ui,
     controls: &mut Controls,
     domain: &Domain,
     grid: glam::UVec3,
+    mode: PlaneControlMode,
 ) -> bool {
-    let mut commit = ui
-        .checkbox(&mut controls.plane.enabled, "Plane by plane")
-        .on_hover_text("Highlight one sampled slice and fade the rest of the cube")
-        .changed();
-    if !controls.plane.enabled {
-        return commit;
+    if mode == PlaneControlMode::Hidden {
+        return false;
+    }
+    let full = mode == PlaneControlMode::Full;
+    let mut commit = false;
+    if full {
+        commit = ui
+            .checkbox(&mut controls.plane.enabled, "Plane by plane")
+            .on_hover_text("Highlight one sampled slice and fade the rest of the cube")
+            .changed();
+        if !controls.plane.enabled {
+            return commit;
+        }
     }
 
     button_row(ui, |ui| {
-        ui.label("Axis");
+        ui.label(if full { "Axis" } else { "Slice axis" });
         for axis in PlaneAxis::ALL {
             commit |= ui
                 .selectable_value(&mut controls.plane.axis, axis, axis.label().to_uppercase())
@@ -1085,7 +1173,7 @@ fn plane_controls(
 
     let response = ui.add(
         egui::Slider::new(&mut controls.plane.index, 0..=count - 1)
-            .text("Plane")
+            .text(if full { "Plane" } else { "Position" })
             .integer(),
     );
     if response.drag_started() {
@@ -1108,15 +1196,17 @@ fn plane_controls(
         index + 1,
         count,
     ));
-    ui.add(
-        egui::Slider::new(
-            &mut controls.plane_dim_opacity,
-            MIN_PLANE_DIM_OPACITY..=MAX_PLANE_DIM_OPACITY,
+    if full {
+        ui.add(
+            egui::Slider::new(
+                &mut controls.plane_dim_opacity,
+                MIN_PLANE_DIM_OPACITY..=MAX_PLANE_DIM_OPACITY,
+            )
+            .text("Off-plane opacity")
+            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
         )
-        .text("Off-plane opacity")
-        .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-    )
-    .on_hover_text("Opacity of arrows outside the selected plane");
+        .on_hover_text("Opacity of arrows outside the selected plane");
+    }
     commit
 }
 
@@ -1266,6 +1356,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_params(controls.arrow_params);
     state.set_streamlines(controls.streamlines);
     state.set_seed_mode(controls.seed_mode);
+    state.set_streamline_count(controls.streamline_count);
     state.set_left_click_action(controls.left_click_action);
     state.set_particles(controls.particles);
     state.set_particle_size(controls.particle_size);
@@ -1304,6 +1395,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.arrow_params = state.arrow_params;
     controls.streamlines = state.streamlines;
     controls.seed_mode = state.seed_mode;
+    controls.streamline_count = state.streamline_count;
     controls.left_click_action = state.left_click_action;
     controls.particles = state.particles;
     controls.particle_size = state.particle_size;

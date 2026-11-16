@@ -18,6 +18,7 @@ use glam::{Vec2, Vec3, Vec4};
 use crate::camera::ViewCamera;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
+use crate::flow::Flow;
 
 /// Tracing parameters (see plan task 9).
 pub struct StreamlineOpts {
@@ -49,10 +50,10 @@ fn inside(domain: &Domain, p: Vec3) -> bool {
         && p.z <= domain.max.z
 }
 
-/// Field flow at `p`, negated for `sign < 0` (upstream tracing). Missing or
+/// Flow at `p`, negated for `sign < 0` (upstream tracing). Missing or
 /// non-finite evaluations read as the zero vector, which ends an integration.
-fn flow_at(field: &FieldExpr, p: Vec3, sign: f32, t: f32) -> Vec3 {
-    match field.eval3_at(p, t) {
+fn flow_at<F: Flow + ?Sized>(flow: &F, p: Vec3, sign: f32, t: f32) -> Vec3 {
+    match flow.eval(p, t) {
         Some(v) if v.is_finite() => v * sign,
         _ => Vec3::splat(0.0),
     }
@@ -65,8 +66,8 @@ fn flow_at(field: &FieldExpr, p: Vec3, sign: f32, t: f32) -> Vec3 {
 /// arc length. Stops at the budget, where the flow vanishes, or on a step
 /// that leaves the domain or turns non-finite. Always returns at least
 /// `[start]`.
-fn integrate(
-    field: &FieldExpr,
+fn integrate<F: Flow + ?Sized>(
+    flow: &F,
     start: Vec3,
     domain: &Domain,
     budget: usize,
@@ -77,18 +78,18 @@ fn integrate(
     let mut line: Vec<Vec3> = vec![start];
     let mut p = start;
     while line.len() < budget {
-        let f0 = flow_at(field, p, sign, t);
+        let f0 = flow_at(flow, p, sign, t);
         let mag = f0.length();
         if mag <= 0.0 {
             break;
         }
         let h = step_scale / mag;
         let k1 = p + f0 * (h * 0.5);
-        let f1 = flow_at(field, k1, sign, t);
+        let f1 = flow_at(flow, k1, sign, t);
         let k2 = p + f1 * (h * 0.5);
-        let f2 = flow_at(field, k2, sign, t);
+        let f2 = flow_at(flow, k2, sign, t);
         let k3 = p + f2 * h;
-        let f3 = flow_at(field, k3, sign, t);
+        let f3 = flow_at(flow, k3, sign, t);
         let next = p + (f0 + f1 * 2.0 + f2 * 2.0 + f3) * (h / 6.0);
         if !next.is_finite() || !inside(domain, next) {
             break;
@@ -104,8 +105,8 @@ fn integrate(
 /// zero. With `both_directions` the result is one continuous ordered path
 /// running farthest-upstream → seed → farthest-downstream: the seed is
 /// counted exactly once, so no zero-length segment can reach the renderer.
-pub fn trace_at(
-    field: &FieldExpr,
+pub fn trace_at<F: Flow + ?Sized>(
+    flow: &F,
     start: Vec3,
     domain: &Domain,
     opts: &StreamlineOpts,
@@ -121,16 +122,16 @@ pub fn trace_at(
         0.05
     };
     if !opts.both_directions {
-        return integrate(field, start, domain, cap, step_scale, 1.0, t);
+        return integrate(flow, start, domain, cap, step_scale, 1.0, t);
     }
     // Spend the budget half upstream (rounded up), the rest downstream; the
     // seed itself is counted once, at the seam. The upstream walk runs
     // seed-outward, so reverse everything past the seed to lay the polyline
     // farthest-backward first, then append the downstream walk (which starts
     // at the seed).
-    let back = integrate(field, start, domain, cap.div_ceil(2), step_scale, -1.0, t);
+    let back = integrate(flow, start, domain, cap.div_ceil(2), step_scale, -1.0, t);
     let forward = integrate(
-        field,
+        flow,
         start,
         domain,
         cap + 1 - back.len(),
@@ -354,6 +355,48 @@ fn unit_triple(z: u64) -> (f32, f32, f32) {
     let b = ((z >> 21) & SLICE) as u32 as f32;
     let c = (z & SLICE) as u32 as f32;
     (a * SCALE - 1.0, b * SCALE - 1.0, c * SCALE - 1.0)
+}
+
+/// Seeds for an explicit streamline count: `count` seeds from a jittered
+/// lattice sized to cover them, independent of the sampling density.
+///
+/// `three_dimensional` picks the lattice's nominal dimensionality: `n =
+/// ceil(count^(1/3))` in 3D, `ceil(sqrt(count))` in 2D. [`seed_grid`] collapses
+/// zero-extent axes to one layer, so a flat domain may produce fewer than
+/// `n^d` points; the axis count grows until the lattice holds at least
+/// `count`, then the result is truncated to exactly `count`. A fully
+/// degenerate domain (every extent zero) can only produce a single seed even
+/// when `count > 1`; that exception is intentional and unreachable through the
+/// UI's clamped extents. Returns an empty vector for `count == 0`.
+pub fn explicit_streamline_seeds(
+    domain: &Domain,
+    count: u32,
+    three_dimensional: bool,
+    salt: u64,
+) -> Vec<Vec3> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let nominal = if three_dimensional {
+        (count as f32).cbrt()
+    } else {
+        (count as f32).sqrt()
+    };
+    let mut per_axis = (nominal.ceil() as u32).max(1);
+    let mut previous = 0;
+    loop {
+        let mut seeds = seed_grid(domain, per_axis, crate::viewmodel::STREAMLINE_JITTER, salt);
+        if seeds.len() >= count as usize {
+            seeds.truncate(count as usize);
+            return seeds;
+        }
+        // A fully degenerate domain cannot grow: return what one point can be.
+        if seeds.len() == previous {
+            return seeds;
+        }
+        previous = seeds.len();
+        per_axis += 1;
+    }
 }
 
 /// Jittered volume lattice, with one layer on each zero-extent axis.

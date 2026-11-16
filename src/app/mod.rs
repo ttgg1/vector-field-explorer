@@ -11,10 +11,11 @@ use crate::fly_camera::{
     sync_fly, sync_fly_mirror,
 };
 use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
 use crate::plot_camera::PlotCamera;
 use crate::plot_scene::{PlotScene, ViewportScene};
-use crate::reference::reference_lines_visible;
+use crate::reference::{reference_lines_visible, reference_plane_lines};
 use crate::render::Camera;
 use crate::renderer::{
     DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
@@ -50,7 +51,10 @@ use crate::particles::{
 mod frame;
 mod input;
 mod panels;
+mod plane;
 pub mod plot;
+
+use plane::SceneFrameKey;
 mod simulation;
 mod viewport;
 
@@ -232,6 +236,12 @@ pub struct VfApp {
     /// The screenshot action (ticket 08): the pending capture request, the
     /// channel its save thread reports on, and the completion toast.
     pub screenshot: Screenshot,
+    /// The visible frame the cached scene and click seeds belong to (issue 13
+    /// task 6); reconciled at the start of every vector simulation frame.
+    scene_frame: SceneFrameKey,
+    /// Whether the previous frame had particle availability (a three-component
+    /// field); a true-to-false transition drops the cloud and burst undo.
+    particle_available: bool,
 }
 impl VfApp {
     /// App with no persistent storage (defaults for every persisted record).
@@ -255,15 +265,16 @@ impl VfApp {
         // domain's centre is the origin, so a fresh session is unchanged.
         let mut orbit = OrbitCamera::default();
         if state.mode_3d {
-            orbit.recentre_on(&state.domain);
+            orbit.recentre_on(&state.scene_domain());
         } else {
-            orbit.recentre_on_2d(&state.domain);
+            orbit.recentre_on_2d(&state.scene_domain());
         }
-        let backdrop = compose_lines(
+        let backdrop = compose_lines_with_frame(
             &[],
             &[],
-            &state.domain,
+            &state.scene_domain(),
             state.is_3d(),
+            state.plane_frame(),
             state.show_grid,
             state.show_coordinate_system,
         );
@@ -271,6 +282,8 @@ impl VfApp {
         let arrow_style_2d = state.arrow_style_2d;
         let arrow_params = state.arrow_params;
         let mode_3d = state.mode_3d;
+        let scene_frame = SceneFrameKey::of(&state);
+        let particle_available = state.field.dimension == 3;
         let last_plot_epoch = state.plot.transition_epoch;
         let last_plot_was_vector = state.is_vector_mode();
         let saved_vector_orbit = if last_plot_was_vector {
@@ -337,6 +350,8 @@ impl VfApp {
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             screenshot: Screenshot::new(),
+            scene_frame,
+            particle_available,
         }
     }
 }
@@ -362,7 +377,35 @@ pub fn compose_lines(
     show_grid: bool,
     show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
-    let mut lines = reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system);
+    compose_lines_with_frame(
+        flow,
+        clicks,
+        domain,
+        sampling_3d,
+        None,
+        show_grid,
+        show_coordinate_system,
+    )
+}
+
+/// As [`compose_lines`], but a plane slice supplies its local [`PlaneFrame`]:
+/// the backdrop is then the flat local grid and its two world-axis-coloured
+/// axes instead of the world cube or mid-z plane. `domain` is ignored for a
+/// plane frame, which carries its own origin and extents.
+#[doc(hidden)]
+pub fn compose_lines_with_frame(
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+    domain: &Domain,
+    sampling_3d: bool,
+    frame: Option<PlaneFrame>,
+    show_grid: bool,
+    show_coordinate_system: bool,
+) -> Vec<LineInstanceGPU> {
+    let mut lines = match frame {
+        Some(frame) => reference_plane_lines(&frame, show_grid, show_coordinate_system),
+        None => reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system),
+    };
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
     lines

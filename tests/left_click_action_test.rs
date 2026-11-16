@@ -104,9 +104,9 @@ fn add_particles_click_plans_one_burst_and_no_seed() {
         "Particles off is a no-op with a hint",
     );
     assert_eq!(
-        click_action_plan(LeftClickAction::AddParticles, true, true, false),
+        click_action_plan(LeftClickAction::AddParticles, true, false, false),
         ClickActionPlan::Ignore(CLICK_HINT_PARTICLES_NEED_3D),
-        "the 2D view has no particle cloud",
+        "an ordinary 2D field has no particle view",
     );
 }
 
@@ -114,7 +114,7 @@ fn add_particles_click_plans_one_burst_and_no_seed() {
 fn the_no_op_hints_are_pinned() {
     assert_eq!(CLICK_HINT_STREAMLINES_OFF, "Streamlines are off");
     assert_eq!(CLICK_HINT_PARTICLES_OFF, "Particles are off");
-    assert_eq!(CLICK_HINT_PARTICLES_NEED_3D, "Particles need the 3D view");
+    assert_eq!(CLICK_HINT_PARTICLES_NEED_3D, "Particles need a 3D field");
 }
 
 #[test]

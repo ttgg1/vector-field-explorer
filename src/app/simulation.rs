@@ -33,6 +33,7 @@ impl VfApp {
             self.refresh_plot_scene();
             return;
         }
+        self.sync_scene_frame();
         self.rebuild_scene();
         self.advance_particles();
     }
@@ -56,11 +57,12 @@ impl VfApp {
                 .state
                 .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            let lines = Arc::new(compose_lines(
+            let lines = Arc::new(compose_lines_with_frame(
                 &self.flow_lines,
                 &self.click_lines,
-                &self.state.domain,
+                &self.state.scene_domain(),
                 self.state.is_3d(),
+                self.state.plane_frame(),
                 self.state.show_grid,
                 self.state.show_coordinate_system,
             ));
@@ -91,11 +93,13 @@ impl VfApp {
     }
 
     fn advance_particles(&mut self) {
-        // Particle cloud: while the toggle is on (3D view only — the 2D
-        // camera has no depth for the dots to sit in), keep the cloud alive,
-        // advance it by the simulation clock's step and rebuild the dot
-        // instances so they ride the same color_range as the arrows. A paused
-        // clock reports a zero step, so the cloud keeps its last positions.
+        // Particle cloud: while the toggle is on for a three-component field,
+        // keep the cloud alive, advance it by the simulation clock's step and
+        // rebuild the dot instances so they ride the same color_range as the
+        // arrows. A 2D plane slice uses its local flat domain and projected
+        // flow, so dots stay on the slice; the 3D view uses the world flow and
+        // full depth. A paused clock reports a zero step, so the cloud keeps
+        // its last positions.
         // Placed after the dirty-rebuild block so this frame's dots already see
         // a fresh density, and before the status bar so its count includes them.
         //
@@ -103,23 +107,26 @@ impl VfApp {
         // change retargets: a lower target trims, a higher one spawns just the
         // difference so existing particles never jump, and a click burst that
         // sits above the configured count survives until the count changes.
-        // Off/2D yields `None` and spawns nothing (the clear branch drops the
-        // cloud).
+        // Off/2D-without-depth yields `None` and spawns nothing (the clear
+        // branch drops the cloud).
         let target = self.state.particle_target();
+        let domain = self.state.scene_domain();
+        let dimension = if self.state.mode_3d { 3 } else { 2 };
         self.particle_target = retarget(
             &mut self.particles,
-            &self.state.domain,
+            &domain,
             self.particle_target,
             target,
-            3,
+            dimension,
         );
         if target.is_some() {
             let appearance = self.state.particle_appearance.sanitized();
             let spacing = self.state.spacing();
+            let flow = self.state.scene_flow();
             advect(
                 &mut self.particles,
-                &self.state.field,
-                &self.state.domain,
+                &flow,
+                &domain,
                 AdvectSettings {
                     dt: self.clock.step_dt(),
                     time: self.state.time,
@@ -133,8 +140,8 @@ impl VfApp {
             let speeds = speed_range(&self.particles);
             let dots = Arc::new(dot_instances_at(
                 &self.particles,
-                &self.state.field,
-                &self.state.domain,
+                &flow,
+                &domain,
                 self.state.colormap,
                 self.dots_range,
                 &appearance,
@@ -144,7 +151,7 @@ impl VfApp {
             ));
             let trails = Arc::new(trail_instances_at(
                 &self.particles,
-                &self.state.field,
+                &flow,
                 self.state.colormap,
                 self.dots_range,
                 &appearance,
@@ -170,10 +177,12 @@ impl VfApp {
                     .unwrap_or(0)
             );
         } else if particle_count(&self.particles) > 0 {
-            // Toggle off (or the 2D view): drop the cloud so switching back
-            // spawns fresh at the fixed seed; the dots were already emptied
-            // because the toggle marks the state dirty, and the trails reset
-            // here because the snapshot never carries per-frame history.
+            // Toggle off (or a two-component field with no depth/slice flow):
+            // drop the cloud so switching back spawns fresh at the fixed seed;
+            // the dots were already emptied because the toggle marks the state
+            // dirty, and the trails reset here because the snapshot never
+            // carries per-frame history. A 2D plane slice is a valid target
+            // and keeps its cloud and trails.
             clear(&mut self.particles);
             if let Some(scene) = self.scene.as_vector_mut() {
                 scene.trails = Arc::new(Vec::new());

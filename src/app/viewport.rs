@@ -1,6 +1,8 @@
 //! Central viewport: camera input, click and double-click handling, scene
 //! painting, screenshots, and the fly crosshair.
 
+use glam::Mat4;
+
 use super::*;
 
 impl VfApp {
@@ -245,55 +247,7 @@ impl VfApp {
                     camera.eye_position(!self.state.mode_3d),
                 )
             };
-            // Ticket 62: the combined stream is the single sorted source for
-            // 3D. The viewmodel's arrow order stays frame-invariant (no
-            // write-back), so equal-depth ties are deterministic; this vector
-            // is built before the screenshot block and consumed by both the
-            // capture and the viewport. 2D keeps its arrows-then-dots path and
-            // never reads the combined stream, but it still paints a stable
-            // far-to-near copy of the arrows (the pre-ticket-62 order).
-            let combined = if self.state.mode_3d {
-                let cached = self.scene.as_vector().expect("vector branch");
-                let mut instances =
-                    combined_instances(cached.arrows.as_slice(), cached.dots.as_slice());
-                sort_scene_back_to_front(&mut instances, &view);
-                Arc::new(instances)
-            } else {
-                Arc::new(Vec::new())
-            };
-            let cached = self.scene.as_vector().expect("vector branch");
-            let arrows = if self.state.mode_3d {
-                Arc::clone(&cached.arrows)
-            } else {
-                Arc::new(sorted_arrows_back_to_front(cached.arrows.as_slice(), &view))
-            };
-            // Trails are 3D-only and painted behind the combined stream, so
-            // their own stable far-to-near order is enough (ticket 48).
-            let trails = if self.state.mode_3d {
-                Arc::new(sorted_lines_back_to_front(cached.trails.as_slice(), &view))
-            } else {
-                Arc::new(Vec::new())
-            };
-            let lines = Arc::clone(&cached.lines);
-            let dots = Arc::clone(&cached.dots);
-            let arrow_style = cached.arrow_style;
-            let arrow_style_2d = cached.arrow_style_2d;
-            let arrow_params = cached.arrow_params;
-            if let Some(cached) = self.scene.as_vector_mut() {
-                cached.combined = Arc::clone(&combined);
-            }
-
-            let scene = SceneGPU {
-                arrows,
-                lines,
-                trails,
-                dots,
-                combined,
-                arrow_style,
-                arrow_style_2d,
-                arrow_params,
-                mode_3d: self.state.mode_3d,
-            };
+            let scene = self.assemble_viewport_scene(&view);
 
             // SVG screenshot export (ticket 69): serialize the 2D scene as
             // vector geometry. No GPU readback is needed, so this runs
@@ -488,6 +442,63 @@ impl VfApp {
                 }
             }
         });
+    }
+
+    /// Build the renderer scene from the cached vector scene for one frame's
+    /// view. Ticket 62: the combined stream is the single sorted source for
+    /// 3D. The viewmodel's arrow order stays frame-invariant (no write-back),
+    /// so equal-depth ties are deterministic. 2D keeps its arrows-then-dots
+    /// path and never reads the combined stream, but it still paints a stable
+    /// far-to-near copy of the arrows (the pre-ticket-62 order).
+    ///
+    /// Trails are painted behind the arrows/dots in both views: 3D plane
+    /// particles and 2D plane-slice particles both produce them, while ordinary
+    /// two-component 2D simply has an empty list.
+    fn assemble_viewport_scene(&mut self, view: &Mat4) -> SceneGPU {
+        let combined = if self.state.mode_3d {
+            let cached = self.scene.as_vector().expect("vector branch");
+            let mut instances =
+                combined_instances(cached.arrows.as_slice(), cached.dots.as_slice());
+            sort_scene_back_to_front(&mut instances, view);
+            Arc::new(instances)
+        } else {
+            Arc::new(Vec::new())
+        };
+        let cached = self.scene.as_vector().expect("vector branch");
+        let arrows = if self.state.mode_3d {
+            Arc::clone(&cached.arrows)
+        } else {
+            Arc::new(sorted_arrows_back_to_front(cached.arrows.as_slice(), view))
+        };
+        let trails = Arc::new(sorted_lines_back_to_front(cached.trails.as_slice(), view));
+        let lines = Arc::clone(&cached.lines);
+        let dots = Arc::clone(&cached.dots);
+        let arrow_style = cached.arrow_style;
+        let arrow_style_2d = cached.arrow_style_2d;
+        let arrow_params = cached.arrow_params;
+        if let Some(cached) = self.scene.as_vector_mut() {
+            cached.combined = Arc::clone(&combined);
+        }
+        SceneGPU {
+            arrows,
+            lines,
+            trails,
+            dots,
+            combined,
+            arrow_style,
+            arrow_style_2d,
+            arrow_params,
+            mode_3d: self.state.mode_3d,
+        }
+    }
+
+    /// Integration-test seam: assemble the scene exactly as `frame_viewport`
+    /// does, using the live orbit view. Doc-hidden because external tests
+    /// cannot name the private viewport module.
+    #[doc(hidden)]
+    pub fn test_assemble_viewport_scene(&mut self) -> SceneGPU {
+        let view = self.orbit.view();
+        self.assemble_viewport_scene(&view)
     }
 }
 

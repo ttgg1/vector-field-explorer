@@ -10,6 +10,7 @@ pub mod colormap;
 pub mod domain;
 pub mod export;
 pub mod field;
+pub mod flow;
 pub mod fly_camera;
 pub mod fonts;
 pub mod particles;

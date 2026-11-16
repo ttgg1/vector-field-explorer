@@ -2,7 +2,7 @@
 // edits and the mode toggle route through the viewmodel State, which owns
 // parsing, the dirty flag and the scene snapshots the viewport paints.
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, UVec3, Vec3};
 use crate::support;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
@@ -174,7 +174,10 @@ fn plane_index_recentres_when_the_grid_shrinks_past_it() {
     assert!(st.set_density(4), "a coarser grid has only 4 z samples");
     assert_eq!(st.plane.index, 1, "the vanished plane recentres to the middle sample");
     assert!(st.set_mode(false), "2D mode samples one z slice");
-    assert_eq!(st.plane.index, 0, "a one-slice axis collapses to index 0");
+    assert_eq!(
+        st.plane.index, 1,
+        "a three-component field keeps its plane grid in 2D, so the selected plane survives"
+    );
 }
 
 #[test]
@@ -1116,18 +1119,40 @@ fn particle_size_and_count_do_not_redirty_the_scene() {
 }
 
 #[test]
-fn particle_target_is_none_while_off_or_in_2d() {
+fn particle_target_follows_the_field_dimension_not_the_projection() {
     let mut s = State::new(true);
     s.set_density(8);
     assert_eq!(s.particle_target(), None, "particles off spawns nothing");
     assert!(s.set_particles(true));
-    assert_eq!(s.particle_target(), Some(128), "Auto follows the density (8 x 16)");
+    assert_eq!(
+        s.particle_target(),
+        Some(128),
+        "Auto follows the density (8 x 16)"
+    );
     assert!(s.set_particle_count(100));
-    assert_eq!(s.particle_target(), Some(100), "an explicit count overrides Auto");
+    assert_eq!(
+        s.particle_target(),
+        Some(100),
+        "an explicit count overrides Auto"
+    );
     assert!(s.set_mode(false));
-    assert_eq!(s.particle_target(), None, "the 2D view has no depth for the cloud");
-    assert!(s.set_mode(true));
-    assert_eq!(s.particle_target(), Some(100), "returning to 3D restores the target");
+    assert_eq!(
+        s.particle_target(),
+        Some(100),
+        "a three-component field in 2D is a plane slice, so it still has a cloud",
+    );
+    assert!(s.set_formula("x, y".into()));
+    assert_eq!(
+        s.particle_target(),
+        None,
+        "ordinary two-component 2D has no depth"
+    );
+    assert!(s.set_formula("x, y, z".into()));
+    assert_eq!(
+        s.particle_target(),
+        Some(100),
+        "returning to a 3D field restores the target"
+    );
     assert!(s.set_particles(false));
     assert_eq!(s.particle_target(), None);
 }
@@ -1147,13 +1172,24 @@ fn snapshots_never_carry_trail_history() {
 }
 
 #[test]
-fn trails_only_exist_when_particles_run_in_three_d() {
+fn trails_only_exist_when_particles_run_over_a_three_component_field() {
     let mut state = State::new(true);
-    assert!(state.particle_target().is_none(), "particles off have no cloud");
+    assert!(
+        state.particle_target().is_none(),
+        "particles off have no cloud"
+    );
     state.set_particles(true);
-    assert!(state.particle_target().is_some(), "3D particles have a target");
+    assert!(
+        state.particle_target().is_some(),
+        "3D particles have a target"
+    );
     state.set_mode(false);
-    assert!(state.particle_target().is_none(), "2D has no particle cloud, so no trails");
+    assert!(
+        state.particle_target().is_some(),
+        "a 3D field in 2D is a plane slice with a cloud",
+    );
+    state.set_formula("x, y".into());
+    assert!(state.particle_target().is_none(), "ordinary 2D has no particle cloud");
 }
 
 #[test]
@@ -1239,6 +1275,92 @@ fn no_rebuild_when_paused() {
     assert!(!state.dirty, "paused view must not mark dirty");
     vector_field_explorer::ui::transport::request_particle_repaint(&ctx, &state, &clock);
     assert!(!ctx.has_requested_repaint(), "paused view must not request repaint");
+}
+
+#[test]
+fn plane_grid_stays_volumetric_for_3d_fields_in_2d() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    assert_eq!(state.plane_grid(), UVec3::splat(state.density));
+    assert_eq!(state.grid().z, 1);
+    state.set_mode(true);
+    assert_eq!(state.plane_grid(), UVec3::splat(state.density));
+}
+
+#[test]
+fn plane_grid_is_flat_for_two_component_fields() {
+    let state = State::new(false);
+    assert_eq!(
+        state.plane_grid(),
+        UVec3::new(state.density, state.density, 1)
+    );
+}
+
+#[test]
+fn sync_plane_uses_the_plane_grid() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_plane_axis(PlaneAxis::X);
+    state.set_plane_index(3);
+    state.set_mode(true);
+    assert_eq!(state.plane.index, 3);
+    assert_eq!(state.plane.clamped(state.plane_grid()).index, 3);
+}
+
+#[test]
+fn plane_frame_clamps_a_stale_index_to_the_plane_grid() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_density(5);
+    // Simulate a stale selection written before the grid shrank: the seam
+    // must clamp it rather than building a frame past the last sample.
+    state.plane.index = 999;
+    let frame = state
+        .plane_frame()
+        .expect("2D of a three-component field is a plane slice");
+    let last_z = plane_coordinate(&state.domain, state.plane_grid(), PlaneAxis::Z, 4);
+    assert!((frame.origin.z - last_z).abs() < 1e-5);
+    assert!((frame.origin.z - state.domain.max.z).abs() < 1e-5);
+
+    assert!(state.set_mode(true));
+    assert!(state.plane_frame().is_none(), "3D is not a plane slice");
+}
+
+#[test]
+fn xy_plane_index_survives_mode_switches_and_clamps_to_the_plane_grid() {
+    for axis in [PlaneAxis::X, PlaneAxis::Y] {
+        let mut state = State::new(false);
+        state.set_formula("x, y, z".into());
+        state.set_density(5);
+        state.set_plane_axis(axis);
+        state.set_plane_index(4);
+        assert_eq!(state.plane.axis, axis);
+        assert_eq!(state.plane.index, 4);
+
+        assert!(state.set_mode(true));
+        assert_eq!(state.plane.index, 4, "a 3D view keeps the {axis:?} index");
+        assert!(state.set_mode(false));
+        assert_eq!(state.plane.index, 4, "returning to 2D keeps the {axis:?} index");
+
+        assert!(state.set_plane_index(0));
+        assert!(state.set_plane_index(999));
+        assert_eq!(
+            state.plane.index,
+            axis.count(state.plane_grid()) - 1,
+            "the index clamps against the n-cubed plane grid, not the render grid"
+        );
+    }
+}
+
+#[test]
+fn set_plane_preserves_dim_toggle_in_2d() {
+    let mut state = State::new(false);
+    state.set_formula("x, y, z".into());
+    state.set_mode(true);
+    state.set_plane_enabled(true);
+    state.set_mode(false);
+    state.set_plane_axis(PlaneAxis::X);
+    assert!(state.plane.enabled);
 }
 
 #[test]
