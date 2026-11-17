@@ -50,21 +50,30 @@ impl AnimationSnapshot {
         }
     }
 
-    /// Build one frame at `time`, advancing the detached particle cloud by
-    /// `dt` unless this is the first captured frame.
+    /// Build one frame at `time` for a projection of the given `aspect`,
+    /// advancing the detached particle cloud by `dt` unless this is the first
+    /// captured frame.
     ///
-    /// `first` is `true` for the captured frame: particles keep the positions
-    /// they had when the snapshot was taken. Later frames integrate exactly
-    /// `dt` seconds through [`advance_exact`], never the GUI `MAX_STEP` clamp.
+    /// A nonfinite or nonpositive `aspect` is rejected with
+    /// [`AnimationError::InvalidSpec`]. `first` is `true` for the captured
+    /// frame: particles keep the positions they had when the snapshot was
+    /// taken. Later frames integrate exactly `dt` seconds through
+    /// [`advance_exact`], never the GUI `MAX_STEP` clamp.
     pub fn frame_at(
         &mut self,
         time: f32,
         dt: f32,
+        aspect: f32,
         first: bool,
     ) -> Result<AnimationFrame, AnimationError> {
         if !time.is_finite() || !dt.is_finite() || dt < 0.0 {
             return Err(AnimationError::InvalidSpec(
                 "animation frame time and step must be finite".into(),
+            ));
+        }
+        if !aspect.is_finite() || aspect <= 0.0 {
+            return Err(AnimationError::InvalidSpec(
+                "animation aspect must be finite and positive".into(),
             ));
         }
         match self.state.field_mode {
@@ -118,11 +127,6 @@ impl AnimationSnapshot {
             Some(fly) => ViewCamera::Fly(fly),
             None => ViewCamera::Orbit(&self.orbit),
         };
-        // The snapshot carries no viewport dimensions; a square aspect keeps
-        // the returned matrix usable and deterministic. Callers that paint a
-        // non-square output can rescale the projection when they know the
-        // output size.
-        let aspect = 1.0;
         let view_proj = camera.vp_matrix(
             aspect,
             if self.state.mode_3d {

@@ -315,18 +315,19 @@ user-installed ffmpeg.
 `State` holds no GPU handles.
 
 **Invariants.** `capture` clones the live app state, cloud, orbit/fly pose and
-theme background without mutating playback. `frame_at(time, dt, first)`
-validates finite inputs, mirrors `time` into the detached state, marks it dirty,
-rebuilds through the live `snapshot_if_dirty` seam, and composes lines, glyphs
-and particles with the same shared app functions as the live viewport.
+theme background without mutating playback. `frame_at(time, dt, aspect, first)`
+validates finite inputs and a finite positive aspect, mirrors `time` into the
+detached state, marks it dirty, rebuilds through the live `snapshot_if_dirty`
+seam, and composes lines, glyphs and particles with the same shared app
+functions as the live viewport.
 Formula and Induction are supported; Sources, Materials and Ode are rejected as
 non-animatable. `first` keeps the captured particle positions; later frames
 advance by exactly `dt` through `particles::advance_exact` (1/120 substeps plus
 a remainder), never the GUI `MAX_STEP` clamp. Only Formula/Induction scenes with
 an enabled particle target advance a cloud. Scene ordering (3D combined sort,
-2D arrows-then-dots, trails behind) is the shared live assembly; `view_proj`
-uses the snapshot camera and a deterministic square aspect because the snapshot
-carries no viewport dimensions.
+2D arrows-then-dots, trails behind) is the shared live assembly and is
+independent of aspect; `view_proj` uses the caller's aspect for the snapshot
+camera.
 
 **Pinned by.** [tests/animation_scene_test.rs](../tests/animation_scene_test.rs):
 time-dependent Formula sampling changes the frame, a 0.5 s particle frame moves
@@ -334,8 +335,8 @@ by 0.5 world units (not one GUI-clamped step), and direct 60-substep advection
 matches each exact substep time.
 
 **Limitations.** The snapshot does not capture transient click seeds or the live
-viewport aspect. Induction is GUI-only by design; CLI animation covers Formula
-and particles.
+viewport aspect; the caller passes the export aspect to `frame_at`. Induction
+is GUI-only by design; CLI animation covers Formula and particles.
 
 #### `src/cli.rs` — native plot export configuration and dispatch
 

@@ -1,6 +1,6 @@
 //! Task 2: the detached animation snapshot advances its own state and cloud.
 
-use vector_field_explorer::animation::ANIMATION_PARTICLE_SUBSTEP;
+use vector_field_explorer::animation::{ANIMATION_PARTICLE_SUBSTEP, AnimationError};
 use vector_field_explorer::animation_scene::{AnimationFrame, AnimationSnapshot};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::field::FieldExpr;
@@ -31,11 +31,11 @@ fn snapshot_captures_the_time_dependent_formula_scene() {
 
     let first: AnimationFrame = snapshot
         .clone()
-        .frame_at(0.25, 0.25, true)
+        .frame_at(0.25, 0.25, 1.0, true)
         .expect("first frame");
     let later = snapshot
         .clone()
-        .frame_at(1.25, 1.0, false)
+        .frame_at(1.25, 1.0, 1.0, false)
         .expect("later frame");
     assert!(!first.scene.arrows.is_empty());
     assert!(!later.scene.arrows.is_empty());
@@ -56,7 +56,7 @@ fn frame_step_does_not_use_the_gui_step_limit() {
     let mut snapshot = snapshot(state, particles);
 
     let _frame = snapshot
-        .frame_at(0.5, 0.5, false)
+        .frame_at(0.5, 0.5, 1.0, false)
         .expect("a frame without a preceding capture frame");
 
     assert_eq!(snapshot.particles.pos.len(), 1);
@@ -78,7 +78,9 @@ fn exact_substeps_use_each_substep_time() {
     let start = particles.pos[0];
     let mut snapshot = snapshot(state.clone(), particles);
 
-    let _frame = snapshot.frame_at(0.5, 0.5, false).expect("first frame");
+    let _frame = snapshot
+        .frame_at(0.5, 0.5, 1.0, false)
+        .expect("first frame");
 
     // Replay the same 60 nominal substeps directly through `advect`, passing
     // each substep's exact start time. A single 0.5 s step from t=0 would take
@@ -108,4 +110,49 @@ fn exact_substeps_use_each_substep_time() {
         actual.distance(start) > 0.1,
         "the time-dependent field must advance the point: {actual:?}"
     );
+}
+
+#[test]
+fn aspect_changes_the_projection_without_changing_the_scene() {
+    let mut state = State::new(true);
+    state.set_formula("1, 0, 0".into());
+    let snapshot = snapshot(state, Particles::default());
+
+    let square = snapshot
+        .clone()
+        .frame_at(0.0, 0.0, 1.0, true)
+        .expect("square frame");
+    let wide = snapshot
+        .clone()
+        .frame_at(0.0, 0.0, 2.0, true)
+        .expect("wide frame");
+
+    assert!(
+        (wide.view_proj.x_axis.x - square.view_proj.x_axis.x / 2.0).abs() < 1e-6,
+        "a 2:1 aspect must halve the horizontal projection scale"
+    );
+    assert_ne!(square.view_proj, wide.view_proj);
+    assert_eq!(square.scene.arrows.len(), wide.scene.arrows.len());
+    for (left, right) in square.scene.arrows.iter().zip(wide.scene.arrows.iter()) {
+        assert_eq!(left.origin, right.origin);
+        assert_eq!(left.dir_len, right.dir_len);
+        assert_eq!(left.color, right.color);
+    }
+    assert_eq!(snapshot.state.formula, "1, 0, 0");
+    assert!(snapshot.particles.pos.is_empty());
+}
+
+#[test]
+fn frame_at_rejects_nonpositive_or_nonfinite_aspect() {
+    let snapshot = snapshot(State::new(true), Particles::default());
+    for aspect in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let mut snapshot = snapshot.clone();
+        assert!(
+            matches!(
+                snapshot.frame_at(0.0, 0.0, aspect, true),
+                Err(AnimationError::InvalidSpec(_))
+            ),
+            "aspect {aspect} must be rejected"
+        );
+    }
 }
