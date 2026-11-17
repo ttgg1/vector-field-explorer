@@ -1,6 +1,6 @@
 # Fields in Matter — Bounded Analytic Material Cases Design
 
-Status: PROPOSED
+Status: APPROVED by owner on 2026-11-17
 Date: 2026-11-17
 Issue: GitHub #29 (planning approval under #17; detailed design/plan approval required before implementation)
 Dependencies: #24 source evaluator, #25 source panel, #26 source visualization, #27 induction demo, #28 ODE workbench. #18 performance evidence is administratively deferred by owner decision and is not a passed floor.
