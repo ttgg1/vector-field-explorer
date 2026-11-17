@@ -14,6 +14,7 @@ impl VfApp {
     ) {
         self.show_top_bar(ui, ctx);
         self.show_formula_bar(ui);
+        self.apply_pending_panel_request();
 
         // Free flight is 3D-only: the formula bar's 2D/3D toggle (or a formula
         // that loses its third component) drops the fly camera before any
@@ -117,6 +118,21 @@ impl VfApp {
         });
     }
 
+    /// Apply the formula bar's one-shot "Open Sources" request to the active
+    /// layout: expand the wide rail or open the compact Sources sheet.
+    fn apply_pending_panel_request(&mut self) {
+        if !self.bar.open_sources {
+            return;
+        }
+        self.bar.open_sources = false;
+        if self.layout_mode == LayoutMode::Compact {
+            self.sheet.open(SheetState::Sources);
+            self.sheet_expanded = SheetSize::Default;
+        } else {
+            self.layout.sources_expanded = true;
+        }
+    }
+
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
         let mut entries = [
@@ -132,6 +148,12 @@ impl VfApp {
                 label: "CAS",
                 shortcut: None,
                 expanded: &mut self.layout.cas_expanded,
+            },
+            RailEntry {
+                id: "sources",
+                label: "Sources",
+                shortcut: None,
+                expanded: &mut self.layout.sources_expanded,
             },
         ];
         show_rail_strip(
@@ -150,6 +172,9 @@ impl VfApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.layout.cas_expanded {
             requests.push(self.layout.cas_width);
+        }
+        if self.layout.sources_expanded {
+            requests.push(self.layout.sources_width);
         }
         if self.layout.presets_expanded {
             requests.push(self.layout.presets_width);
@@ -216,6 +241,36 @@ impl VfApp {
             }
             if collapse {
                 self.layout.cas_expanded = false;
+            }
+        }
+        if self.layout.sources_expanded {
+            let width = widths.next().unwrap();
+            let mut collapse = false;
+            let response = egui::Panel::left(("sources_panel", self.panel_generation))
+                .exact_size(width)
+                .show(ui, |ui| {
+                    collapse = layout::collapse_button_named(
+                        ui,
+                        layout::RailSide::Left,
+                        "Sources",
+                        "Sources",
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("sources_body")
+                        .show(ui, |ui| {
+                            crate::ui::sources_panel::show(
+                                ui,
+                                &mut self.state,
+                                &mut self.sources,
+                                false,
+                            );
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.sources_width = width;
+            }
+            if collapse {
+                self.layout.sources_expanded = false;
             }
         }
         if self.layout.presets_expanded {
@@ -422,6 +477,7 @@ impl VfApp {
                         #[cfg(not(target_arch = "wasm32"))]
                         (SheetState::Cas, "CAS"),
                         (SheetState::Presets, "Presets"),
+                        (SheetState::Sources, "Sources"),
                     ];
                     let available = (ui.available_width() - close_width).max(0.0);
                     egui::ScrollArea::horizontal()
@@ -503,6 +559,7 @@ impl VfApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => "CAS",
                     SheetState::Presets => "Presets",
+                    SheetState::Sources => "Sources",
                     SheetState::None => "",
                 };
                 ui.horizontal(|ui| {
@@ -564,6 +621,14 @@ impl VfApp {
                         camera_request =
                             self.presets
                                 .show_compact(ui, &mut self.camera, &mut self.state, true);
+                    }
+                    SheetState::Sources => {
+                        crate::ui::sources_panel::show(
+                            ui,
+                            &mut self.state,
+                            &mut self.sources,
+                            true,
+                        );
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => self.show_cas_body(ui),
@@ -633,6 +698,40 @@ impl VfApp {
             if crate::ui::help_overlay::show(ui.ctx(), anchor, self.state.mode_3d) {
                 self.layout.help_visible = false;
             }
+        }
+
+        // Sources: one small, readable status line over the viewport, derived
+        // from the same sampling counters as the panel. It never replaces the
+        // field or invents a second accuracy accounting.
+        if self.state.field_mode == FieldMode::Sources
+            && let (Some(rect), Some(text)) = (
+                self.last_viewport_rect,
+                self.state
+                    .source_sampling()
+                    .and_then(crate::ui::sources_panel::status_text),
+            )
+        {
+            let pos = egui::pos2(rect.left() + 12.0, rect.top() + 12.0);
+            ui.painter().text(
+                pos,
+                egui::Align2::LEFT_TOP,
+                text,
+                egui::FontId::proportional(13.0),
+                egui::Color32::WHITE,
+            );
+        }
+
+        // The `Both` source display paints fixed family colours, so the
+        // viewport names those colours under the status line. The status text
+        // above is untouched; this is a second, short line.
+        if self.state.field_mode == FieldMode::Sources
+            && self.state.sources.display == crate::source_scene::SourceDisplay::Both
+            && let Some(rect) = self.last_viewport_rect
+        {
+            crate::ui::sources_panel::paint_both_legend(
+                ui.painter(),
+                egui::pos2(rect.left() + 12.0, rect.top() + 34.0),
+            );
         }
 
         // Help > About (ticket 15): a small window over everything, closed by

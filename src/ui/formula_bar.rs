@@ -7,12 +7,15 @@
 
 use eframe::egui;
 
+use crate::source_scene::FieldMode;
 use crate::viewmodel::State;
 
-/// Bar-local state kept out of [`State`]: the text the user has typed.
+/// Bar-local state kept out of [`State`]: the text the user has typed, and a
+/// one-shot request for the app to open/expand the Sources panel.
 #[derive(Debug, Clone, Default)]
 pub struct FormulaBarState {
     pub text: String,
+    pub open_sources: bool,
 }
 
 impl FormulaBarState {
@@ -27,7 +30,7 @@ impl FormulaBarState {
 /// `compact` keeps the same widgets but gives them finger-sized hit targets and
 /// applies the formula-field width floor; the wide path is unchanged.
 pub fn show(ui: &mut egui::Ui, state: &mut State, bar: &mut FormulaBarState, compact: bool) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if compact {
             ui.spacing_mut().interact_size.y = crate::ui::layout::TOUCH_TARGET;
         }
@@ -56,6 +59,34 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, bar: &mut FormulaBarState, com
         if let Some(label) = crate::ui::plot_panel::source_label(kind) {
             ui.label(label);
         }
+        let vector_mode = state.is_vector_mode();
+        if vector_mode {
+            if ui
+                .selectable_label(state.field_mode == FieldMode::Formula, "Formula")
+                .on_hover_text("Edit and sample the formula field")
+                .clicked()
+            {
+                state.set_field_mode(FieldMode::Formula);
+            }
+            if ui
+                .selectable_label(state.field_mode == FieldMode::Sources, "Sources")
+                .on_hover_text("Build the scene in the Sources panel")
+                .clicked()
+            {
+                state.set_field_mode(FieldMode::Sources);
+            }
+        }
+        if vector_mode && state.field_mode == FieldMode::Sources {
+            ui.label(sources_summary(state));
+            if ui
+                .button("Open Sources")
+                .on_hover_text("Expand or focus the Sources panel")
+                .clicked()
+            {
+                bar.open_sources = true;
+            }
+            return;
+        }
         // The one mirror follows the active editor. Vector edits and scalar
         // drafts never overwrite each other because only the active source is
         // read here; the app reconciles the mirror on kind changes too.
@@ -80,4 +111,22 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, bar: &mut FormulaBarState, com
             state.set_active_source(bar.text.clone());
         }
     });
+}
+
+fn sources_summary(state: &State) -> String {
+    let display = match state.sources.display {
+        crate::source_scene::SourceDisplay::Electric => "Electric",
+        crate::source_scene::SourceDisplay::Magnetic => "Magnetic",
+        crate::source_scene::SourceDisplay::Both => "Both",
+    };
+    let accuracy = if state.sources.allow_inaccurate {
+        "accuracy not met shown"
+    } else {
+        "accuracy not met hidden"
+    };
+    format!(
+        "{} sources · {display} · softening {:.3} · {accuracy}",
+        state.sources.entries.len(),
+        state.sources.softening
+    )
 }

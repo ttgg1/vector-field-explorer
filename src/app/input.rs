@@ -199,6 +199,11 @@ impl VfApp {
             // Task 6: the menu reset owns controls/clock; the app-owned half
             // cancels captures, returns to vector mode and empties plot state.
             self.reset_plot_state();
+            // Sources are a separate durable scene: global reset empties it,
+            // drops the cached sampling and returns to the formula adapter.
+            // Plot-section reset deliberately leaves them alone.
+            self.state.reset_sources();
+            self.state.set_field_mode(FieldMode::Formula);
         }
     }
 
@@ -411,6 +416,11 @@ impl VfApp {
         if !self.state.is_vector_mode() {
             // Plot mode never seeds or bursts, including the captured-pointer
             // and S/P routes that share this wrapper.
+            self.last_click_seed = None;
+            return;
+        }
+        if self.state.field_mode == FieldMode::Sources {
+            // Source mode is static: no streamline seeds and no particle bursts.
             self.last_click_seed = None;
             return;
         }

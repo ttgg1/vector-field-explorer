@@ -9,6 +9,7 @@ pub mod panel_rails;
 pub mod plot_panel;
 pub mod presets;
 pub mod sidebar;
+pub mod sources_panel;
 pub mod status_bar;
 pub mod style_panel;
 pub mod top_bar;

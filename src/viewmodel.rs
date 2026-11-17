@@ -14,6 +14,7 @@ use super::flow::{Flow, SceneFlow};
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
+use super::source_scene::{FieldMode, SourceSampling, SourceScene, sample_source_scene};
 use super::streamlines::{
     CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
 };
@@ -287,6 +288,14 @@ pub struct State {
     pub particle_appearance: ParticleAppearance,
     /// Which sampled slice plane-by-plane mode highlights (ticket 23).
     pub plane: PlaneView,
+    /// Formula or the editable source scene; exactly one adapter is sampled.
+    pub field_mode: FieldMode,
+    /// The durable source list and its settings, preserved across mode switches.
+    pub sources: SourceScene,
+    /// The last source sampling pass for the active adapter.
+    pub source_sampling: Option<SourceSampling>,
+    /// One-line source status/hint owned by the panel and status bar.
+    pub source_notice: Option<String>,
     pub dirty: bool,
     /// Transient simulated time mirrored from the clock. Not persisted.
     pub time: f32,
@@ -325,16 +334,19 @@ impl State {
     /// active accepted time-dependent scalar expression.
     pub fn has_time_dependent_consumer(self: &State) -> bool {
         if self.is_vector_mode() {
+            if self.field_mode == FieldMode::Sources {
+                return false;
+            }
             self.particle_target().is_some() || self.field.is_time_dependent()
         } else {
             self.active_scalar_is_time_dependent()
         }
     }
 
-    /// Sampling runs three-dimensional only when the mode is 3D and the
-    /// field actually carries three components.
+    /// Sampling runs three-dimensional only when the mode is 3D and the active
+    /// field actually carries three components (sources always do).
     pub fn is_3d(self: &State) -> bool {
-        self.mode_3d && self.field.dimension == 3
+        self.mode_3d && self.active_dimension() == 3
     }
 
     /// A fresh state for a 2D or 3D field at the defaults.
@@ -387,6 +399,10 @@ impl State {
             particle_count: 0,
             particle_appearance: ParticleAppearance::default(),
             plane: PlaneView::middle(grid),
+            field_mode: FieldMode::Formula,
+            sources: SourceScene::default(),
+            source_sampling: None,
+            source_notice: None,
             dirty: true,
             time: 0.0,
         }
@@ -420,6 +436,89 @@ impl State {
         }
     }
 
+    /// The active field's sampled dimension: sources are always three
+    /// dimensional; the formula reports its own component count.
+    pub fn active_dimension(self: &State) -> usize {
+        match self.field_mode {
+            FieldMode::Sources => 3,
+            FieldMode::Formula => self.field.dimension,
+        }
+    }
+
+    /// Switch between the formula and source adapters. Formula, parsed field,
+    /// source scene and the 2D/3D projection are all preserved; only the
+    /// cached sampling and the source notice are cleared.
+    pub fn set_field_mode(self: &mut State, mode: FieldMode) -> bool {
+        if self.field_mode == mode {
+            return false;
+        }
+        let previous_grid = self.plane_grid();
+        self.field_mode = mode;
+        self.source_sampling = None;
+        self.source_notice = None;
+        if self.clamp_source_density() {
+            self.sync_plane(previous_grid);
+        }
+        self.mark_dirty()
+    }
+
+    /// Re-clamp the stored density when Sources makes the active sampling
+    /// cubic. This is the one path that can turn a legal 200² 2D density into
+    /// 3D sampling, so the 40³ cap must apply here even though `set_density`
+    /// already clamps at edit time.
+    fn clamp_source_density(self: &mut State) -> bool {
+        if self.field_mode == FieldMode::Sources && self.is_3d() && self.density > MAX_DENSITY_3D {
+            self.density = MAX_DENSITY_3D;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace the durable source scene and invalidate its cached sampling.
+    pub fn set_source_scene(self: &mut State, scene: SourceScene) -> bool {
+        if self.sources == scene {
+            return false;
+        }
+        self.sources = scene;
+        self.source_sampling = None;
+        self.source_notice = None;
+        self.mark_dirty()
+    }
+
+    /// Rebuild the active adapter's cache: formula mode holds no source
+    /// sampling; source mode samples the scene at the current domain, grid and
+    /// plane frame.
+    pub fn refresh_source_sampling(self: &mut State) {
+        if self.field_mode == FieldMode::Formula {
+            self.source_sampling = None;
+            return;
+        }
+        let plane = self.plane_frame();
+        let sampling = sample_source_scene(
+            &self.sources,
+            &self.domain,
+            self.grid(),
+            plane.as_ref(),
+            &self.view_options(),
+        );
+        self.source_sampling = Some(sampling);
+    }
+
+    /// The cached source sampling, if the source mode has sampled this scene.
+    pub fn source_sampling(self: &State) -> Option<&SourceSampling> {
+        self.source_sampling.as_ref()
+    }
+
+    /// Global reset's source half: return to the default empty scene. The
+    /// formula mode itself is selected by the caller's reset path.
+    pub fn reset_sources(self: &mut State) -> bool {
+        self.sources.reset();
+        self.source_sampling = None;
+        self.source_notice = None;
+        self.mark_dirty()
+    }
+
     /// The projection: an orthographic front view for 2D, the orbiting
     /// perspective camera for 3D.
     pub fn set_mode(self: &mut State, mode_3d: bool) -> bool {
@@ -436,6 +535,7 @@ impl State {
         let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
         self.plot.vector_mode_3d = mode_3d;
+        self.clamp_source_density();
         self.sync_plane(previous_grid);
         self.mark_dirty()
     }
@@ -770,7 +870,10 @@ impl State {
     /// `None` otherwise. Ordinary two-component fields have no depth or slice
     /// flow for a dot to ride, so the off state still spawns nothing.
     pub fn particle_target(self: &State) -> Option<usize> {
-        (self.particles && self.field.dimension == 3)
+        if self.field_mode == FieldMode::Sources {
+            return None;
+        }
+        (self.particles && self.active_dimension() == 3)
             .then(|| effective_particle_count(self.density, self.particle_count) as usize)
     }
 
@@ -853,8 +956,8 @@ impl State {
     /// even while 2D renders one `n`×`n` layer; a two-component field keeps
     /// the flat `n`×`n`×`1` grid it has always had.
     pub fn plane_grid(self: &State) -> UVec3 {
-        let n = self.density.max(MIN_DENSITY);
-        if self.field.dimension == 3 {
+        let n = self.capped_density();
+        if self.active_dimension() == 3 {
             UVec3::new(n, n, n)
         } else {
             UVec3::new(n, n, 1)
@@ -863,7 +966,7 @@ impl State {
 
     /// Whether 2D is showing a slice of a three-component field.
     pub fn is_plane_slice(self: &State) -> bool {
-        self.field.dimension == 3 && !self.mode_3d
+        self.active_dimension() == 3 && !self.mode_3d
     }
 
     /// The local frame of the selected slice, when 2D is showing one. The
@@ -909,11 +1012,23 @@ impl State {
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
     /// `n`×`n`×`n` when sampling runs three-dimensional.
     pub fn grid(self: &State) -> UVec3 {
-        let n = self.density.max(MIN_DENSITY);
+        let n = self.capped_density();
         if self.is_3d() {
             UVec3::new(n, n, n)
         } else {
             UVec3::new(n, n, 1)
+        }
+    }
+
+    /// The stored density with the source-mode 3D ceiling applied defensively.
+    /// Transition setters clamp `density` itself; this also covers any direct
+    /// field write so sampling can never exceed 40³ in Source mode.
+    fn capped_density(self: &State) -> u32 {
+        let n = self.density.max(MIN_DENSITY);
+        if self.field_mode == FieldMode::Sources && self.is_3d() {
+            n.min(MAX_DENSITY_3D)
+        } else {
+            n
         }
     }
 
@@ -1078,6 +1193,10 @@ impl State {
     /// so its lines run with the depth they cross. [`streamlines::ray_seed`]
     /// turns a click into a seed inside the domain for the orbit view's click-to-seed.
     pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
+        // Source mode samples static arrows only; formula transients never leak.
+        if self.field_mode == FieldMode::Sources {
+            return Vec::new();
+        }
         // Off hides both seed sources; Click hides only the automatic grid.
         if !self.streamlines || self.seed_mode == StreamlineSeedMode::Click {
             return Vec::new();
@@ -1163,7 +1282,7 @@ impl State {
         color_range: (f32, f32),
         clicks: &[Vec3],
     ) -> Vec<LineInstanceGPU> {
-        if !self.streamlines {
+        if self.field_mode == FieldMode::Sources || !self.streamlines {
             return Vec::new();
         }
         let opts = self.streamline_opts();
@@ -1182,6 +1301,27 @@ impl State {
     /// the UI layer just stores the result; the field is sampled once and
     /// reused for the arrows and the streamline colour range.
     pub fn snapshot(self: &State) -> SceneGPU {
+        if self.field_mode == FieldMode::Sources {
+            let arrows = if self.arrows {
+                match &self.source_sampling {
+                    Some(sampling) => self.arrow_instances(&sampling.arrows),
+                    None => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            return SceneGPU {
+                arrows: Arc::new(arrows),
+                lines: Arc::new(Vec::new()),
+                trails: Arc::new(Vec::new()),
+                dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
+                arrow_style: self.arrow_style,
+                arrow_style_2d: self.arrow_style_2d,
+                arrow_params: self.arrow_params,
+                mode_3d: self.mode_3d,
+            };
+        }
         let sampled = self.sample();
         let arrows = if self.arrows {
             self.arrow_instances(&sampled)
@@ -1213,6 +1353,7 @@ impl State {
         if !self.dirty {
             return None;
         }
+        self.refresh_source_sampling();
         self.dirty = false;
         Some(self.snapshot())
     }

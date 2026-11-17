@@ -21,6 +21,9 @@ use crate::particles::{
     DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
 };
 use crate::plot::PlotKind;
+use crate::source_scene::{
+    FieldMode, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceRecord, SourceScene,
+};
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
@@ -172,6 +175,25 @@ pub struct ViewRecord {
     pub particle_loop_on_stagnation: bool,
     #[serde(default = "default_particle_stagnation_seconds")]
     pub particle_stagnation_seconds: f32,
+    /// Which adapter the viewport shows. A pre-#25 record has no key and opens
+    /// in Formula mode with an empty source scene.
+    #[serde(default)]
+    pub field_mode: FieldMode,
+    /// The durable source scene in list order. Each record is validated again
+    /// on restore; malformed entries are skipped.
+    #[serde(default, deserialize_with = "deserialize_source_entries")]
+    pub source_entries: Vec<SourceRecord>,
+    /// Which field families the source scene draws.
+    #[serde(default)]
+    pub source_display: SourceDisplay,
+    /// Scene-wide softening. Out-of-range or non-finite values fall back to
+    /// the default in [`ViewRecord::restore`].
+    #[serde(default = "default_source_softening")]
+    pub source_softening: f64,
+    /// Whether accuracy-not-met estimates may be drawn. Only an exact `true`
+    /// restores the opt-in; every other value becomes false.
+    #[serde(default, deserialize_with = "deserialize_bool_or_false")]
+    pub source_allow_inaccurate: bool,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -241,6 +263,11 @@ impl ViewRecord {
             particle_trail_width: state.particle_appearance.trail_width,
             particle_loop_on_stagnation: state.particle_appearance.loop_on_stagnation,
             particle_stagnation_seconds: state.particle_appearance.stagnation_seconds,
+            field_mode: state.field_mode,
+            source_entries: state.sources.to_records(),
+            source_display: state.sources.display,
+            source_softening: state.sources.softening,
+            source_allow_inaccurate: state.sources.allow_inaccurate,
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -323,6 +350,36 @@ impl ViewRecord {
         state.set_plot_height_range(self.plot_height_min, self.plot_height_max);
         state.restore_plot_drafts(self.curve_source.clone(), self.surface_source.clone());
         state.set_plot_kind(self.plot_kind);
+
+        // Sources restore last so a legacy formula above is never overwritten
+        // by opening the saved scene. Every record is revalidated; a bad one is
+        // skipped rather than failing the envelope.
+        let mut scene = SourceScene::from_records(&self.source_entries);
+        let softening = if self.source_softening.is_finite()
+            && (MIN_SOFTENING..=MAX_SOFTENING).contains(&self.source_softening)
+        {
+            self.source_softening
+        } else {
+            default_source_softening()
+        };
+        let _ = scene.set_softening(softening);
+        scene.set_display(self.source_display);
+        scene.set_allow_inaccurate(self.source_allow_inaccurate);
+        let valid_entries = scene.entries.len();
+        let requested_sources = self.field_mode == FieldMode::Sources;
+        state.set_source_scene(scene);
+        // A saved Sources mode without any usable entry cannot draw anything;
+        // fall back to Formula instead of presenting an empty source field.
+        state.set_field_mode(if requested_sources && valid_entries > 0 {
+            FieldMode::Sources
+        } else {
+            FieldMode::Formula
+        });
+        state.source_sampling = None;
+        if valid_entries != self.source_entries.len() {
+            state.source_notice = Some("Some saved sources were invalid and were skipped".into());
+        }
+        state.mark_dirty();
     }
 }
 
@@ -359,6 +416,57 @@ fn default_plane_dim_opacity() -> f32 {
 /// before the contrast existed used the linear mapping.
 fn default_proportional_exponent() -> f32 {
     crate::viewmodel::DEFAULT_PROPORTIONAL_EXPONENT
+}
+
+/// The `source_softening` serde default: the evaluator's historical `0.1`.
+fn default_source_softening() -> f64 {
+    0.1
+}
+
+/// Decode the source list element by element so one wrong-typed or corrupt
+/// record cannot fail the whole settings envelope. A skipped element becomes
+/// the empty default record, which [`SourceRecord::to_source`] rejects; the
+/// restore path still sees the original length and can raise its notice.
+fn deserialize_source_entries<'de, D>(deserializer: D) -> Result<Vec<SourceRecord>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum LenientRecord {
+        Record(SourceRecord),
+        Invalid(serde::de::IgnoredAny),
+    }
+
+    let records = Vec::<LenientRecord>::deserialize(deserializer)?;
+    Ok(records
+        .into_iter()
+        .map(|record| match record {
+            LenientRecord::Record(record) => record,
+            LenientRecord::Invalid(_) => SourceRecord::default(),
+        })
+        .collect())
+}
+
+/// Decode an accuracy opt-in leniently: only a literal `true` enables it, and
+/// every other value (wrong type, corrupt, missing) becomes false without
+/// failing the whole settings envelope.
+fn deserialize_bool_or_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Matches a bool, or swallows any other value as `false`.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrFalse {
+        Bool(bool),
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match BoolOrFalse::deserialize(deserializer)? {
+        BoolOrFalse::Bool(value) => value,
+        BoolOrFalse::Other(_) => false,
+    })
 }
 
 /// The `particle_size` serde default (ticket 30): records written before the

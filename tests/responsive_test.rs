@@ -33,8 +33,16 @@ const _: () = assert!(COMPACT_ROW_HEIGHT >= TOUCH_TARGET);
 fn layout_mode_is_compact_at_and_below_700_points() {
     assert_eq!(COMPACT_WIDTH, 700.0);
     assert_eq!(layout_mode(1200.0), LayoutMode::Wide);
-    assert_eq!(layout_mode(701.0), LayoutMode::Wide, "one point above the breakpoint is wide");
-    assert_eq!(layout_mode(700.0), LayoutMode::Compact, "the 700 pt boundary is compact");
+    assert_eq!(
+        layout_mode(701.0),
+        LayoutMode::Wide,
+        "one point above the breakpoint is wide"
+    );
+    assert_eq!(
+        layout_mode(700.0),
+        LayoutMode::Compact,
+        "the 700 pt boundary is compact"
+    );
     assert_eq!(layout_mode(699.0), LayoutMode::Compact);
     assert_eq!(layout_mode(520.0), LayoutMode::Compact);
     assert_eq!(layout_mode(360.0), LayoutMode::Compact);
@@ -68,7 +76,18 @@ fn only_one_sheet_is_open_at_a_time() {
     sheet.toggle(SheetState::Controls);
     assert_eq!(sheet, SheetState::Controls);
     sheet.toggle(SheetState::Presets);
-    assert_eq!(sheet, SheetState::Presets, "the other tab switches, never stacks");
+    assert_eq!(
+        sheet,
+        SheetState::Presets,
+        "the other tab switches, never stacks"
+    );
+    sheet.open(SheetState::Sources);
+    assert_eq!(
+        sheet,
+        SheetState::Sources,
+        "Sources shares the one compact sheet"
+    );
+    assert!(!sheet.shows(SheetState::Presets));
 
     sheet.close();
     assert_eq!(sheet, SheetState::None);
@@ -78,7 +97,11 @@ fn only_one_sheet_is_open_at_a_time() {
 fn reset_layout_closes_the_transient_sheet() {
     let mut sheet = SheetState::Presets;
     reset_sheet(&mut sheet);
-    assert_eq!(sheet, SheetState::None, "Reset layout closes any open sheet");
+    assert_eq!(
+        sheet,
+        SheetState::None,
+        "Reset layout closes any open sheet"
+    );
 }
 
 #[test]
@@ -102,7 +125,10 @@ fn sheet_height_caps_at_55_percent_and_keeps_the_viewport_floor() {
     for available in [0.0, 1.0, 100.0, 288.0, 500.0, 900.0] {
         let height = sheet_height(640.0, available, SheetSize::Default);
         assert!(height >= 0.0, "height is never negative at {available}");
-        assert!(height <= available, "the sheet fits the available {available}");
+        assert!(
+            height <= available,
+            "the sheet fits the available {available}"
+        );
         assert!(
             height <= 640.0 * SHEET_MAX_FRACTION + 1e-3,
             "never above 55% of the window at {available}"
@@ -110,8 +136,16 @@ fn sheet_height_caps_at_55_percent_and_keeps_the_viewport_floor() {
     }
 
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        assert_eq!(sheet_height(bad, 500.0, SheetSize::Default), 0.0, "bad window height {bad}");
-        assert_eq!(sheet_height(640.0, bad, SheetSize::Default), 0.0, "bad available height {bad}");
+        assert_eq!(
+            sheet_height(bad, 500.0, SheetSize::Default),
+            0.0,
+            "bad window height {bad}"
+        );
+        assert_eq!(
+            sheet_height(640.0, bad, SheetSize::Default),
+            0.0,
+            "bad available height {bad}"
+        );
     }
     assert_eq!(sheet_height(0.0, 500.0, SheetSize::Default), 0.0);
     assert_eq!(sheet_height(-10.0, 500.0, SheetSize::Default), 0.0);
@@ -120,14 +154,26 @@ fn sheet_height_caps_at_55_percent_and_keeps_the_viewport_floor() {
 #[test]
 fn compact_plan_hides_the_side_panels_and_shows_the_tab_bar() {
     let compact = compact_plan(LayoutMode::Compact);
-    assert!(!compact.controls_panel, "compact hides the Controls side panel");
-    assert!(!compact.presets_panel, "compact hides the Presets side panel");
-    assert!(compact.compact_top_bar, "compact swaps in the hamburger bar");
+    assert!(
+        !compact.controls_panel,
+        "compact hides the Controls side panel"
+    );
+    assert!(
+        !compact.presets_panel,
+        "compact hides the Presets side panel"
+    );
+    assert!(
+        compact.compact_top_bar,
+        "compact swaps in the hamburger bar"
+    );
     assert!(compact.tab_bar, "compact shows the bottom tab bar");
     assert!(compact.sheet, "compact can open a bottom sheet");
 
     let wide = compact_plan(LayoutMode::Wide);
-    assert!(wide.controls_panel && wide.presets_panel, "wide keeps both panels");
+    assert!(
+        wide.controls_panel && wide.presets_panel,
+        "wide keeps both panels"
+    );
     assert!(!wide.compact_top_bar, "wide keeps the full menu row");
     assert!(!wide.tab_bar, "wide has no tab bar");
     assert!(!wide.sheet, "wide has no sheet");
@@ -147,7 +193,10 @@ fn the_formula_field_keeps_at_least_forty_percent_of_the_bar() {
     let bar = 360.0;
     let chrome = 150.0;
     let field = formula_field_width(bar, chrome);
-    assert!((field - (bar - chrome)).abs() < 1e-3, "the field flexes into the remainder");
+    assert!(
+        (field - (bar - chrome)).abs() < 1e-3,
+        "the field flexes into the remainder"
+    );
     assert!(field >= bar * 0.4, "the field keeps at least 40% at 360 pt");
 
     // Even a greedy chrome budget leaves the 40% floor.
@@ -194,7 +243,11 @@ fn two_finger_pan_maps_only_3d_multi_touch_translation() {
 #[test]
 fn compact_status_is_the_width_mask_and_keeps_fps_at_360() {
     let compact = visible_stats(360.0);
-    assert_eq!(compact, visible_stats(360.0), "consume ticket 51's mask unchanged");
+    assert_eq!(
+        compact,
+        visible_stats(360.0),
+        "consume ticket 51's mask unchanged"
+    );
     assert!(!compact.sim_time && !compact.density && !compact.trails);
     assert!(compact.particles, "360 pt keeps the particle count");
 
@@ -211,9 +264,15 @@ fn compact_status_is_the_width_mask_and_keeps_fps_at_360() {
     };
     let text = format_status(&status, compact);
     assert!(text.contains("60 fps"), "FPS survives every width: {text}");
-    assert!(text.contains("16.7 ms"), "frame time survives every width: {text}");
+    assert!(
+        text.contains("16.7 ms"),
+        "frame time survives every width: {text}"
+    );
     assert!(text.contains("1.2k arrows") && text.contains("240 streamlines"));
-    assert!(text.contains("800 particles"), "360 pt keeps particles: {text}");
+    assert!(
+        text.contains("800 particles"),
+        "360 pt keeps particles: {text}"
+    );
     assert!(!text.contains("trail segs") && !text.contains("n²") && !text.contains("| t "));
 
     // The compact mask is a strict subset of the wide one.
@@ -305,13 +364,34 @@ fn the_web_shell_ships_safe_area_insets_and_a_full_bleed_viewport() {
 
 #[test]
 fn swipe_transitions_advance_one_sheet_state_and_close_at_the_bottom() {
-    assert_eq!(sheet_swipe_transition(SheetSize::Collapsed, -25.0), (SheetSize::Default, false));
-    assert_eq!(sheet_swipe_transition(SheetSize::Default, -25.0), (SheetSize::Expanded, false));
-    assert_eq!(sheet_swipe_transition(SheetSize::Expanded, -25.0), (SheetSize::Expanded, false));
-    assert_eq!(sheet_swipe_transition(SheetSize::Expanded, 25.0), (SheetSize::Default, false));
-    assert_eq!(sheet_swipe_transition(SheetSize::Default, 25.0), (SheetSize::Collapsed, false));
-    assert_eq!(sheet_swipe_transition(SheetSize::Collapsed, 25.0), (SheetSize::Collapsed, true));
-    assert_eq!(sheet_swipe_transition(SheetSize::Default, 24.0), (SheetSize::Default, false));
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Collapsed, -25.0),
+        (SheetSize::Default, false)
+    );
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Default, -25.0),
+        (SheetSize::Expanded, false)
+    );
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Expanded, -25.0),
+        (SheetSize::Expanded, false)
+    );
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Expanded, 25.0),
+        (SheetSize::Default, false)
+    );
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Default, 25.0),
+        (SheetSize::Collapsed, false)
+    );
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Collapsed, 25.0),
+        (SheetSize::Collapsed, true)
+    );
+    assert_eq!(
+        sheet_swipe_transition(SheetSize::Default, 24.0),
+        (SheetSize::Default, false)
+    );
 }
 
 fn css_brand_breakpoint(css: &str) -> f32 {
@@ -341,8 +421,14 @@ fn header_boundary_assertion_accepts_windows_line_endings() {
     let css = css.replace("\r\n", "\n");
     let crlf_source = css.replace('\n', "\r\n");
     for (name, source) in [("LF", &css), ("CRLF", &crlf_source)] {
-        assert!(!source.contains("\r\r\n"), "{name} fixture must not contain CRCRLF");
-        assert!(css_hides_brand_header(source, 700.0), "{name} source hides the complete header");
+        assert!(
+            !source.contains("\r\r\n"),
+            "{name} fixture must not contain CRCRLF"
+        );
+        assert!(
+            css_hides_brand_header(source, 700.0),
+            "{name} source hides the complete header"
+        );
     }
 }
 
@@ -350,8 +436,14 @@ fn header_boundary_assertion_accepts_windows_line_endings() {
 fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases() {
     let css = fs::read_to_string(repo_root().join("web/style.css")).unwrap();
     let css_breakpoint = css_brand_breakpoint(&css);
-    assert_eq!(css_breakpoint, 700.0, "the approved web CSS breakpoint remains 700 CSS px");
-    assert_eq!(COMPACT_WIDTH, 700.0, "the native/egui root-width breakpoint remains 700 pt");
+    assert_eq!(
+        css_breakpoint, 700.0,
+        "the approved web CSS breakpoint remains 700 CSS px"
+    );
+    assert_eq!(
+        COMPACT_WIDTH, 700.0,
+        "the native/egui root-width breakpoint remains 700 pt"
+    );
     assert!(
         css_hides_brand_header(&css, css_breakpoint),
         "the complete page header is hidden at the parsed CSS viewport boundary"
@@ -363,14 +455,68 @@ fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases(
     // ratio and egui zoom; the table exercises physical-width cases that map
     // to the same measured CSS viewport through those factors.
     let cases = [
-        ("one CSS px below", 699.0, 1.0, 1.0, 0.0, 0.0, true, LayoutMode::Compact),
-        ("at CSS boundary", 700.0, 1.0, 1.0, 0.0, 0.0, true, LayoutMode::Compact),
-        ("one CSS px above", 701.0, 1.0, 1.0, 0.0, 0.0, false, LayoutMode::Wide),
-        ("2x DPR", 1400.0, 2.0, 1.0, 0.0, 0.0, true, LayoutMode::Compact),
-        ("125% page zoom", 875.0, 1.0, 1.25, 0.0, 0.0, true, LayoutMode::Compact),
+        (
+            "one CSS px below",
+            699.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            true,
+            LayoutMode::Compact,
+        ),
+        (
+            "at CSS boundary",
+            700.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            true,
+            LayoutMode::Compact,
+        ),
+        (
+            "one CSS px above",
+            701.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            false,
+            LayoutMode::Wide,
+        ),
+        (
+            "2x DPR",
+            1400.0,
+            2.0,
+            1.0,
+            0.0,
+            0.0,
+            true,
+            LayoutMode::Compact,
+        ),
+        (
+            "125% page zoom",
+            875.0,
+            1.0,
+            1.25,
+            0.0,
+            0.0,
+            true,
+            LayoutMode::Compact,
+        ),
         // Source-derived divergence: CSS media uses viewport width; egui sees
         // canvas width after horizontal safe-area padding.
-        ("40px total safe area", 720.0, 1.0, 1.0, 20.0, 20.0, false, LayoutMode::Compact),
+        (
+            "40px total safe area",
+            720.0,
+            1.0,
+            1.0,
+            20.0,
+            20.0,
+            false,
+            LayoutMode::Compact,
+        ),
     ];
     for (name, physical_width, dpr, page_zoom, inset_left, inset_right, hidden, mode) in cases {
         let css_viewport = physical_width / (dpr * page_zoom);
@@ -380,7 +526,11 @@ fn css_and_rust_responsive_seams_are_asserted_separately_with_measurement_cases(
             "header media-query result for {name} ({css_viewport} CSS px)",
         );
         let canvas_root_points = css_viewport - inset_left - inset_right;
-        assert_eq!(layout_mode(canvas_root_points), mode, "egui root seam for {name}");
+        assert_eq!(
+            layout_mode(canvas_root_points),
+            mode,
+            "egui root seam for {name}"
+        );
     }
 }
 

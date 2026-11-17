@@ -31,6 +31,7 @@ pub mod sampling;
 pub mod scalar;
 pub mod screenshot;
 pub mod sim_clock;
+pub mod source_scene;
 pub mod sources;
 pub mod streamlines;
 pub mod ui;

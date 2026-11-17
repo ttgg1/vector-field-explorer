@@ -3,7 +3,7 @@
 // values, view-state restoration and the style clamp (review I-3).
 
 use eframe::Storage as _;
-use glam::Vec3;
+use glam::{DVec3, Vec3};
 
 use vector_field_explorer::VfApp;
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
@@ -14,6 +14,10 @@ use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::plane::DIM_ALPHA;
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::source_scene::{
+    FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
+};
+use vector_field_explorer::sources::SourceKind;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
@@ -423,6 +427,8 @@ fn sample_settings() -> AppSettings {
             presets_expanded: true,
             controls_width: 300.0,
             presets_width: 210.0,
+            sources_expanded: false,
+            sources_width: 280.0,
             help_visible: false,
             #[cfg(not(target_arch = "wasm32"))]
             cas_expanded: true,
@@ -1891,4 +1897,206 @@ fn streamline_count_round_trips_and_missing_field_defaults_to_auto() {
 
     let missing: ViewRecord = serde_json::from_str("{}").expect("all fields default");
     assert_eq!(missing.streamline_count, 0);
+}
+
+fn source_scene() -> SourceScene {
+    let mut scene = SourceScene::default();
+    for (index, tag) in SourceKindTag::ALL.into_iter().enumerate() {
+        let mut source = tag.default_source();
+        let i = index as f64;
+        // Every entry differs in position, orientation and its kind-specific
+        // numbers, so a lost, swapped or defaulted field cannot pass unnoticed.
+        source.center = DVec3::new(1.0 + i, -2.0 - i, 0.5 + i);
+        source.axis = DVec3::new(1.0, 2.0 + i, 3.0);
+        source.kind = match tag {
+            SourceKindTag::PointCharge => SourceKind::PointCharge { charge: -1.5 - i },
+            SourceKindTag::FiniteLineCharge => SourceKind::FiniteLineCharge {
+                charge: 2.0 + i,
+                length: 1.25 + i * 0.25,
+            },
+            SourceKindTag::ChargedRing => SourceKind::ChargedRing {
+                charge: -3.0 - i,
+                radius: 0.75 + i * 0.25,
+            },
+            SourceKindTag::ChargedDisc => SourceKind::ChargedDisc {
+                charge: 4.0 + i,
+                radius: 1.5 + i * 0.25,
+            },
+            SourceKindTag::SolidSphere => SourceKind::SolidSphere {
+                charge: -5.0 - i,
+                radius: 2.0 + i * 0.25,
+            },
+            SourceKindTag::StraightWire => SourceKind::StraightWire { current: 6.0 + i },
+            SourceKindTag::CurrentLoop => SourceKind::CurrentLoop {
+                current: -7.0 - i,
+                radius: 2.5 + i * 0.25,
+            },
+            SourceKindTag::Solenoid => SourceKind::Solenoid {
+                current: 8.0 + i,
+                radius: 0.5 + i * 0.05,
+                length: 2.0 + i * 0.5,
+                turns: 3 + index as u32,
+            },
+        };
+        scene.add(source).unwrap();
+    }
+    assert!(scene.set_enabled(2, false), "one entry stays disabled");
+    scene.set_display(SourceDisplay::Electric);
+    scene.set_softening(0.02).unwrap();
+    scene.set_allow_inaccurate(true);
+    scene
+}
+
+#[test]
+fn source_scene_round_trips_through_the_view_record() {
+    let mut state = State::new(true);
+    state.set_source_scene(source_scene());
+    state.set_field_mode(FieldMode::Sources);
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.field_mode, FieldMode::Sources);
+    assert_eq!(record.source_entries.len(), 8);
+    assert_eq!(record.source_display, SourceDisplay::Electric);
+    assert_eq!(record.source_softening, 0.02);
+    assert!(record.source_allow_inaccurate);
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: record.clone(),
+            ..Default::default()
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.source_entries, record.source_entries);
+    assert_eq!(loaded.view.source_entries.len(), 8);
+
+    let mut restored = State::new(true);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut restored, &mut controls);
+    assert_eq!(restored.field_mode, FieldMode::Sources);
+    assert_eq!(restored.sources.entries.len(), 8);
+    assert_eq!(restored.sources.display, SourceDisplay::Electric);
+    assert_eq!(restored.sources.softening, 0.02);
+    assert!(restored.sources.allow_inaccurate);
+    assert_eq!(
+        restored.sources.entries, state.sources.entries,
+        "every restored entry keeps its enabled flag, center, axis and kind parameters",
+    );
+    assert!(
+        !restored.sources.entries[2].enabled,
+        "the disabled entry stays disabled",
+    );
+    assert!(
+        restored.sources.entries[0].source.kind != SourceKindTag::PointCharge.default_source().kind,
+        "the signed strength survives instead of reverting to the kind default",
+    );
+    assert!(restored.formula == state.formula);
+}
+
+#[test]
+fn a_legacy_record_opens_in_formula_with_opt_in_off() {
+    let record: ViewRecord = serde_json::from_str("{}").unwrap();
+    assert_eq!(record.field_mode, FieldMode::Formula);
+    assert!(record.source_entries.is_empty());
+    assert_eq!(record.source_display, SourceDisplay::Both);
+    assert_eq!(record.source_softening, 0.1);
+    assert!(!record.source_allow_inaccurate);
+}
+
+#[test]
+fn malformed_source_records_are_skipped_without_losing_other_settings() {
+    let json = r#"{
+        "formula": "(1, 2, 3)",
+        "field_mode": "Sources",
+        "source_entries": [
+            {"kind":"ChargedRing","center":[0,0,0],"axis":[0,0,1],"strength":1,"radius":1},
+            {"kind":"NotAKind","center":[0,0,0],"axis":[0,0,1],"strength":1},
+            {"kind":"SolidSphere","center":[0,0,0],"axis":[0,0,1],"strength":1,"radius":0}
+        ],
+        "source_display": "Both",
+        "source_softening": 0.1,
+        "source_allow_inaccurate": "not-a-bool"
+    }"#;
+    let record: ViewRecord = serde_json::from_str(json).unwrap();
+    let mut state = State::new(true);
+    let mut controls = Controls::new();
+    record.restore(&mut state, &mut controls);
+    assert_eq!(state.formula, "(1, 2, 3)");
+    assert_eq!(state.sources.entries.len(), 1);
+    assert!(!state.sources.allow_inaccurate);
+    assert!(state.source_notice.is_some());
+}
+
+#[test]
+fn a_record_without_valid_sources_forces_formula_mode() {
+    let record = ViewRecord {
+        field_mode: FieldMode::Sources,
+        source_entries: vec![SourceRecord {
+            kind: "NotAKind".into(),
+            ..SourceRecord::default()
+        }],
+        ..ViewRecord::default()
+    };
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    record.restore(&mut state, &mut controls);
+    assert_eq!(state.field_mode, FieldMode::Formula);
+    assert!(state.sources.entries.is_empty());
+    assert!(state.source_notice.is_some());
+}
+
+#[test]
+fn source_records_keep_order_and_skip_invalid_numbers() {
+    let mut scene = SourceScene::default();
+    for tag in SourceKindTag::ALL {
+        let mut source = tag.default_source();
+        source.center = DVec3::new(1.0, 2.0, 3.0);
+        scene.add(source).unwrap();
+    }
+    let mut records = scene.to_records();
+    assert_eq!(records.len(), 8);
+    let mut invalid = records[0].clone();
+    invalid.center[0] = f64::NAN;
+    records.insert(1, invalid);
+    assert_eq!(records.len(), 9, "the crafted non-finite record is present");
+
+    let restored = SourceScene::from_records(&records);
+    assert_eq!(
+        restored.entries.len(),
+        8,
+        "a record with a non-finite number is skipped"
+    );
+    assert_eq!(
+        restored.entries[0].source.kind,
+        scene.entries[0].source.kind
+    );
+    assert_eq!(
+        restored.entries[7].source.kind,
+        scene.entries[7].source.kind
+    );
+}
+
+#[test]
+fn global_reset_clears_source_scene_and_sampling_cache() {
+    let mut app = VfApp::new();
+    let mut scene = SourceScene::default();
+    scene
+        .add(SourceKindTag::PointCharge.default_source())
+        .unwrap();
+    app.state.set_source_scene(scene);
+    app.state.set_field_mode(FieldMode::Sources);
+    app.state.refresh_source_sampling();
+    assert!(app.state.source_sampling().is_some());
+
+    app.test_harness().reset_all();
+
+    assert!(app.state.sources.entries.is_empty());
+    assert!(app.state.source_sampling().is_none());
+    assert!(app.state.source_notice.is_none());
+    assert_eq!(
+        app.state.field_mode,
+        FieldMode::Formula,
+        "global reset returns to the formula adapter",
+    );
 }

@@ -1,5 +1,6 @@
 use eframe::egui;
 use vector_field_explorer::field::FieldExpr;
+use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::cas_panel::{self, CasPanelState, Operation, ResultKind, Variable};
 use vector_field_explorer::ui::layout;
 use vector_field_explorer::ui::style_panel::{self, AppStyle};
@@ -580,6 +581,16 @@ fn button_bounds(output: &egui::PlatformOutput, label: &str) -> Option<egui::Rec
         })
 }
 
+fn button_is_disabled(output: &egui::PlatformOutput, label: &str) -> bool {
+    output
+        .accesskit_update
+        .as_ref()
+        .into_iter()
+        .flat_map(|update| update.nodes.iter())
+        .find(|(_, node)| node.role() == egui::Role::Button && node.label() == Some(label))
+        .is_some_and(|(_, node)| node.is_disabled())
+}
+
 fn labeled_bounds(output: &egui::PlatformOutput, label: &str) -> Option<egui::Rect> {
     output
         .accesskit_update
@@ -828,4 +839,41 @@ fn edits_mode_switch_and_failures_invalidate_apply_without_mutation() {
     assert_eq!(state.formula, original);
     assert_eq!(evidence(&state), before);
     assert!(state.snapshot_if_dirty().is_none());
+}
+
+#[test]
+fn cas_apply_refuses_source_mode_without_touching_the_formula() {
+    let mut state = State::new(true);
+    state.set_formula("(y, -x, 0)".into());
+    let formula = state.formula.clone();
+    let mut panel = CasPanelState::default();
+    panel.input = "x".into();
+    panel.operation = Operation::Gradient;
+    panel.refresh(3);
+    assert!(panel.can_apply(3), "the vector formula edit is applicable");
+    state.set_field_mode(FieldMode::Sources);
+    assert!(!panel.apply(&mut state, 3));
+    assert_eq!(state.formula, formula);
+}
+
+#[test]
+fn source_mode_disables_apply_and_explains_the_formula_scope() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    let mut panel = vector_panel(3);
+    state.set_field_mode(FieldMode::Sources);
+    let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert!(
+        button_is_disabled(&output.platform_output, "Apply vector"),
+        "Sources mode must disable CAS Apply"
+    );
+    assert!(
+        has_text(
+            &output.platform_output,
+            "CAS edits the formula field; switch to Formula."
+        ),
+        "Sources mode must explain the formula-only CAS scope"
+    );
 }

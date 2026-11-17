@@ -496,7 +496,10 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 **Invariants.**
 - Wide layout shows both side panels (or rails) and no compact chrome; Compact
   uses `layout::compact_plan` to hide both panels, swap the top bar, and show
-  one bottom sheet.
+  one bottom sheet. The left rail strip orders Controls, native CAS and Sources.
+- The Sources rail/body and the compact Sources tab draw
+  `sources_panel::show`; the formula bar's one-shot `open_sources` request
+  expands the wide rail or opens the compact sheet, then clears.
 - The Controls panel is drawn before the dirty rebuild, so a control edit lands
   in this frame's snapshot and counts.
 - `recentre_domain` follows a domain change: 3D to the new centre, 2D in x/y
@@ -509,7 +512,10 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   `layout::sheet_height`; a swipe down past 24 pt or a tap on the handle closes
   it.
 - Overlays paint last. The help overlay is suppressed in Compact below 520 pt of
-  viewport width; the full Help window remains reachable from the menu.
+  viewport width; the full Help window remains reachable from the menu. In
+  Sources mode a small viewport line shows `sources_panel::status_text`.
+- The Features section is hidden in Sources mode; the exact formula-field note
+  is the one-line replacement, and the Sources panel repeats it.
 
 **Pinned by.** `tests/layout_test.rs`, `tests/responsive_test.rs`,
 `tests/persistence_test.rs` (restored domain framing),
@@ -612,6 +618,75 @@ them at a point.
 
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
+
+#### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
+
+**Purpose.** Owns the editable source list and its scene-wide display settings
+without duplicating source math or validation. `FieldMode` selects Formula or
+Sources; `SourceDisplay` selects Electric, Magnetic or Both; `SourceEntry` pairs
+an enabled flag with a `Source`; `SourceScene` holds the entries, display,
+softening and accuracy opt-in. The same module turns a scene into drawable
+arrows through the real evaluator.
+
+**Public API.** `FieldMode`, `SourceDisplay`, `SourceEntry`, `SourceScene`,
+`SourceSceneError`, `SourceKindTag` (with `ALL`, `label`, `family` and
+`default_source`), `SourceRecord` (flat serde shape with `from_source` and
+`to_source`), and `MIN_SOFTENING = 1e-6` / `MAX_SOFTENING = 1.0`.
+`SourceScene` exposes `add`, `remove`, `set_enabled`, `replace`, `reset_entry`,
+`reset`, `set_softening`, `set_display`, `set_allow_inaccurate`,
+`enabled_sources`, `validate`, `to_records` and `from_records`. `SourceKindTag`
+also exposes `of(&SourceKind)`. Sampling adds `SourceSampling`,
+`SourceFamilyStatus`, `FamilyDisposition`, `classify_family_result`,
+`sample_source_scene`, and the fixed `ELECTRIC_COLOR = [255, 176, 64]` /
+`MAGNETIC_COLOR = [64, 196, 255]` used by `Both`. Readable-error helpers
+`validate_source`, `enabled_row`, `error_message` and
+`scene_error_message` keep raw enum debug out of the panel and map an
+enabled-only validation index to the 1-based row the user sees.
+
+**Invariants.** Defaults are Formula, Both, softening `0.1`, opt-in off and no
+entries. The catalogue defaults are center zero and axis +Z, charge/current
+`1.0`, line length/radius `1.0`, and a solenoid radius `0.5`, length `2.0` and
+eight turns. `add` rejects the 65th entry with `Limit { max: 64 }`; `add` and
+`replace` validate the candidate scene before committing. Softening must be
+finite and within the closed `1e-6..=1.0` range. `validate` copies only enabled
+sources through `SourceSet::new` with default `WorkLimits`, then validates
+`EvalOptions`; `InputError` maps to typed scene errors including a stable
+parameter name. `reset_entry` restores the kind defaults while keeping the
+entry's center, axis and enabled state; `reset` restores the whole default
+scene. Invalid indices make `remove`/`set_enabled`/`reset_entry` no-ops.
+`to_records` flattens every entry (including disabled ones) into the stable
+`SourceRecord` kind spellings; `from_records` rebuilds a default scene in list
+order, revalidating each record through `SourceSet` and skipping unknown kinds,
+non-finite numbers and impossible dimensions. The global reset empties the
+scene, clears the sampling cache/notice and returns to Formula; plot-section
+reset leaves sources alone.
+
+**Sampling contract.** `sample_source_scene` validates the enabled scene through
+`SourceSet::new`/`EvalOptions`, then builds one `Evaluator`. A 3D view samples
+`Domain::grid_points`; a 2D view samples the existing `PlaneFrame` local grid,
+evaluates in world and projects onto the plane, returning local `(u, v, 0)`
+positions. `TargetMet` is drawable; `AccuracyNotMet` is drawable only with the
+opt-in; `Unavailable` and non-finite values never are. `Both` tags E amber and B
+cyan without summing or sharing one magnitude scale; a single family uses the
+normal colormap over its drawn magnitudes. An enabled family with no sources is
+`empty: true` with zero arrows and no error, and invalid scenes return their
+typed message with no arrows. Counters track sources, drawn arrows, target-met,
+accuracy-not-met total/drawn and unavailable per family.
+
+**Pinned by.** [tests/source_scene_test.rs](../tests/source_scene_test.rs):
+`the_default_scene_is_empty_in_formula_mode`,
+`all_eight_kinds_have_valid_defaults_and_a_family`,
+`add_remove_enable_and_reset_change_only_the_scene`,
+`source_limit_stops_the_sixty_fifth_entry`,
+`invalid_geometry_is_rejected_with_a_parameter_name`,
+`softening_is_bounded_and_never_nan`, and
+`disabled_entries_are_not_part_of_the_validated_scene`; source-mode behaviour is
+in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
+
+**Limitations.** Sampling is CPU and static. Persistence stores the scene; the
+editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
+to Formula without clearing the scene, and native CAS refuses Sources mode. The
+user guide is [docs/sources-panel.md](../docs/sources-panel.md).
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -1102,7 +1177,8 @@ decisions that do not need a window.
   `LeftClickAction { SeedStreamline, AddParticles }`.
 - `State` with all visible fields and setters. Every setter returns `bool`
   (“did this actually change?”) and marks dirty only on a real change. Key
-  setters: `set_formula`, `set_mode`, `set_density`, `set_domain`,
+  setters: `set_formula`, `set_mode`, `set_field_mode`, `set_source_scene`,
+  `set_density`, `set_domain`,
   `set_arrow_scale`, `set_arrow_opacity`, `set_plane_dim_opacity`,
   `set_arrow_length_mode`, `set_magnitude_scale`, `set_proportional_exponent`,
   `set_colormap`, `set_auto_fit`, `set_color_range`, `set_arrows`,
@@ -1111,6 +1187,9 @@ decisions that do not need a window.
   `set_streamlines`, `set_seed_mode`, `set_left_click_action`, `set_particles`,
   `set_particle_size`, `set_particle_count`, `set_particle_appearance`,
   `set_plane`, `set_plane_enabled`, `set_plane_axis`, `set_plane_index`.
+- Source mode fields: `field_mode`, `sources`, `source_sampling` and
+  `source_notice`; `active_dimension`, `refresh_source_sampling`,
+  `source_sampling` and `reset_sources`.
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1123,8 +1202,21 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `is_3d()` means `mode_3d && field.dimension == 3`; this gates the cube grid,
-  density cap, plane mode, and streamline depth.
+- `active_dimension()` is 3 in Sources mode and the formula's component count
+  otherwise; `is_3d()` means `mode_3d && active_dimension() == 3`. This gates
+  the cube grid, density cap, plane frame/slice and streamline depth, so source
+  mode uses the existing 2D plane path in 2D and the world cube in 3D.
+- `set_field_mode` preserves formula, source scene and the 2D/3D projection,
+  clears the cached sampling/notice and marks dirty; `set_source_scene` replaces
+  the durable scene and clears the cache. Formula edits never invalidate source
+  state, and source edits never invalidate formula state. Entering Sources or
+  toggling its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
+  `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
+  has no transition bypass.
+- `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
+  source cache, source mode stores a fresh `SourceSampling`. `snapshot` in
+  Sources mode returns cached arrows only (empty if unsampled) and never samples
+  the formula.
 - `set_formula` keeps the last good `FieldExpr` on a parse error and still marks
   dirty so the status bar updates; `set_mode`/density/domain/formula-dimension
   changes call `sync_plane` with the previous grid.
@@ -1147,9 +1239,10 @@ decisions that do not need a window.
   Tracing is RK4 with step `0.5 * spacing`, budget 120, both directions.
 - Click bursts: 5 seeds, 8 % of the smallest positive extent, deterministic from
   the clicked bits; 2D pins z, 3D jitters depth.
-- `particle_target()` is `Some` only when `particles && field.dimension == 3`,
-  independent of the view mode, so a two-component formula gets no cloud in 3D
-  while a three-component field gets one in the 2D plane slice.
+- `particle_target()` is `Some` only when `particles && active_dimension() == 3`
+  in Formula mode (never in Sources), independent of the view mode, so a
+  two-component formula gets no cloud in 3D while a three-component field gets
+  one in the 2D plane slice.
 - `drag_channel`: middle always pans; secondary orbits in 3D unless Shift, pans
   in 2D; primary orbits in 3D and pans in 2D.
 - `apply_camera_input`: 3D orbit/pan/zoom uses orbit distance and FOV; 2D pans
@@ -1160,7 +1253,7 @@ decisions that do not need a window.
   matching last seed, and only truncates particles when the current count is at
   least the pre-click count.
 
-**Pinned by.** `tests/viewmodel_test.rs` (66 tests) is the main contract:
+**Pinned by.** `tests/viewmodel_test.rs` (76 tests) is the main contract:
 `snapshot_rebuilds_only_when_dirty`, `garbage_formula_keeps_field_and_reports_error`,
 `invalid_edit_reports_error_without_losing_the_field`,
 `unchanged_setters_report_false_and_stay_clean`, `density_clamped_per_mode`,
@@ -1201,8 +1294,8 @@ storage key, with migration and corruption tolerance.
 | Record | Fields | Compatibility |
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
-| `LayoutState` | `controls_expanded`, `presets_expanded`, `controls_width`, `presets_width`, `help_visible` | `#[serde(default)]`; widths sanitized |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); `normalize` and `speed` are read-only legacy |
+| `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1221,8 +1314,14 @@ storage key, with migration and corruption tolerance.
    `SeedStreamline`. Old `Pyramid`/`Line` spellings decode to Cone/Flat.
 8. Unknown future keys are ignored by serde; absent fields take their documented
    defaults.
+9. Source records restore after the formula/controls: each entry is revalidated
+   through `SourceScene::from_records`, malformed entries are skipped with a
+   one-line `source_notice`, softening outside `1e-6..=1.0` falls back to `0.1`,
+   the accuracy opt-in is true only for an exact stored `true`, and Sources mode
+   falls back to Formula when no valid entry remains. `formula` and the source
+   scene never overwrite each other.
 
-**Tested by.** `tests/persistence_test.rs` (39 tests):
+**Tested by.** `tests/persistence_test.rs` (51 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -1234,8 +1333,14 @@ storage key, with migration and corruption tolerance.
 `compact_mode_and_sheet_are_never_written_to_storage`,
 `a_bad_formula_in_the_record_keeps_the_last_good_field`,
 `each_reference_preference_survives_storage_restore_and_constructor_independently`,
-`a_partial_reference_record_defaults_only_the_missing_coordinate_flag`, and
-the restore/sanitize tests.
+`a_partial_reference_record_defaults_only_the_missing_coordinate_flag`,
+`source_scene_round_trips_through_the_view_record`,
+`a_legacy_record_opens_in_formula_with_opt_in_off`,
+`malformed_source_records_are_skipped_without_losing_other_settings`,
+`a_record_without_valid_sources_forces_formula_mode`,
+`source_records_keep_order_and_skip_invalid_numbers`,
+`global_reset_clears_source_scene_and_sampling_cache`, and the
+restore/sanitize tests.
 
 **Limitations.** There is no explicit schema version number; compatibility is a
 set of serde defaults and aliases that must be maintained forever. Camera state,
@@ -1922,7 +2027,7 @@ thread.
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
 `layout`, `menu`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
-`status_bar`, `style_panel`, `top_bar`, `transport`.
+`sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -1934,7 +2039,12 @@ operation preview, copy, and explicitly applying validated vector results.
 rail/body independently of Controls, and Compact reuses the single sheet.
 `tests/cas_rails_test.rs` exercises actual rail/menu/tab/Apply and resize paths.
 Preview identity includes input, operation, variable, and the current app mode;
-CAS scratch is not persisted.
+CAS scratch is not persisted. Formula mode keeps its historical authoritative
+2D/3D app-mode dimension (not the field's arity). Sources mode has no formula
+editor: `apply` refuses it before dimension/vector checks, and `show` disables
+Apply with the exact explanation `CAS edits the formula field; switch to
+Formula.` The preview dimension reads `State::active_dimension()` in Sources
+mode without changing formula-mode semantics.
 
 #### `src/ui/arrows.rs` — unused placeholder (not compiled)
 
@@ -1983,14 +2093,50 @@ plot-section reset.
 
 **Pinned by.** `tests/plot_ui_test.rs`.
 
+#### `src/ui/sources_panel.rs` — editable source scene
+
+**Purpose.** The dedicated Sources rail/sheet: display selector (Electric /
+Magnetic / Both with the E amber / B cyan legend), Add combo and button,
+per-entry enable, kind, center/axis and kind parameters, Remove, Reset this
+source, a collapsible Advanced area with softening, the model note, the exact
+accuracy opt-in and the sampling status, plus the formula-field help line.
+
+**Public API.** `SourceDraft`, `SourcesPanelState` (`add_kind`, `drafts`) with
+`sync`, `mark_edited`, `set_radius`, `set_strength`, `set_length`, `set_turns`,
+`set_center`, `set_axis`, `commit`, `set_softening`, `set_allow_inaccurate`;
+`show(ui, state, panel, compact)`; `status_text(&SourceSampling)`.
+
+**Invariants.**
+- A draft keeps invalid text across frames; `sync` only rebuilds new/removed
+  entries or non-dirty drafts.
+- Invalid edits set `draft.error` and never call `set_source_scene`; valid edits
+  replace only that entry. `Add` is disabled at `MAX_SOURCES = 64`.
+- Softening uses the scene range `1e-6..=1.0`; the opt-in and display go through
+  the committed scene setters. Any valid source edit clears `source_notice`.
+- `status_text` reports hidden versus shown accuracy and unavailable counts per
+  family without inventing counters; a scene validation error is shown readably.
+- The Sources help line explains that streamlines/particles remain formula
+  features. `Advanced` starts open so the opt-in and status are discoverable.
+
+**Pinned by.** `tests/sources_panel_test.rs`
+(`sources_panel_adds_removes_and_resets_through_real_widgets`,
+`invalid_draft_does_not_replace_the_committed_source`,
+`source_notice_is_rendered_and_survives_until_dismissed`,
+`scene_error_text_names_the_displayed_row_and_parameter`,
+`add_is_disabled_at_the_source_limit`), and
+`tests/button_sizing_test.rs::compact_sources_panel_buttons_keep_touch_targets`.
+
 #### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text }`, `FormulaBarState::new`, `show(ui,
-state, bar, compact)`.
+**Public API.** `FormulaBarState { text, open_sources }`, `FormulaBarState::new`,
+`show(ui, state, bar, compact)`.
 
 **Invariants.**
+- In vector mode a Formula/Sources selector calls `State::set_field_mode`;
+  Sources hides the text editor and shows a source summary plus `Open Sources`,
+  which raises `bar.open_sources` for the app to consume.
 - The bar's text mirror is refreshed from `state.active_source()` when they
   differ, so presets, restores and kind changes update the field without
   overwriting a preserved scalar draft.
@@ -2000,14 +2146,17 @@ state, bar, compact)`.
   vector mode keeps comma-separated component syntax.
 - Clicking 3D/2D calls `state.set_mode` (which selects the saved Curve/Surface
   in plot mode).
-- Compact sets a 44 pt interaction height and uses
-  `layout::formula_field_width` (≥ 40 % of the bar); wide lets the field fill
-  the remainder.
+- Compact sets a 44 pt interaction height, wraps rather than overflowing the
+  panel, and uses `layout::formula_field_width` (≥ 40 % of the bar); wide lets
+  the field fill the remainder.
 
-**Pinned by.** There is no dedicated `formula_bar_test.rs`; the setter contract
-is in `tests/viewmodel_test.rs` (`valid_formula_replaces_field_and_clears_error`,
-`garbage_formula_keeps_field_and_reports_error`) and the width rule is in
-`tests/responsive_test.rs::the_formula_field_keeps_at_least_forty_percent_of_the_bar`.
+**Pinned by.** `tests/sources_panel_test.rs::formula_bar_switches_mode_and_hides_the_editor`;
+the setter contract is in `tests/viewmodel_test.rs`
+(`valid_formula_replaces_field_and_clears_error`,
+`garbage_formula_keeps_field_and_reports_error`), the width rule in
+`tests/responsive_test.rs::the_formula_field_keeps_at_least_forty_percent_of_the_bar`,
+and the real hitboxes in
+`tests/button_sizing_test.rs::real_formula_transport_and_help_buttons_fit_and_grow`.
 
 **Limitations.** No syntax highlighting, autocomplete, or history.
 
@@ -2019,23 +2168,31 @@ window.
 **Public API.** Font-size constants, `HelpHeadingStyle`,
 `section_heading_style`, `OVERLAY_HEADING_COLOR`, `window_heading_color`,
 `HelpRow`, `HelpSection`, `FLY_HELP_*`, `SEED_HELP_*`, `LEFT_CLICK_HELP_*`,
-`HELP_SECTIONS`, `all_rows`, `sections_for`, `rows_for`, `FORMULA_HINT`, `show`,
-`help_window`.
+`HELP_SECTIONS`, `SCALAR_HELP_SECTION`, `SOURCES_HELP_SECTION`,
+`scalar_help_rows`, `sources_help_rows`, `all_rows`, `sections_for`,
+`rows_for`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
 - `HELP_SECTIONS` is the single source of strings; the overlay shows the active
-  view + Global, the window shows all three groups. A static, not a const, so
-  both surfaces can be proven to share the allocation.
+  view + Global, the window shows all three groups plus the Scalar plots and
+  Sources sections. A static, not a const, so both surfaces can be proven to
+  share the allocation.
+- The Sources section covers formula/source separation, all eight editors,
+  E/B/Both without summation, scene-wide softening, the default-off accuracy
+  opt-in, hidden non-finite/unavailable results, and that streamlines,
+  particles and click seeding remain formula features.
 - `?`/F1 toggle the overlay; Esc and the × dismiss it; the window has its own
   open flag.
 - Headings and rows use pinned sizes/colours; the window heading is the theme's
   strong colour, the overlay heading is fixed light grey.
 - The formula hint is not an input row.
 
-**Pinned by.** `tests/help_overlay_test.rs` (14 tests):
+**Pinned by.** `tests/help_overlay_test.rs` (16 tests):
 `the_overlay_and_window_share_one_table`,
 `the_overlay_shows_only_the_active_view_and_global`,
 `every_binding_is_listed_exactly_once_in_its_group`,
+`help_explains_source_mode_and_accuracy_opt_in`,
+`the_help_window_renders_the_sources_section`,
 `the_stale_right_drag_pans_copy_is_gone`,
 `two_d_help_never_mentions_orbiting`,
 `help_typography_ranks_the_window_title_above_section_headings_and_rows`.
@@ -2051,7 +2208,8 @@ tab-bar/sheet plan.
 **Public API.** `RAIL_WIDTH = 32`, `RAIL_FRAME_MARGIN = 4`,
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
-`MIN_PANEL_WIDTH = 180`, `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
+`DEFAULT_SOURCES_WIDTH = 280`, `MIN_PANEL_WIDTH = 180`,
+`MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
 `FORMULA_MIN_FRACTION = 0.40`; `LayoutMode`, `SheetState`, `layout_mode`,
@@ -2059,19 +2217,23 @@ tab-bar/sheet plan.
 `RailSide`, `rail_text_angle`, `rail_chevron`, `collapse_chevron`,
 `rail_label_band`, `rail_chevron_pos`, `rail_tooltip`, `RailLabel`,
 `LayoutState`, `clamp_width`, `rail`, `RailPanel`, `rail_panel`,
-`collapse_button`.
+`collapse_button`, `collapse_button_named`.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores five desktop fields plus native-only
+- Compact is transient: `LayoutState` stores seven desktop fields (Controls,
+  Presets and Sources visibility/width plus help) and native-only
   `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
+- `SheetState::Sources` shares the one compact sheet.
+- Sources defaults to collapsed at 280 pt and sanitizes to 180..=460.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
   outward on a rail and inward on a collapse button; the rail is the only
   restore affordance; the real content band is narrower than the outer width.
 - `LayoutState::sanitized` clamps widths; `reset` restores first-launch layout
-  (Controls/Presets expanded, native CAS closed, help visible).
+  (Controls/Presets expanded, Sources collapsed, native CAS closed, help
+  visible).
 - `formula_field_width` never goes below 40 % of the bar and never returns a
   negative width.
 - Compact buttons have a 40-point floor; the tab bar grows beyond its 48-point
@@ -2154,8 +2316,9 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 `load_field`, `show`.
 
 **Invariants.**
-- Built-in field presets load formula and dimension through the viewmodel
-  setters; the highlight only appears when the clicked name matches the current
+- Built-in field presets return to Formula first, then load formula and
+  dimension through the viewmodel setters; the saved source scene is preserved
+  and the highlight only appears when the clicked name matches the current
   formula and mode (duplicate formulas highlight one row).
 - Saving with an existing name replaces it; the new row becomes active.
 - Delete asks for confirmation; delete removes from list and disk (or
@@ -2166,9 +2329,10 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 - Native `new` logs a load failure and starts empty; wasm storage failure shows
   one note but keeps the in-memory list usable.
 
-**Pinned by.** `tests/ui_preset_test.rs` (13):
+**Pinned by.** `tests/ui_preset_test.rs` (17):
 `every_built_in_field_preset_loads_through_the_panel`,
 `loading_a_field_preset_sets_its_formula_and_dimension`,
+`classic_presets_return_to_formula_and_keep_the_source_scene`,
 `loading_a_duplicate_formula_preset_highlights_only_the_clicked_name`,
 `saving_highlights_the_row_and_a_duplicate_replaces_it`,
 `deleting_waits_for_confirmation_then_clears_the_highlight`,

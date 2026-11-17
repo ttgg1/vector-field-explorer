@@ -13,6 +13,7 @@ use crate::export::{load_wasm_presets, save_wasm_presets};
 use crate::plot::PlotKind;
 use crate::presets::{PresetCategory, START_HERE, presets, presets_in};
 use crate::render::Camera;
+use crate::source_scene::FieldMode;
 use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
 
@@ -297,6 +298,10 @@ impl PresetPanel {
     pub fn load_field(&mut self, name: &str, state: &mut State) -> bool {
         match presets().iter().find(|preset| preset.name == name) {
             Some(preset) => {
+                // A field preset is always a vector formula: return to Formula
+                // before the vector projection/formula setters so the saved
+                // source scene is preserved but no longer sampled.
+                state.set_field_mode(FieldMode::Formula);
                 // A field preset is always a vector field: return there before
                 // the vector projection/formula setters so a scalar kind can
                 // never reinterpret the preset text as a scalar draft.

@@ -36,6 +36,7 @@ use crate::particles::{
     ParticleAppearance, ParticleColorMode,
 };
 use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
+use crate::source_scene::{FieldMode, SourceDisplay};
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
@@ -287,6 +288,19 @@ pub fn streamline_count_label(count: u32) -> String {
     } else {
         count.to_string()
     }
+}
+
+/// Explained in place of the Coloring widgets when the Both source display
+/// owns the colours: fixed family colours replace the colormap, so there is no
+/// shared magnitude range to choose.
+pub const BOTH_COLORING_NOTE: &str = "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic to use a colormap.";
+
+/// Whether the Coloring section renders the colormap, auto-fit and range
+/// widgets. Sources in the `Both` display paint fixed family colours instead,
+/// so those controls would be silently inert; single-family source displays
+/// and Formula mode use the normal colormap path.
+pub fn coloring_controls_visible(field_mode: FieldMode, display: SourceDisplay) -> bool {
+    !(field_mode == FieldMode::Sources && display == SourceDisplay::Both)
 }
 
 /// Whether the particle size slider applies. With Particles off there are no
@@ -574,6 +588,7 @@ fn show_inner(
     };
     let domain = state.domain;
     let vector_mode = state.is_vector_mode();
+    let coloring_visible = coloring_controls_visible(state.field_mode, state.sources.display);
 
     // The plane mirror follows the seam (which clamps/recentres it on grid
     // changes) except while its slider is mid-drag: the in-flight value has to
@@ -803,11 +818,14 @@ fn show_inner(
         }
     });
 
-    section(ui, Section::Features, controls, None, |ui, controls| {
-        if !vector_mode {
-            ui.label("Streamlines and particles are vector-only; their values are retained.");
-        }
-        ui.add_enabled_ui(vector_mode, |ui| {
+    if state.field_mode == crate::source_scene::FieldMode::Sources {
+        ui.label("Streamlines and particles use the formula field; switch to Formula to use them.");
+    } else {
+        section(ui, Section::Features, controls, None, |ui, controls| {
+            if !vector_mode {
+                ui.label("Streamlines and particles are vector-only; their values are retained.");
+            }
+            ui.add_enabled_ui(vector_mode, |ui| {
         ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
             "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
         );
@@ -1011,9 +1029,14 @@ fn show_inner(
                 .on_disabled_hover_text("Turn Particles on to change their appearance");
             });
         });
-    });
+        });
+    }
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
+        if !coloring_visible {
+            ui.label(BOTH_COLORING_NOTE);
+            return;
+        }
         if !vector_mode {
             ui.label(
                 "Vector magnitude range is disabled while plotting; plot colours live in Plot.",

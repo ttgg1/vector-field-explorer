@@ -1,7 +1,7 @@
 //! Native-only symbolic formula tools. All editor state is transient.
 use eframe::egui;
 
-use crate::{cas, field::FieldExpr, viewmodel::State};
+use crate::{cas, field::FieldExpr, source_scene::FieldMode, viewmodel::State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Operation {
@@ -134,12 +134,17 @@ impl CasPanelState {
         })
     }
     pub fn apply(&mut self, state: &mut State, dimension: usize) -> bool {
+        // CAS edits the formula editor only. Sources mode has no formula
+        // editor, so refuse before any dimension/vector validation.
+        if state.field_mode == FieldMode::Sources {
+            return false;
+        }
         // CAS mutates the vector editor only. A direct call in scalar mode is
         // inert; there is no scalar CAS semantics in this task.
         if !state.is_vector_mode() {
             return false;
         }
-        let current_dimension = if state.mode_3d { 3 } else { 2 };
+        let current_dimension = cas_dimension(state);
         if dimension != current_dimension {
             return false;
         }
@@ -161,6 +166,22 @@ impl CasPanelState {
     }
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+}
+
+/// The dimension the CAS editor previews. Formula mode keeps its historical
+/// authoritative 2D/3D app-mode source (not the field's arity); Sources mode has
+/// no formula editor but its field is always three-dimensional.
+fn cas_dimension(state: &State) -> usize {
+    match state.field_mode {
+        FieldMode::Sources => state.active_dimension(),
+        FieldMode::Formula => {
+            if state.mode_3d {
+                3
+            } else {
+                2
+            }
+        }
     }
 }
 
@@ -283,8 +304,9 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
-    panel.refresh(if state.mode_3d { 3 } else { 2 });
-    let dimension = if state.mode_3d { 3 } else { 2 };
+    let sources_mode = state.field_mode == FieldMode::Sources;
+    let dimension = cas_dimension(state);
+    panel.refresh(dimension);
     let content_width = ui.available_width();
     let reset = ui
         .button("Reset")
@@ -362,16 +384,19 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
                 ui.ctx().copy_text(p.formula.clone());
             }
             if p.kind == ResultKind::Vector {
-                let enabled = vector_mode && panel.can_apply(dimension);
+                let enabled = !sources_mode && vector_mode && panel.can_apply(dimension);
                 let response = ui
                     .add_enabled(enabled, egui::Button::new("Apply vector"))
                     .on_hover_text("Replace the plotted field with this valid vector formula");
-                let response = if vector_mode {
+                let response = if sources_mode {
                     response
-                } else {
+                        .on_disabled_hover_text("CAS edits the formula field; switch to Formula.")
+                } else if !vector_mode {
                     response.on_disabled_hover_text(
                         "CAS apply is vector-only; return to Vector field mode",
                     )
+                } else {
+                    response
                 };
                 if response.clicked() {
                     panel.apply(state, dimension);
@@ -379,7 +404,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
             }
         });
     }
-    if !vector_mode
+    if sources_mode {
+        ui.label("CAS edits the formula field; switch to Formula.");
+    } else if !vector_mode
         && panel
             .preview
             .as_ref()
