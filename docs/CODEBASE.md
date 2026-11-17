@@ -856,6 +856,78 @@ retardation or physical singular limit. The cap benchmark measures unit-current
 cache preparation, not frame time; it is recorded in
 [docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
 
+#### `src/material.rs` — bounded analytic material cases and outlines
+
+**Purpose.** Pure Task 1 seam for the Materials mode. Four canonical analytic
+cases are supported: a dielectric sphere, a planar dielectric interface, a
+permeable sphere and a planar permeable interface. Each case exposes `Total`,
+`Applied` and `Response`; `response` is exactly `total - applied`. Electric and
+magnetic families are selected by case and are never summed. The module is CPU
+only and has no renderer, clock, source, persistence or export dependency.
+
+**Public API.** `MaterialCase`, `MaterialView`, `MaterialFamily`,
+`MaterialScene` (`Debug`, `Clone`, `PartialEq`, `Default`), `MaterialError`,
+`MaterialLine`, `MaterialSampling`, `material_family`,
+`material_assumptions`, `material_warning`, `validate_material`,
+`material_field`, `material_applied`, `material_response`, `material_outline`,
+and `sample_materials`. Constants are
+`MATERIAL_DEFAULT_RADIUS`, `MATERIAL_DEFAULT_INTERFACE_OFFSET`,
+`MATERIAL_INTERFACE_TOLERANCE_FACTOR`, `MATERIAL_MIN_RELATIVE`,
+`MATERIAL_MAX_RELATIVE`, `MATERIAL_ELECTRIC_COLOR` (amber `[255,176,64]`) and
+`MATERIAL_MAGNETIC_COLOR` (cyan `[64,196,255]`); the exact warning strings are
+exported as `MATERIAL_INTERFACE_WARNING`, `MATERIAL_RESPONSE_EMPTY_WARNING`,
+`MATERIAL_EMPTY_DOMAIN_WARNING` and `MATERIAL_COINCIDENT_SLICE_WARNING`.
+
+**Invariants.** Relative constants are finite in `1.0..=100.0`, the applied
+field is finite and nonzero, sphere radius is finite and positive, and boundary
+offset is finite. Sphere formulas use the standard dipole coefficient and
+uniform interior value; planar formulas keep tangential E / normal B continuous
+(and normal D / tangential H continuous where applicable). The no-contrast
+limit returns the applied field and an identically zero response. A point
+exactly on the interface returns `MaterialError::Unsupported`; sampling applies
+the domain-scaled `1e-9 * max(domain extent, 1.0)` guard before evaluation,
+counts `omitted_interface`, and keeps near-interface samples on both sides.
+Vectors below `1e-6`, non-finite values and invalid scenes never draw arrows.
+`response_empty` is set only for the `Response` view when every finite sampled
+response is below `1e-6`. Warnings join in the fixed order interface omission,
+empty response, empty/impossible domain, coincident slice. Sampling uses fixed
+family colours with no colormap or softening.
+
+**2D and outline.** With `Some(PlaneFrame)`, sampling visits the frame's local
+grid, evaluates the same 3D field at `to_world(local)`, returns local positions
+and projects the selected family vector with `project`. `material_outline`
+draws the 3D sphere's three great circles and applied radial marker, or only the
+slice cut circle; it draws the 3D boundary square and normal marker, or the
+clipped slice-intersection line. Parallel noncoincident boundary slices draw
+nothing; a coincident slice draws the local square and adds the discontinuity
+warning. Every returned coordinate is finite.
+
+**Pinned by.** [tests/material_test.rs](../tests/material_test.rs):
+`dielectric_sphere_matches_inside_far_field_and_no_contrast`,
+`dielectric_boundary_conditions_and_response_are_piecewise`,
+`permeable_sphere_and_boundary_match_their_interface_conditions`,
+`applied_plus_response_reconstructs_total_for_all_cases`,
+`exact_interface_hits_are_unsupported`,
+`validation_rejects_bad_constants_geometry_and_applied`,
+`sampling_omits_exact_interface_but_keeps_near_interface`,
+`no_contrast_response_is_empty_with_exact_note`,
+`empty_domain_returns_warning_not_arrows`,
+`warnings_join_in_the_deterministic_documented_order`,
+`outline_uses_slice_intersection_only`,
+`every_design_case_has_a_family_assumptions_and_fixed_colour`,
+`two_dimensional_sampling_is_a_projected_three_dimensional_slice`, and
+`sphere_and_boundary_fields_are_finite_off_the_interface`. Cap evidence is
+[tests/material_bench_test.rs](../tests/material_bench_test.rs) via
+`scripts/bench-materials.sh`; results are recorded in
+[docs/perf/materials-performance.md](perf/materials-performance.md).
+
+**Limitations.** Exact catalog only: no general material solver, overlapping
+inclusions, anisotropic/nonlinear/dispersive media, conductors, free surface
+charge, hysteresis or eddy currents. 2D is a slice of the same 3D case. The
+benchmark measures analytic sampling, not frame time or browser performance.
+The Materials panel, state/app integration, persistence and export provenance
+belong to later planned tasks and are not part of this module yet.
+
 #### `src/source_presets.rs` — built-in source-scene presets
 
 **Purpose.** The ten illustrative source scenes offered above the saved camera
