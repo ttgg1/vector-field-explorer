@@ -1,6 +1,6 @@
 # Animation Export Design
 
-**Status:** PROPOSED
+**Status:** APPROVED by owner on 2026-11-17
 **Date:** 2026-11-17
 **Issue:** [#71](https://github.com/ttgg1/vector-field-explorer/issues/71)
 **Dependencies:** #16 (shared clock scalar animation), #27 (induction), #28 (ODE/clock seams), #15 (CLI export)
