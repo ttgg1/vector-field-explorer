@@ -28,6 +28,7 @@ use crate::streamlines::click_seed;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
+use crate::ui::material_panel::MaterialPanelState;
 use crate::ui::menu::{self, MenuAction};
 use crate::ui::ode_panel::OdePanelState;
 use crate::ui::presets::PresetPanel;
@@ -130,6 +131,9 @@ pub struct VfApp {
     /// Panel-local draft for the ODE rail/sheet; only valid edits reach the
     /// committed scene.
     pub ode: OdePanelState,
+    /// Panel-local draft for the Materials rail/sheet; only valid edits reach
+    /// the committed scene.
+    pub material: MaterialPanelState,
     /// Effective width for the later Presets phase; never persisted.
     wide_presets_width: f32,
     #[cfg(not(target_arch = "wasm32"))]
@@ -318,6 +322,13 @@ impl VfApp {
         let last_plot_was_vector = state.is_vector_mode();
         let last_field_mode = state.field_mode;
         let last_ode_epoch = Some(state.ode_epoch);
+        // A restored Materials record must seed the panel draft from the
+        // committed scene, exactly like entering the mode; otherwise the panel
+        // would show a stale default on the first frame.
+        let mut material = MaterialPanelState::default();
+        if state.field_mode == FieldMode::Materials {
+            material.sync_from(&state);
+        }
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
@@ -330,6 +341,7 @@ impl VfApp {
             sources: SourcesPanelState::default(),
             induction: InductionPanelState::default(),
             ode: OdePanelState::default(),
+            material,
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),

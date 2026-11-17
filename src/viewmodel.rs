@@ -23,6 +23,10 @@ use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
 };
+use crate::material::{
+    MaterialError, MaterialSampling, MaterialScene, material_outline, sample_materials,
+    validate_material,
+};
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
@@ -43,6 +47,10 @@ pub const DEFAULT_DENSITY_3D: u32 = 16;
 pub const MAX_DENSITY_2D: u32 = 200;
 /// Density the sidebar clamps the 3D grid to.
 pub const MAX_DENSITY_3D: u32 = 40;
+/// Densest supported 3D Materials grid.
+pub const MATERIAL_MAX_DENSITY_3D: u32 = 40;
+/// Densest supported 2D Materials slice grid.
+pub const MATERIAL_MAX_DENSITY_2D: u32 = 200;
 /// The smallest density the sidebar offers.
 pub const MIN_DENSITY: u32 = 4;
 /// Bounds and default of the particle dot size (ticket 30): a multiplier on
@@ -309,6 +317,13 @@ pub struct State {
     pub induction_error: Option<String>,
     /// One-line source status/hint owned by the panel and status bar.
     pub source_notice: Option<String>,
+    /// Durable bounded analytic material scene, preserved across mode switches.
+    pub material: MaterialScene,
+    /// The last material sampling pass for the active Materials adapter.
+    pub material_sampling: Option<MaterialSampling>,
+    /// The last rejected material edit or sampling problem, shown by the
+    /// status bar. A failed edit never replaces the last valid scene/sampling.
+    pub material_error: Option<String>,
     /// Durable ODE workbench scene, preserved across mode switches.
     pub ode: OdeScene,
     /// Precomputed playback data; replaced only by a committed scene/edit.
@@ -382,7 +397,9 @@ impl State {
                 // Ode owns a precomputed solution; playback time is mirrored
                 // only and must never re-integrate or dirty the scene.
                 FieldMode::Ode => {}
-                FieldMode::Sources => {}
+                // Materials and Sources are static: the clock never dirties
+                // their scenes.
+                FieldMode::Sources | FieldMode::Materials => {}
             }
         } else {
             self.scalar_time_changed();
@@ -396,7 +413,7 @@ impl State {
     pub fn has_time_dependent_consumer(self: &State) -> bool {
         if self.is_vector_mode() {
             match self.field_mode {
-                FieldMode::Sources => false,
+                FieldMode::Sources | FieldMode::Materials => false,
                 FieldMode::Induction => self.induction.is_animated(),
                 // A stored solution plays on the shared clock; a pending lazy
                 // solve keeps the clock alive long enough to produce it.
@@ -474,6 +491,9 @@ impl State {
             induction_sampling: None,
             induction_error: None,
             source_notice: None,
+            material: MaterialScene::default(),
+            material_sampling: None,
+            material_error: None,
             ode: OdeScene::default(),
             ode_solution: None,
             ode_error: None,
@@ -520,7 +540,7 @@ impl State {
     /// dimensional; the formula reports its own component count.
     pub fn active_dimension(self: &State) -> usize {
         match self.field_mode {
-            FieldMode::Sources | FieldMode::Induction => 3,
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials => 3,
             // The solved scene owns the dimension; before a lazy solve, the
             // selected scene does. Never hardcode the projection here.
             FieldMode::Ode => self
@@ -541,10 +561,10 @@ impl State {
         if self.field_mode == mode {
             return false;
         }
-        if mode == FieldMode::Ode && !self.is_vector_mode() {
-            // Ode is a vector-viewport concept: a scalar kind would hide the
-            // trajectory scene. Restoring the vector kind also restores the
-            // projection the vector view last held.
+        if matches!(mode, FieldMode::Ode | FieldMode::Materials) && !self.is_vector_mode() {
+            // Ode and Materials are vector-viewport concepts: a scalar kind
+            // would hide their scenes. Restoring the vector kind also restores
+            // the projection the vector view last held.
             self.set_plot_kind(crate::plot::PlotKind::VectorField);
         }
         let previous_grid = self.plane_grid();
@@ -554,6 +574,9 @@ impl State {
         self.source_sampling = None;
         self.source_notice = None;
         self.induction_sampling = None;
+        // A mode switch always invalidates the sampled material frame; the
+        // durable scene (and any edit error) stays.
+        self.material_sampling = None;
         if mode != FieldMode::Induction {
             // Leaving Induction drops the prepared geometry cache; the durable
             // scene stays so returning re-prepares at the current clock time.
@@ -578,17 +601,25 @@ impl State {
         true
     }
 
-    /// Re-clamp the stored density when Sources makes the active sampling
-    /// cubic. This is the one path that can turn a legal 200² 2D density into
-    /// 3D sampling, so the 40³ cap must apply here even though `set_density`
-    /// already clamps at edit time. Induction is capped at sampling time
-    /// instead, so its stored density survives a mode visit untouched.
+    /// Re-clamp the stored density when a mode makes the active sampling
+    /// cubic or denser than its cap. This is the one path that can turn a
+    /// legal 200² 2D density into 3D sampling, so the 40³ cap must apply here
+    /// even though `set_density` already clamps at edit time. Materials uses
+    /// the same caps as the general 2D/3D grid; Induction is capped at sampling
+    /// time instead, so its stored density survives a mode visit untouched.
     fn clamp_source_density(self: &mut State) -> bool {
-        if self.field_mode == FieldMode::Sources && self.is_3d() && self.density > MAX_DENSITY_3D {
-            self.density = MAX_DENSITY_3D;
-            true
-        } else {
-            false
+        let cap = match self.field_mode {
+            FieldMode::Sources if self.is_3d() => Some(MAX_DENSITY_3D),
+            FieldMode::Materials if self.is_3d() => Some(MATERIAL_MAX_DENSITY_3D),
+            FieldMode::Materials => Some(MATERIAL_MAX_DENSITY_2D),
+            _ => None,
+        };
+        match cap {
+            Some(cap) if self.density > cap => {
+                self.density = cap;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -856,6 +887,65 @@ impl State {
         self.mark_dirty()
     }
 
+    /// Replace the durable material scene. Validation runs first; an invalid
+    /// edit leaves the previous scene and its last valid sampling untouched and
+    /// records the readable error. A valid edit clears that error and
+    /// invalidates the sampled frame.
+    pub fn set_material_scene(self: &mut State, scene: MaterialScene) -> Result<(), MaterialError> {
+        if let Err(error) = validate_material(&scene) {
+            let message = material_error_text(&error);
+            self.material_error = Some(message);
+            return Err(error);
+        }
+        if scene == self.material {
+            self.material_error = None;
+            return Ok(());
+        }
+        self.material = scene;
+        self.material_error = None;
+        self.material_sampling = None;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Rebuild the Materials frame at the current domain, density and plane.
+    /// A 3D view samples the capped cube; a 2D view samples its existing
+    /// [`PlaneFrame`] slice. Validation failures and sampling warnings are
+    /// carried by the returned sampling; the status bar reads both.
+    pub fn refresh_material_sampling(self: &mut State) {
+        if self.field_mode != FieldMode::Materials {
+            self.material_sampling = None;
+            return;
+        }
+        if let Err(error) = validate_material(&self.material) {
+            self.material_error = Some(material_error_text(&error));
+            self.material_sampling = None;
+            return;
+        }
+        let plane = self.plane_frame();
+        let n = self.capped_density();
+        let grid = if plane.is_some() {
+            UVec3::new(n, n, 1)
+        } else {
+            UVec3::splat(n)
+        };
+        self.material_sampling = Some(sample_materials(
+            &self.material,
+            &self.domain,
+            grid,
+            plane.as_ref(),
+        ));
+    }
+
+    /// Global reset's Materials half: restore the default bounded scene and
+    /// drop the sampled frame and any edit error. The caller selects Formula.
+    pub fn reset_material(self: &mut State) -> bool {
+        self.material = MaterialScene::default();
+        self.material_sampling = None;
+        self.material_error = None;
+        self.mark_dirty()
+    }
+
     /// The projection: an orthographic front view for 2D, the orbiting
     /// perspective camera for 3D.
     pub fn set_mode(self: &mut State, mode_3d: bool) -> bool {
@@ -882,6 +972,8 @@ impl State {
         let max = match self.field_mode {
             FieldMode::Induction if self.is_3d() => MAX_INDUCTION_DENSITY_3D,
             FieldMode::Induction => MAX_INDUCTION_DENSITY_2D,
+            FieldMode::Materials if self.is_3d() => MATERIAL_MAX_DENSITY_3D,
+            FieldMode::Materials => MATERIAL_MAX_DENSITY_2D,
             _ if self.is_3d() => MAX_DENSITY_3D,
             _ => MAX_DENSITY_2D,
         };
@@ -1150,7 +1242,7 @@ impl State {
     /// that hides the click lines: off hides both and refuses new seeds, so
     /// re-enabling reproduces the previous clicks. Both modes accept clicks.
     pub fn accepts_click_seed(self: &State) -> bool {
-        self.field_mode != FieldMode::Ode && self.streamlines
+        !matches!(self.field_mode, FieldMode::Ode | FieldMode::Materials) && self.streamlines
     }
 
     /// Particle tracing, not yet drawn.
@@ -1211,7 +1303,7 @@ impl State {
     pub fn particle_target(self: &State) -> Option<usize> {
         if matches!(
             self.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
         ) {
             return None;
         }
@@ -1382,6 +1474,14 @@ impl State {
         let n = self.density.max(MIN_DENSITY);
         match self.field_mode {
             FieldMode::Sources if self.is_3d() => n.min(MAX_DENSITY_3D),
+            FieldMode::Materials => {
+                let cap = if self.is_3d() {
+                    MATERIAL_MAX_DENSITY_3D
+                } else {
+                    MATERIAL_MAX_DENSITY_2D
+                };
+                n.min(cap)
+            }
             FieldMode::Induction => {
                 let cap = if self.is_3d() {
                     MAX_INDUCTION_DENSITY_3D
@@ -1559,7 +1659,7 @@ impl State {
         // trajectories; formula streamlines never leak into any of them.
         if matches!(
             self.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
         ) {
             return Vec::new();
         }
@@ -1650,7 +1750,7 @@ impl State {
     ) -> Vec<LineInstanceGPU> {
         if matches!(
             self.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
         ) || !self.streamlines
         {
             return Vec::new();
@@ -1729,6 +1829,43 @@ impl State {
                 mode_3d: self.mode_3d,
             };
         }
+        if self.field_mode == FieldMode::Materials {
+            // Arrows plus only the selected case's simple outline. No
+            // particles, streamlines, click seeds, glyphs or scalar plot.
+            let arrows = if self.arrows {
+                self.material_sampling
+                    .as_ref()
+                    .map(|sampling| self.arrow_instances(&sampling.arrows))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let plane = self.plane_frame();
+            let lines = material_outline(&self.material, &self.scene_domain(), plane.as_ref())
+                .into_iter()
+                .map(|segment| LineInstanceGPU {
+                    a: [segment.a[0], segment.a[1], segment.a[2], 1.0],
+                    b: [
+                        segment.b[0],
+                        segment.b[1],
+                        segment.b[2],
+                        crate::reference::EDGE_WIDTH,
+                    ],
+                    color: segment.color,
+                })
+                .collect::<Vec<_>>();
+            return SceneGPU {
+                arrows: Arc::new(arrows),
+                lines: Arc::new(lines),
+                trails: Arc::new(Vec::new()),
+                dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
+                arrow_style: self.arrow_style,
+                arrow_style_2d: self.arrow_style_2d,
+                arrow_params: self.arrow_params,
+                mode_3d: self.mode_3d,
+            };
+        }
         let sampled = self.sample();
         let arrows = if self.arrows {
             self.arrow_instances(&sampled)
@@ -1760,13 +1897,22 @@ impl State {
         if !self.dirty {
             return None;
         }
-        if self.field_mode == FieldMode::Induction {
-            self.refresh_induction();
-        } else {
-            self.refresh_source_sampling();
+        match self.field_mode {
+            FieldMode::Induction => self.refresh_induction(),
+            FieldMode::Materials => self.refresh_material_sampling(),
+            _ => self.refresh_source_sampling(),
         }
         self.dirty = false;
         Some(self.snapshot())
+    }
+}
+
+/// A readable message for a rejected material scene.
+fn material_error_text(error: &MaterialError) -> String {
+    match error {
+        MaterialError::InvalidScene(message) | MaterialError::Unsupported(message) => {
+            message.clone()
+        }
     }
 }
 

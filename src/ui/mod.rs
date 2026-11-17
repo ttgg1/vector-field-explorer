@@ -5,6 +5,7 @@ pub mod formula_bar;
 pub mod help_overlay;
 pub mod induction_panel;
 pub mod layout;
+pub mod material_panel;
 pub mod menu;
 pub mod ode_panel;
 pub mod panel_rails;

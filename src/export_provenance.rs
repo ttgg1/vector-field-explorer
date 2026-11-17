@@ -14,6 +14,10 @@
 //! `allow_inaccurate` changes the drawn count, never the warning.
 
 use crate::induction::{InductionCase, InductionFamilyStatus, InductionSampling, InductionScene};
+use crate::material::{
+    MaterialCase, MaterialFamily, MaterialSampling, MaterialScene, MaterialView, material_family,
+    validate_material,
+};
 use crate::ode::{ODE_STEP, OdeScene, OdeSolution, OdeSource};
 use crate::sim_clock::SimClock;
 use crate::source_scene::{
@@ -51,6 +55,14 @@ pub const ODE_INVALID_LINE: &str = "ODE scene invalid: {error}";
 /// Playback/timeline context for an available ODE solution.
 pub const ODE_TIMELINE_LINE: &str = "timeline: duration = {duration}, step = {step}, t = {time}";
 
+/// The always-present Materials model line. The bounded catalogue is exact;
+/// this is the only Material model statement, and it is never suppressible.
+pub const MATERIAL_MODEL_LINE: &str = "Materials - bounded analytic cases - no general solver";
+/// Warning when no material sampling pass is available at export time.
+pub const MATERIAL_NO_SAMPLING_LINE: &str = "Materials sampling unavailable";
+/// Validation-failure line for the durable material scene.
+pub const MATERIAL_INVALID_LINE: &str = "Materials scene invalid: {error}";
+
 /// Capture-time export context shared by the PNG and SVG paths.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExportProvenance {
@@ -65,6 +77,8 @@ pub struct ExportProvenance {
     pub induction_mode: bool,
     /// True when this provenance came from Ode mode.
     pub ode_mode: bool,
+    /// True when this provenance came from Materials mode.
+    pub material_mode: bool,
 }
 
 /// Derive export provenance for the current field mode.
@@ -139,6 +153,7 @@ pub fn source_export_provenance(
         source_mode: true,
         induction_mode: false,
         ode_mode: false,
+        material_mode: false,
     })
 }
 
@@ -246,6 +261,7 @@ pub fn induction_export_provenance(
         source_mode: false,
         induction_mode: true,
         ode_mode: false,
+        material_mode: false,
     })
 }
 
@@ -307,7 +323,128 @@ pub fn ode_export_provenance(
         source_mode: false,
         induction_mode: false,
         ode_mode: true,
+        material_mode: false,
     })
+}
+
+/// Derive export provenance for the bounded Materials catalogue.
+///
+/// Pure and request-time: it reads the durable scene and the already-cached
+/// sampling only. It never evaluates the field, samples a grid or solves a
+/// boundary-value problem. Non-Materials modes return an empty provenance with
+/// `material_mode` false, so exporting another adapter cannot gain material
+/// metadata. In Materials mode the result always carries the bounded-model,
+/// background/material constants, view, applied field and assumptions lines;
+/// a missing sampling pass or a scene/sampling warning is always appended.
+pub fn material_export_provenance(
+    mode: FieldMode,
+    scene: &MaterialScene,
+    sampling: Option<&MaterialSampling>,
+) -> ExportProvenance {
+    if mode != FieldMode::Materials {
+        return ExportProvenance::default();
+    }
+
+    let family = material_family(scene.case);
+    let (family_label, field, units) = match family {
+        MaterialFamily::Electric => ("electric", "E", "V/m"),
+        MaterialFamily::Magnetic => ("magnetic", "B", "T"),
+    };
+    let [x, y, z] = scene.applied;
+    let mut warning_lines = vec![
+        MATERIAL_MODEL_LINE.to_string(),
+        format!(
+            "Background eps_r = {}, mu_r = {}",
+            scene.background_epsilon_r, scene.background_mu_r
+        ),
+        format!(
+            "Material eps_r = {}, mu_r = {}",
+            scene.material_epsilon_r, scene.material_mu_r
+        ),
+        format!("Applied/response: {}", material_view_label(scene.view)),
+        format!("Applied field: {field} = ({x}, {y}, {z}) {units}"),
+        crate::material::material_assumptions(scene.case).to_string(),
+    ];
+    let mut warning_metadata = Vec::new();
+    if let Err(error) = validate_material(scene) {
+        let line = MATERIAL_INVALID_LINE.replace("{error}", &material_error_text(&error));
+        warning_lines.push(line.clone());
+        warning_metadata.push(line);
+    }
+    match sampling {
+        None => {
+            warning_lines.push(MATERIAL_NO_SAMPLING_LINE.to_string());
+            warning_metadata.push(MATERIAL_NO_SAMPLING_LINE.to_string());
+        }
+        Some(sampling) => {
+            if let Some(warning) = &sampling.warning
+                && !warning.is_empty()
+            {
+                warning_lines.push(warning.clone());
+                warning_metadata.push(warning.clone());
+            }
+        }
+    }
+
+    let mut metadata = vec![
+        (
+            "vfe.model".to_string(),
+            "materials-bounded-analytic".to_string(),
+        ),
+        (
+            "vfe.material_case".to_string(),
+            material_case_label(scene.case).to_string(),
+        ),
+        ("vfe.material_family".to_string(), family_label.to_string()),
+        (
+            "vfe.background_eps_r".to_string(),
+            scene.background_epsilon_r.to_string(),
+        ),
+        (
+            "vfe.background_mu_r".to_string(),
+            scene.background_mu_r.to_string(),
+        ),
+        (
+            "vfe.material_eps_r".to_string(),
+            scene.material_epsilon_r.to_string(),
+        ),
+        (
+            "vfe.material_mu_r".to_string(),
+            scene.material_mu_r.to_string(),
+        ),
+        (
+            "vfe.material_view".to_string(),
+            material_view_label(scene.view).to_string(),
+        ),
+        ("vfe.material_units".to_string(), units.to_string()),
+        (
+            "vfe.material_interface_axis".to_string(),
+            material_axis_label(scene.interface_axis).to_string(),
+        ),
+        (
+            "vfe.material_interface_offset".to_string(),
+            scene.interface_offset.to_string(),
+        ),
+        (
+            "vfe.material_applied".to_string(),
+            format!("({x}, {y}, {z})"),
+        ),
+    ];
+    if !warning_metadata.is_empty() {
+        metadata.push((
+            "vfe.material_warning".to_string(),
+            warning_metadata.join("; "),
+        ));
+    }
+
+    ExportProvenance {
+        warning_lines,
+        metadata,
+        source_mode: false,
+        induction_mode: false,
+        ode_mode: false,
+        material_mode: true,
+    }
 }
 
 /// The visible warning/context lines, in paint order.
@@ -339,6 +476,34 @@ fn ode_source_label(source: OdeSource) -> &'static str {
     match source {
         OdeSource::Equations => "equations",
         OdeSource::CurrentField => "current_field",
+    }
+}
+
+fn material_case_label(case: MaterialCase) -> &'static str {
+    match case {
+        MaterialCase::DielectricSphere => "dielectric_sphere",
+        MaterialCase::DielectricBoundary => "dielectric_boundary",
+        MaterialCase::PermeableSphere => "permeable_sphere",
+        MaterialCase::PermeableBoundary => "permeable_boundary",
+    }
+}
+
+fn material_view_label(view: MaterialView) -> &'static str {
+    match view {
+        MaterialView::Total => "Total",
+        MaterialView::Applied => "Applied",
+        MaterialView::Response => "Response",
+    }
+}
+
+fn material_axis_label(axis: crate::plane::PlaneAxis) -> &'static str {
+    axis.label()
+}
+
+fn material_error_text(error: &crate::material::MaterialError) -> String {
+    match error {
+        crate::material::MaterialError::InvalidScene(message)
+        | crate::material::MaterialError::Unsupported(message) => message.clone(),
     }
 }
 

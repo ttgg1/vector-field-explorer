@@ -781,6 +781,47 @@ impl PlotAppHarness<'_> {
         self.app.state.induction_error.as_deref()
     }
 
+    /// Material arrows in the last sampled Materials frame.
+    pub fn material_arrow_count(&self) -> usize {
+        self.app
+            .state
+            .material_sampling
+            .as_ref()
+            .map(|sampling| sampling.arrows.len())
+            .unwrap_or(0)
+    }
+
+    /// Material outline segments only; reference/backdrop lines excluded.
+    pub fn material_line_count(&self) -> usize {
+        let plane = self.app.state.plane_frame();
+        crate::material::material_outline(
+            &self.app.state.material,
+            &self.app.state.scene_domain(),
+            plane.as_ref(),
+        )
+        .len()
+    }
+
+    /// The active Materials error or sampling warning, if any.
+    pub fn material_sampling_error(&self) -> Option<&str> {
+        self.app
+            .state
+            .material_sampling
+            .as_ref()
+            .and_then(|sampling| sampling.warning.as_deref())
+            .or(self.app.state.material_error.as_deref())
+    }
+
+    /// The durable Materials scene.
+    pub fn material_scene(&self) -> Option<&crate::material::MaterialScene> {
+        Some(&self.app.state.material)
+    }
+
+    /// Assemble the viewport scene exactly as the frame does (test seam).
+    pub fn test_assemble_viewport_scene(&mut self) -> SceneGPU {
+        self.app.test_assemble_viewport_scene()
+    }
+
     /// Arrow, trail and dot instance counts in the current vector scene.
     pub fn vector_scene_counts(&self) -> (usize, usize, usize) {
         match &self.app.scene {

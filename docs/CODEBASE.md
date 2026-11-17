@@ -352,7 +352,8 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `clock`, `screenshot`, and private scene/click/particle caches, including the
+  `material` (`MaterialPanelState`), `clock`, `screenshot`, and private
+  scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
   [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
@@ -423,7 +424,10 @@ and remembered vector pose, installs the isolated `PlotDrawState` callback,
 routes plot navigation, and guards scalar SVG / dispatches scalar PNG capture.
 
 **Public API.** `VfApp::fit_plot`, the doc-hidden `VfApp::test_harness`
-integration seam, and `SvgExportRoute` for the final SVG execution guard.
+integration seam (including `material_arrow_count`, `material_line_count`,
+`material_sampling_error`, `material_scene` and
+`test_assemble_viewport_scene`), and `SvgExportRoute` for the final SVG
+execution guard.
 
 **Invariants.** Scalar mode pauses rather than deletes vector particle/trail/
 time state; the live and captured plot share one `PlotScene` Arc and the source
@@ -514,8 +518,20 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   bar's one-shot `open_ode` request expands the wide rail or opens the compact
   sheet. Step, Fit and Reset dispatch to `VfApp::ode_step`, the shared Fit
   command and `State::reset_ode` plus the default Reset command.
+- The Materials rail/body and compact Materials tab draw
+  `material_panel::show`; the formula bar's one-shot `open_materials` request
+  expands the wide rail or opens the compact sheet. Fit uses the shared Fit
+  command; Reset calls `State::reset_material`, re-syncs the panel draft and
+  applies the default camera command. Entering Materials syncs the panel draft
+  from the committed scene only on entry, restore or reset, never every frame.
 - ODE mode status reports `State::ode_error`; the Features controls are
-  disabled with the ODE note and the Coloring section is not drawn.
+  disabled with the ODE note and the Coloring section is not drawn. Materials
+  status reports `State::material_error` or the current sampling warning; its
+  Features controls are disabled with the arrows-only note and its Coloring
+  section is hidden.
+- The viewport paints `Materials - {case} - {Total|Applied|Response}` in
+  Materials mode and shows `Response is identically zero for this view.` when
+  the sampling is response-empty. Leaving Materials closes its compact sheet.
 - The Controls panel is drawn before the dirty rebuild, so a control edit lands
   in this frame's snapshot and counts.
 - `recentre_domain` follows a domain change: 3D to the new centre, 2D in x/y
@@ -552,6 +568,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   epoch or dirty flag changes, auto-fits the first solution after mode entry,
   resets the clock time on a new epoch, and never samples the field, retraces
   clicks, spawns particles or appends source/induction glyphs.
+- Materials branches before the formula/scalar path: it runs
+  `sync_scene_frame` and the dirty rebuild, then returns. It never samples the
+  formula, advects particles, retraces clicks, appends glyphs or refreshes the
+  scalar plot; the pure snapshot already carries material arrows and outline.
 - Otherwise `advance_simulation` runs `sync_scene_frame` first (see
   `src/app/plane.rs`), then the dirty rebuild, then particle advection.
 - Ode's `advance_clock` clamps the shared clock to the solution duration and
@@ -578,8 +598,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   consumer exists and the clock is playing.
 
 **Pinned by.** `tests/viewmodel_test.rs` (dirty/rebuild, trails-empty snapshot),
-`tests/particles_test.rs` (retarget/advect/colour/trail), and
-`tests/particle_playback_test.rs` (clock/repaint).
+`tests/particles_test.rs` (retarget/advect/colour/trail),
+`tests/particle_playback_test.rs` (clock/repaint), and
+`tests/material_app_test.rs` (Materials arrows/outline-only branch, caps, plane
+slice reuse, error retention and mode isolation).
 
 **Limitations.** Grid and click streamlines are retraced on any rebuild; this is
 deliberate but can be expensive at high density. Particle state is CPU-side and
@@ -712,7 +734,8 @@ untouched.
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula,
-Sources, Induction or Ode; `SourceDisplay` selects Electric, Magnetic or Both;
+Sources, Induction, Materials or Ode; `SourceDisplay` selects Electric,
+Magnetic or Both;
 `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
 softening and accuracy opt-in. The same module turns a scene into drawable
@@ -855,6 +878,93 @@ itself is pinned by `tests/induction_test.rs` as above.
 retardation or physical singular limit. The cap benchmark measures unit-current
 cache preparation, not frame time; it is recorded in
 [docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
+
+#### `src/material.rs` — bounded analytic material cases and outlines
+
+**Purpose.** Pure seam for the Materials mode. Four canonical analytic cases are
+supported: a dielectric sphere, a planar dielectric interface, a permeable
+sphere and a planar permeable interface. Each case exposes `Total`, `Applied`
+and `Response`; `response` is exactly `total - applied`. Electric and magnetic
+families are selected by case and are never summed. The module is CPU only and
+has no renderer, clock, source, persistence or export dependency; the app,
+panel, persistence and export adapters are documented in their own sections.
+
+**Public API.** `MaterialCase`, `MaterialView`, `MaterialFamily`,
+`MaterialScene` (`Debug`, `Clone`, `PartialEq`, `Default`), `MaterialError`,
+`MaterialLine`, `MaterialSampling`, `material_family`,
+`material_assumptions`, `material_warning`, `validate_material`,
+`material_field`, `material_applied`, `material_response`, `material_outline`,
+and `sample_materials`. Constants are
+`MATERIAL_DEFAULT_RADIUS`, `MATERIAL_DEFAULT_INTERFACE_OFFSET`,
+`MATERIAL_EXACT_HIT_FACTOR`, `MATERIAL_COINCIDENT_SLICE_FACTOR`,
+`MATERIAL_MIN_RELATIVE`,
+`MATERIAL_MAX_RELATIVE`, `MATERIAL_ELECTRIC_COLOR` (amber `[255,176,64]`) and
+`MATERIAL_MAGNETIC_COLOR` (cyan `[64,196,255]`); the exact warning strings are
+exported as `MATERIAL_INTERFACE_WARNING`, `MATERIAL_RESPONSE_EMPTY_WARNING`,
+`MATERIAL_EMPTY_DOMAIN_WARNING` and `MATERIAL_COINCIDENT_SLICE_WARNING`.
+
+**Invariants.** Relative constants are finite in `1.0..=100.0`, the applied
+field is finite and nonzero, sphere radius is finite and positive, and boundary
+offset is finite. Sphere formulas use the standard dipole coefficient and
+uniform interior value; planar formulas keep tangential E / normal B continuous
+(and normal D / tangential H continuous where applicable). The no-contrast
+limit returns the applied field and an identically zero response. A point
+exactly on the interface returns `MaterialError::Unsupported`; sampling applies
+the domain-scaled `1e-9 * max(domain extent, 1.0)` guard before evaluation,
+counts `omitted_interface`, and keeps near-interface samples on both sides.
+Vectors below `1e-6`, non-finite values and invalid scenes never draw arrows.
+`response_empty` is set only for the `Response` view when every finite sampled
+response is below `1e-6`. Warnings join in the fixed order interface omission,
+empty response, empty/impossible domain, coincident slice. Sampling uses fixed
+family colours with no colormap or softening.
+
+**2D and outline.** With `Some(PlaneFrame)`, sampling visits the frame's local
+grid, evaluates the same 3D field at `to_world(local)`, returns local positions
+and projects the selected family vector with `project`. `material_outline`
+draws the 3D sphere's three great circles and applied radial marker, or only the
+slice cut circle; it draws the 3D boundary square and normal marker, or the
+clipped slice-intersection line. Parallel noncoincident boundary slices draw
+nothing; a coincident slice draws the local square and adds the discontinuity
+warning. Every returned coordinate is finite.
+
+**Pinned by.** [tests/material_test.rs](../tests/material_test.rs):
+`dielectric_sphere_matches_inside_far_field_and_no_contrast`,
+`dielectric_boundary_conditions_and_response_are_piecewise`,
+`permeable_sphere_and_boundary_match_their_interface_conditions`,
+`applied_plus_response_reconstructs_total_for_all_cases`,
+`exact_interface_hits_are_unsupported`,
+`validation_rejects_bad_constants_geometry_and_applied`,
+`sampling_omits_exact_interface_but_keeps_near_interface`,
+`no_contrast_response_is_empty_with_exact_note`,
+`empty_domain_returns_warning_not_arrows`,
+`warnings_join_in_the_deterministic_documented_order`,
+`outline_uses_slice_intersection_only`,
+`every_design_case_has_a_family_assumptions_and_fixed_colour`,
+`two_dimensional_sampling_is_a_projected_three_dimensional_slice`, and
+`sphere_and_boundary_fields_are_finite_off_the_interface`. Cap evidence is
+[tests/material_bench_test.rs](../tests/material_bench_test.rs) via
+`scripts/bench-materials.sh`; results are recorded in
+[docs/perf/materials-performance.md](perf/materials-performance.md).
+
+**App integration.** `FieldMode::Materials` and its State adapter live in
+[src/viewmodel.rs](../src/viewmodel.rs); the arrows-only scene branch and
+outline reach the viewport through `VfApp::advance_simulation`. The responsive
+panel and viewport label are in
+[src/ui/material_panel.rs](../src/ui/material_panel.rs) and
+[src/app/panels.rs](../src/app/panels.rs); persistence and lazy restore are in
+[src/persistence.rs](../src/persistence.rs); request-time export lines and
+metadata are in
+[src/export_provenance.rs](../src/export_provenance.rs). Materials is static:
+`has_time_dependent_consumer` is false and no formula/scalar/persisted particle
+or CAS path is sampled. The applied/response views use fixed family colours, and
+the 2D outline is the slice intersection only.
+
+**Limitations.** Exact catalog only: no general material solver, overlapping
+inclusions, anisotropic/nonlinear/dispersive media, conductors, free surface
+charge, hysteresis or eddy currents. 2D is a slice of the same 3D case. The
+benchmark measures analytic sampling, not frame time or browser performance.
+Browser/WebAssembly runtime and manual visual checks were owner-waived for this
+delivery and are not claimed as passed.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
@@ -1409,6 +1519,7 @@ decisions that do not need a window.
 **Public API (major).**
 - Density/grid/plane constants: `DEFAULT_DENSITY_2D = 24`,
   `DEFAULT_DENSITY_3D = 16`, `MAX_DENSITY_2D = 200`, `MAX_DENSITY_3D = 40`,
+  `MATERIAL_MAX_DENSITY_3D = 40`, `MATERIAL_MAX_DENSITY_2D = 200`,
   `MIN_DENSITY = 4`; particle size/count and arrow/opacity/magnitude/domain
   bounds; `PLANE_MARGIN = 1.35`; `STREAMLINE_WIDTH = 0.012`,
   `STREAMLINE_MAX_LEN = 120`, `STREAMLINE_JITTER = 0.45`.
@@ -1435,6 +1546,9 @@ decisions that do not need a window.
 - Induction mode fields: `induction`, `induction_prepared`,
   `induction_sampling` and `induction_error`; `set_induction_scene`,
   `refresh_induction` and `reset_induction`.
+- Materials mode fields: `material` (durable `MaterialScene`),
+  `material_sampling` (`Option<MaterialSampling>`) and `material_error`;
+  `set_material_scene`, `refresh_material_sampling` and `reset_material`.
 - Ode mode fields: `ode`, `ode_solution` (`Arc<OdeSolution>`), `ode_error`,
   `ode_epoch`, `ode_chart`, `ode_variables` and private `ode_dirty`;
   `set_ode_scene` (validate/solve atomically), `refresh_ode_if_dirty`,
@@ -1452,12 +1566,12 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `active_dimension()` is 3 in Sources and Induction, the solved scene's
-  dimension in Ode (the selected scene before the first lazy solve), and the
-  formula's component count otherwise; `is_3d()` means `mode_3d &&
+- `active_dimension()` is 3 in Sources, Induction and Materials, the solved
+  scene's dimension in Ode (the selected scene before the first lazy solve),
+  and the formula's component count otherwise; `is_3d()` means `mode_3d &&
   active_dimension() == 3`. This gates the cube grid, density cap, plane
-  frame/slice and streamline depth, so source/induction mode uses the existing
-  2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
+  frame/slice and streamline depth, so source/induction/materials mode uses the
+  existing 2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
 - `set_field_mode` preserves the formula, source scene, induction scene and the
   current 2D/3D projection, clears the cached sampling/notice and marks dirty.
   Entering Induction never rewrites the stored density or the projection;
@@ -1494,6 +1608,15 @@ decisions that do not need a window.
 - Induction is a clock consumer exactly while `induction.is_animated()`; its
   `set_time` only dirties an animated waveform, so pause/resume and the scalar
   plot pause hold the sampled field at the shared time.
+- Materials is static: `has_time_dependent_consumer` is false, `set_time` is a
+  no-op and `particle_target` is `None` (clicks and streamlines are refused).
+  `set_material_scene` validates first; a rejection records `material_error` and
+  retains the last valid scene and sampling, while a valid change clears the
+  error/sampling and marks dirty. `refresh_material_sampling` samples the
+  capped 40³ cube or the existing `PlaneFrame` slice (200²), stores warnings in
+  `MaterialSampling::warning`, and never samples the formula. `snapshot` emits
+  cached arrows plus `material_outline` lines only; outlines are not reference
+  lines. `reset_material` restores the default scene and clears the cache.
 - `set_formula` keeps the last good `FieldExpr` on a parse error and still marks
   dirty so the status bar updates; `set_mode`/density/domain/formula-dimension
   changes call `sync_plane` with the previous grid.
@@ -1564,8 +1687,8 @@ accepted expressions and delegates scene construction to `plot_scene`.
 storage key, with migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view }`, `AppSettings::sanitized`;
-`ViewRecord` (all fields, `capture`, `restore`, `Default`); `finite_or`;
-`load`, `save`; private serde helpers.
+`ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
+`Default`); `finite_or`; `load`, `save`; private serde helpers.
 
 **Schema (all under `eframe::APP_KEY`).**
 
@@ -1573,7 +1696,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1617,6 +1740,15 @@ storage key, with migration and corruption tolerance.
     Formula selected and set no ODE error. Global reset restores the default
     scene, chart `phase` and variables `[true,true,false]` and clears any shared
     Ode loop period.
+12. Materials restores through `restore_material_fields`: case/view/axis tokens
+    and every number are revalidated by `validate_material`; the durable scene
+    is stored without sampling. A malformed payload restores the valid default
+    dielectric sphere and sets `material_error` only when the stored mode is
+    explicitly Materials, so an old or damaged record never promotes the mode.
+    Global reset clears the Material scene, sampling cache and error before
+    returning to Formula; the Materials section Reset restores only the default
+    scene. `VfApp::new_with_storage` refreshes the panel draft through
+    `MaterialPanelState::sync_from` after a restored Materials record.
 
 **Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -2253,30 +2385,49 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source, induction and ODE export warning contract
+#### `src/export_provenance.rs` — source, induction, ODE and Materials export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
 derived from the validated `SourceScene` plus cached `SourceSampling`, from the
 durable `InductionScene` plus shared softening and cached
-`InductionSampling`, or from the durable `OdeScene` plus the already-computed
-`OdeSolution` and shared clock; it never samples the field, re-integrates the
-ODE scene or creates vector data.
+`InductionSampling`, from the durable `OdeScene` plus the already-computed
+`OdeSolution` and shared clock, or from the durable `MaterialScene` plus cached
+`MaterialSampling`; it never samples the field, re-integrates the ODE scene,
+solves a material boundary-value problem or creates vector data.
 
 **Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
-induction_mode, ode_mode }`, `source_export_provenance(mode, scene, sampling)`,
+induction_mode, ode_mode, material_mode }`,
+`source_export_provenance(mode, scene, sampling)`,
 `induction_export_provenance(mode, scene, softening, sampling)`,
 `ode_export_provenance(mode, scene, solution, error, timeline)`,
+`material_export_provenance(mode, scene, sampling)`,
 `provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
 `MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
 `NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
 `INDUCTION_INVALID_LINE`, `ODE_MODEL_LINE`, `ODE_BOUNDED_LINE`,
-`ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`.
+`ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`,
+`MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`.
 
 **Invariants.**
 - Formula mode returns `None` from all helpers; Sources/Induction/Ode always
   return `Some` for their own mode (`source_mode` / `induction_mode` /
-  `ode_mode` respectively).
+  `ode_mode` respectively). `material_export_provenance` returns an empty
+  provenance with `material_mode = false` for every other mode; the app router
+  only calls it in Materials mode, so non-Materials exports gain no material
+  metadata and no banner.
+- Materials lines are exactly the bounded-model line, background constants,
+  material constants, `Applied/response: {Total|Applied|Response}`, the applied
+  field with `E ... V/m` or `B ... T`, the case assumptions, then the current
+  sampling warning. Missing sampling adds `Materials sampling unavailable`; an
+  invalid scene adds `Materials scene invalid: {error}`. None is suppressible.
+- Materials metadata is exactly `vfe.model = materials-bounded-analytic`,
+  `vfe.material_case`, `vfe.material_family`, `vfe.background_eps_r`,
+  `vfe.background_mu_r`, `vfe.material_eps_r`, `vfe.material_mu_r`,
+  `vfe.material_view`, `vfe.material_units`, `vfe.material_interface_axis`,
+  `vfe.material_interface_offset`, `vfe.material_applied`, and
+  `vfe.material_warning` only when a warning is present. No field is evaluated
+  and no non-finite arrow is exported.
 - The softened-model line is always first. Missing sampling adds
   `Source sampling unavailable` or `Induction sampling unavailable`; a
   validation error adds the matching invalid line; accuracy/unavailable lines
@@ -2313,9 +2464,12 @@ induction_mode, ode_mode }`, `source_export_provenance(mode, scene, sampling)`,
 `missing_or_invalid_sampling_keeps_the_warning`) and
 `tests/induction_export_test.rs` (exact induction lines/metadata, missing and
 invalid sampling, opt-in/caps, decoded PNG banner/tEXt bytes and visible SVG
-text/metadata) and `tests/ode_export_test.rs` (request-time Ode provenance,
+text/metadata), `tests/ode_export_test.rs` (request-time Ode provenance,
 decoded PNG banner/tEXt, visible SVG text/metadata, unavailable-solution
-warning with no fabricated geometry, and the 2D-only SVG rejection).
+warning with no fabricated geometry, and the 2D-only SVG rejection) and
+`tests/material_export_test.rs` (exact Materials lines/metadata, decoded PNG
+banner/tEXt, visible SVG text/metadata, 2D-only rule, non-Materials isolation,
+unsuppressed response/interface warnings and finite geometry).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 
@@ -2568,6 +2722,44 @@ teaching demo.
 `induction_rail_expands_a_real_app_frame`) and
 `tests/layout_test.rs` for the persisted layout fields.
 
+#### `src/ui/material_panel.rs` — the responsive Materials panel
+
+**Purpose.** The wide left rail/compact sheet body for `FieldMode::Materials`,
+plus the shared case/view names, viewport summary and help rows.
+
+**Public API.** `MaterialPanelState { draft, error, advanced }`,
+`MaterialPanelState::default`, `commit(&mut State) -> bool`, `sync_from(&State)`,
+`show(ui, &mut panel, &mut State, compact) -> Option<MaterialPanelAction>`,
+`MaterialPanelAction::{Fit, Reset}`, `case_label`, `view_label`,
+`family_symbol`, `family_unit`, `summary`, `MATERIAL_HELP_ROWS`,
+`material_help_rows`, `MATERIALS_ONLY_NOTE`.
+
+**Invariants.**
+- `commit` calls `State::set_material_scene`; an invalid draft keeps the last
+  valid scene/sampling and records an actionable error naming the field.
+  `sync_from` runs on mode entry, Reset and future persistence restore, never
+  every frame, so a dirty draft survives.
+- Case, geometry, both background and both material constants, the applied
+  vector and the view commit through the draft on click or release; a frame
+  never commits merely because a value exists.
+- The applied family uses the exact design units: `V/m` for electric cases and
+  `T` for magnetic cases. The panel never converts to generic display units.
+- Advanced is closed by default and shows the case assumptions, the interface
+  tolerance, the current sampling status/count, the current warning only, and
+  `No general material solver`.
+- A rejected draft error is shown until the next successful commit or Reset;
+  warnings come only from the sampling that belongs to the committed scene, so
+  a valid scene edit cannot present a prior scene's warning as current.
+- `Reset` restores the default material scene and the default camera through
+  the app's shared Reset seam; `Fit` uses the existing view-command seam.
+- Materials is arrows-only, with the exact note
+  `Arrows only: streamlines, particles and click seeding stay off in Materials.`
+
+**Pinned by.** `tests/material_panel_test.rs` (wide/compact controls, commit
+and rejection, view/Reset, exact units, disabled Features/CAS, help rows,
+viewport label, current-only warning, rail/sheet requests) and
+`tests/layout_test.rs` for `materials_expanded`/`materials_width`.
+
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 
 **Purpose.** The wide left rail/compact sheet body for `FieldMode::Ode`: source
@@ -2615,14 +2807,17 @@ Option<OdePanelAction>`, `OdePanelAction::{Step, Fit, Reset}`,
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text, open_sources, open_induction, open_ode }`,
+**Public API.** `FormulaBarState { text, open_sources, open_induction, open_ode, open_materials }`,
 `FormulaBarState::new`, `show(ui, state, bar, compact)`.
 
 **Invariants.**
-- In vector mode the Formula/Sources/Induction/ODE selector calls
-  `State::set_field_mode`; Sources, Induction and ODE hide the text editor and
-  show their own summary plus `Open Sources`/`Open induction`/`Open ODE`, which
-  raise the matching one-shot request for the app to consume.
+- In vector mode the Formula/Sources/Induction/ODE/Materials selector calls
+  `State::set_field_mode`; Sources, Induction, ODE and Materials hide the text
+  editor and show their own summary plus
+  `Open Sources`/`Open induction`/`Open ODE`/`Open materials`, which raise the
+  matching one-shot request for the app to consume.
+- The Materials summary names the selected case and view and the applied field
+  with its exact unit (`V/m` or `T`).
 - Compact keeps the projection and adapter selectors on one horizontally
   scrollable row and puts the editor/summary beneath it, so a large font cannot
   squeeze the compact sheet out of existence.

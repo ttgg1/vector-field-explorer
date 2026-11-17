@@ -17,11 +17,15 @@ use serde::{Deserialize, Serialize};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
 use crate::induction::{InductionCase, InductionScene};
+use crate::material::{
+    MaterialCase, MaterialError, MaterialScene, MaterialView, validate_material,
+};
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
     DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
 };
+use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::source_scene::{
     FieldMode, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceRecord, SourceScene,
@@ -245,6 +249,31 @@ pub struct ViewRecord {
     /// Time-series variable selection; at least one is restored on.
     #[serde(default = "default_ode_variables")]
     pub ode_variables: [bool; 3],
+    /// Durable Materials case token. Missing on a legacy record; the default is
+    /// the valid dielectric sphere.
+    #[serde(default = "default_material_case")]
+    pub material_case: String,
+    #[serde(default = "default_material_background_epsilon_r")]
+    pub material_background_epsilon_r: f64,
+    #[serde(default = "default_material_background_mu_r")]
+    pub material_background_mu_r: f64,
+    #[serde(default = "default_material_material_epsilon_r")]
+    pub material_material_epsilon_r: f64,
+    #[serde(default = "default_material_material_mu_r")]
+    pub material_material_mu_r: f64,
+    #[serde(default = "default_material_radius")]
+    pub material_radius: f64,
+    /// `x`, `y` or `z`; validated on restore.
+    #[serde(default = "default_material_interface_axis")]
+    pub material_interface_axis: String,
+    #[serde(default)]
+    pub material_interface_offset: f64,
+    /// Applied field as plain `[x, y, z]` so `glam` never appears in storage.
+    #[serde(default = "default_material_applied")]
+    pub material_applied: [f64; 3],
+    /// `total`, `applied` or `response`.
+    #[serde(default = "default_material_view")]
+    pub material_view: String,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -336,6 +365,16 @@ impl ViewRecord {
             ode_duration: state.ode.duration,
             ode_chart: ode_chart_label(state.ode_chart).to_string(),
             ode_variables: state.ode_variables,
+            material_case: material_case_label(state.material.case).to_string(),
+            material_background_epsilon_r: state.material.background_epsilon_r,
+            material_background_mu_r: state.material.background_mu_r,
+            material_material_epsilon_r: state.material.material_epsilon_r,
+            material_material_mu_r: state.material.material_mu_r,
+            material_radius: state.material.radius,
+            material_interface_axis: material_axis_label(state.material.interface_axis).to_string(),
+            material_interface_offset: state.material.interface_offset,
+            material_applied: state.material.applied,
+            material_view: material_view_label(state.material.view).to_string(),
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -437,6 +476,8 @@ impl ViewRecord {
         let requested_sources = self.field_mode == FieldMode::Sources;
         let requested_induction = self.field_mode == FieldMode::Induction;
         let requested_ode = self.field_mode == FieldMode::Ode;
+        let requested_materials = self.field_mode == FieldMode::Materials;
+        let material_valid = self.restored_material_scene().is_ok();
         let restored_induction = self.restored_induction_scene();
         let induction_valid = restored_induction.is_ok();
         state.set_source_scene(scene);
@@ -463,12 +504,17 @@ impl ViewRecord {
         // an invalid saved induction scene cannot either. Both fall back to
         // Formula instead of presenting an empty field. Ode stays selected when
         // it was stored explicitly; its lazy solve owns the error state.
+        // Materials is selected only from an explicitly stored mode and a
+        // valid record, so a malformed payload can never promote the mode.
+        self.restore_material_fields(state);
         state.set_field_mode(if requested_sources && valid_entries > 0 {
             FieldMode::Sources
         } else if requested_induction && induction_valid {
             FieldMode::Induction
         } else if requested_ode {
             FieldMode::Ode
+        } else if requested_materials && material_valid {
+            FieldMode::Materials
         } else {
             FieldMode::Formula
         });
@@ -493,6 +539,74 @@ impl ViewRecord {
             }
         }
         state.mark_dirty();
+    }
+
+    /// Restore the durable Materials scene from the record without sampling.
+    ///
+    /// Validation is the same [`validate_material`] gate the editor uses. A
+    /// malformed payload always falls back to the default dielectric sphere;
+    /// only an explicitly stored Materials mode surfaces the error, so an old
+    /// or damaged record can never promote Materials. The returned `Some` is
+    /// the stored error for the caller/tests, already mirrored on the state.
+    pub fn restore_material_fields(&self, state: &mut State) -> Option<String> {
+        let requested_materials = self.field_mode == FieldMode::Materials;
+        match self.restored_material_scene() {
+            Ok(scene) => {
+                state.material = scene;
+                state.material_error = None;
+            }
+            Err(error) => {
+                state.material = MaterialScene::default();
+                state.material_error = requested_materials.then_some(error);
+            }
+        }
+        state.material_sampling = None;
+        state.material_error.clone()
+    }
+
+    /// Rebuild the persisted Materials scene. Every field is serde-defaulted,
+    /// so an old payload yields the valid default scene; unknown case/view/axis
+    /// tokens and invalid numbers are reported instead of silently promoting
+    /// the mode.
+    fn restored_material_scene(&self) -> Result<MaterialScene, String> {
+        let case = match self.material_case.as_str() {
+            "dielectric_sphere" => MaterialCase::DielectricSphere,
+            "dielectric_boundary" => MaterialCase::DielectricBoundary,
+            "permeable_sphere" => MaterialCase::PermeableSphere,
+            "permeable_boundary" => MaterialCase::PermeableBoundary,
+            other => return Err(format!("material case is not recognized: {other}")),
+        };
+        let view = match self.material_view.as_str() {
+            "total" => MaterialView::Total,
+            "applied" => MaterialView::Applied,
+            "response" => MaterialView::Response,
+            other => return Err(format!("material view is not recognized: {other}")),
+        };
+        let interface_axis = match self.material_interface_axis.as_str() {
+            "x" => PlaneAxis::X,
+            "y" => PlaneAxis::Y,
+            "z" => PlaneAxis::Z,
+            other => {
+                return Err(format!(
+                    "material interface axis is not recognized: {other}"
+                ));
+            }
+        };
+        let scene = MaterialScene {
+            case,
+            background_epsilon_r: self.material_background_epsilon_r,
+            background_mu_r: self.material_background_mu_r,
+            material_epsilon_r: self.material_material_epsilon_r,
+            material_mu_r: self.material_material_mu_r,
+            radius: self.material_radius,
+            interface_axis,
+            interface_offset: self.material_interface_offset,
+            applied: self.material_applied,
+            view,
+        };
+        validate_material(&scene)
+            .map_err(|error| format!("material scene: {}", material_validation_text(&error)))?;
+        Ok(scene)
     }
 
     /// Rebuild the persisted induction scene. Every field is serde-defaulted,
@@ -567,6 +681,75 @@ fn ode_source_label(source: OdeSource) -> &'static str {
         OdeSource::Equations => "equations",
         OdeSource::CurrentField => "current_field",
     }
+}
+
+fn material_case_label(case: MaterialCase) -> &'static str {
+    match case {
+        MaterialCase::DielectricSphere => "dielectric_sphere",
+        MaterialCase::DielectricBoundary => "dielectric_boundary",
+        MaterialCase::PermeableSphere => "permeable_sphere",
+        MaterialCase::PermeableBoundary => "permeable_boundary",
+    }
+}
+
+fn material_view_label(view: MaterialView) -> &'static str {
+    match view {
+        MaterialView::Total => "total",
+        MaterialView::Applied => "applied",
+        MaterialView::Response => "response",
+    }
+}
+
+fn material_axis_label(axis: PlaneAxis) -> &'static str {
+    match axis {
+        PlaneAxis::X => "x",
+        PlaneAxis::Y => "y",
+        PlaneAxis::Z => "z",
+    }
+}
+
+fn material_validation_text(error: &MaterialError) -> String {
+    match error {
+        MaterialError::InvalidScene(message) | MaterialError::Unsupported(message) => {
+            message.clone()
+        }
+    }
+}
+
+fn default_material_case() -> String {
+    material_case_label(MaterialScene::default().case).to_string()
+}
+
+fn default_material_background_epsilon_r() -> f64 {
+    MaterialScene::default().background_epsilon_r
+}
+
+fn default_material_background_mu_r() -> f64 {
+    MaterialScene::default().background_mu_r
+}
+
+fn default_material_material_epsilon_r() -> f64 {
+    MaterialScene::default().material_epsilon_r
+}
+
+fn default_material_material_mu_r() -> f64 {
+    MaterialScene::default().material_mu_r
+}
+
+fn default_material_radius() -> f64 {
+    MaterialScene::default().radius
+}
+
+fn default_material_interface_axis() -> String {
+    material_axis_label(MaterialScene::default().interface_axis).to_string()
+}
+
+fn default_material_applied() -> [f64; 3] {
+    MaterialScene::default().applied
+}
+
+fn default_material_view() -> String {
+    material_view_label(MaterialScene::default().view).to_string()
 }
 
 fn default_ode_source() -> String {

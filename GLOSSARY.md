@@ -111,7 +111,9 @@ _Avoid_: blending, additive mode
 
 **Softening**:
 The scene-wide length scale that keeps analytic source fields finite at their
-singularities; display-only, not a physical regularization or wire radius.
+singularities; display-only, not a physical regularization or wire radius. It is
+shared by Sources and Induction and is never applied to a Materials case, whose
+canonical fields have no Plummer softening.
 _Avoid_: epsilon, clamp
 
 **Quasistatic**:
@@ -141,7 +143,8 @@ _Avoid_: 2D slice
 **CAS**:
 The optional symbolic tool that differentiates formulas and derives gradient,
 divergence, and curl without solving equations. It edits the formula field only,
-never a source, induction, or ODE scene; it is disabled outside Formula.
+never a source, induction, materials, or ODE scene; it is disabled outside
+Formula.
 _Avoid_: solver, evaluator
 
 **Source scene**:
@@ -152,10 +155,31 @@ _Avoid_: source preset, source configuration
 
 **Field mode**:
 The exclusive choice among Formula (a typed vector expression), Sources (the
-editable source scene), Induction (the Faraday teaching demo), and Ode (the
-precomputed trajectory workbench). Switching preserves every durable state and
-never merges them; loading a classic preset returns to Formula.
+editable source scene), Induction (the Faraday teaching demo), Materials (the
+bounded analytic material cases), and Ode (the precomputed trajectory
+workbench). Switching preserves every durable state and never merges them;
+loading a classic preset returns to Formula.
 _Avoid_: source toggle, plot kind
+
+**Material case**:
+One of four bounded analytic configurations: dielectric sphere, dielectric plane
+boundary, permeable sphere, or permeable plane boundary. Each has one inclusion
+in an infinite homogeneous background, a uniform applied field, and an exact
+closed-form total field. It is not a general material or boundary-value solver.
+_Avoid_: material solver, arbitrary medium, finite-element model
+
+**Applied field**:
+The uniform `E0` or `B0` imposed at infinity for a material case. It is the
+nonzero excitation, the `Applied` view, and the vector subtracted from the total
+to form the response. It is not the total field inside or near the inclusion.
+_Avoid_: external field, incident field, total field
+
+**Response field**:
+The bound/induced contribution in a material case, exactly `total - applied`.
+It is drawn only as the `Response` view, is labelled as matter's contribution,
+and vanishes in the no-contrast limit. Electric and magnetic responses are never
+summed.
+_Avoid_: bound field, polarisation field, total field
 
 **Induction mode**:
 The dedicated Faraday teaching adapter: one axisymmetric current loop or finite
@@ -335,8 +359,9 @@ _Avoid_: click mode, click behavior
 
 The following concepts are not implemented in v0.1.0; they are reserved for
 the post-v1 physics work (ADR 0003). Implemented terms — field mode, field
-source, superposition, 2D slice, 2D approximation, softening, CAS, and the ODE
-workbench concepts — are defined under Field and motion.
+source, superposition, 2D slice, 2D approximation, softening, CAS, the ODE
+workbench concepts, and the bounded Materials concepts (material case, applied
+field and response field) — are defined under Field and motion.
 
 **Source configuration**:
 A named, persisted set of field sources that can be loaded into source mode.
@@ -354,13 +379,10 @@ loaded through the ordinary validated setters. Never a formula preset.
 _Avoid_: source configuration, formula preset
 
 **Material region**:
-A region with relative permittivity and permeability that modifies the field.
+A general region with relative permittivity and permeability that modifies the
+field. The app implements only the four bounded **Material case** catalog
+entries; arbitrary or overlapping material regions remain future scope.
 _Avoid_: medium, dielectric
-
-**Bound field**:
-The field contribution from polarised or magnetised matter in a material
-region, shown separately from the applied field.
-_Avoid_: induced field (that is the Faraday field)
 
 **Induced field**:
 The electric field produced by a time-varying magnetic field, shown separately

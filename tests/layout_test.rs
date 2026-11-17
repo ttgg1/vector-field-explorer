@@ -192,6 +192,8 @@ fn layout_state_serializes_exactly_its_platform_persisted_fields() {
         "induction_width",
         "ode_expanded",
         "ode_width",
+        "materials_expanded",
+        "materials_width",
         "help_visible",
         #[cfg(not(target_arch = "wasm32"))]
         "cas_expanded",
@@ -217,6 +219,11 @@ fn old_layout_defaults_only_new_fields_and_round_trips() {
     assert_eq!(layout.sources_width, DEFAULT_SOURCES_WIDTH);
     assert!(!layout.induction_expanded);
     assert_eq!(layout.induction_width, DEFAULT_INDUCTION_WIDTH);
+    assert!(!layout.materials_expanded);
+    assert_eq!(
+        layout.materials_width,
+        vector_field_explorer::ui::layout::DEFAULT_MATERIALS_WIDTH
+    );
     #[cfg(not(target_arch = "wasm32"))]
     {
         assert!(!layout.cas_expanded);

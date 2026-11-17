@@ -408,6 +408,13 @@ pub fn induction_help_rows() -> &'static [HelpRow] {
     INDUCTION_HELP_ROWS
 }
 
+/// Materials-mode notes. The rows live in `ui::material_panel` so the panel,
+/// Help window and tests share one table.
+pub static MATERIALS_HELP_SECTION: HelpSection = HelpSection {
+    title: "Materials",
+    rows: crate::ui::material_panel::MATERIAL_HELP_ROWS,
+};
+
 /// The three groups, in window order. Both help surfaces read this table, so a
 /// binding is spelled exactly once. A `static` (not a `const`) so the overlay
 /// and the window can be proven to hand back the very same allocation.
@@ -576,6 +583,7 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
             all.push(&SCALAR_HELP_SECTION);
             all.push(&SOURCES_HELP_SECTION);
             all.push(&INDUCTION_HELP_SECTION);
+            all.push(&MATERIALS_HELP_SECTION);
             all.push(&crate::ui::ode_panel::ODE_HELP_SECTION);
             table(ui, &all, heading_color);
         });

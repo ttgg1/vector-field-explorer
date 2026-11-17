@@ -823,14 +823,17 @@ fn show_inner(
     } else {
         let induction_mode = state.field_mode == crate::source_scene::FieldMode::Induction;
         let ode_mode = state.field_mode == crate::source_scene::FieldMode::Ode;
+        let materials_mode = state.field_mode == crate::source_scene::FieldMode::Materials;
         if induction_mode {
             ui.label(
                 "Arrows only: streamlines, particles and click seeding stay off in Induction.",
             );
         } else if ode_mode {
             ui.label("Streamlines, particles and click seeding stay off in Ode.");
+        } else if materials_mode {
+            ui.label(crate::ui::material_panel::MATERIALS_ONLY_NOTE);
         }
-        ui.add_enabled_ui(!(induction_mode || ode_mode), |ui| {
+        ui.add_enabled_ui(!(induction_mode || ode_mode || materials_mode), |ui| {
             section(ui, Section::Features, controls, None, |ui, controls| {
                 if !vector_mode {
                     ui.label("Streamlines and particles are vector-only; their values are retained.");
@@ -1043,7 +1046,9 @@ fn show_inner(
         });
     }
 
-    if state.field_mode != crate::source_scene::FieldMode::Ode {
+    if state.field_mode != crate::source_scene::FieldMode::Ode
+        && state.field_mode != crate::source_scene::FieldMode::Materials
+    {
         section(ui, Section::Coloring, controls, None, |ui, controls| {
             if !coloring_visible {
                 ui.label(BOTH_COLORING_NOTE);
