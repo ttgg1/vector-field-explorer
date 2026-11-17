@@ -131,25 +131,14 @@ impl Default for SourcesPanelState {
 }
 
 impl SourcesPanelState {
-    /// Rebuild drafts only for new/removed entries or when a draft is not
-    /// dirty, so invalid text survives across frames.
+    /// Rebuild drafts when the entry list changes structurally. On an
+    /// add/remove the list positions no longer identify the same source, so
+    /// preserving dirty state by index could commit one entry's text onto
+    /// another; drop it and re-read the committed scene. With a stable length,
+    /// only non-dirty drafts are refreshed so invalid text survives.
     pub fn sync(&mut self, scene: &SourceScene) {
         if self.drafts.len() != scene.entries.len() {
-            let shared = self.drafts.len().min(scene.entries.len());
-            for index in 0..shared {
-                if !self.drafts[index].dirty {
-                    self.drafts[index] = SourceDraft::from_entry(&scene.entries[index]);
-                }
-            }
-            if scene.entries.len() > self.drafts.len() {
-                self.drafts.extend(
-                    scene.entries[self.drafts.len()..]
-                        .iter()
-                        .map(SourceDraft::from_entry),
-                );
-            } else {
-                self.drafts.truncate(scene.entries.len());
-            }
+            self.drafts = scene.entries.iter().map(SourceDraft::from_entry).collect();
             return;
         }
         for (draft, entry) in self.drafts.iter_mut().zip(&scene.entries) {

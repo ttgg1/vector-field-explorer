@@ -424,6 +424,89 @@ fn valid_draft_edits_replace_only_the_edited_entry() {
 }
 
 #[test]
+fn removal_drops_invalid_draft_text_before_the_survivor_edit() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .sources
+        .add(SourceKindTag::ChargedRing.default_source())
+        .unwrap();
+    state
+        .sources
+        .add(SourceKindTag::PointCharge.default_source())
+        .unwrap();
+    let survivor = state.sources.entries[1].source;
+
+    let mut panel = SourcesPanelState::default();
+    panel.sync(&state.sources);
+    assert!(panel.set_radius(0, 0.0).is_some(), "entry 0 is dirty");
+    assert!(panel.drafts[0].dirty && panel.drafts[0].error.is_some());
+
+    // Remove entry 0 through the real topmost Remove button.
+    let out = paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 2);
+    let remove = nodes(&out)
+        .into_iter()
+        .filter(|node| node.label == "Remove source")
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .unwrap()
+        .rect
+        .center();
+    click_sources(&ctx, 1200.0, remove, &mut state, &mut panel, false);
+    assert_eq!(state.sources.entries.len(), 1);
+    assert_eq!(state.sources.entries[0].source, survivor);
+
+    // The surviving draft must be B, so a valid edit cannot inherit A's error
+    // or its kind/parameters.
+    let edit_error = panel.set_center(0, survivor.center.to_array());
+    assert!(
+        edit_error.is_none(),
+        "a valid survivor edit must not inherit the removed draft's error: {edit_error:?}"
+    );
+    assert!(panel.commit(0, &mut state).is_none());
+    assert_eq!(
+        state.sources.entries[0].source, survivor,
+        "the removed draft must never be committed onto the survivor"
+    );
+}
+
+#[test]
+fn dirty_draft_after_an_earlier_removal_never_rebinds() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .sources
+        .add(SourceKindTag::PointCharge.default_source())
+        .unwrap();
+    state
+        .sources
+        .add(SourceKindTag::ChargedRing.default_source())
+        .unwrap();
+    // Dirty entry 1 with a valid-but-uncommitted value, then simulate the
+    // earlier entry disappearing and sync as `remove` does.
+    let mut panel = SourcesPanelState::default();
+    panel.sync(&state.sources);
+    assert!(panel.set_radius(1, 2.0).is_none());
+    assert!(panel.drafts[1].dirty);
+
+    let survivor = state.sources.entries[1].source;
+    let mut scene = state.sources.clone();
+    scene.remove(0);
+    state.set_source_scene(scene);
+    panel.sync(&state.sources);
+
+    assert!(
+        panel.set_center(0, survivor.center.to_array()).is_none(),
+        "the survivor's fresh draft accepts a valid edit"
+    );
+    assert!(panel.commit(0, &mut state).is_none());
+    assert_eq!(
+        state.sources.entries[0].source, survivor,
+        "a dirty draft after the removed entry must not rebind to the survivor"
+    );
+}
+
+#[test]
 fn add_is_disabled_at_the_source_limit() {
     let ctx = context();
     let mut state = State::new(true);
