@@ -5,6 +5,7 @@ use glam::{Mat4, Vec3};
 
 use super::{CameraKind, CliError, CliOptions, Mode, validate_effective};
 use crate::{
+    animation_scene::AnimationSnapshot,
     app::compose_lines_with_frame,
     camera::OrbitCamera,
     fly_camera::FlyCamera,
@@ -39,59 +40,8 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
     validate_effective(options)?;
     // Validate every interval before allocating or advancing a particle cloud.
     let (steps, endpoint) = simulation_schedule(options)?;
-    let mut state = State::new(options.mode == Mode::ThreeD);
-    state.set_formula(options.formula.clone());
-    state.set_density(options.density);
-    state.set_domain(options.domain.min, options.domain.max);
-    state.arrows = options.arrows;
-    state.streamlines = options.streamlines;
-    state.particles = options.particles;
-    state.arrow_scale = options.arrow_scale;
-    state.arrow_opacity = options.arrow_opacity;
-    state.plane_dim_opacity = options.plane_dim_opacity;
-    state.arrow_length_mode = options.arrow_length_mode;
-    state.magnitude_scale = options.magnitude_scale;
-    state.proportional_exponent = options.proportional_exponent;
-    state.colormap = options.colormap;
-    state.auto_fit = options.color_range.is_none();
-    if let Some([min, max]) = options.color_range {
-        state.color_min = min;
-        state.color_max = max;
-    }
-    state.arrow_style = options.arrow_style_3d;
-    state.arrow_style_2d = options.arrow_style_2d;
-    state.arrow_params = options.arrow_params;
-    state.seed_mode = options.streamline_seed_mode;
-    state.set_plane(options.plane);
-    state.particle_count = options.particle_count;
-    state.particle_size = options.particle_size;
-    state.particle_appearance = options.particle_appearance;
-    state.show_grid = options.references.grid_and_domain_box;
-    state.show_coordinate_system = options.references.world_axes;
-    state.time = options.start_time_seconds as f32;
-
-    let dimension = if state.mode_3d { 3 } else { 2 };
-    let cloud = state.particle_target().map(|target| {
-        let domain = state.scene_domain();
-        let flow = state.scene_flow();
-        let mut cloud = Particles::with_seed(options.seed);
-        particles::spawn(&mut cloud, &domain, target, dimension);
-        for &(time, dt) in &steps {
-            particles::advect(
-                &mut cloud,
-                &flow,
-                &domain,
-                AdvectSettings {
-                    time,
-                    dt,
-                    trail_len: state.particle_appearance.trail_len,
-                    loop_on_stagnation: state.particle_appearance.loop_on_stagnation,
-                    stagnation_seconds: state.particle_appearance.stagnation_seconds,
-                },
-            );
-        }
-        cloud
-    });
+    let mut state = cli_state(options);
+    let cloud = particle_cloud(&mut state, options, &steps);
     state.time = endpoint;
     // Snapshot owns flow tracing. Compose references onto those lines exactly once.
     let mut scene = state.snapshot();
@@ -144,13 +94,153 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
     Ok(PreparedScene { scene, frame })
 }
 
+/// Capture the Formula/particle state for a CLI animation.
+///
+/// Particles are preadvanced from time zero to `start_time_seconds` with the
+/// existing `fixed_step_seconds`; `duration_seconds` is the animation span and
+/// does not add particle time. The snapshot then owns every later frame step.
+pub fn prepare_animation_snapshot(options: &CliOptions) -> Result<AnimationSnapshot, CliError> {
+    validate_effective(options)?;
+    let (steps, endpoint) = preadvance_schedule(options)?;
+    let mut state = cli_state(options);
+    let particles = particle_cloud(&mut state, options, &steps).unwrap_or_default();
+    state.time = endpoint;
+    let (orbit, fly) = snapshot_camera(options, state.domain);
+    let clear = output_frame(options)?.background_linear;
+    Ok(AnimationSnapshot::from_parts(
+        state, particles, orbit, fly, clear,
+    ))
+}
+
+fn cli_state(options: &CliOptions) -> State {
+    let mut state = State::new(options.mode == Mode::ThreeD);
+    state.set_formula(options.formula.clone());
+    state.set_density(options.density);
+    state.set_domain(options.domain.min, options.domain.max);
+    state.arrows = options.arrows;
+    state.streamlines = options.streamlines;
+    state.particles = options.particles;
+    state.arrow_scale = options.arrow_scale;
+    state.arrow_opacity = options.arrow_opacity;
+    state.plane_dim_opacity = options.plane_dim_opacity;
+    state.arrow_length_mode = options.arrow_length_mode;
+    state.magnitude_scale = options.magnitude_scale;
+    state.proportional_exponent = options.proportional_exponent;
+    state.colormap = options.colormap;
+    state.auto_fit = options.color_range.is_none();
+    if let Some([min, max]) = options.color_range {
+        state.color_min = min;
+        state.color_max = max;
+    }
+    state.arrow_style = options.arrow_style_3d;
+    state.arrow_style_2d = options.arrow_style_2d;
+    state.arrow_params = options.arrow_params;
+    state.seed_mode = options.streamline_seed_mode;
+    state.set_plane(options.plane);
+    state.particle_count = options.particle_count;
+    state.particle_size = options.particle_size;
+    state.particle_appearance = options.particle_appearance;
+    state.show_grid = options.references.grid_and_domain_box;
+    state.show_coordinate_system = options.references.world_axes;
+    state.time = options.start_time_seconds as f32;
+    state
+}
+
+fn particle_cloud(
+    state: &mut State,
+    options: &CliOptions,
+    steps: &[(f32, f32)],
+) -> Option<Particles> {
+    state.particle_target().map(|target| {
+        let domain = state.scene_domain();
+        let flow = state.scene_flow();
+        let mut cloud = Particles::with_seed(options.seed);
+        particles::spawn(
+            &mut cloud,
+            &domain,
+            target,
+            if state.mode_3d { 3 } else { 2 },
+        );
+        for &(time, dt) in steps {
+            particles::advect(
+                &mut cloud,
+                &flow,
+                &domain,
+                AdvectSettings {
+                    time,
+                    dt,
+                    trail_len: state.particle_appearance.trail_len,
+                    loop_on_stagnation: state.particle_appearance.loop_on_stagnation,
+                    stagnation_seconds: state.particle_appearance.stagnation_seconds,
+                },
+            );
+        }
+        cloud
+    })
+}
+
+fn snapshot_camera(
+    options: &CliOptions,
+    domain: crate::domain::Domain,
+) -> (OrbitCamera, Option<FlyCamera>) {
+    let camera = &options.camera;
+    let mut orbit = OrbitCamera {
+        target: domain.center(),
+        ..OrbitCamera::default()
+    };
+    let mut fly = None;
+    match options.mode {
+        Mode::TwoD => {
+            orbit.target = glam::Vec3::from_array(camera.target);
+            orbit.ortho_zoom = camera.ortho_zoom;
+        }
+        Mode::ThreeD => match camera.kind {
+            CameraKind::Orbit => {
+                orbit.target = glam::Vec3::from_array(camera.target);
+                orbit.yaw = camera.yaw;
+                orbit.pitch = camera.pitch;
+                orbit.distance = camera.distance;
+                orbit.fov_y = camera.fov_y_degrees.to_radians();
+            }
+            CameraKind::Fly => {
+                let mut camera = FlyCamera::from_orbit(&orbit, FlyCamera::default().sensitivity);
+                if options.camera.specified.position {
+                    camera.position = glam::Vec3::from_array(options.camera.position);
+                }
+                if options.camera.specified.yaw {
+                    camera.yaw = options.camera.yaw;
+                }
+                if options.camera.specified.pitch {
+                    camera.pitch = options.camera.pitch;
+                }
+                fly = Some(camera);
+            }
+        },
+    }
+    (orbit, fly)
+}
+
 /// Indexed f64 schedule with independently rounded f32 RK4 arguments.
 /// Keep this private: callers exercise preflight through the complete scene owner.
 fn simulation_schedule(options: &CliOptions) -> Result<(Vec<(f32, f32)>, f32), CliError> {
+    simulation_schedule_between(
+        options.start_time_seconds,
+        options.duration_seconds,
+        options.fixed_step_seconds,
+    )
+}
+
+/// Particle preadvance from zero to the animation start time.
+fn preadvance_schedule(options: &CliOptions) -> Result<(Vec<(f32, f32)>, f32), CliError> {
+    simulation_schedule_between(0.0, options.start_time_seconds, options.fixed_step_seconds)
+}
+
+fn simulation_schedule_between(
+    start: f64,
+    duration: f64,
+    step: f64,
+) -> Result<(Vec<(f32, f32)>, f32), CliError> {
     let invalid = |reason: &str| CliError::Validation(format!("simulation schedule: {reason}"));
-    let start = options.start_time_seconds;
-    let duration = options.duration_seconds;
-    let step = options.fixed_step_seconds;
     let end = start + duration;
     if !end.is_finite() || !(end as f32).is_finite() {
         return Err(invalid("nonfinite endpoint"));

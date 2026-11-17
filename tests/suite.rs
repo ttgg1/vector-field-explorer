@@ -36,6 +36,8 @@ mod cas_test;
 #[cfg(unix)]
 mod clean_test_artifacts_test;
 #[cfg(not(target_arch = "wasm32"))]
+mod cli_animation_test;
+#[cfg(not(target_arch = "wasm32"))]
 mod cli_gpu_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cli_scene_test;

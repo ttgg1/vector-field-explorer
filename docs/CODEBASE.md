@@ -407,17 +407,31 @@ only `color_range` accepts null. Supplied values are intrinsically validated
 before flags can override them. Final mode and formula determine density and
 grid bounds; `CliOptions` carries resolved settings and explicit camera-member
 markers for mode applicability. Clap and pollster are native-only dependencies.
+`animation_format` is a lowercase `gif|mp4|webm` string at the clap/JSON edge;
+`CliOptions` carries the resolved `AnimationFormat`. Animation mode requires the
+output extension to match the format, defaults an omitted duration to 4 s, and
+leaves the still-image duration default at 0. `animation_fps` defaults to 12 and
+`animation_loop` to false; loop with MP4/WebM and odd video dimensions are
+validation errors. Frame, pixel, byte and nonfinite-time limits come from
+`AnimationSpec`; animation validation runs before any output file is created.
+Still PNG/SVG bytes and `--duration` preadvance semantics are unchanged when
+`animation_format` is absent.
 
-**Pinned by.** `tests/cli_test.rs`, registered in the native suite.
+**Pinned by.** `tests/cli_test.rs` and `tests/cli_animation_test.rs`, registered
+in the native suite.
 
 **Dispatch.** `run_from` handles clap help/version, reads an optional strict JSON
-config, resolves flags and calls `run_export`. The latter validates and prepares
-one scene, selects CPU SVG or offscreen RGBA8 + PNG encoding by output extension,
-and writes the explicit path with contextual errors. Neither constructs `VfApp`,
-uses storage, nor opens dialogs. No-argument GUI and wasm startup are unchanged.
-`tests/cli_test.rs` exercises the actual executable with child-only environments;
-`scripts/test-cli-dispatch.sh` separately runs real displayless 2D/3D PNG decoding,
-non-background field checks and persistence sentinels through the wired binary.
+config, resolves flags and calls `run_export`. The latter validates and branches
+only when `animation_format` is present: animation captures a detached
+Formula/particle snapshot, opens one headless session and streams every frame
+through `apply_export_banner` and a `FrameSink` (`gif_sink` or `video_sink`).
+Otherwise it prepares one scene, selects CPU SVG or offscreen RGBA8 + PNG
+encoding by output extension, and writes the explicit path with contextual
+errors. Neither constructs `VfApp`, uses storage, nor opens dialogs. No-argument
+GUI and wasm startup are unchanged. `tests/cli_test.rs` exercises the actual
+executable with child-only environments; `scripts/test-cli-dispatch.sh`
+separately runs real displayless 2D/3D PNG decoding, non-background field checks
+and persistence sentinels through the wired binary.
 
 #### `src/cli_svg.rs` — native CPU vector export
 
@@ -440,25 +454,35 @@ portrait/landscape fit, deterministic bytes, no raster image, and 3D rejection.
 #### `src/cli_gpu.rs` — native surface-free GPU export
 
 **Purpose / API.** `cli::render_offscreen(&PreparedScene)` requests a headless
-wgpu adapter/device and returns packed RGBA8. It does not create a surface,
-window, app or persistence state. PNG encoding/writing belongs to CLI dispatch.
+wgpu adapter/device and returns packed RGBA8. `HeadlessRenderSession::new`
+initializes one adapter/device/`DrawState` and `render_frame` can paint many
+scenes; `render_offscreen` remains the one-shot still-PNG wrapper. It does not
+create a surface, window, app or persistence state. PNG encoding/writing belongs
+to CLI dispatch. `AnimationRenderSession` is the doc-hidden frame seam used by
+CLI animation; `HeadlessRenderSession` implements it.
 
 **Invariants.** Dimensions, packed/padded pixel bytes, storage sizes, vertex
-counts and adapter/device limits are checked before resource allocation. No
-optional device features are requested. The target must support rendering,
-blending and copying `Rgba8UnormSrgb`; no format or CPU/noop fallback is allowed.
-The existing `DrawState` paints the prepared frame with its linear clear color;
-readback is display-encoded sRGB. GPU validation/internal/OOM scopes, uncaptured
-errors and device loss become actionable CLI errors. The doc-hidden production
-`offscreen_error_to_cli` preserves render versus typed readback classification.
-Two further doc-hidden production seams support GPU-free failure checks:
-`validate_gpu_limits` delegates to the same private resource-size validator used
-for rendering, and `acquire_device_with` invokes the actual device request once
-and preserves its original cause in a contextual `CliError::Device`.
+counts and adapter/device limits are checked for every frame before resource
+allocation. A streaming session requests the adapter's storage/buffer maxima so
+later frames are not limited by the first frame, then checks each frame against
+the device's limits; the one-shot still wrapper keeps its original minimal
+request and bytes. No optional device features are requested. The target must
+support rendering, blending and copying `Rgba8UnormSrgb`; no format or CPU/noop
+fallback is allowed. The existing `DrawState` paints the prepared frame with its
+linear clear color; readback is display-encoded sRGB. GPU validation/internal/OOM
+scopes, uncaptured errors and device loss become actionable CLI errors. The
+doc-hidden production `offscreen_error_to_cli` preserves render versus typed
+readback classification. Two further doc-hidden production seams support
+GPU-free failure checks: `validate_gpu_limits` delegates to the same private
+resource-size validator used for rendering, and `acquire_device_with` invokes
+the actual device request once and preserves its original cause in a contextual
+`CliError::Device`.
 
 **Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions, reduced texture,
 readback/storage/binding limits, injected device-request failure, exactly-once
 acquisition success/failure, and actual map callback failure.
+`tests/cli_animation_test.rs` pins that one animation export opens exactly one
+session through the injected factory and streams the scheduled frame count.
 `scripts/test-cli-gpu.sh` runs isolated displayless workers for
 injected adapter absence, real 2D/3D dimensions/field content, PNG decoding, exact
 clear/linear-alpha-blend channel bytes, and software Vulkan when installed.
