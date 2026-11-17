@@ -287,6 +287,8 @@ pub ode: OdeScene,
 pub ode_solution: Option<std::sync::Arc<OdeSolution>>,
 pub ode_error: Option<String>,
 pub ode_epoch: u64,
+pub ode_chart: OdeChart,
+pub ode_variables: [bool; 3],
 ode_dirty: bool,
 ```
 
@@ -434,7 +436,6 @@ pub struct OdePanelState {
     pub draft: OdeScene,
     pub error: Option<String>,
     pub advanced: bool,
-    pub chart: OdeChart,
 }
 
 pub enum OdeChart { Phase, TimeSeries }
@@ -443,6 +444,12 @@ pub enum OdeChart { Phase, TimeSeries }
 `OdePanelState::commit(&mut State) -> bool` validates the draft, calls
 `State::set_ode_scene`, syncs the draft back on success, and exposes the error
 on failure. Invalid drafts never replace the last valid scene.
+
+The chart selection and visible time-series variables are durable view state,
+not widget-local state: they live in `State::ode_chart`/`State::ode_variables`
+so `ViewRecord::restore` can round-trip them without receiving the panel. The
+panel renders and commits them through narrow `State` setters; `OdeChart`
+itself is serde-mapped only in `ViewRecord`.
 
 Responsive placement:
 
