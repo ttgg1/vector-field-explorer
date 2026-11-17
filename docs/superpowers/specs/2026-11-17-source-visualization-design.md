@@ -1,6 +1,6 @@
 # Source visualization — glyphs, selected slice, presets and export warnings
 
-**Status:** PROPOSED for Issue [#26](https://github.com/ttgg1/vector-field-explorer/issues/26). The owner approved **Approach A** and the projected/off-slice 2D glyph policy on 2026-11-17; this document is the detailed design awaiting owner approval before implementation.
+**Status:** APPROVED by owner on 2026-11-17 for Issue [#26](https://github.com/ttgg1/vector-field-explorer/issues/26). The owner approved **Approach A**, the projected/off-slice 2D glyph policy, and this detailed design. Implementation follows the approved plan and independent review.
 
 **Issue:** [#26](https://github.com/ttgg1/vector-field-explorer/issues/26) under physics epic [#17](https://github.com/ttgg1/vector-field-explorer/issues/17).
 
