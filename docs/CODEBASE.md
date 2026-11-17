@@ -2022,12 +2022,41 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
+#### `src/export_provenance.rs` — source export warning and metadata contract
+
+**Purpose.** One capture-time provenance object feeds the baked PNG banner,
+PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
+derived from the validated `SourceScene` plus the cached `SourceSampling`; it
+never samples the field or creates vector data.
+
+**Public API.** `ExportProvenance { warning_lines, metadata, source_mode }`,
+`source_export_provenance(mode, scene, sampling)`, `provenance_lines`,
+`provenance_metadata`, and the exact ASCII copy constants `MODEL_LINE`,
+`ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`, `NO_SAMPLING_LINE`.
+
+**Invariants.**
+- Formula mode returns `None`; Sources mode always returns `Some`.
+- The softened-model line is always first. Missing sampling adds
+  `Source sampling unavailable`; a validation error adds the invalid line;
+  accuracy/unavailable lines appear only when their counts are nonzero.
+- `allow_inaccurate` changes the drawn count only; it never removes a warning.
+- Metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
+  `vfe.accuracy_not_met_total`, `vfe.accuracy_not_met_drawn`,
+  `vfe.unavailable`, and `vfe.validation_error` when present.
+
+**Pinned by.** `tests/source_export_test.rs`
+(`formula_exports_have_no_source_provenance`,
+`source_warning_lines_and_metadata_are_exact_and_separate`,
+`opt_in_adds_visible_data_but_never_removes_the_warning`,
+`missing_or_invalid_sampling_keeps_the_warning`).
+
 #### `src/export.rs` — PNG encoding and camera-preset files
 
 **Purpose.** PNG encode/write, SVG placeholder, and camera-preset JSON
 persistence (native file or browser `localStorage`).
 
-**Public API.** `encode_png`, `save_png` (native), `save_svg` (placeholder);
+**Public API.** `encode_png`, `encode_png_with_text`, `sanitize_png_text`,
+`save_png` (native), `save_svg` (placeholder);
 `Preset { name, position, scale }`, `presets_to_json`, `presets_from_json`,
 `PRESETS_STORAGE_KEY`, `load_wasm_presets`, `save_wasm_presets`,
 `storage_note`, and native `save_preset`, `delete_preset`, `load_presets`.
@@ -2035,6 +2064,9 @@ persistence (native file or browser `localStorage`).
 **Invariants.**
 - `encode_png` rejects a frame whose length is not exactly `width * height * 4`
   and writes RGBA8.
+- `encode_png_with_text` writes the same RGBA8 pixels through the `png` encoder
+  and adds each metadata pair as a `tEXt` chunk; keywords and values are
+  sanitized to printable ASCII (newlines become spaces, other non-ASCII `?`).
 - Native preset files are `presets.json` under the chosen directory; save
   replaces by name, delete rewrites even when the list becomes empty.
 - The wasm list is JSON under `vector-field-explorer.camera-presets`, separate
@@ -2065,8 +2097,12 @@ download paths.
 `SaveOutcome`, `capture_size`, `padded_row_bytes`, `strip_row_padding`,
 `png_readback_check`, `to_rgba`, `date_stamp`, `default_filename`,
 `ensure_png_extension`, `spawn_save` (native), `finish_download` (wasm),
-`Screenshot` (`new`, `with_channel`, `request`, `take_request`, `sender`,
-`tick`, `fail`, `toast_text`, `toast`).
+`scene_to_svg`, `scene_to_svg_with_provenance`, `apply_export_banner`,
+`Screenshot` (`new`, `with_channel`, `request`, `request_with_provenance`,
+`request_svg`, `request_svg_with_provenance`, `take_request`,
+`take_request_with_provenance`, `take_svg_request`,
+`take_svg_request_with_provenance`, `sender`, `tick`, `fail`, `toast_text`,
+`toast`).
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)
@@ -2085,6 +2121,17 @@ download paths.
   completion, starts a download, and reports; a second click is ignored while a
   capture is in flight.
 - `toast` requests repaints while visible so it expires on time.
+- `apply_export_banner` bakes the provenance warning into the RGBA frame with a
+  dependency-free 5×7 bitmap font over a dark strip; a wrong frame length is an
+  error.
+- `scene_to_svg` delegates to `scene_to_svg_with_provenance(..., None)`, so the
+  no-provenance document is unchanged. The provenance variant adds an escaped
+  `<metadata>` block and visible `<text>`, and converts line/trail widths from
+  world units to pixels from the projected endpoint span (`0.5..=3.0`, with the
+  historical `max(0.5)` fallback for a zero world span).
+- Pending PNG/SVG requests carry the provenance captured at request time;
+  `take_*_with_provenance` returns `Some(provenance)` for a live request and
+  `None` when idle.
 
 **Pinned by.** `tests/screenshot_test.rs` (18 tests):
 `capture_size_keeps_the_aspect_and_the_4096_cap`,
@@ -2097,6 +2144,12 @@ download paths.
 `completion_lands_as_a_toast_and_expires`,
 `a_click_asks_for_exactly_one_capture`,
 `native_allows_a_second_capture_while_one_is_in_flight`.
+Banner/stroke/SVG provenance behavior is pinned by `tests/source_export_test.rs`
+(`png_banner_and_text_chunks_are_in_the_decoded_file`,
+`svg_warning_is_visible_and_metadata_is_present`,
+`svg_stroke_width_converts_world_units_to_pixels_and_clamps`,
+`no_provenance_svg_keeps_existing_stroke_width_semantics`,
+`screenshot_request_keeps_the_provenance_captured_at_request_time`).
 
 **Limitations.** The GPU readback itself is only exercised by the runtime smoke
 test. The browser cap is lower (2048) because the PNG encode runs on the main

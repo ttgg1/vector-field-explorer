@@ -9,6 +9,7 @@ pub mod cli;
 pub mod colormap;
 pub mod domain;
 pub mod export;
+pub mod export_provenance;
 pub mod field;
 pub mod flow;
 pub mod fly_camera;

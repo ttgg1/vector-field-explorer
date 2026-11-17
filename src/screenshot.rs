@@ -28,6 +28,8 @@ use eframe::egui;
 use eframe::wgpu::TextureFormat;
 use glam::Mat4;
 
+use crate::export_provenance::{ExportProvenance, provenance_lines};
+
 /// Largest edge of a capture, pixels. A bigger viewport is scaled down on both
 /// axes so the framing (and the camera aspect) stays what the user sees.
 ///
@@ -498,6 +500,293 @@ fn color_to_hex(c: [f32; 4]) -> String {
     format!("#{:02x}{:02x}{:02x}", r, g, b)
 }
 
+/// Approximate printable ASCII as 5×7 rows, most significant bit leftmost.
+///
+/// This is deliberately a tiny built-in font: the export banner must not need
+/// an egui context, a font file, or a new dependency. Unknown characters render
+/// as `?`.
+fn bitmap_glyph(c: char) -> [u8; 7] {
+    match c.to_ascii_uppercase() {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ],
+        '-' => [
+            0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000,
+        ],
+        '=' => [
+            0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000,
+        ],
+        ':' => [
+            0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000,
+        ],
+        ',' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000,
+        ],
+        '.' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100,
+        ],
+        '(' => [
+            0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010,
+        ],
+        ')' => [
+            0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000,
+        ],
+        '/' => [
+            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+        ],
+        '_' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111,
+        ],
+        '+' => [
+            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
+        ],
+        ' ' => [0; 7],
+        _ => [
+            0b01110, 0b10001, 0b00001, 0b00110, 0b00100, 0b00000, 0b00100,
+        ],
+    }
+}
+
+/// Bake the provenance warning into an RGBA frame as a dark translucent strip
+/// with near-white bitmap text, bottom-left, above 4 px of padding.
+///
+/// The banner is part of the decoded PNG pixels, so a saved source image keeps
+/// its softened-model and accuracy context even outside the app. Lines paint
+/// bottom-up in provenance order and are clipped to the image width/height.
+pub fn apply_export_banner(
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    provenance: &ExportProvenance,
+) -> Result<(), String> {
+    let expected = width as usize * height as usize * 4;
+    if rgba.len() != expected {
+        return Err(format!(
+            "invalid frame size: expected {expected} bytes, got {}",
+            rgba.len()
+        ));
+    }
+    if width == 0 || height == 0 {
+        return Ok(());
+    }
+    let lines = provenance_lines(provenance);
+    if lines.is_empty() {
+        return Ok(());
+    }
+
+    const SCALE: u32 = 2;
+    const PADDING: u32 = 4;
+    const FONT_HEIGHT: u32 = 7;
+    const GLYPH_WIDTH: u32 = 5;
+    const GLYPH_ADVANCE: u32 = 6;
+    let line_height = FONT_HEIGHT * SCALE + 2;
+    let banner_height = (lines.len() as u32)
+        .saturating_mul(line_height)
+        .saturating_add(PADDING)
+        .min(height);
+    let banner_top = height - banner_height;
+
+    // Semi-transparent dark strip composited over whatever pixels are below.
+    for y in banner_top..height {
+        for x in 0..width {
+            let offset = ((y * width + x) * 4) as usize;
+            for channel in 0..3 {
+                rgba[offset + channel] = (f32::from(rgba[offset + channel]) * 0.35).round() as u8;
+            }
+        }
+    }
+
+    // Text: line 0 sits at the bottom, matching "above the padding" order.
+    for (line_index, line) in lines.iter().enumerate() {
+        let baseline = height
+            .saturating_sub(PADDING + line_index as u32 * line_height)
+            .saturating_sub(FONT_HEIGHT * SCALE);
+        let mut pen_x = PADDING;
+        for c in line.chars() {
+            if pen_x + GLYPH_WIDTH * SCALE > width.saturating_sub(PADDING) {
+                break;
+            }
+            let glyph = bitmap_glyph(c);
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..GLYPH_WIDTH {
+                    if bits & (1 << (GLYPH_WIDTH - 1 - col)) == 0 {
+                        continue;
+                    }
+                    for dy in 0..SCALE {
+                        for dx in 0..SCALE {
+                            let x = pen_x + col * SCALE + dx;
+                            let y = baseline + row as u32 * SCALE + dy;
+                            if x < width && y < height {
+                                let offset = ((y * width + x) * 4) as usize;
+                                rgba[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
+                            }
+                        }
+                    }
+                }
+            }
+            pen_x += GLYPH_ADVANCE * SCALE;
+        }
+    }
+
+    Ok(())
+}
+
+/// Escape text for XML content/attributes.
+fn xml_escape(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// Convert a world-unit line width into screen pixels from the projected
+/// endpoint span. Falls back to the historical `max(0.5)` when the world span
+/// is zero or either endpoint cannot be projected.
+fn line_stroke_width(
+    line: &crate::renderer::LineInstanceGPU,
+    view_proj: Mat4,
+    width: u32,
+    height: u32,
+) -> f32 {
+    let fallback = line.b[3].max(0.5);
+    let world = ((line.b[0] - line.a[0]).powi(2)
+        + (line.b[1] - line.a[1]).powi(2)
+        + (line.b[2] - line.a[2]).powi(2))
+    .sqrt();
+    if !world.is_finite() || world <= 0.0 {
+        return fallback;
+    }
+    let Some((x1, y1)) =
+        world_to_screen(view_proj, [line.a[0], line.a[1], line.a[2]], width, height)
+    else {
+        return fallback;
+    };
+    let Some((x2, y2)) =
+        world_to_screen(view_proj, [line.b[0], line.b[1], line.b[2]], width, height)
+    else {
+        return fallback;
+    };
+    let pixels = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+    let scale = pixels / world;
+    if !scale.is_finite() || scale <= 0.0 {
+        return fallback;
+    }
+    (line.b[3].abs() * scale).clamp(0.5, 3.0)
+}
+
 /// Serialize a 2D scene as an SVG document. `view_proj` is the active
 /// camera's view-projection matrix; `width`/`height` are the output pixel
 /// dimensions. Arrows, streamlines, trails and particles are emitted as
@@ -513,6 +802,26 @@ pub fn scene_to_svg(
     width: u32,
     height: u32,
     clear: [f64; 4],
+) -> String {
+    scene_to_svg_with_provenance(scene, view_proj, width, height, clear, None)
+}
+
+/// Serialize a 2D scene as an SVG document with optional source provenance.
+///
+/// With `None` the output is exactly the historical [`scene_to_svg`] document.
+/// With provenance the document also carries:
+/// - a `<metadata>` block with the `vfe.*` key/value pairs, XML-escaped;
+/// - a visible bottom-left `<text>` warning over a translucent `<rect>`;
+/// - line/trail widths converted from world units to pixels using the projected
+///   endpoint span, clamped to `0.5..=3.0` (zero world span falls back to the
+///   old `max(0.5)` width).
+pub fn scene_to_svg_with_provenance(
+    scene: &crate::renderer::SceneGPU,
+    view_proj: Mat4,
+    width: u32,
+    height: u32,
+    clear: [f64; 4],
+    provenance: Option<&ExportProvenance>,
 ) -> String {
     // Warn (never truncate) when the scene is larger than the safe cap.
     let element_count = svg_element_count(scene);
@@ -563,7 +872,10 @@ pub fn scene_to_svg(
             continue;
         };
         let color = color_to_hex(line.color);
-        let w = line.b[3].max(0.5);
+        let w = match provenance {
+            Some(_) => line_stroke_width(line, view_proj, width, height),
+            None => line.b[3].max(0.5),
+        };
         out.push_str(&format!(
             "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"{}\" stroke-width=\"{:.2}\" stroke-linecap=\"round\"/>",
             x1, y1, x2, y2, color, w
@@ -625,6 +937,38 @@ pub fn scene_to_svg(
                 "<circle cx=\"{:.2}\" cy=\"{:.2}\" r=\"{:.2}\" fill=\"{}\"/>",
                 sx, sy, r, color
             ));
+        }
+    }
+
+    if let Some(provenance) = provenance {
+        if !provenance.metadata.is_empty() {
+            out.push_str("<metadata>");
+            for (key, value) in &provenance.metadata {
+                let tag = xml_escape(key);
+                out.push_str(&format!("<{tag}>{}</{tag}>", xml_escape(value)));
+            }
+            out.push_str("</metadata>");
+        }
+
+        let lines = provenance_lines(provenance);
+        if !lines.is_empty() {
+            const FONT_SIZE: f32 = 12.0;
+            const LINE_HEIGHT: f32 = 14.0;
+            const PADDING: f32 = 6.0;
+            let banner_height =
+                (lines.len() as f32 * LINE_HEIGHT + PADDING * 2.0).min(height as f32);
+            let banner_top = height as f32 - banner_height;
+            out.push_str(&format!(
+                "<rect x=\"0\" y=\"{banner_top:.2}\" width=\"{width}\" height=\"{banner_height:.2}\" fill=\"#000000\" fill-opacity=\"0.65\"/>",
+            ));
+            for (index, line) in lines.iter().enumerate() {
+                let baseline =
+                    height as f32 - PADDING - (lines.len() - 1 - index) as f32 * LINE_HEIGHT;
+                out.push_str(&format!(
+                    "<text x=\"8\" y=\"{baseline:.2}\" font-family=\"monospace\" font-size=\"{FONT_SIZE:.0}\" fill=\"#ffffff\">{}</text>",
+                    xml_escape(line)
+                ));
+            }
         }
     }
 
@@ -720,8 +1064,10 @@ struct Toast {
 /// reopen the slot. On wasm a second click while a capture is in flight is
 /// ignored; native keeps its previous allow-a-second-request behavior.
 pub struct Screenshot {
-    pending: bool,
-    svg_pending: bool,
+    /// `Some(provenance)` while a PNG request waits for dispatch; the inner
+    /// value is the provenance captured at request time.
+    pending: Option<Option<ExportProvenance>>,
+    svg_pending: Option<Option<ExportProvenance>>,
     capturing: bool,
     tx: Sender<SaveOutcome>,
     rx: Receiver<SaveOutcome>,
@@ -769,8 +1115,8 @@ impl Screenshot {
         capture_rx: Receiver<CaptureReport>,
     ) -> Self {
         Self {
-            pending: false,
-            svg_pending: false,
+            pending: None,
+            svg_pending: None,
             capturing: false,
             tx,
             rx,
@@ -785,23 +1131,39 @@ impl Screenshot {
     /// Record a click. The capture itself happens in the viewport, where this
     /// frame's exact rect and camera are known.
     pub fn request(&mut self) {
-        self.pending = true;
+        self.request_with_provenance(None);
+    }
+
+    /// Record a click together with the source provenance captured now.
+    pub fn request_with_provenance(&mut self, provenance: Option<ExportProvenance>) {
+        self.pending = Some(provenance);
     }
 
     /// Request an SVG (vector) export of the current 2D view.
     pub fn request_svg(&mut self) {
-        self.svg_pending = true;
+        self.request_svg_with_provenance(None);
+    }
+
+    /// Request an SVG export with the source provenance captured now.
+    pub fn request_svg_with_provenance(&mut self, provenance: Option<ExportProvenance>) {
+        self.svg_pending = Some(provenance);
+    }
+
+    /// Consume an SVG request; `Some(provenance)` means "export this frame".
+    /// The outer `None` means no request was pending.
+    pub fn take_svg_request_with_provenance(&mut self) -> Option<Option<ExportProvenance>> {
+        self.svg_pending.take()
     }
 
     /// Consume an SVG request; true means "export this frame".
     pub fn take_svg_request(&mut self) -> bool {
-        std::mem::take(&mut self.svg_pending)
+        self.take_svg_request_with_provenance().is_some()
     }
 
     /// Whether an SVG request is still waiting for the viewport dispatch.
     #[doc(hidden)]
     pub fn svg_request_pending(&self) -> bool {
-        self.svg_pending
+        self.svg_pending.is_some()
     }
 
     /// Consume the click; true means "capture this frame".
@@ -811,15 +1173,23 @@ impl Screenshot {
     /// its old behavior and allows another request while the save dialog owns
     /// the first capture.
     pub fn take_request(&mut self) -> bool {
-        let requested = std::mem::take(&mut self.pending);
-        if !requested || (cfg!(target_arch = "wasm32") && self.capturing) {
-            return false;
+        self.take_request_with_provenance().is_some()
+    }
+
+    /// Consume the click and return the provenance captured with it.
+    ///
+    /// `None` means no request was pending (the outer option is the request
+    /// slot); `Some(None)` means a request without source provenance.
+    pub fn take_request_with_provenance(&mut self) -> Option<Option<ExportProvenance>> {
+        let provenance = self.pending.take()?;
+        if cfg!(target_arch = "wasm32") && self.capturing {
+            return None;
         }
         self.capturing = true;
         let generation = self.next_generation;
         self.next_generation = self.next_generation.wrapping_add(1);
         self.active_generations.push(generation);
-        true
+        Some(provenance)
     }
 
     /// The generation of the capture just claimed by [`Self::take_request`].
@@ -847,8 +1217,8 @@ impl Screenshot {
     /// completions. Used by Reset; the worker may still finish, but its tagged
     /// result is ignored.
     pub fn cancel_pending(&mut self) {
-        self.pending = false;
-        self.svg_pending = false;
+        self.pending = None;
+        self.svg_pending = None;
         self.capturing = false;
         self.active_generations.clear();
         self.toast = None;
