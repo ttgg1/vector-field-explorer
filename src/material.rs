@@ -404,7 +404,7 @@ pub fn sample_materials(
     if !can_sample {
         warnings.push(MATERIAL_EMPTY_DOMAIN_WARNING);
     }
-    if plane.is_some() && coincident_interface_slice(scene, plane) {
+    if plane.is_some() && coincident_interface_slice(scene, domain, plane) {
         warnings.push(MATERIAL_COINCIDENT_SLICE_WARNING);
     }
     if !warnings.is_empty() {
@@ -688,7 +688,7 @@ fn boundary_world_outline(
 
 fn boundary_slice_outline(
     scene: &MaterialScene,
-    _domain: &Domain,
+    domain: &Domain,
     frame: &PlaneFrame,
     color: [f32; 4],
 ) -> Vec<MaterialLine> {
@@ -696,7 +696,7 @@ fn boundary_slice_outline(
     let dot = normal.dot(frame.normal).abs();
     let parallel = (dot - 1.0).abs() <= 1e-6;
     if parallel {
-        if !plane_coincides_with_interface(scene, frame) {
+        if !plane_coincides_with_interface(scene, domain, frame) {
             return Vec::new();
         }
         return local_square(frame, color);
@@ -790,24 +790,34 @@ fn clip_line_to_box(
     ))
 }
 
-fn coincident_interface_slice(scene: &MaterialScene, plane: Option<&PlaneFrame>) -> bool {
+fn coincident_interface_slice(
+    scene: &MaterialScene,
+    domain: &Domain,
+    plane: Option<&PlaneFrame>,
+) -> bool {
     let (MaterialCase::DielectricBoundary | MaterialCase::PermeableBoundary, Some(frame)) =
         (scene.case, plane)
     else {
         return false;
     };
-    plane_coincides_with_interface(scene, frame)
+    plane_coincides_with_interface(scene, domain, frame)
 }
 
 /// Whether `frame` is parallel to and lies on the planar interface. The dot is
 /// formed in f64 from the frame origin and axis components so a genuinely
 /// coincident nonzero-offset slice is not rejected by f32 rounding.
-fn plane_coincides_with_interface(scene: &MaterialScene, frame: &PlaneFrame) -> bool {
+fn plane_coincides_with_interface(
+    scene: &MaterialScene,
+    domain: &Domain,
+    frame: &PlaneFrame,
+) -> bool {
     let normal = axis_vector(scene.interface_axis);
     if (normal.dot(frame.normal).abs() - 1.0).abs() > 1e-6 {
         return false;
     }
     let dot = normal.as_dvec3().dot(frame.origin.as_dvec3());
-    let tolerance = MATERIAL_COINCIDENT_SLICE_FACTOR * scene.interface_offset.abs().max(1.0);
+    let domain_extent = f64::from(domain.domain_size().max_element());
+    let case_extent = scene.interface_offset.abs().max(1.0);
+    let tolerance = MATERIAL_COINCIDENT_SLICE_FACTOR * domain_extent.max(case_extent);
     (dot - scene.interface_offset).abs() <= tolerance
 }

@@ -427,6 +427,49 @@ fn sampling_counts_interface_hits_that_only_the_case_tolerance_rejects() {
 }
 
 #[test]
+fn larger_domain_widens_the_coincident_slice_threshold() {
+    let offset = 5e-4;
+    let mut scene = boundary(MaterialCase::DielectricBoundary, 4.0, 1.0, [1.0, 0.0, 0.0]);
+    scene.interface_axis = PlaneAxis::Z;
+    scene.interface_offset = offset;
+
+    let small = Domain::new(Vec3::splat(-0.5), Vec3::splat(0.5));
+    let small_frame = z_frame(&small, UVec3::new(9, 9, 9), 4);
+    let small_sampling = sample_materials(&scene, &small, UVec3::new(9, 9, 1), Some(&small_frame));
+    assert!(
+        !small_sampling
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Slice lies on the interface"),
+        "a small domain keeps the tight threshold: {:?}",
+        small_sampling.warning
+    );
+    assert!(
+        material_outline(&scene, &small, Some(&small_frame)).is_empty(),
+        "a small domain does not draw a coincident square"
+    );
+
+    // 1e-6 * 1000 = 1e-3, wider than the 5e-4 offset.
+    let large = Domain::new(Vec3::splat(-500.0), Vec3::splat(500.0));
+    let large_frame = z_frame(&large, UVec3::new(9, 9, 9), 4);
+    let large_sampling = sample_materials(&scene, &large, UVec3::new(9, 9, 1), Some(&large_frame));
+    assert!(
+        large_sampling
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Slice lies on the interface"),
+        "a large domain widens the threshold: {:?}",
+        large_sampling.warning
+    );
+    assert!(
+        !material_outline(&scene, &large, Some(&large_frame)).is_empty(),
+        "a large domain draws the coincident square"
+    );
+}
+
+#[test]
 fn coincident_nonzero_offset_slice_survives_f32_rounding() {
     let boxed = domain();
     // With 21 samples over [-2, 2] index 11 sits at the real coordinate 0.2,
