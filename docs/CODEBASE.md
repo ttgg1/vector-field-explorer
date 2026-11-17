@@ -144,9 +144,11 @@ Why the seam matters:
   a 2D slice never gets world-cube references; the snapshot's `lines` holds
   grid-seeded streamlines only. In `FieldMode::Sources` the app also appends the
   active scene's `source_glyph_lines` after the reference/flow/click lines, so
-  markers follow the same selected `plane_frame` as the samples; Formula mode
-  preserves the durable scene but appends none. The resulting `SceneGPU.lines`
-  is shared by both viewport modes, CLI export and screenshot capture.
+  markers follow the same selected `plane_frame` as the samples. In
+  `FieldMode::Induction` it appends exactly the selected conductor's glyph and
+  no streamline/click geometry; Formula mode preserves the durable scene but
+  appends none. The resulting `SceneGPU.lines` is shared by both viewport modes,
+  CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -629,8 +631,9 @@ multiplication (`2x` is invalid), and no symbolic differentiation.
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
-without duplicating source math or validation. `FieldMode` selects Formula or
-Sources; `SourceDisplay` selects Electric, Magnetic or Both; `SourceEntry` pairs
+without duplicating source math or validation. `FieldMode` selects Formula,
+Sources or Induction; `SourceDisplay` selects Electric, Magnetic or Both;
+`SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
 softening and accuracy opt-in. The same module turns a scene into drawable
 arrows through the real evaluator.
@@ -742,10 +745,31 @@ diagnostics; the induced field itself never depends on CAS.
 native-only `cas_derivative_matches_the_analytic_waveform`. Fixtures and their
 independent mpmath generator live in `tests/support/induction/`.
 
+**App integration (Task 2).** `State::induction` is the durable scene;
+`induction_prepared` caches the unit-current geometry and `induction_sampling`
+the current frame. `set_induction_scene` validates before replacing: an invalid
+edit records `induction_error`, returns false and leaves the previous scene,
+prepared `Arc` and arrows untouched; a valid edit clears the error.
+`refresh_induction` compares the `InductionKey`, re-prepares only on a geometry/
+domain/grid/plane/softening change, and otherwise rescales the same `Arc`.
+Entering Induction takes the 3D view; the stored density is never destroyed,
+only sampled against the 20³ (3D) or 80² (2D slice) cap. Induction is a clock
+consumer only while `is_animated()`; the app starts no second clock, draws no
+particles/streamlines/clicks, and pauses with the existing scalar-plot rule.
+`snapshot` returns arrows and empty line/trail/dot geometry; `rebuild_scene`
+composes the backdrop, one conductor glyph and those arrows.
+
+**Pinned by.** [tests/induction_app_test.rs](../tests/induction_app_test.rs):
+caps and mode preservation, clock consumption and pause, time-only `Arc`
+identity, geometry re-prepare, fixed E/B colours, local plane positions, the
+invalid-edit retain-last-valid rule, arrows-only snapshots and glyph
+composition, density restore on leaving, and mirrored clock time. The model
+itself is pinned by `tests/induction_test.rs` as above.
+
 **Limitations.** CPU-only, quasistatic and softened: no displacement current,
-retardation or physical singular limit. Task 1 provides the model/evaluator
-only; mode integration, UI, persistence and export warnings are later tasks.
-The cap benchmark is recorded in
+retardation or physical singular limit. The induction UI, persistence/export
+provenance, docs and integrated cap benchmark are later tasks. The cap benchmark
+is recorded in
 [docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
 
 #### `src/source_presets.rs` — built-in source-scene presets
@@ -1324,6 +1348,9 @@ decisions that do not need a window.
 - Source mode fields: `field_mode`, `sources`, `source_sampling` and
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
   `source_sampling` and `reset_sources`.
+- Induction mode fields: `induction`, `induction_prepared`,
+  `induction_sampling` and `induction_error`; `set_induction_scene` and
+  `refresh_induction`.
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1336,21 +1363,30 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `active_dimension()` is 3 in Sources mode and the formula's component count
-  otherwise; `is_3d()` means `mode_3d && active_dimension() == 3`. This gates
-  the cube grid, density cap, plane frame/slice and streamline depth, so source
-  mode uses the existing 2D plane path in 2D and the world cube in 3D.
-- `set_field_mode` preserves formula, source scene and the 2D/3D projection,
-  clears the cached sampling/notice and marks dirty; `set_source_scene` replaces
-  the durable scene and clears the cache. Formula edits never invalidate source
-  state, and source edits never invalidate formula state. Entering Sources or
-  toggling its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
+- `active_dimension()` is 3 in Sources and Induction mode and the formula's
+  component count otherwise; `is_3d()` means `mode_3d && active_dimension() ==
+  3`. This gates the cube grid, density cap, plane frame/slice and streamline
+  depth, so source/induction mode uses the existing 2D plane path in 2D and the
+  world cube in 3D.
+- `set_field_mode` preserves the formula, source scene and induction scene,
+  clears the cached sampling/notice and marks dirty. Entering
+  Induction selects the 3D view but never rewrites the stored density; sampling
+  caps it at `MAX_INDUCTION_DENSITY_3D` in 3D and `MAX_INDUCTION_DENSITY_2D` on
+  a 2D slice, so leaving restores the untouched formula density.
+  `set_source_scene` replaces the durable scene and clears the cache. Formula
+  edits never invalidate source or induction state. Entering Sources or toggling
+  its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
   `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
   has no transition bypass.
 - `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
-  source cache, source mode stores a fresh `SourceSampling`. `snapshot` in
-  Sources mode returns cached arrows only (empty if unsampled) and never samples
-  the formula.
+  source/induction cache, source mode stores a fresh `SourceSampling`, induction
+  mode re-prepares only on a changed `InductionKey` and otherwise rescales the
+  same prepared `Arc`. `snapshot` in Sources/Induction mode returns cached arrows
+  only (empty if unsampled) and never samples the formula; Induction also emits
+  no lines, trails, dots or combined stream.
+- Induction is a clock consumer exactly while `induction.is_animated()`; its
+  `set_time` only dirties an animated waveform, so pause/resume and the scalar
+  plot pause hold the sampled field at the shared time.
 - `set_formula` keeps the last good `FieldExpr` on a parse error and still marks
   dirty so the status bar updates; `set_mode`/density/domain/formula-dimension
   changes call `sync_plane` with the previous grid.
@@ -1644,8 +1680,9 @@ accelerating.
 
 #### `src/sim_clock.rs` — the single simulation clock
 
-**Purpose.** The only time source for animated features (particles today; future
-time-dependent fields and plots).
+**Purpose.** The only time source for animated features: particles,
+time-dependent formula fields, active time-dependent scalar plots, and an
+animated induction scene.
 
 **Public API.** `MAX_STEP = 1/20`, `MIN_SPEED = 0.1`, `MAX_SPEED = 3.0`,
 `DEFAULT_SPEED = 1.0`; `SimClock { time, playing, speed, .. }` with `advance`,

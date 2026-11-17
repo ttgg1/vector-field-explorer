@@ -442,8 +442,12 @@ impl VfApp {
             self.last_click_seed = None;
             return;
         }
-        if self.state.field_mode == FieldMode::Sources {
-            // Source mode is static: no streamline seeds and no particle bursts.
+        if matches!(
+            self.state.field_mode,
+            FieldMode::Sources | FieldMode::Induction
+        ) {
+            // Source mode is static and Induction is arrows-only: no streamline
+            // seeds and no particle bursts.
             self.last_click_seed = None;
             return;
         }

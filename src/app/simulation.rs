@@ -70,7 +70,19 @@ impl VfApp {
             let arrow_style_2d = fresh.arrow_style_2d;
             let arrow_params = fresh.arrow_params;
             let mode_3d = fresh.mode_3d;
-            self.dots_range = self.state.color_range(&self.state.sample());
+            // Induction is arrows-only: its arrows carry their own colours and
+            // there is no particle cloud to share a range with. Avoid sampling
+            // the formula field, which is not on screen.
+            if self.state.field_mode == crate::source_scene::FieldMode::Induction {
+                self.dots_range = self
+                    .state
+                    .induction_sampling
+                    .as_ref()
+                    .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
+                    .unwrap_or((0.0, 1.0));
+            } else {
+                self.dots_range = self.state.color_range(&self.state.sample());
+            }
             self.flow_lines = Arc::unwrap_or_clone(fresh.lines);
             // Click bursts outlive the rebuild: they are anchored on the field,
             // not on the sampling grid, so retrace them against the new
@@ -89,17 +101,32 @@ impl VfApp {
                 self.state.show_coordinate_system,
             );
             // Source markers are contextual overlays on the current sampling
-            // scene. Only the source adapter emits them; Formula preserves the
-            // durable scene but draws none.
-            let glyph_lines = if self.state.field_mode == crate::source_scene::FieldMode::Sources {
-                let glyphs = crate::source_glyph::source_glyphs(
-                    &self.state.sources,
-                    &self.state.scene_domain(),
-                    self.state.plane_frame().as_ref(),
-                );
-                crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
-            } else {
-                Vec::new()
+            // scene. Sources draws every enabled entry; Induction draws exactly
+            // the selected conductor. Formula preserves its durable scene but
+            // draws no marker.
+            let glyph_lines = match self.state.field_mode {
+                crate::source_scene::FieldMode::Sources => {
+                    let glyphs = crate::source_glyph::source_glyphs(
+                        &self.state.sources,
+                        &self.state.scene_domain(),
+                        self.state.plane_frame().as_ref(),
+                    );
+                    crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
+                }
+                crate::source_scene::FieldMode::Induction => {
+                    let mut scene = crate::source_scene::SourceScene::default();
+                    scene.entries.push(crate::source_scene::SourceEntry {
+                        enabled: true,
+                        source: self.state.induction.unit_source(),
+                    });
+                    let glyphs = crate::source_glyph::source_glyphs(
+                        &scene,
+                        &self.state.scene_domain(),
+                        self.state.plane_frame().as_ref(),
+                    );
+                    crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
+                }
+                crate::source_scene::FieldMode::Formula => Vec::new(),
             };
             self.source_glyph_line_count = glyph_lines.len();
             lines.extend(glyph_lines);

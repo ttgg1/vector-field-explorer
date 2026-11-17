@@ -744,6 +744,32 @@ impl PlotAppHarness<'_> {
         self.app.source_glyph_line_count
     }
 
+    /// The last induction sampling pass, cloned for assertions.
+    pub fn induction_sampling(&self) -> Option<crate::induction::InductionSampling> {
+        self.app.state.induction_sampling.clone()
+    }
+
+    /// The prepared unit-current cache identity, cloned so tests can compare
+    /// `Arc::ptr_eq` across frames.
+    pub fn induction_prepared_arc(&self) -> Option<Arc<crate::induction::InductionPrepared>> {
+        self.app.state.induction_prepared.clone()
+    }
+
+    /// The last rejected induction edit, if any.
+    pub fn induction_error(&self) -> Option<&str> {
+        self.app.state.induction_error.as_deref()
+    }
+
+    /// Arrow, trail and dot instance counts in the current vector scene.
+    pub fn vector_scene_counts(&self) -> (usize, usize, usize) {
+        match &self.app.scene {
+            ViewportScene::Vector(scene) => {
+                (scene.arrows.len(), scene.trails.len(), scene.dots.len())
+            }
+            ViewportScene::Plot(_) => (0, 0, 0),
+        }
+    }
+
     /// Every line in the current vector viewport scene, backdrop included.
     pub fn viewport_line_count(&self) -> usize {
         match &self.app.scene {
