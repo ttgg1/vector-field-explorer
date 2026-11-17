@@ -354,6 +354,79 @@ fn outline_uses_slice_intersection_only() {
 }
 
 #[test]
+fn sphere_slice_outline_is_centered_on_the_sphere_in_an_asymmetric_domain() {
+    let sphere_scene = sphere(MaterialCase::DielectricSphere, 4.0, 1.0, [1.0, 0.0, 0.0]);
+    // The sphere sits at the world origin, so an asymmetric domain puts the
+    // slice centre away from the local origin.
+    let boxed = Domain::new(Vec3::new(-1.0, -2.0, -1.0), Vec3::new(3.0, 2.0, 1.0));
+    let grid = UVec3::new(5, 5, 5);
+    let frame = z_frame(&boxed, grid, 2);
+    assert!(
+        frame.origin.z.abs() <= 1e-6,
+        "slice must pass through z = 0"
+    );
+
+    let center = frame.to_local(Vec3::ZERO).truncate();
+    let cut_radius = (1.0f32 - frame.origin.z * frame.origin.z).sqrt();
+    assert!(
+        center.length() > 0.5,
+        "the setup must move the local cut centre, got {center:?}"
+    );
+
+    let outline = material_outline(&sphere_scene, &boxed, Some(&frame));
+    assert!(!outline.is_empty(), "the slice intersects the sphere");
+    for line in &outline {
+        for endpoint in [line.a, line.b] {
+            let point = Vec3::from(endpoint);
+            assert!(point.z.abs() <= 1e-6, "outline stays in the slice plane");
+            let distance = (point.truncate() - center).length();
+            assert!(
+                (distance - cut_radius).abs() <= 1e-4,
+                "endpoint {point:?} is {distance} from the true centre {center:?}, expected {cut_radius}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sampling_counts_interface_hits_that_only_the_case_tolerance_rejects() {
+    let mut scene = sphere(MaterialCase::DielectricSphere, 4.0, 1.0, [1.0, 0.0, 0.0]);
+    // The sphere surface cuts the domain at x = 2, but the case tolerance
+    // `1e-9 * max(radius, 1)` is wider than `1e-9 * max(extent, 1)` because the
+    // radius exceeds the small domain extent.
+    scene.radius = 2.0 + 1.5e-9;
+    let boxed = Domain::new(Vec3::new(1.95, -0.05, -0.05), Vec3::new(2.05, 0.05, 0.05));
+    let grid = UVec3::splat(3);
+    let points = boxed.grid_points(grid).collect::<Vec<_>>();
+    let rejected = points
+        .iter()
+        .filter(|point| {
+            matches!(
+                material_field(&scene, **point),
+                Err(MaterialError::Unsupported(_))
+            )
+        })
+        .count();
+    assert!(
+        rejected > 0,
+        "the setup must place a grid point where only the case tolerance rejects"
+    );
+
+    let sampling = sample_materials(&scene, &boxed, grid, None);
+    assert!(
+        sampling.omitted_interface as usize >= rejected,
+        "rejected interface points are reported, not silently dropped: omitted {}, rejected {}",
+        sampling.omitted_interface,
+        rejected
+    );
+    assert_eq!(
+        sampling.arrows.len() + sampling.omitted_interface as usize,
+        points.len(),
+        "every sample is either drawn or explicitly omitted"
+    );
+}
+
+#[test]
 fn coincident_nonzero_offset_slice_survives_f32_rounding() {
     let boxed = domain();
     // With 21 samples over [-2, 2] index 11 sits at the real coordinate 0.2,

@@ -363,6 +363,24 @@ fn materials_compact_and_wide_panels_reflow() {
 }
 
 #[test]
+fn material_advanced_panel_states_both_tolerance_factors() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Materials);
+    let mut panel = MaterialPanelState::default();
+    panel.sync_from(&state);
+    panel.advanced = true;
+    let out = panel_frame(&ctx, 1200.0, &mut state, &mut panel, false, Vec::new());
+    let text = painted_texts(&out).join("\n");
+    assert!(
+        text.contains(
+            "Exact-hit omission: 1e-9 × max(extent, 1). Coincident-slice detection: 1e-6 × max(domain extent, case extent, 1)."
+        ),
+        "the advanced pane distinguishes the exact-hit and coincident-slice factors: {text}"
+    );
+}
+
+#[test]
 fn materials_features_and_cas_are_disabled() {
     let ctx = context();
 

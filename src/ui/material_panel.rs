@@ -13,8 +13,9 @@
 use eframe::egui;
 
 use crate::material::{
-    MATERIAL_INTERFACE_TOLERANCE_FACTOR, MaterialCase, MaterialFamily, MaterialScene, MaterialView,
-    material_applied, material_assumptions, material_family, material_warning,
+    MATERIAL_COINCIDENT_SLICE_FACTOR, MATERIAL_EXACT_HIT_FACTOR, MaterialCase, MaterialFamily,
+    MaterialScene, MaterialView, material_applied, material_assumptions, material_family,
+    material_warning,
 };
 use crate::plane::PlaneAxis;
 use crate::ui::help_overlay::HelpRow;
@@ -315,8 +316,8 @@ fn show_advanced(ui: &mut egui::Ui, panel: &MaterialPanelState, state: &State) {
     ui.label("Assumptions");
     ui.label(material_assumptions(panel.draft.case));
     ui.label(format!(
-        "Interface tolerance: {:.0e} × max(extent, 1); samples exactly on the interface are omitted.",
-        MATERIAL_INTERFACE_TOLERANCE_FACTOR
+        "Exact-hit omission: {:.0e} × max(extent, 1). Coincident-slice detection: {:.0e} × max(domain extent, case extent, 1).",
+        MATERIAL_EXACT_HIT_FACTOR, MATERIAL_COINCIDENT_SLICE_FACTOR
     ));
 
     match state.material_sampling.as_ref() {

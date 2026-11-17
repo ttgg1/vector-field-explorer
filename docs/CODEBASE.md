@@ -896,7 +896,8 @@ panel, persistence and export adapters are documented in their own sections.
 `material_field`, `material_applied`, `material_response`, `material_outline`,
 and `sample_materials`. Constants are
 `MATERIAL_DEFAULT_RADIUS`, `MATERIAL_DEFAULT_INTERFACE_OFFSET`,
-`MATERIAL_INTERFACE_TOLERANCE_FACTOR`, `MATERIAL_MIN_RELATIVE`,
+`MATERIAL_EXACT_HIT_FACTOR`, `MATERIAL_COINCIDENT_SLICE_FACTOR`,
+`MATERIAL_MIN_RELATIVE`,
 `MATERIAL_MAX_RELATIVE`, `MATERIAL_ELECTRIC_COLOR` (amber `[255,176,64]`) and
 `MATERIAL_MAGNETIC_COLOR` (cyan `[64,196,255]`); the exact warning strings are
 exported as `MATERIAL_INTERFACE_WARNING`, `MATERIAL_RESPONSE_EMPTY_WARNING`,

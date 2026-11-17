@@ -17,12 +17,17 @@ use crate::sampling::ArrowData;
 pub const MATERIAL_DEFAULT_RADIUS: f64 = 1.0;
 /// Default planar-interface offset for a new material scene.
 pub const MATERIAL_DEFAULT_INTERFACE_OFFSET: f64 = 0.0;
-/// Documented fractional interface tolerance exposed to the UI.
+/// Fractional factor for the exact-hit guard `1e-9 * max(extent, 1)`.
 ///
-/// The exact-hit guard used by sampling is the domain-scaled `1e-9 * max(extent,
-/// 1.0)`; this constant records the design's applicability scale without
-/// turning the guard into an omitted band.
-pub const MATERIAL_INTERFACE_TOLERANCE_FACTOR: f64 = 1e-6;
+/// Sampling widens this to the case's own guard (`radius`/`|offset|`) so a
+/// point the evaluator rejects is always reported as omitted.
+pub const MATERIAL_EXACT_HIT_FACTOR: f64 = 1e-9;
+/// Fractional factor for detecting a slice coincident with a planar interface:
+/// `1e-6 * max(|interface offset|, 1)`.
+///
+/// The dot product is formed in f64 because f32 plane coordinates round past
+/// the much tighter exact-hit guard at nonzero offsets.
+pub const MATERIAL_COINCIDENT_SLICE_FACTOR: f64 = 1e-6;
 /// Largest accepted relative permittivity/permeability.
 pub const MATERIAL_MAX_RELATIVE: f64 = 100.0;
 /// Smallest accepted relative permittivity/permeability.
@@ -43,12 +48,6 @@ pub const MATERIAL_EMPTY_DOMAIN_WARNING: &str = "The sampling domain or grid pro
 pub const MATERIAL_COINCIDENT_SLICE_WARNING: &str =
     "Slice lies on the interface; the field is discontinuous here.";
 
-/// The exact-hit tolerance is scaled by the domain extent, not a fixed band.
-const EXACT_HIT_FACTOR: f64 = 1e-9;
-/// Tolerance factor for deciding a slice plane coincides with a planar
-/// interface. The dot product is formed in f64 because f32 plane coordinates
-/// round past the much tighter exact-hit guard at nonzero offsets.
-const COINCIDENT_SLICE_FACTOR: f64 = 1e-6;
 /// Vectors below this magnitude are degenerate and are not drawn.
 const DEGENERATE_MAGNITUDE: f32 = 1e-6;
 /// Great-circle/circle segment count for outlines.
@@ -332,7 +331,7 @@ pub fn sample_materials(
     let can_sample = dims_ok && extents_ok && finite_domain;
 
     let extent = size.x.abs().max(size.y.abs()).max(size.z.abs()).max(1.0) as f64;
-    let tolerance = EXACT_HIT_FACTOR * extent;
+    let tolerance = (MATERIAL_EXACT_HIT_FACTOR * extent).max(case_exact_hit_tolerance(scene));
 
     let mut finite_response_seen = false;
     let mut any_nonzero_response = false;
@@ -434,7 +433,7 @@ fn sphere_field(scene: &MaterialScene, point: Vec3, electric: bool) -> Result<Ve
     let radius = scene.radius;
     let p = point.as_dvec3();
     let r = p.length();
-    let tolerance = EXACT_HIT_FACTOR * radius.max(1.0);
+    let tolerance = case_exact_hit_tolerance(scene);
     if (r - radius).abs() <= tolerance {
         return Err(MaterialError::Unsupported(
             MATERIAL_INTERFACE_WARNING.into(),
@@ -476,7 +475,7 @@ fn boundary_field(
     let p = point.as_dvec3();
     let n = normal.as_dvec3();
     let offset = scene.interface_offset;
-    let tolerance = EXACT_HIT_FACTOR * offset.abs().max(1.0);
+    let tolerance = case_exact_hit_tolerance(scene);
     let coordinate = p.dot(n);
     if (coordinate - offset).abs() <= tolerance {
         return Err(MaterialError::Unsupported(
@@ -498,6 +497,21 @@ fn boundary_field(
     };
 
     Ok(Vec3::new(value.x as f32, value.y as f32, value.z as f32))
+}
+
+/// The exact-hit guard the case evaluator applies, independent of the domain.
+///
+/// Sampling takes the maximum of this and its domain-scaled guard so it never
+/// treats a point as valid that `material_field` will reject.
+fn case_exact_hit_tolerance(scene: &MaterialScene) -> f64 {
+    match scene.case {
+        MaterialCase::DielectricSphere | MaterialCase::PermeableSphere => {
+            MATERIAL_EXACT_HIT_FACTOR * scene.radius.max(1.0)
+        }
+        MaterialCase::DielectricBoundary | MaterialCase::PermeableBoundary => {
+            MATERIAL_EXACT_HIT_FACTOR * scene.interface_offset.abs().max(1.0)
+        }
+    }
 }
 
 fn on_interface(scene: &MaterialScene, world: Vec3, tolerance: f64) -> bool {
@@ -608,7 +622,17 @@ fn sphere_slice_outline(
     if !cut_radius.is_finite() || cut_radius <= 0.0 {
         return Vec::new();
     }
-    circle(Vec3::ZERO, Vec3::X, Vec3::Y, cut_radius, color)
+    let center = frame.to_local(Vec3::ZERO);
+    if !center.is_finite() {
+        return Vec::new();
+    }
+    circle(
+        Vec3::new(center.x, center.y, 0.0),
+        Vec3::X,
+        Vec3::Y,
+        cut_radius,
+        color,
+    )
 }
 
 fn boundary_world_outline(
@@ -784,6 +808,6 @@ fn plane_coincides_with_interface(scene: &MaterialScene, frame: &PlaneFrame) -> 
         return false;
     }
     let dot = normal.as_dvec3().dot(frame.origin.as_dvec3());
-    let tolerance = COINCIDENT_SLICE_FACTOR * scene.interface_offset.abs().max(1.0);
+    let tolerance = MATERIAL_COINCIDENT_SLICE_FACTOR * scene.interface_offset.abs().max(1.0);
     (dot - scene.interface_offset).abs() <= tolerance
 }
