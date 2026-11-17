@@ -114,6 +114,19 @@ The scene-wide length scale that keeps analytic source fields finite at their
 singularities; display-only, not a physical regularization or wire radius.
 _Avoid_: epsilon, clamp
 
+**Quasistatic**:
+The induction teaching approximation that keeps Faraday's law but omits
+displacement current, radiation, retardation, and free-charge electrostatics;
+it is not a full Maxwell evolution.
+_Avoid_: static, electrostatics
+
+**Softened vector potential**:
+The azimuthal potential `A_phi` of the selected loop or solenoid evaluated with
+the shared softening, from which Induction reconstructs `E = -dA/dt`. It is an
+analytic model result, not a time finite difference or a general inverse-Faraday
+solution.
+_Avoid_: vector field, EMF potential
+
 **2D slice**:
 The plane of a three-component field rendered in 2D, selected by axis and grid
 index (x, y, or z). Existing two-component fields keep their ordinary flat X/Y
@@ -138,20 +151,42 @@ Sources field mode and is never merged with the formula.
 _Avoid_: source preset, source configuration
 
 **Field mode**:
-The exclusive choice between Formula (a typed vector expression) and Sources
-(the editable source scene). Switching preserves both durable states and never
-merges them; loading a classic preset returns to Formula.
+The exclusive choice among Formula (a typed vector expression), Sources (the
+editable source scene), and Induction (the Faraday teaching demo). Switching
+preserves every durable state and never merges them; loading a classic preset
+returns to Formula.
 _Avoid_: source toggle, plot kind
 
+**Induction mode**:
+The dedicated Faraday teaching adapter: one axisymmetric current loop or finite
+continuous solenoid driven by a sinusoidal current, with separate E and B arrow
+families sampled on the shared clock. It is arrows-only and never merges with
+Formula or Sources.
+_Avoid_: Maxwell mode, induction formula
+
+**Induction scene**:
+The durable, persisted one-conductor geometry and waveform: case, center, axis,
+radius (plus solenoid length and turns), signed amplitude, frequency, display,
+and accuracy opt-in. It is sampled only in Induction mode.
+_Avoid_: source scene, induction preset
+
+**Induction waveform**:
+The sinusoidal current `I(t) = amplitude * cos(2*pi*frequency*t)` and its
+analytic derivative. Zero amplitude or zero frequency makes the scene static and
+gives exactly zero induced E.
+_Avoid_: AC source, oscillator
+
 **E/B display**:
-The Sources panel choice Electric, Magnetic or Both. Both draws E amber and B
-cyan as separate families, without summation or one shared magnitude scale.
+The Sources or Induction panel choice Electric, Magnetic or Both. Both draws E
+amber and B cyan as separate families, without summation or one shared magnitude
+scale.
 _Avoid_: combined field, total field
 
 **Accuracy opt-in**:
-The default-off Sources setting that permits finite AccuracyNotMet results to
-be drawn and labelled. It never makes non-finite or unavailable values
-drawable, and restore accepts only an exact persisted true.
+The default-off Sources or Induction setting that permits finite
+AccuracyNotMet results to be drawn and labelled. It never makes non-finite or
+unavailable values drawable, never suppresses a warning or cap, and restore
+accepts only an exact persisted true.
 _Avoid_: ignore accuracy, hidden results
 
 **Domain**:
@@ -213,8 +248,9 @@ The fading history of a particle's recent positions, drawn behind it.
 _Avoid_: trace, tail
 
 **Simulation clock**:
-The single time source for animated formulas, plots, and particles. It owns the
-current simulation time, whether time is playing, and the speed multiplier.
+The single time source for animated formulas, plots, particles, and induction
+fields. It owns the current simulation time, whether time is playing, and the
+speed multiplier.
 _Avoid_: animation timer, per-feature clock
 
 **Scalar animation**:
@@ -282,7 +318,9 @@ _Avoid_: induced field (that is the Faraday field)
 
 **Induced field**:
 The electric field produced by a time-varying magnetic field, shown separately
-from the applied field and from bound matter.
+from B and from bound matter. In Induction it is reconstructed as `E = -dA/dt`
+from the softened axisymmetric vector potential; arbitrary B alone cannot
+determine it.
 _Avoid_: EMF field
 
 **Maxwell mode**:

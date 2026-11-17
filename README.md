@@ -28,6 +28,10 @@ instanced GPU scene:
   E/B/Both display, scene-wide softening and a default-off accuracy opt-in,
   with source glyphs, projected off-slice markers, illustrative source presets
   and export warnings; see the [sources panel guide](docs/sources-panel.md);
+- an Induction teaching demo for one editable current loop or finite solenoid,
+  with separate E and B arrow families driven by the shared clock and
+  reconstructed from a softened vector potential; see
+  [Induction teaching demo](#induction-teaching-demo);
 - a 2D orthographic view and a 3D orbit camera, plus a free-fly camera;
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
   plane-by-plane inspection, including 2D slices of three-component fields,
@@ -50,9 +54,10 @@ The source-evaluator API (eight softened source kinds, family-local accuracy
 and diagnostics) is summarized in the
 [source accuracy notes](docs/sources-accuracy.md).
 
-It is a teaching-grade explorer, not a numerical solver: there is no
-differentiation, divergence, curl, or field-equation solver in this release.
-The architecture and module map are in [docs/CODEBASE.md](docs/CODEBASE.md);
+It is a teaching-grade explorer, not a numerical solver: the native CAS
+differentiates formulas and derives gradient, divergence, and curl, but there
+is no ODE, PDE, or Maxwell-equation solver. The architecture and module map are
+in [docs/CODEBASE.md](docs/CODEBASE.md);
 domain vocabulary and settled decisions are in [GLOSSARY.md](GLOSSARY.md) and
 [docs/adr/](docs/adr/).
 
@@ -260,8 +265,9 @@ Enter a comma-separated tuple in the formula bar:
 The outer parentheses are optional. Components split at top-level commas, so
 parentheses inside a component are respected. Variables are `x`, `y`, and `z`;
 standard math functions such as `sin`, `cos`, `exp`, `sqrt`, `abs`, and `min`
-are available, as are the constants `pi` and `e`. There is no time variable
-`t` in this release.
+are available, as are the constants `pi` and `e`. A vector formula may also use
+the shared simulated time `t`, which animates it from the same clock as
+particles and time-dependent scalar plots. Static formulas ignore the clock.
 
 A formula that does not parse leaves the last valid field on screen and shows
 the parse error in the status bar; it never blanks the viewport. A 3D formula
@@ -271,6 +277,62 @@ The Presets panel groups the built-in field presets into Classic,
 Electrostatics, Magnetostatics, and Electrodynamics. Clicking one loads its
 formula and its 2D/3D dimension into the scene and returns to Formula mode,
 leaving any saved source scene untouched; the formula remains editable.
+
+### Induction teaching demo
+
+Choose **Induction** in the Formula/Sources selector to open the dedicated
+induction panel. It models one axisymmetric conductor: a circular current loop
+or a finite continuous solenoid. Radius, solenoid length and turns, signed
+current amplitude, frequency, and the E/B/Both display are editable; the
+default shown current is `I(t) = amplitude * cos(2*pi*frequency*t)`. The shared
+scene-wide softening `a` is editable under **Advanced** and affects Sources and
+Induction alike.
+
+This is a quasistatic, axisymmetric, softened teaching model. It has no
+displacement current, radiation, retardation, free-charge electrostatics, or
+physical singular limit, and its units are illustrative rather than
+calibrated. Faraday's law fixes only the curl of `E`; an arbitrary measured `B`
+therefore does not by itself determine `E`. The demo avoids pretending
+otherwise: it reconstructs the azimuthal vector potential `A_phi` analytically
+for the selected softened conductor and reports `E = -dA/dt`, with `B` from the
+existing softened source evaluator. It is not an inverse-Faraday solve and not
+a finite difference in time. A static current is exact: zero amplitude or zero
+frequency gives `dI/dt = 0` and therefore zero induced `E`.
+
+**Electric**, **Magnetic**, or **Both** selects the arrow families. `Both`
+draws E in fixed amber and B in fixed cyan as separate arrows; the two families
+are never summed, averaged, or forced onto one magnitude range. E and B are a
+quarter cycle out of phase, so one can be empty at a chosen time.
+
+Induction uses the one shared simulation clock: Play/Pause, step, reset-time,
+speed, and loop are the existing transport, with no private timer. A static
+induction scene has no clock consumer and leaves the transport hidden unless
+another feature is using time. The mode is arrows-only: streamlines, particles,
+and click seeding stay off, and their stored settings are preserved for other
+modes. Switching modes preserves the current 2D/3D projection and the stored
+density; induction sampling is capped at `20³` in 3D and `80²` on a 2D slice,
+and invalid edits keep the last valid scene and arrows while showing the
+actionable error.
+
+The induced field and waveform are identical on native and web builds. The
+native CAS differentiates the canonical waveform only to show a diagnostic
+derivative string; both platforms evaluate the same analytic derivative for
+the field, and the web build does not need a CAS port. The CAS string is not
+exported or part of the physical result.
+
+PNG and SVG exports always carry the induction model line and shared softening
+plus any accuracy-not-met, unavailable, missing-sampling, or invalid-scene
+warning. The default-off accuracy opt-in changes only which finite results are
+drawn; it never suppresses a warning, raises a cap, or turns a non-finite value
+into a vector. The induction scene (geometry, waveform, display, and opt-in)
+persists with the view; older settings without those fields restore the default
+valid loop scene in Formula mode.
+
+Measured preparation times for the caps are in
+[docs/perf/induction-performance.md](docs/perf/induction-performance.md). They
+are cache-preparation measurements, not a frame-time target; the 33 ms
+particle target is not claimed for induction. Browser/WebAssembly and manual
+visual checks are owner-waived for this delivery, not claimed as passed.
 
 ### Mouse and keyboard
 
@@ -373,9 +435,10 @@ survive a restart:
 
 - the view state: formula or loaded preset, 2D/3D mode, domain, density, arrow
   settings, colouring, streamline and particle settings, the saved source scene
-  (entries, display, softening and accuracy opt-in) with its field mode, and
-  the Show grid / Show coordinate system preferences (remembered across both
-  modes);
+  (entries, display, softening and accuracy opt-in), the saved induction scene
+  (case, center, axis, radius/length/turns, amplitude/frequency, display and
+  accuracy opt-in) with its field mode, and the Show grid / Show coordinate
+  system preferences (remembered across both modes);
 - the layout: panel visibility, panel widths, and help-overlay visibility;
 - the appearance: theme, accent, rounding, spacing, and font size.
 
@@ -387,6 +450,9 @@ preset** is a formula definition. The distinction is defined in
 
 Corrupt or partial settings fall back to defaults or clamp to valid ranges;
 older saved views without the guide preferences show both guides by default.
+Older payloads without induction fields restore the default valid current-loop
+scene; malformed induction fields also fall back to that scene and report the
+validation error instead of failing startup.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
 logged and left untouched rather than silently overwritten (a missing file
 starts with an empty list), and save or delete failures surface a non-blocking
@@ -395,14 +461,19 @@ camera presets use `localStorage`.
 
 ## Limitations
 
-- **Static fields only.** Formulas have no time variable `t`; the
-  Electrodynamics presets are spatial snapshots. Time-dependent fields are
-  post-v1 work (see [ADR 0003](docs/adr/0003-physics-foundations.md)).
-- **No data import or export.** The input is a formula, a built-in preset or an
-  editable source scene; screenshots are PNG only. There is no CSV, NumPy, or
-  project-file import.
-- **No solver.** Gradient, divergence, curl, ODE, and Maxwell solvers are not
-  implemented.
+- **Fields may be time-dependent.** Vector formulas and scalar plots may
+  reference the shared time `t`; the Electrodynamics presets themselves are
+  static spatial snapshots, not a wave simulation.
+- **Induction is a teaching approximation.** Quasistatic, axisymmetric and
+  softened, with no displacement current, radiation, retardation, or physical
+  singular limit. It is not a general Maxwell or inverse-Faraday solver, and
+  the cap timings are preparation measurements rather than frame-time claims.
+- **No data import or export.** The input is a formula, a built-in preset, or an
+  editable source or induction scene. Screenshots are PNG, or 2D SVG; there is
+  no CSV, NumPy, or project-file import.
+- **No general solver.** The native CAS differentiates formulas and derives
+  gradient, divergence, and curl. It does not solve ODEs, PDEs, or Maxwell's
+  equations.
 - **NaN and infinite samples are skipped.** A pole inside the domain leaves a
   hole in the arrows rather than crashing or blanking the scene; a parse error
   keeps the last valid field. Built-in singular-looking presets are softened.

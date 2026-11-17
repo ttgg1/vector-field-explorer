@@ -616,7 +616,8 @@ them at a point.
 - Outer parentheses are optional list delimiters; commas split only at top level
   (nested parentheses are respected).
 - Exactly 2 or 3 components are accepted; anything else is `Parse`.
-- Evaluation binds `x`, `y`, `z`; unknown variables produce `None`.
+- Evaluation binds `x`, `y`, `z`, and the shared simulated time `t`; unknown
+  variables produce `None`.
 - A 2D field evaluated at 3D `p` ignores `p.z` and returns `(u, v, 0)`.
 - Any NaN/infinite component makes the whole evaluation `None`.
 
@@ -625,8 +626,10 @@ them at a point.
 `eval_nan_becomes_none`, `unknown_variable_not_evaluated`,
 `three_component_evaluated_in_two_d`.
 
-**Limitations.** No time variable (v0.1.0 is static), no implicit
-multiplication (`2x` is invalid), and no symbolic differentiation.
+**Limitations.** No implicit multiplication (`2x` is invalid), and no symbolic
+differentiation in the formula parser; differentiation is the separate native
+CAS panel. A formula that references `t` is time-dependent and animates from
+the shared clock.
 
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
@@ -772,7 +775,8 @@ composition, density restore on leaving, and mirrored clock time. The model
 itself is pinned by `tests/induction_test.rs` as above.
 
 **Limitations.** CPU-only, quasistatic and softened: no displacement current,
-retardation or physical singular limit. The cap benchmark is recorded in
+retardation or physical singular limit. The cap benchmark measures unit-current
+cache preparation, not frame time; it is recorded in
 [docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
 
 #### `src/source_presets.rs` — built-in source-scene presets
@@ -1266,8 +1270,8 @@ dimension, category }`; `presets()`; `presets_in(category)`;
 and the category/limit tests.
 
 **Limitations.** Formulas are illustrative, not physical (Coulomb numerators are
-not normalised); there is no time dependence, and ElectroDynamics presets are
-static spatial snapshots.
+not normalised). The preset formulas themselves are static spatial snapshots;
+formulas may still reference `t` when the user edits them.
 
 #### `src/colormap.rs` — scalar-to-RGB ramps
 
@@ -3296,12 +3300,13 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 
 ## 10. Known limitations, gathered
 
-- **Static fields only.** `meval` expressions have no time variable; Electrodynamics
-  presets are spatial snapshots. Time animation is post-v1 (ADR 0003).
-- **Formula-only field definition.** Sources and superposition exist only as a
-  glossary/ADR plan, not code.
-- **No solver.** No differentiation, divergence, curl, gradient, ODE, or Maxwell
-  solver is implemented.
+- **Fields may be time-dependent.** `meval` expressions bind `x`, `y`, `z`, and
+  the shared time `t`; the Electrodynamics presets themselves are static
+  spatial snapshots. Induction supplies the dedicated dynamic-field demo.
+- **Three separate adapters.** Formula, Sources, and Induction are exclusive
+  modes with durable state; there is no formula-to-source conversion.
+- **No general solver.** The native CAS differentiates formulas and derives
+  gradient, divergence, and curl; no ODE, PDE, or Maxwell solver is implemented.
 - **No depth/MSAA.** 3D ordering is CPU painter sort; no shadows, anti-aliasing
   beyond dot rims, or transparency sorting per triangle.
 - **One 3D draw budget.** Every instance pays for a 16-side cone even when the
