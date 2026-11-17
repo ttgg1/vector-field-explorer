@@ -1,6 +1,6 @@
 # ODE Workbench — Design
 
-- **Status:** PROPOSED — awaiting owner approval
+- **Status:** APPROVED by owner on 2026-11-17
 - **Date:** 2026-11-17
 - **Issue:** [#28](https://github.com/ttgg1/vector-field-explorer/issues/28)
 - **Epic:** [#17](https://github.com/ttgg1/vector-field-explorer/issues/17)
