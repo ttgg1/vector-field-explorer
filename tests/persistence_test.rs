@@ -17,6 +17,7 @@ use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
 };
+use vector_field_explorer::sources::SourceKind;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
@@ -1898,11 +1899,46 @@ fn streamline_count_round_trips_and_missing_field_defaults_to_auto() {
 
 fn source_scene() -> SourceScene {
     let mut scene = SourceScene::default();
-    for tag in SourceKindTag::ALL {
+    for (index, tag) in SourceKindTag::ALL.into_iter().enumerate() {
         let mut source = tag.default_source();
-        source.center = DVec3::new(1.0, -2.0, 0.5);
+        let i = index as f64;
+        // Every entry differs in position, orientation and its kind-specific
+        // numbers, so a lost, swapped or defaulted field cannot pass unnoticed.
+        source.center = DVec3::new(1.0 + i, -2.0 - i, 0.5 + i);
+        source.axis = DVec3::new(1.0, 2.0 + i, 3.0);
+        source.kind = match tag {
+            SourceKindTag::PointCharge => SourceKind::PointCharge { charge: -1.5 - i },
+            SourceKindTag::FiniteLineCharge => SourceKind::FiniteLineCharge {
+                charge: 2.0 + i,
+                length: 1.25 + i * 0.25,
+            },
+            SourceKindTag::ChargedRing => SourceKind::ChargedRing {
+                charge: -3.0 - i,
+                radius: 0.75 + i * 0.25,
+            },
+            SourceKindTag::ChargedDisc => SourceKind::ChargedDisc {
+                charge: 4.0 + i,
+                radius: 1.5 + i * 0.25,
+            },
+            SourceKindTag::SolidSphere => SourceKind::SolidSphere {
+                charge: -5.0 - i,
+                radius: 2.0 + i * 0.25,
+            },
+            SourceKindTag::StraightWire => SourceKind::StraightWire { current: 6.0 + i },
+            SourceKindTag::CurrentLoop => SourceKind::CurrentLoop {
+                current: -7.0 - i,
+                radius: 2.5 + i * 0.25,
+            },
+            SourceKindTag::Solenoid => SourceKind::Solenoid {
+                current: 8.0 + i,
+                radius: 0.5 + i * 0.05,
+                length: 2.0 + i * 0.5,
+                turns: 3 + index as u32,
+            },
+        };
         scene.add(source).unwrap();
     }
+    assert!(scene.set_enabled(2, false), "one entry stays disabled");
     scene.set_display(SourceDisplay::Electric);
     scene.set_softening(0.02).unwrap();
     scene.set_allow_inaccurate(true);
@@ -1941,6 +1977,18 @@ fn source_scene_round_trips_through_the_view_record() {
     assert_eq!(restored.sources.display, SourceDisplay::Electric);
     assert_eq!(restored.sources.softening, 0.02);
     assert!(restored.sources.allow_inaccurate);
+    assert_eq!(
+        restored.sources.entries, state.sources.entries,
+        "every restored entry keeps its enabled flag, center, axis and kind parameters",
+    );
+    assert!(
+        !restored.sources.entries[2].enabled,
+        "the disabled entry stays disabled",
+    );
+    assert!(
+        restored.sources.entries[0].source.kind != SourceKindTag::PointCharge.default_source().kind,
+        "the signed strength survives instead of reverting to the kind default",
+    );
     assert!(restored.formula == state.formula);
 }
 
@@ -2004,10 +2052,19 @@ fn source_records_keep_order_and_skip_invalid_numbers() {
         source.center = DVec3::new(1.0, 2.0, 3.0);
         scene.add(source).unwrap();
     }
-    let records = scene.to_records();
+    let mut records = scene.to_records();
     assert_eq!(records.len(), 8);
+    let mut invalid = records[0].clone();
+    invalid.center[0] = f64::NAN;
+    records.insert(1, invalid);
+    assert_eq!(records.len(), 9, "the crafted non-finite record is present");
+
     let restored = SourceScene::from_records(&records);
-    assert_eq!(restored.entries.len(), 8);
+    assert_eq!(
+        restored.entries.len(),
+        8,
+        "a record with a non-finite number is skipped"
+    );
     assert_eq!(
         restored.entries[0].source.kind,
         scene.entries[0].source.kind
@@ -2035,4 +2092,9 @@ fn global_reset_clears_source_scene_and_sampling_cache() {
     assert!(app.state.sources.entries.is_empty());
     assert!(app.state.source_sampling().is_none());
     assert!(app.state.source_notice.is_none());
+    assert_eq!(
+        app.state.field_mode,
+        FieldMode::Formula,
+        "global reset returns to the formula adapter",
+    );
 }
