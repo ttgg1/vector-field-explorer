@@ -70,6 +70,11 @@ impl VfApp {
         // exposes the wide-menu commands; Appearance lives in the Controls sheet.
         let mut style_changed = false;
         let plan = layout::compact_plan(self.layout_mode);
+        let animation_reason = if self.animation_job.is_some() {
+            Some("Animation export is already running.")
+        } else {
+            AnimationEligibility::from_state(&self.state).reason
+        };
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = if plan.compact_top_bar {
                 top_bar::show_compact_with_plot_kind(
@@ -77,6 +82,7 @@ impl VfApp {
                     &self.screenshot,
                     self.state.mode_3d,
                     self.state.plot.kind,
+                    animation_reason,
                 )
             } else {
                 top_bar::show_with_plot_kind(
@@ -86,6 +92,7 @@ impl VfApp {
                     &mut self.appearance_open,
                     self.state.mode_3d,
                     self.state.plot.kind,
+                    animation_reason,
                 )
             };
             style_changed = changed;
@@ -1108,6 +1115,21 @@ impl VfApp {
         // Help > Keyboard & mouse (ticket 18): the full help table, the same
         // strings the overlay above renders.
         crate::ui::help_overlay::help_window(ui.ctx(), &mut self.help_open);
+
+        // Animation export: publish the running job's progress, then draw the
+        // dialog over everything. The dialog returns one action; the app owns
+        // screenshot mutual exclusion, snapshot capture and playback pauses.
+        self.sync_animation_job_status();
+        let eligibility = AnimationEligibility::from_state(&self.state);
+        let screenshot_busy = self.screenshot.is_busy();
+        let action = animation_dialog::show(
+            ui.ctx(),
+            &mut self.animation,
+            eligibility,
+            self.state.time,
+            screenshot_busy,
+        );
+        self.apply_animation_dialog_action(action, ui.ctx());
     }
 }
 
@@ -1141,5 +1163,238 @@ fn resize_panel(ui: &mut egui::Ui, panel: &egui::Response, side: layout::RailSid
         Some(layout::clamp_width(width, rect.width()))
     } else {
         None
+    }
+}
+
+impl VfApp {
+    /// Open the animation export dialog with its size defaulted to the current
+    /// viewport, clamped to the animation pixel budget.
+    pub(super) fn open_animation_dialog(&mut self, ctx: &egui::Context) {
+        if self.animation_job.is_some() {
+            self.screenshot
+                .notify("Animation export is already running.".into(), true);
+            return;
+        }
+        let viewport = self
+            .last_viewport_rect
+            .map(|rect| {
+                let pixels_per_point = ctx.pixels_per_point();
+                (
+                    (rect.width() * pixels_per_point).round().max(1.0) as u32,
+                    (rect.height() * pixels_per_point).round().max(1.0) as u32,
+                )
+            })
+            .unwrap_or((1280, 720));
+        self.animation.open_for_viewport(viewport);
+        ctx.request_repaint();
+    }
+
+    /// Validate the dialog, capture the detached snapshot and provenance, pick
+    /// the native sink, pause playback and start the job.
+    pub(super) fn start_animation_export(&mut self, ctx: &egui::Context) {
+        if self.animation_job.is_some() {
+            return;
+        }
+        let eligibility = AnimationEligibility::from_state(&self.state);
+        if !eligibility.allowed {
+            self.animation.error = eligibility.reason.map(str::to_owned);
+            return;
+        }
+        if self.screenshot.is_busy() {
+            self.animation.error = Some(animation_dialog::SCREENSHOT_BUSY_REASON.into());
+            return;
+        }
+        let start_time = self.state.time;
+        if let Some(error) = self.animation.validation_error(start_time) {
+            self.animation.error = Some(error);
+            return;
+        }
+        let spec = self.animation.spec(start_time);
+        let snapshot = match self.animation_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.animation.error = Some(error.to_string());
+                return;
+            }
+        };
+        let provenance = self.field_export_provenance();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(path) = self.choose_animation_path(&spec) else {
+                self.animation.status = Some("Animation export cancelled.".into());
+                return;
+            };
+            let empty = crate::export_provenance::ExportProvenance::default();
+            let provenance_ref = provenance.as_ref().unwrap_or(&empty);
+            let sink = match spec.format {
+                crate::animation::AnimationFormat::Gif => crate::animation::gif_sink(&spec, &path),
+                crate::animation::AnimationFormat::Mp4
+                | crate::animation::AnimationFormat::Webm => {
+                    crate::animation::video_sink(&spec, &path, provenance_ref)
+                }
+            };
+            let sink = match sink {
+                Ok(sink) => sink,
+                Err(error) => {
+                    self.animation.error = Some(error.to_string());
+                    return;
+                }
+            };
+            let job = match AnimationJob::new(spec, snapshot, sink, provenance) {
+                Ok(job) => job,
+                Err(error) => {
+                    self.animation.error = Some(error.to_string());
+                    return;
+                }
+            };
+            self.begin_animation_job(job, ctx);
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let sink = match crate::animation_job::memory_gif_sink(&spec) {
+                Ok(sink) => sink,
+                Err(error) => {
+                    self.animation.error = Some(error.to_string());
+                    return;
+                }
+            };
+            let job = match AnimationJob::new(spec, snapshot, sink, provenance) {
+                Ok(job) => job,
+                Err(error) => {
+                    self.animation.error = Some(error.to_string());
+                    return;
+                }
+            };
+            self.begin_animation_job(job, ctx);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn choose_animation_path(
+        &self,
+        spec: &crate::animation::AnimationSpec,
+    ) -> Option<std::path::PathBuf> {
+        use crate::animation::AnimationFormat;
+        use crate::ui::animation_dialog::{default_animation_filename, ensure_animation_extension};
+
+        let suggested = default_animation_filename(std::time::SystemTime::now(), spec.format);
+        let dialog = rfd::FileDialog::new()
+            .set_title("Export animation")
+            .set_file_name(&suggested);
+        let dialog = match spec.format {
+            AnimationFormat::Gif => dialog.add_filter("Animated GIF", &["gif"]),
+            AnimationFormat::Mp4 => dialog.add_filter("MP4 video", &["mp4"]),
+            AnimationFormat::Webm => dialog.add_filter("WebM video", &["webm"]),
+        };
+        dialog
+            .save_file()
+            .map(|path| ensure_animation_extension(path, spec.format))
+    }
+
+    fn begin_animation_job(&mut self, job: AnimationJob, ctx: &egui::Context) {
+        self.animation_restore_playing = Some(self.clock.playing);
+        self.clock.set_playing(false);
+        self.animation.running = true;
+        self.animation.progress = Some((0, job.frames_total()));
+        self.animation.error = None;
+        self.animation.status = None;
+        self.animation.status = Some("Exporting animation…".into());
+        self.animation_job = Some(job);
+        ctx.request_repaint();
+    }
+
+    /// Cancel a running job. The next pump drops the sink, which deletes its
+    /// temporary file, and the completion path restores playback.
+    pub(super) fn cancel_animation_export(&mut self, ctx: &egui::Context) {
+        if let Some(job) = self.animation_job.as_mut() {
+            job.cancel();
+            ctx.request_repaint();
+        } else {
+            self.animation.running = false;
+            self.animation.progress = None;
+        }
+    }
+
+    /// Publish progress and finish a terminal job exactly once: restore the
+    /// previous play state, close the progress line and report the outcome.
+    pub(super) fn sync_animation_job_status(&mut self) {
+        let Some(job) = self.animation_job.as_ref() else {
+            self.status.animation_status = None;
+            return;
+        };
+        let state = job.state();
+        let done = job.frames_done();
+        let total = job.frames_total();
+        let error = job.error().map(str::to_owned);
+
+        if !state.is_terminal() {
+            self.status.animation_status = Some(match state {
+                AnimationJobState::Encoding | AnimationJobState::Writing => {
+                    "Animation encoding…".to_string()
+                }
+                _ => format!("Animation {done}/{total} frames"),
+            });
+            self.animation.progress = Some((done, total));
+            self.animation.running = true;
+            return;
+        }
+
+        self.animation_job = None;
+        self.animation.running = false;
+        self.animation.progress = None;
+        self.status.animation_status = None;
+        if let Some(playing) = self.animation_restore_playing.take() {
+            self.clock.set_playing(playing);
+        }
+
+        match state {
+            AnimationJobState::Done => {
+                self.animation.error = None;
+                self.animation.status = Some("Animation export complete.".into());
+                self.screenshot
+                    .notify("animation export complete".into(), false);
+            }
+            AnimationJobState::Cancelled => {
+                self.animation.status = Some("Animation export cancelled.".into());
+                self.screenshot.notify("animation cancelled".into(), false);
+            }
+            AnimationJobState::Failed => {
+                let message = error.unwrap_or_else(|| "animation export failed".into());
+                self.animation.error = Some(message.clone());
+                self.animation.status = None;
+                self.screenshot
+                    .notify(format!("animation export failed: {message}"), true);
+            }
+            _ => {}
+        }
+    }
+
+    /// Dialogue action dispatch after the widget pass.
+    pub(super) fn apply_animation_dialog_action(
+        &mut self,
+        action: AnimationDialogAction,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            AnimationDialogAction::None => {}
+            AnimationDialogAction::Start => self.start_animation_export(ctx),
+            AnimationDialogAction::Cancel => self.cancel_animation_export(ctx),
+        }
+    }
+}
+
+#[doc(hidden)]
+impl VfApp {
+    /// Test seam: install an already-built animation job through the same
+    /// pause/capture path the dialog uses.
+    pub fn test_begin_animation_job(&mut self, job: AnimationJob) {
+        self.begin_animation_job(job, &egui::Context::default());
+    }
+
+    /// Test seam: run the terminal-state reconciliation once.
+    pub fn test_sync_animation_job(&mut self) {
+        self.sync_animation_job_status();
     }
 }

@@ -18,6 +18,99 @@ impl VfApp {
                 return;
             };
 
+            // Animation export: render at most one detached frame per app
+            // update, before the live paint. The job owns its snapshot, so this
+            // never steps live state or the shared clock.
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.animation_job.is_some() {
+                let mut renderer = render_state.renderer.write();
+                if renderer.callback_resources.get_mut::<DrawState>().is_none() {
+                    renderer.callback_resources.insert(DrawState::new(
+                        &render_state.device,
+                        render_state.target_format,
+                    ));
+                    self.renderer_ready = true;
+                }
+                if let Some(draw) = renderer.callback_resources.get_mut::<DrawState>()
+                    && let Some(job) = self.animation_job.as_mut()
+                {
+                    let mut bridge = NativeAnimationRenderer {
+                        draw,
+                        device: &render_state.device,
+                        queue: &render_state.queue,
+                    };
+                    let _ = job.pump(&mut bridge);
+                }
+                drop(renderer);
+                if self
+                    .animation_job
+                    .as_ref()
+                    .is_some_and(|job| !job.state().is_terminal())
+                {
+                    ui.ctx().request_repaint();
+                }
+            }
+
+            // Browser animation export: one async offscreen readback at a time.
+            // The callback only posts RGBA; the next app update applies the
+            // banner and pushes it to the job on the main thread.
+            #[cfg(target_arch = "wasm32")]
+            if self.animation_job.is_some() {
+                let completed = self
+                    .animation_wasm_rx
+                    .as_ref()
+                    .and_then(|rx| rx.try_recv().ok());
+                if let Some(result) = completed {
+                    self.animation_wasm_rx = None;
+                    if let Some(job) = self.animation_job.as_mut() {
+                        let _ = job.finish_rendered_frame(result);
+                    }
+                }
+                if self.animation_wasm_rx.is_none()
+                    && let Some(job) = self.animation_job.as_mut()
+                {
+                    match job.take_next_frame() {
+                        Ok(Some(request)) => {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.animation_wasm_rx = Some(rx);
+                            let mut renderer = render_state.renderer.write();
+                            if renderer.callback_resources.get_mut::<DrawState>().is_none() {
+                                renderer.callback_resources.insert(DrawState::new(
+                                    &render_state.device,
+                                    render_state.target_format,
+                                ));
+                                self.renderer_ready = true;
+                            }
+                            if let Some(draw) = renderer.callback_resources.get_mut::<DrawState>() {
+                                let started = draw.render_offscreen_async(
+                                    &render_state.device,
+                                    &render_state.queue,
+                                    &request.frame.scene,
+                                    request.frame.view_proj,
+                                    request.frame.eye,
+                                    request.width,
+                                    request.height,
+                                    request.clear,
+                                    move |result| {
+                                        let _ = tx.send(result);
+                                    },
+                                );
+                                if let Err(error) = started {
+                                    drop(renderer);
+                                    self.animation_wasm_rx = None;
+                                    if let Some(job) = self.animation_job.as_mut() {
+                                        let _ = job.finish_rendered_frame(Err(error));
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => {}
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
+
             // Task 6: scalar mode owns its isolated depth pass and never builds
             // or paints vector geometry. The plot path handles its own input,
             // capture dispatch and renderer installation.
@@ -544,5 +637,38 @@ fn draw_webgpu_fallback(ui: &mut egui::Ui, rect: egui::Rect) {
 fn reload_page() {
     if let Some(window) = web_sys::window() {
         let _ = window.location().reload();
+    }
+}
+
+/// Bridges the installed live `DrawState` to the animation job's synchronous
+/// native renderer. It borrows the renderer for exactly one `pump`.
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeAnimationRenderer<'a> {
+    draw: &'a mut crate::renderer::DrawState,
+    device: &'a eframe::wgpu::Device,
+    queue: &'a eframe::wgpu::Queue,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl crate::animation_job::AnimationRenderer for NativeAnimationRenderer<'_> {
+    fn render(
+        &mut self,
+        frame: crate::animation_scene::AnimationFrame,
+        width: u32,
+        height: u32,
+        clear: [f64; 4],
+    ) -> Result<Vec<u8>, AnimationError> {
+        self.draw
+            .render_offscreen(
+                self.device,
+                self.queue,
+                &frame.scene,
+                frame.view_proj,
+                frame.eye,
+                width,
+                height,
+                clear,
+            )
+            .map_err(|error| AnimationError::Encoder(error.to_string()))
     }
 }

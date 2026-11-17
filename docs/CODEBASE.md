@@ -339,6 +339,54 @@ dots, trails and combined stream.
 viewport aspect; the caller passes the export aspect to `frame_at`. Induction
 is GUI-only by design; CLI animation covers Formula and particles.
 
+#### `src/animation_job.rs` — GUI animation job
+
+**Purpose / API.** Owns one GUI animation export: `AnimationEligibility
+{ allowed, reason, animated }` with the three exact disabled reasons,
+`AnimationJobState`, the `AnimationRenderer` trait (fakeable in tests), and
+`AnimationJob` (`new`, `fake*` test constructors, `pump`, `cancel`,
+`take_next_frame`/`finish_rendered_frame` for the browser's async readback,
+`state`, `frames_done/total`, `error`). The browser-only `memory_gif_sink`
+encodes to memory and downloads the GIF on finish.
+
+**Invariants.** Eligibility is derived only from the live `State`: Formula needs
+a time-dependent field or an enabled particle target; Induction needs
+`is_animated()`; Sources, Materials, Ode and scalar plots take the shared
+unsupported reason. `pump` renders at most one detached frame per app update and
+never mutates `VfApp` or advances the shared clock; the explicit `1/fps` step and
+captured snapshot are the only animation state. Every frame passes
+`apply_export_banner` with the provenance captured at Start before the sink sees
+it. A job that fails, is cancelled, or is dropped abandons its sink, so the
+streaming encoder deletes its temporary file and never finishes the output.
+`AnimationJob::new` validates the spec and computes the frame count once.
+
+**Pinned by.** [tests/animation_job_test.rs](../tests/animation_job_test.rs):
+one-frame-at-a-time progress, renderer and sink failures, cancellation before and
+during encoding, banner application on every fake frame, temp-cleanup probes,
+exact eligibility reasons, and a real `AnimationSnapshot` + `gif_sink` export
+decoded back to its frame count.
+
+#### `src/ui/animation_dialog.rs` — animation export dialog
+
+**Purpose / API.** `AnimationDialogState` (format, duration, fps, GIF loop,
+width/height, error, progress, status), `AnimationDialogAction`, the window
+`show`, size/budget helpers and filename helpers. The dialog captures no app
+state: the app applies Start/Cancel after the widget pass.
+
+**Invariants.** The default size is the current viewport in physical pixels,
+scaled down into `ANIMATION_MAX_PIXELS` while preserving aspect. There is no
+start-time field; the spec starts at the captured live `State::time`. The exact
+frame count and disabled reason are visible before Start. Explicit oversized
+values are validation errors, not clamps. The browser build is GIF-only and
+rejects an explicit edge above `ANIMATION_WASM_MAX_EDGE` (2048) instead of
+silently shrinking it. Start is disabled while a screenshot capture is pending or
+a job is running.
+
+**Pinned by.** [tests/animation_dialog_test.rs](../tests/animation_dialog_test.rs)
+at 1200 and 390 px: menu/dialog rendering, frame-count text, exact disabled
+reasons for static Formula/Induction and unsupported modes, menu disabled state,
+screenshot mutual exclusion and the paused/restored transport state.
+
 #### `src/cli.rs` — native plot export configuration and dispatch
 
 **Purpose.** Parse one-shot export flags and strict JSON, overlay config with
@@ -421,14 +469,15 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `material` (`MaterialPanelState`), `clock`, `screenshot`, and private
+  `material` (`MaterialPanelState`), `clock`, `screenshot`, `animation`
+  (`AnimationDialogState`), `animation_job`, and private
   scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
   [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
 - `StatusBarState` (parse message, fps/frame ms, arrow/streamline/particle/trail
-  counts, density, `is_3d`, sim time, flying, hint).
+  counts, density, `is_3d`, sim time, flying, hint, animation progress).
 - `presets_data_dir()` (native re-export of the XDG directory).
 - `Default for VfApp`.
 
@@ -2637,6 +2686,9 @@ silently. Scalar plot captures always pass `None`.
 - Pending PNG/SVG requests carry the provenance captured at request time;
   `take_*_with_provenance` returns `Some(provenance)` for a live request and
   `None` when idle.
+- Animation export and screenshot capture are mutually exclusive:
+  `Screenshot::is_busy` blocks Start while a PNG/SVG capture is pending or in
+  flight, and the app refuses PNG/SVG requests while an animation job exists.
 
 **Pinned by.** `tests/screenshot_test.rs` (18 tests):
 `capture_size_keeps_the_aspect_and_the_4096_cap`,

@@ -4,6 +4,7 @@ use eframe::egui;
 use glam::{Mat4, Vec2, Vec3};
 
 use crate::animation::AnimationError;
+use crate::animation_job::{AnimationEligibility, AnimationJob, AnimationJobState};
 use crate::animation_scene::AnimationSnapshot;
 use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use crate::domain::Domain;
@@ -27,6 +28,7 @@ use crate::screenshot::{self, Instant, Screenshot};
 use crate::sim_clock::SimClock;
 use crate::source_scene::FieldMode;
 use crate::streamlines::click_seed;
+use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogState};
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
@@ -103,6 +105,8 @@ pub struct StatusBarState {
     /// fresh 2.5 s frame-time lifetime when the text changes, so re-setting the
     /// same message each frame would make it flicker instead of expiring once.
     pub hint: Option<String>,
+    /// Live animation export progress, e.g. `Animation 12/48 frames`.
+    pub animation_status: Option<String>,
 }
 
 /// How many viewport clicks keep their seeded bursts. Clicks accumulate only up
@@ -267,6 +271,18 @@ pub struct VfApp {
     /// The screenshot action (ticket 08): the pending capture request, the
     /// channel its save thread reports on, and the completion toast.
     pub screenshot: Screenshot,
+    /// The animation export dialog's settings and progress.
+    pub animation: AnimationDialogState,
+    /// The single running animation job, if any. It owns a detached snapshot;
+    /// the live scene is never stepped by it.
+    pub animation_job: Option<AnimationJob>,
+    /// The transport's playing state before the export paused it. Restored on
+    /// Done, Cancelled and error.
+    animation_restore_playing: Option<bool>,
+    /// One async offscreen readback in flight on the browser: the callback
+    /// sends RGBA here and the next app update pushes it to the job.
+    #[cfg(target_arch = "wasm32")]
+    animation_wasm_rx: Option<std::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
     /// Provenance claimed with the SVG request at execution dispatch. `None`
     /// means the active request had no source context.
     svg_export_provenance: Option<crate::export_provenance::ExportProvenance>,
@@ -403,6 +419,11 @@ impl VfApp {
             last_ode_epoch,
             ode_autofit_pending: false,
             screenshot: Screenshot::new(),
+            animation: AnimationDialogState::default(),
+            animation_job: None,
+            animation_restore_playing: None,
+            #[cfg(target_arch = "wasm32")]
+            animation_wasm_rx: None,
             svg_export_provenance: None,
             scene_frame,
             particle_available,

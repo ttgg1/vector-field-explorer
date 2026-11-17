@@ -10,9 +10,11 @@
 mod support;
 
 mod accent_picker_test;
+mod animation_dialog_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod animation_ffmpeg_test;
 mod animation_gif_test;
+mod animation_job_test;
 mod animation_scene_test;
 mod animation_test;
 mod arrow_alpha_test;

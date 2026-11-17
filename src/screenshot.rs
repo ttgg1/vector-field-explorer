@@ -1215,6 +1215,13 @@ impl Screenshot {
         self.svg_pending = Some(provenance);
     }
 
+    /// Whether a PNG or SVG capture is pending or in flight. Animation export
+    /// uses this to keep one offscreen readback at a time; the screenshot guards
+    /// use the animation job's existence symmetrically.
+    pub fn is_busy(&self) -> bool {
+        self.capturing || self.pending.is_some() || self.svg_pending.is_some()
+    }
+
     /// Consume an SVG request; `Some(provenance)` means "export this frame".
     /// The outer `None` means no request was pending.
     pub fn take_svg_request_with_provenance(&mut self) -> Option<Option<ExportProvenance>> {

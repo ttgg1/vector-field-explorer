@@ -61,7 +61,12 @@ fn the_bar_carries_the_v1_menu_table() {
         vec![
             (
                 "File",
-                vec!["Export screenshot…", "Export screenshot (SVG)…", "Quit"]
+                vec![
+                    "Export screenshot…",
+                    "Export screenshot (SVG)…",
+                    "Export animation…",
+                    "Quit",
+                ]
             ),
             ("Edit", vec!["Copy formula", "Reset all controls"]),
             (
@@ -139,6 +144,7 @@ fn every_action_maps_to_its_side_effect() {
     let expected = [
         (MenuAction::ExportScreenshot, SideEffect::Screenshot),
         (MenuAction::ExportScreenshotSvg, SideEffect::ScreenshotSvg),
+        (MenuAction::ExportAnimation, SideEffect::Animation),
         (MenuAction::Quit, SideEffect::Quit),
         (
             MenuAction::CopyFormula,

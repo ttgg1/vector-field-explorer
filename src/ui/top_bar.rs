@@ -302,7 +302,13 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
 
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
-fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool, kind: PlotKind) -> bool {
+fn add_menu_item(
+    ui: &mut egui::Ui,
+    item: &menu::MenuItem,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+) -> bool {
     style_panel::restore_menu_button_padding(ui);
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
     // the sidebar Camera section.
@@ -310,9 +316,11 @@ fn add_menu_item(ui: &mut egui::Ui, item: &menu::MenuItem, mode_3d: bool, kind: 
     if let Some(label) = menu::item_shortcut_label(item) {
         button = button.shortcut_text(label);
     }
-    let reason = (item.action == MenuAction::ExportScreenshotSvg)
-        .then(|| svg_disabled_reason(kind, mode_3d))
-        .flatten();
+    let reason = match item.action {
+        MenuAction::ExportScreenshotSvg => svg_disabled_reason(kind, mode_3d),
+        MenuAction::ExportAnimation => animation_reason,
+        _ => None,
+    };
     let response = match reason {
         Some(reason) => ui.add_enabled(false, button).on_disabled_hover_text(reason),
         None => ui.add(button),
@@ -435,6 +443,7 @@ pub fn show(
         appearance_open,
         mode_3d,
         PlotKind::VectorField,
+        None,
     )
 }
 
@@ -447,6 +456,7 @@ pub fn show_with_plot_kind(
     appearance_open: &mut bool,
     mode_3d: bool,
     kind: PlotKind,
+    animation_reason: Option<&'static str>,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
@@ -457,7 +467,7 @@ pub fn show_with_plot_kind(
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
-                    if add_menu_item(ui, item, mode_3d, kind) {
+                    if add_menu_item(ui, item, mode_3d, kind, animation_reason) {
                         action = Some(item.action);
                     }
                 }
@@ -505,7 +515,7 @@ pub fn show_compact(
     screenshot: &Screenshot,
     mode_3d: bool,
 ) -> (Option<MenuAction>, bool) {
-    show_compact_with_plot_kind(ui, screenshot, mode_3d, PlotKind::VectorField)
+    show_compact_with_plot_kind(ui, screenshot, mode_3d, PlotKind::VectorField, None)
 }
 
 /// Compact bar with the active plot kind (same SVG guard as [`show_with_plot_kind`]).
@@ -514,6 +524,7 @@ pub fn show_compact_with_plot_kind(
     screenshot: &Screenshot,
     mode_3d: bool,
     kind: PlotKind,
+    animation_reason: Option<&'static str>,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let style_changed = false;
@@ -536,7 +547,7 @@ pub fn show_compact_with_plot_kind(
                     if item.action == MenuAction::OpenAppearance {
                         continue;
                     }
-                    if add_menu_item(ui, item, mode_3d, kind) {
+                    if add_menu_item(ui, item, mode_3d, kind, animation_reason) {
                         action = Some(item.action);
                     }
                 }
