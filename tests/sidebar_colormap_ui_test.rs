@@ -13,6 +13,7 @@ use crate::support;
 
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord};
+use vector_field_explorer::source_scene::{FieldMode, SourceDisplay};
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::AppStyle;
@@ -184,7 +185,11 @@ fn assert_scene_uses(state: &mut State, expected: Colormap) {
     assert_eq!(scene.arrows.len(), sampled.len());
     for (instance, arrow) in scene.arrows.iter().zip(&sampled) {
         let rgb = expected.colormap(arrow.mag, lo, hi);
-        let want = [rgb[0] as f32 / 255.0, rgb[1] as f32 / 255.0, rgb[2] as f32 / 255.0];
+        let want = [
+            rgb[0] as f32 / 255.0,
+            rgb[1] as f32 / 255.0,
+            rgb[2] as f32 / 255.0,
+        ];
         for channel in 0..3 {
             assert!(
                 (instance.color[channel] - want[channel]).abs() < 1e-6,
@@ -200,12 +205,15 @@ fn assert_scene_uses(state: &mut State, expected: Colormap) {
         Colormap::Viridis
     };
     assert!(
-        sampled.iter().zip(scene.arrows.iter()).any(|(arrow, instance)| {
-            let rgb = other.colormap(arrow.mag, lo, hi);
-            (instance.color[0] - rgb[0] as f32 / 255.0).abs() > 1e-6
-                || (instance.color[1] - rgb[1] as f32 / 255.0).abs() > 1e-6
-                || (instance.color[2] - rgb[2] as f32 / 255.0).abs() > 1e-6
-        }),
+        sampled
+            .iter()
+            .zip(scene.arrows.iter())
+            .any(|(arrow, instance)| {
+                let rgb = other.colormap(arrow.mag, lo, hi);
+                (instance.color[0] - rgb[0] as f32 / 255.0).abs() > 1e-6
+                    || (instance.color[1] - rgb[1] as f32 / 255.0).abs() > 1e-6
+                    || (instance.color[2] - rgb[2] as f32 / 255.0).abs() > 1e-6
+            }),
         "the new palette must change at least one arrow colour"
     );
 }
@@ -223,15 +231,26 @@ fn colormap_row_drives_state_scene_and_persistence() {
         "Coloring opens with Viridis selected"
     );
     // Consume the startup build so the click's dirty flag is the only one.
-    assert!(s.state.snapshot_if_dirty().is_some(), "the fresh scene builds once");
+    assert!(
+        s.state.snapshot_if_dirty().is_some(),
+        "the fresh scene builds once"
+    );
     assert!(!s.state.dirty);
 
     let rows = nodes(&out);
     let turbo = labelled(&rows, egui::Role::Button, "Turbo").expect("the Turbo button");
     assert!(!is_toggled(turbo), "Turbo is not selected yet");
     let out = s.click(turbo.center());
-    assert_eq!(s.controls.colormap, Colormap::Turbo, "the mirror follows the click");
-    assert_eq!(s.state.colormap, Colormap::Turbo, "apply reaches the viewmodel");
+    assert_eq!(
+        s.controls.colormap,
+        Colormap::Turbo,
+        "the mirror follows the click"
+    );
+    assert_eq!(
+        s.state.colormap,
+        Colormap::Turbo,
+        "apply reaches the viewmodel"
+    );
     assert!(s.state.dirty, "the change asks for a scene rebuild");
     let _ = out;
 
@@ -253,12 +272,24 @@ fn colormap_row_drives_state_scene_and_persistence() {
     // Persistence: the UI-selected palette is what the saved view record
     // carries, and a restore (the loaded-state path) brings it back.
     let record = ViewRecord::capture(&s.state);
-    assert_eq!(record.colormap, Colormap::Turbo, "the record stores the selection");
+    assert_eq!(
+        record.colormap,
+        Colormap::Turbo,
+        "the record stores the selection"
+    );
     let mut restored = State::new(false);
     let mut restored_controls = Controls::new();
     record.restore(&mut restored, &mut restored_controls);
-    assert_eq!(restored.colormap, Colormap::Turbo, "a persisted Turbo survives restore");
-    assert_eq!(restored_controls.colormap, Colormap::Turbo, "the widget mirror restores too");
+    assert_eq!(
+        restored.colormap,
+        Colormap::Turbo,
+        "a persisted Turbo survives restore"
+    );
+    assert_eq!(
+        restored_controls.colormap,
+        Colormap::Turbo,
+        "the widget mirror restores too"
+    );
 
     // Also prove the value survives the real on-disk envelope (save/load), not
     // just the record struct.
@@ -270,7 +301,11 @@ fn colormap_row_drives_state_scene_and_persistence() {
     let mut storage = MemoryStorage::default();
     vector_field_explorer::persistence::save(&mut storage, &settings);
     let loaded = vector_field_explorer::persistence::load(Some(&storage));
-    assert_eq!(loaded.view.colormap, Colormap::Turbo, "Turbo round-trips through APP_KEY");
+    assert_eq!(
+        loaded.view.colormap,
+        Colormap::Turbo,
+        "Turbo round-trips through APP_KEY"
+    );
 }
 
 #[test]
@@ -302,7 +337,11 @@ fn coloring_reset_returns_viridis_through_the_real_button() {
     s.click(reset.center());
     let out = s.idle();
 
-    assert_eq!(s.controls.colormap, Colormap::Viridis, "reset restores the default palette");
+    assert_eq!(
+        s.controls.colormap,
+        Colormap::Viridis,
+        "reset restores the default palette"
+    );
     assert!(s.controls.auto_fit, "reset restores auto-fit");
     assert_eq!(s.state.colormap, Colormap::Viridis);
     assert!(s.state.auto_fit);
@@ -312,8 +351,77 @@ fn coloring_reset_returns_viridis_through_the_real_button() {
         is_toggled(labelled(&rows, egui::Role::Button, "Viridis").expect("Viridis")),
         "the row shows the default selection again"
     );
-    assert!(!is_toggled(labelled(&rows, egui::Role::Button, "Turbo").expect("Turbo")));
+    assert!(!is_toggled(
+        labelled(&rows, egui::Role::Button, "Turbo").expect("Turbo")
+    ));
     assert_scene_uses(&mut s.state, Colormap::Viridis);
+}
+
+#[test]
+fn both_source_display_hides_colormap_and_range_with_a_reason() {
+    let mut s = Sidebar::new();
+    s.state.set_field_mode(FieldMode::Sources);
+    // Manual range, so the range row would be visible if it were not hidden.
+    s.controls.auto_fit = false;
+
+    let mut scene = s.state.sources.clone();
+    scene.set_display(SourceDisplay::Both);
+    s.state.set_source_scene(scene);
+    let out = open_coloring(&mut s);
+    let rows = nodes(&out);
+    assert!(
+        labelled(&rows, egui::Role::Button, "Viridis").is_none(),
+        "the Both family colours replace the colormap row"
+    );
+    assert!(
+        labelled(&rows, egui::Role::CheckBox, "Auto-fit color range").is_none(),
+        "Both has no shared magnitude range to fit"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|node| node.value.as_deref() == Some("Magnitude range:")),
+        "the manual range row is hidden in Both"
+    );
+    assert!(
+        rows.iter().any(|node| {
+            node.role == egui::Role::Label
+                && node.value.as_deref()
+                    == Some(
+                        "Both uses fixed family colours (E amber, B cyan); choose Electric or \
+                         Magnetic to use a colormap.",
+                    )
+        }),
+        "the Coloring section explains why its controls are absent"
+    );
+
+    // A single-family display still uses the shared colormap and range.
+    let mut scene = s.state.sources.clone();
+    scene.set_display(SourceDisplay::Electric);
+    s.state.set_source_scene(scene);
+    let out = s.idle();
+    let rows = nodes(&out);
+    assert!(
+        labelled(&rows, egui::Role::Button, "Viridis").is_some(),
+        "Electric restores the colormap row"
+    );
+    assert!(
+        labelled(&rows, egui::Role::CheckBox, "Auto-fit color range").is_some(),
+        "Electric restores the auto-fit control"
+    );
+    assert!(
+        rows.iter()
+            .any(|node| node.value.as_deref() == Some("Magnitude range:")),
+        "Electric restores the manual range row"
+    );
+    assert!(
+        !rows.iter().any(|node| node.value.as_deref()
+            == Some(
+                "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic \
+                 to use a colormap.",
+            )),
+        "the Both explanation disappears outside Both"
+    );
 }
 
 /// In-memory stand-in for eframe's disk-backed storage (the persistence test

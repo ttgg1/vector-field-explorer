@@ -326,6 +326,38 @@ fn family_status_text(name: &str, family: &SourceFamilyStatus, parts: &mut Vec<S
     }
 }
 
+/// The `Both` display legend segments: each family's label and its fixed
+/// arrow colour, in painting order. Single-family displays use the shared
+/// colormap instead, so they have no fixed-colour legend.
+pub fn both_legend() -> [(&'static str, [u8; 3]); 2] {
+    [
+        ("E amber", crate::source_scene::ELECTRIC_COLOR),
+        ("B cyan", crate::source_scene::MAGNETIC_COLOR),
+    ]
+}
+
+/// Paint the `Both` display legend as one line at `pos`: the family labels in
+/// their fixed colours, separated by a neutral dot. The viewport overlay and
+/// tests share this exact painting path.
+pub fn paint_both_legend(painter: &egui::Painter, pos: egui::Pos2) {
+    let font = egui::FontId::proportional(12.0);
+    let neutral = egui::Color32::from_gray(220);
+    let mut x = pos.x;
+    let mut draw = |text: &str, color: egui::Color32| {
+        let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+        let width = galley.size().x;
+        painter.galley(egui::pos2(x, pos.y), galley, color);
+        x += width;
+    };
+    draw("Both: ", neutral);
+    for (index, (label, rgb)) in both_legend().into_iter().enumerate() {
+        if index > 0 {
+            draw(" · ", neutral);
+        }
+        draw(label, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+    }
+}
+
 /// Draw the Sources panel. `compact` applies the same finger-sized row floor
 /// as the other compact sheets; wide keeps the historical panel spacing.
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelState, compact: bool) {

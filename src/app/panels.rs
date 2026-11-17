@@ -721,6 +721,19 @@ impl VfApp {
             );
         }
 
+        // The `Both` source display paints fixed family colours, so the
+        // viewport names those colours under the status line. The status text
+        // above is untouched; this is a second, short line.
+        if self.state.field_mode == FieldMode::Sources
+            && self.state.sources.display == crate::source_scene::SourceDisplay::Both
+            && let Some(rect) = self.last_viewport_rect
+        {
+            crate::ui::sources_panel::paint_both_legend(
+                ui.painter(),
+                egui::pos2(rect.left() + 12.0, rect.top() + 34.0),
+            );
+        }
+
         // Help > About (ticket 15): a small window over everything, closed by
         // its × (its open flag is the window's visibility).
         top_bar::about_window(ui.ctx(), &mut self.about_open);

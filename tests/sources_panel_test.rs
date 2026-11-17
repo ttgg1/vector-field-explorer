@@ -527,6 +527,51 @@ fn add_is_disabled_at_the_source_limit() {
 }
 
 #[test]
+fn both_source_display_paints_the_viewport_family_legend() {
+    // Drive the real app frame so the legend comes from `frame_overlays`, not
+    // from a replica. The Sources panel is collapsed by default, so the panel's
+    // own "E amber"/"B cyan" row cannot satisfy these assertions.
+    let ctx = context();
+    let mut app = vector_field_explorer::VfApp::new();
+    assert!(!app.layout.sources_expanded, "the panel starts collapsed");
+    app.state.set_field_mode(FieldMode::Sources);
+    let mut scene = app.state.sources.clone();
+    scene.set_display(SourceDisplay::Both);
+    app.state.set_source_scene(scene);
+
+    let mut eframe_frame = eframe::Frame::_new_kittest();
+    let mut out = None;
+    for _ in 0..2 {
+        let mut frame = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut app, ui, &mut eframe_frame),
+        );
+        frame.textures_delta.clear();
+        out = Some(frame);
+    }
+    let out = out.unwrap();
+    let labels: Vec<&str> = out
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        labels.contains(&"E amber"),
+        "the viewport legend names the electric family: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"B cyan"),
+        "the viewport legend names the magnetic family: {labels:?}"
+    );
+}
+
+#[test]
 fn display_selector_changes_only_the_scene_display() {
     let mut state = State::new(true);
     state.set_field_mode(FieldMode::Sources);
