@@ -245,6 +245,9 @@ pub struct VfApp {
     /// The screenshot action (ticket 08): the pending capture request, the
     /// channel its save thread reports on, and the completion toast.
     pub screenshot: Screenshot,
+    /// Provenance claimed with the SVG request at execution dispatch. `None`
+    /// means the active request had no source context.
+    svg_export_provenance: Option<crate::export_provenance::ExportProvenance>,
     /// The visible frame the cached scene and click seeds belong to (issue 13
     /// task 6); reconciled at the start of every vector simulation frame.
     scene_frame: SceneFrameKey,
@@ -364,6 +367,7 @@ impl VfApp {
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             screenshot: Screenshot::new(),
+            svg_export_provenance: None,
             scene_frame,
             particle_available,
             last_field_mode,

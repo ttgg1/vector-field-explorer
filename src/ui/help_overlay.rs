@@ -347,6 +347,14 @@ pub static SOURCES_HELP_ROWS: &[HelpRow] = &[
         action: "never drawn, even with the accuracy opt-in",
     },
     HelpRow {
+        input: "Source glyphs",
+        action: "mark each source's kind, position, axis and sign; the 2D slice projects them, dashing off-slice sources",
+    },
+    HelpRow {
+        input: "Source export",
+        action: "PNG and SVG carry the softened-model and accuracy-not-met warning; sampling missing means Source sampling unavailable",
+    },
+    HelpRow {
         input: "Streamlines / particles / click seeds",
         action: "streamlines, particles and click seeding are formula-only; Sources mode leaves them off",
     },

@@ -261,8 +261,15 @@ A named, persisted set of field sources that can be loaded into source mode.
 _Avoid_: source preset, scene
 
 **Source glyph**:
-The marker drawn at a source's position and orientation in the viewport.
+The marker drawn at a source's position and orientation in the viewport, with
+its kind, family and signed charge/current. In 2D it is projected into the
+selected plane; off-slice sources are dashed and translucent, not hidden.
 _Avoid_: icon, marker
+
+**Source preset**:
+An illustrative built-in SourceScene in the separate Sources catalogue,
+loaded through the ordinary validated setters. Never a formula preset.
+_Avoid_: source configuration, formula preset
 
 **Material region**:
 A region with relative permittivity and permeability that modifies the field.

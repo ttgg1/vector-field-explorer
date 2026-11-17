@@ -28,7 +28,7 @@ use eframe::egui;
 use eframe::wgpu::TextureFormat;
 use glam::Mat4;
 
-use crate::export_provenance::{ExportProvenance, provenance_lines};
+use crate::export_provenance::{ExportProvenance, provenance_lines, provenance_metadata};
 
 /// Largest edge of a capture, pixels. A bigger viewport is scaled down on both
 /// axes so the framing (and the camera aspect) stays what the user sees.
@@ -234,12 +234,39 @@ pub fn ensure_png_extension(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Encode a captured frame through the historical no-provenance path or the
+/// provenance-aware `tEXt` path.
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_capture(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    provenance: Option<&ExportProvenance>,
+) -> std::io::Result<Vec<u8>> {
+    match provenance {
+        Some(provenance) => crate::export::encode_png_with_text(
+            rgba,
+            width,
+            height,
+            provenance_metadata(provenance),
+        ),
+        None => crate::export::encode_png(rgba, width, height),
+    }
+}
+
 /// Write a captured frame, reporting success/failure back to the UI. The path
 /// goes to the encoder as a `Path`, exactly as the dialog returned it.
 #[cfg(not(target_arch = "wasm32"))]
-fn save_capture(rgba: &[u8], width: u32, height: u32, path: PathBuf) -> SaveOutcome {
+fn save_capture(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    path: PathBuf,
+    provenance: Option<&ExportProvenance>,
+) -> SaveOutcome {
     let path = ensure_png_extension(path);
-    match crate::export::save_png(rgba, width, height, &path) {
+    match encode_capture(rgba, width, height, provenance).and_then(|png| std::fs::write(&path, png))
+    {
         Ok(()) => SaveOutcome::Saved(path),
         Err(error) => SaveOutcome::Failed(error.to_string()),
     }
@@ -284,10 +311,11 @@ impl CaptureSink {
 pub fn spawn_save(
     sink: CaptureSink,
     ctx: egui::Context,
-    rgba: Vec<u8>,
+    mut rgba: Vec<u8>,
     width: u32,
     height: u32,
     suggested: String,
+    provenance: Option<ExportProvenance>,
 ) {
     std::thread::spawn(move || {
         let outcome = match rfd::FileDialog::new()
@@ -296,7 +324,18 @@ pub fn spawn_save(
             .add_filter("PNG image", &["png"])
             .save_file()
         {
-            Some(path) => save_capture(&rgba, width, height, path),
+            Some(path) => {
+                let mut banner_error = None;
+                if let Some(provenance) = &provenance
+                    && let Err(error) = apply_export_banner(&mut rgba, width, height, provenance)
+                {
+                    banner_error = Some(error);
+                }
+                match banner_error {
+                    Some(error) => SaveOutcome::Failed(error),
+                    None => save_capture(&rgba, width, height, path, provenance.as_ref()),
+                }
+            }
             None => SaveOutcome::Cancelled,
         };
         sink.send(outcome);
@@ -435,8 +474,23 @@ pub fn download_svg(svg: &str, filename: &str) -> Result<(), String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn save_capture(rgba: &[u8], width: u32, height: u32, filename: &str) -> SaveOutcome {
-    match crate::export::encode_png(rgba, width, height) {
+fn save_capture(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    filename: &str,
+    provenance: Option<&ExportProvenance>,
+) -> SaveOutcome {
+    let encoded = match provenance {
+        Some(provenance) => crate::export::encode_png_with_text(
+            rgba,
+            width,
+            height,
+            provenance_metadata(provenance),
+        ),
+        None => crate::export::encode_png(rgba, width, height),
+    };
+    match encoded {
         Ok(png) => match download_png(&png, filename) {
             Ok(()) => SaveOutcome::DownloadStarted,
             Err(error) => SaveOutcome::Failed(error),
@@ -457,9 +511,21 @@ pub(crate) fn finish_download(
     filename: String,
     sink: CaptureSink,
     ctx: egui::Context,
+    provenance: Option<ExportProvenance>,
 ) {
     let outcome = match result {
-        Ok(rgba) => save_capture(&rgba, width, height, &filename),
+        Ok(mut rgba) => {
+            let mut banner_error = None;
+            if let Some(provenance) = &provenance
+                && let Err(error) = apply_export_banner(&mut rgba, width, height, provenance)
+            {
+                banner_error = Some(error);
+            }
+            match banner_error {
+                Some(error) => SaveOutcome::Failed(error),
+                None => save_capture(&rgba, width, height, &filename, provenance.as_ref()),
+            }
+        }
         Err(error) => SaveOutcome::Failed(error),
     };
     sink.send(outcome);
@@ -1164,6 +1230,27 @@ impl Screenshot {
     #[doc(hidden)]
     pub fn svg_request_pending(&self) -> bool {
         self.svg_pending.is_some()
+    }
+
+    /// Whether a PNG request is still waiting for the viewport dispatch.
+    #[doc(hidden)]
+    pub fn png_request_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// The pending PNG provenance without consuming the request. The outer
+    /// `None` means no request; `Some(None)` means a request captured without
+    /// source provenance.
+    #[doc(hidden)]
+    pub fn pending_png_provenance(&self) -> Option<&Option<ExportProvenance>> {
+        self.pending.as_ref()
+    }
+
+    /// The pending SVG provenance with the same slot distinction as
+    /// [`Self::pending_png_provenance`].
+    #[doc(hidden)]
+    pub fn pending_svg_provenance(&self) -> Option<&Option<ExportProvenance>> {
+        self.svg_pending.as_ref()
     }
 
     /// Consume the click; true means "capture this frame".

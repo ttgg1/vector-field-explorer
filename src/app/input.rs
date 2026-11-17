@@ -114,6 +114,35 @@ impl VfApp {
         domain_before
     }
 
+    /// Capture the source export context now. Formula mode has none; Sources
+    /// always produces a warning-bearing provenance, even before sampling.
+    pub(super) fn source_export_provenance(
+        &self,
+    ) -> Option<crate::export_provenance::ExportProvenance> {
+        crate::export_provenance::source_export_provenance(
+            self.state.field_mode,
+            &self.state.sources,
+            self.state.source_sampling(),
+        )
+    }
+
+    /// Queue a PNG request with the provenance captured at request time.
+    pub(super) fn request_png_export(&mut self) {
+        let provenance = self.source_export_provenance();
+        self.screenshot.request_with_provenance(provenance);
+    }
+
+    /// Queue an SVG request behind the shared execution guard, with the
+    /// provenance captured at request time.
+    pub(super) fn request_svg_export(&mut self) {
+        if let Some(reason) = self.svg_block_reason() {
+            self.screenshot.notify(reason, true);
+            return;
+        }
+        let provenance = self.source_export_provenance();
+        self.screenshot.request_svg_with_provenance(provenance);
+    }
+
     /// Apply one menu or shortcut action through the pure seam, then run the
     /// side effect that needs the app (popover, capture, clipboard, quit).
     /// Everything the seam can mutate goes in through [`menu::UiState`], so
@@ -172,14 +201,8 @@ impl VfApp {
             menu::SideEffect::ShowHelp => self.help_open = true,
             // The capture itself happens in the viewport, where this frame's
             // rect and camera are known.
-            menu::SideEffect::Screenshot => self.screenshot.request(),
-            menu::SideEffect::ScreenshotSvg => {
-                if let Some(reason) = self.svg_block_reason() {
-                    self.screenshot.notify(reason, true);
-                } else {
-                    self.screenshot.request_svg();
-                }
-            }
+            menu::SideEffect::Screenshot => self.request_png_export(),
+            menu::SideEffect::ScreenshotSvg => self.request_svg_export(),
             menu::SideEffect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             menu::SideEffect::CopyText(text) => ctx.copy_text(text),
             // Help > Download desktop app (ticket 16a): hand the static page to

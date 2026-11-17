@@ -180,9 +180,11 @@ impl VfApp {
     /// request becomes a failure toast and never reaches `scene_to_svg` or a
     /// saver thread.
     pub(super) fn take_svg_export_route(&mut self) -> SvgExportRoute {
-        if !self.screenshot.take_svg_request() {
+        let Some(provenance) = self.screenshot.take_svg_request_with_provenance() else {
             return SvgExportRoute::NoRequest;
-        }
+        };
+        let provenance = provenance.or_else(|| self.source_export_provenance());
+        self.svg_export_provenance = provenance;
         match self.svg_block_reason() {
             Some(message) => {
                 self.screenshot.notify(message.clone(), true);
@@ -190,6 +192,15 @@ impl VfApp {
             }
             None => SvgExportRoute::Allowed,
         }
+    }
+
+    /// Claim the provenance that travelled with the SVG request just routed.
+    /// Runs after [`Self::take_svg_export_route`]; a rejected request leaves it
+    /// unused and the next route overwrites it.
+    pub(super) fn take_svg_export_provenance(
+        &mut self,
+    ) -> Option<crate::export_provenance::ExportProvenance> {
+        self.svg_export_provenance.take()
     }
 
     /// Consume one PNG request for the active scalar plot. The returned scene
@@ -201,9 +212,12 @@ impl VfApp {
         rect: egui::Rect,
         pixels_per_point: f32,
     ) -> Option<(Arc<PlotScene>, PlotFrame, [u32; 2], u64)> {
-        if self.state.is_vector_mode() || !self.screenshot.take_request() {
+        if self.state.is_vector_mode() {
             return None;
         }
+        // Scalar exports always carry `None` provenance; consume through the
+        // same request lifecycle as the vector PNG path.
+        let _ = self.screenshot.take_request_with_provenance()?;
         let Some(scene) = self.refresh_plot_scene() else {
             self.screenshot.fail("plot scene unavailable".into());
             return None;
@@ -514,6 +528,7 @@ impl VfApp {
                         extent[0],
                         extent[1],
                         filename,
+                        None,
                     ),
                     None => self
                         .screenshot
@@ -549,7 +564,9 @@ impl VfApp {
                 extent,
                 clear,
                 move |result| {
-                    screenshot::finish_download(result, extent[0], extent[1], filename, sink, ctx);
+                    screenshot::finish_download(
+                        result, extent[0], extent[1], filename, sink, ctx, None,
+                    );
                 },
             );
             if let Err(error) = started {
@@ -661,6 +678,35 @@ impl PlotAppHarness<'_> {
     pub fn menu_svg_export(&mut self, ctx: &egui::Context) {
         self.app
             .apply_menu_action(MenuAction::ExportScreenshotSvg, ctx);
+    }
+
+    /// Queue the same PNG request the menu queues, including request-time
+    /// source provenance.
+    pub fn request_png_export(&mut self) {
+        self.app.request_png_export();
+    }
+
+    /// Queue the same SVG request the menu queues, behind its execution guard.
+    pub fn request_svg_export(&mut self) {
+        self.app.request_svg_export();
+    }
+
+    /// Clone the pending PNG provenance without consuming the request.
+    pub fn export_png_provenance(&self) -> Option<crate::export_provenance::ExportProvenance> {
+        self.app
+            .screenshot
+            .pending_png_provenance()
+            .cloned()
+            .flatten()
+    }
+
+    /// Clone the pending SVG provenance without consuming the request.
+    pub fn export_svg_provenance(&self) -> Option<crate::export_provenance::ExportProvenance> {
+        self.app
+            .screenshot
+            .pending_svg_provenance()
+            .cloned()
+            .flatten()
     }
 
     pub fn svg_dispatch(&mut self) -> SvgExportRoute {

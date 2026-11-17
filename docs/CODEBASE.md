@@ -2096,13 +2096,20 @@ download paths.
 **Public API.** `MAX_CAPTURE_EDGE` (4096 native / 2048 wasm), `TOAST_TTL`,
 `SaveOutcome`, `capture_size`, `padded_row_bytes`, `strip_row_padding`,
 `png_readback_check`, `to_rgba`, `date_stamp`, `default_filename`,
-`ensure_png_extension`, `spawn_save` (native), `finish_download` (wasm),
+`ensure_png_extension`, `spawn_save` (native; now takes the request-time
+`Option<ExportProvenance>`), `finish_download` (wasm; same provenance),
 `scene_to_svg`, `scene_to_svg_with_provenance`, `apply_export_banner`,
 `Screenshot` (`new`, `with_channel`, `request`, `request_with_provenance`,
 `request_svg`, `request_svg_with_provenance`, `take_request`,
 `take_request_with_provenance`, `take_svg_request`,
-`take_svg_request_with_provenance`, `sender`, `tick`, `fail`, `toast_text`,
-`toast`).
+`take_svg_request_with_provenance`, `svg_request_pending`,
+`png_request_pending`, `pending_png_provenance`, `pending_svg_provenance`,
+`sender`, `tick`, `fail`, `toast_text`, `toast`).
+`VfApp::request_png_export`/`request_svg_export` capture
+`source_export_provenance()` at request time; the viewport consumes it through
+the `take_*_with_provenance` variants. A Source-mode request made without
+provenance derives the fallback instead of exporting silently. Scalar plot
+captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)
@@ -2123,7 +2130,9 @@ download paths.
 - `toast` requests repaints while visible so it expires on time.
 - `apply_export_banner` bakes the provenance warning into the RGBA frame with a
   dependency-free 5×7 bitmap font over a dark strip; a wrong frame length is an
-  error.
+  error and is reported as `SaveOutcome::Failed`. With provenance the capturer
+  encodes through `encode_png_with_text`; without it the historical
+  `encode_png`/`save_png` bytes are unchanged.
 - `scene_to_svg` delegates to `scene_to_svg_with_provenance(..., None)`, so the
   no-provenance document is unchanged. The provenance variant adds an escaped
   `<metadata>` block and visible `<text>`, and converts line/trail widths from
