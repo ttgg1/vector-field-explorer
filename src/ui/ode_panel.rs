@@ -9,7 +9,8 @@
 use eframe::egui;
 
 use crate::ode::{
-    ODE_COLORS, ODE_MAX_DURATION, ODE_MAX_SEEDS, ODE_STEP, OdeChart, OdeScene, OdeSeed,
+    ODE_COLORS, ODE_MAX_DIMENSION, ODE_MAX_DURATION, ODE_MAX_SEEDS, ODE_MIN_DIMENSION, ODE_STEP,
+    OdeChart, OdeScene, OdeSeed,
 };
 use crate::ui::help_overlay::{HelpRow, HelpSection};
 use crate::viewmodel::State;
@@ -105,6 +106,14 @@ pub fn show(
                 && panel.draft.source != source
             {
                 panel.draft.source = source;
+                if source == crate::ode::OdeSource::CurrentField {
+                    // The solved scene's dimension must match the durable
+                    // field's; a 2D draft cannot integrate a 3D field.
+                    panel.draft.dimension = state
+                        .field
+                        .dimension
+                        .clamp(ODE_MIN_DIMENSION, ODE_MAX_DIMENSION);
+                }
                 commit = true;
             }
         }

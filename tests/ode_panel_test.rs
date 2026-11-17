@@ -7,7 +7,7 @@ use eframe::egui;
 
 use crate::support;
 
-use vector_field_explorer::ode::OdeChart;
+use vector_field_explorer::ode::{OdeChart, OdeSource};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::formula_bar::{self, FormulaBarState};
 use vector_field_explorer::ui::layout::{DEFAULT_ODE_WIDTH, LayoutState, SheetState};
@@ -213,6 +213,81 @@ fn ode_equation_edit_commits_valid_scene_only() {
     assert!(panel.commit(&mut state));
     assert_eq!(state.ode.equations[1], "-x - 0.1*y");
     assert!(panel.error.is_none());
+}
+
+#[test]
+fn current_field_switch_adopts_the_durable_field_dimension() {
+    let ctx = context();
+    let mut state = State::new(true);
+    assert!(state.set_formula("y, -x, 0".into()));
+    assert_eq!(state.field.dimension, 3, "the durable field is 3D");
+    state.set_field_mode(FieldMode::Ode);
+    let mut panel = OdePanelState::default();
+    assert_eq!(panel.draft.dimension, 2, "the draft starts in 2D");
+
+    let width = 1200.0;
+    let height = 900.0;
+    let out = panel_frame(
+        &ctx,
+        width,
+        height,
+        Vec::new(),
+        &mut state,
+        &mut panel,
+        false,
+    );
+    let current_field = find(&nodes(&out), "Current field")
+        .expect("Current field selector")
+        .rect
+        .center();
+    click_panel(
+        &ctx,
+        width,
+        height,
+        current_field,
+        &mut state,
+        &mut panel,
+        false,
+    );
+
+    assert_eq!(
+        panel.draft.dimension, 3,
+        "selecting the current field adopts its dimension"
+    );
+    assert_eq!(state.ode.source, OdeSource::CurrentField);
+    assert!(state.ode_error.is_none(), "{:?}", state.ode_error);
+    assert_eq!(
+        state
+            .ode_solution
+            .as_ref()
+            .map(|solution| solution.dimension),
+        Some(3),
+        "the solved scene is three dimensional"
+    );
+
+    let equations = find(
+        &nodes(&panel_frame(
+            &ctx,
+            width,
+            height,
+            Vec::new(),
+            &mut state,
+            &mut panel,
+            false,
+        )),
+        "Equations",
+    )
+    .expect("Equations selector")
+    .rect
+    .center();
+    click_panel(
+        &ctx, width, height, equations, &mut state, &mut panel, false,
+    );
+    assert_eq!(state.ode.source, OdeSource::Equations);
+    assert_eq!(
+        panel.draft.dimension, 3,
+        "switching back to equations keeps the draft dimension"
+    );
 }
 
 #[test]
