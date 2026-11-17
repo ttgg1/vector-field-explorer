@@ -1,6 +1,6 @@
 # Maxwell Teaching Cases Design
 
-**Status:** PROPOSED
+**Status:** APPROVED by owner on 2026-11-17
 **Date:** 2026-11-17
 **Issue:** [#30](https://github.com/ttgg1/vector-field-explorer/issues/30)
 **Dependencies:** #13 (plane slices), #24 (source evaluator conventions), #29 (bounded analytic case pattern), #18 (performance evidence)
