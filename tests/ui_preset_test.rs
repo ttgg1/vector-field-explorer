@@ -8,6 +8,7 @@
 use vector_field_explorer::export::{delete_preset, load_presets};
 use vector_field_explorer::presets::presets;
 use vector_field_explorer::render::Camera;
+use vector_field_explorer::source_scene::{FieldMode, SourceKindTag};
 use vector_field_explorer::ui::presets::PresetPanel;
 use vector_field_explorer::viewmodel::State;
 
@@ -423,4 +424,19 @@ fn delete_failure_on_corrupt_preset_file_sets_storage_note() {
         Some("home"),
         "a failed delete keeps the confirmation open"
     );
+}
+
+#[test]
+fn classic_presets_return_to_formula_and_keep_the_source_scene() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .sources
+        .add(SourceKindTag::PointCharge.default_source())
+        .unwrap();
+    let mut panel = PresetPanel::default();
+    assert!(panel.load_field("Point charge", &mut state));
+    assert_eq!(state.field_mode, FieldMode::Formula);
+    assert_eq!(state.sources.entries.len(), 1);
+    assert!(state.formula.len() > 3);
 }

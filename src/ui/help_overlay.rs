@@ -313,6 +313,50 @@ pub fn scalar_help_rows() -> &'static [HelpRow] {
     SCALAR_HELP_ROWS
 }
 
+/// Source-mode-specific notes. Kept as a separate section so the scalar and
+/// binding tables stay exactly as reviewed; the Help window appends this
+/// section after Scalar plots.
+pub static SOURCES_HELP_SECTION: HelpSection = HelpSection {
+    title: "Sources",
+    rows: SOURCES_HELP_ROWS,
+};
+
+pub static SOURCES_HELP_ROWS: &[HelpRow] = &[
+    HelpRow {
+        input: "Formula | Sources",
+        action: "modes keep separate state; switching never merges a formula vector and a source vector",
+    },
+    HelpRow {
+        input: "Sources",
+        action: "build a mixed electric/current scene; all eight source kinds have editors",
+    },
+    HelpRow {
+        input: "E / B / Both",
+        action: "E amber, B cyan in Both; families are never summed or share one magnitude scale",
+    },
+    HelpRow {
+        input: "Softening",
+        action: "one scene-wide value 1e-6..=1.0; part of the teaching model, not a physical radius",
+    },
+    HelpRow {
+        input: "Accuracy not met",
+        action: "hidden by default; opt in to draw finite accuracy not met results only",
+    },
+    HelpRow {
+        input: "Unavailable / non-finite",
+        action: "never drawn, even with the accuracy opt-in",
+    },
+    HelpRow {
+        input: "Streamlines / particles / click seeds",
+        action: "streamlines, particles and click seeding are formula-only; Sources mode leaves them off",
+    },
+];
+
+/// The source help rows, exposed for the Help window and tests.
+pub fn sources_help_rows() -> &'static [HelpRow] {
+    SOURCES_HELP_ROWS
+}
+
 /// The three groups, in window order. Both help surfaces read this table, so a
 /// binding is spelled exactly once. A `static` (not a `const`) so the overlay
 /// and the window can be proven to hand back the very same allocation.
@@ -479,6 +523,7 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
         .show(ctx, |ui| {
             let mut all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
             all.push(&SCALAR_HELP_SECTION);
+            all.push(&SOURCES_HELP_SECTION);
             table(ui, &all, heading_color);
         });
 }

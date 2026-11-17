@@ -684,8 +684,9 @@ accuracy-not-met total/drawn and unavailable per family.
 in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 
 **Limitations.** Sampling is CPU and static. Persistence stores the scene; the
-editable panel lives in `src/ui/sources_panel.rs` and preset/CAS integration is
-a later task.
+editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
+to Formula without clearing the scene, and native CAS refuses Sources mode. The
+user guide is [docs/sources-panel.md](../docs/sources-panel.md).
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -2038,7 +2039,12 @@ operation preview, copy, and explicitly applying validated vector results.
 rail/body independently of Controls, and Compact reuses the single sheet.
 `tests/cas_rails_test.rs` exercises actual rail/menu/tab/Apply and resize paths.
 Preview identity includes input, operation, variable, and the current app mode;
-CAS scratch is not persisted.
+CAS scratch is not persisted. Formula mode keeps its historical authoritative
+2D/3D app-mode dimension (not the field's arity). Sources mode has no formula
+editor: `apply` refuses it before dimension/vector checks, and `show` disables
+Apply with the exact explanation `CAS edits the formula field; switch to
+Formula.` The preview dimension reads `State::active_dimension()` in Sources
+mode without changing formula-mode semantics.
 
 #### `src/ui/arrows.rs` — unused placeholder (not compiled)
 
@@ -2162,23 +2168,30 @@ window.
 **Public API.** Font-size constants, `HelpHeadingStyle`,
 `section_heading_style`, `OVERLAY_HEADING_COLOR`, `window_heading_color`,
 `HelpRow`, `HelpSection`, `FLY_HELP_*`, `SEED_HELP_*`, `LEFT_CLICK_HELP_*`,
-`HELP_SECTIONS`, `all_rows`, `sections_for`, `rows_for`, `FORMULA_HINT`, `show`,
-`help_window`.
+`HELP_SECTIONS`, `SCALAR_HELP_SECTION`, `SOURCES_HELP_SECTION`,
+`scalar_help_rows`, `sources_help_rows`, `all_rows`, `sections_for`,
+`rows_for`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
 - `HELP_SECTIONS` is the single source of strings; the overlay shows the active
-  view + Global, the window shows all three groups. A static, not a const, so
-  both surfaces can be proven to share the allocation.
+  view + Global, the window shows all three groups plus the Scalar plots and
+  Sources sections. A static, not a const, so both surfaces can be proven to
+  share the allocation.
+- The Sources section covers formula/source separation, all eight editors,
+  E/B/Both without summation, scene-wide softening, the default-off accuracy
+  opt-in, hidden non-finite/unavailable results, and that streamlines,
+  particles and click seeding remain formula features.
 - `?`/F1 toggle the overlay; Esc and the × dismiss it; the window has its own
   open flag.
 - Headings and rows use pinned sizes/colours; the window heading is the theme's
   strong colour, the overlay heading is fixed light grey.
 - The formula hint is not an input row.
 
-**Pinned by.** `tests/help_overlay_test.rs` (14 tests):
+**Pinned by.** `tests/help_overlay_test.rs` (15 tests):
 `the_overlay_and_window_share_one_table`,
 `the_overlay_shows_only_the_active_view_and_global`,
 `every_binding_is_listed_exactly_once_in_its_group`,
+`help_explains_source_mode_and_accuracy_opt_in`,
 `the_stale_right_drag_pans_copy_is_gone`,
 `two_d_help_never_mentions_orbiting`,
 `help_typography_ranks_the_window_title_above_section_headings_and_rows`.
@@ -2302,8 +2315,9 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 `load_field`, `show`.
 
 **Invariants.**
-- Built-in field presets load formula and dimension through the viewmodel
-  setters; the highlight only appears when the clicked name matches the current
+- Built-in field presets return to Formula first, then load formula and
+  dimension through the viewmodel setters; the saved source scene is preserved
+  and the highlight only appears when the clicked name matches the current
   formula and mode (duplicate formulas highlight one row).
 - Saving with an existing name replaces it; the new row becomes active.
 - Delete asks for confirmation; delete removes from list and disk (or
@@ -2314,9 +2328,10 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 - Native `new` logs a load failure and starts empty; wasm storage failure shows
   one note but keeps the in-memory list usable.
 
-**Pinned by.** `tests/ui_preset_test.rs` (13):
+**Pinned by.** `tests/ui_preset_test.rs` (17):
 `every_built_in_field_preset_loads_through_the_panel`,
 `loading_a_field_preset_sets_its_formula_and_dimension`,
+`classic_presets_return_to_formula_and_keep_the_source_scene`,
 `loading_a_duplicate_formula_preset_highlights_only_the_clicked_name`,
 `saving_highlights_the_row_and_a_duplicate_replaces_it`,
 `deleting_waits_for_confirmation_then_clears_the_highlight`,

@@ -24,6 +24,9 @@ instanced GPU scene:
 - arrows coloured by magnitude, with separate 2D and 3D arrow families;
 - streamlines traced with RK4, seeded from the grid or from clicks;
 - animated particles with trails and speed or magnitude colouring;
+- a Sources panel for mixed electric/current scenes, all eight source editors,
+  E/B/Both display, scene-wide softening and a default-off accuracy opt-in; see
+  the [sources panel guide](docs/sources-panel.md);
 - a 2D orthographic view and a 3D orbit camera, plus a free-fly camera;
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
   plane-by-plane inspection, including 2D slices of three-component fields,
@@ -265,7 +268,8 @@ viewed in 2D uses its first two components.
 
 The Presets panel groups the built-in field presets into Classic,
 Electrostatics, Magnetostatics, and Electrodynamics. Clicking one loads its
-formula and its 2D/3D dimension into the scene; the formula remains editable.
+formula and its 2D/3D dimension into the scene and returns to Formula mode,
+leaving any saved source scene untouched; the formula remains editable.
 
 ### Mouse and keyboard
 
@@ -367,8 +371,10 @@ The app writes one settings envelope under eframe's app key. The following
 survive a restart:
 
 - the view state: formula or loaded preset, 2D/3D mode, domain, density, arrow
-  settings, colouring, streamline and particle settings, and the Show grid /
-  Show coordinate system preferences (remembered across both modes);
+  settings, colouring, streamline and particle settings, the saved source scene
+  (entries, display, softening and accuracy opt-in) with its field mode, and
+  the Show grid / Show coordinate system preferences (remembered across both
+  modes);
 - the layout: panel visibility, panel widths, and help-overlay visibility;
 - the appearance: theme, accent, rounding, spacing, and font size.
 
@@ -391,8 +397,9 @@ camera presets use `localStorage`.
 - **Static fields only.** Formulas have no time variable `t`; the
   Electrodynamics presets are spatial snapshots. Time-dependent fields are
   post-v1 work (see [ADR 0003](docs/adr/0003-physics-foundations.md)).
-- **No data import or export.** The input is a formula or a built-in preset;
-  screenshots are PNG only. There is no CSV, NumPy, or project-file import.
+- **No data import or export.** The input is a formula, a built-in preset or an
+  editable source scene; screenshots are PNG only. There is no CSV, NumPy, or
+  project-file import.
 - **No solver.** Gradient, divergence, curl, ODE, and Maxwell solvers are not
   implemented.
 - **NaN and infinite samples are skipped.** A pole inside the domain leaves a

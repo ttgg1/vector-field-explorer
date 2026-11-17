@@ -99,6 +99,29 @@ _Avoid_: theme preset
 The vector function sampled over the domain, defined by a typed formula.
 _Avoid_: vector field function, field expression
 
+**Source scene**:
+The durable, persisted list of placed electric and magnetic sources plus its
+display choice, scene-wide softening and accuracy opt-in. It is sampled only in
+Sources field mode and is never merged with the formula.
+_Avoid_: source preset, source configuration
+
+**Field mode**:
+The exclusive choice between Formula (a typed vector expression) and Sources
+(the editable source scene). Switching preserves both durable states and never
+merges them; loading a classic preset returns to Formula.
+_Avoid_: source toggle, plot kind
+
+**E/B display**:
+The Sources panel choice Electric, Magnetic or Both. Both draws E amber and B
+cyan as separate families, without summation or one shared magnitude scale.
+_Avoid_: combined field, total field
+
+**Accuracy opt-in**:
+The default-off Sources setting that permits finite AccuracyNotMet results to
+be drawn and labelled. It never makes non-finite or unavailable values
+drawable, and restore accepts only an exact persisted true.
+_Avoid_: ignore accuracy, hidden results
+
 **Domain**:
 The axis-aligned box `[x_min,x_max] × [y_min,y_max] × [z_min,z_max]` over which
 the field is sampled; 2D uses the x/y extents and the selected z slice (the z

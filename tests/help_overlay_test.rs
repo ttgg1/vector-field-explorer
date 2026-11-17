@@ -4,11 +4,11 @@
 // and reject the stale "right-drag pans" copy.
 
 use vector_field_explorer::ui::help_overlay::{
-    FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTIONS, HELP_SECTION_TITLE_SIZE,
-    HELP_WINDOW_TITLE_SIZE, LEFT_CLICK_HELP_ACTION, LEFT_CLICK_HELP_INPUT,
-    LEFT_CLICK_HELP_TOOLTIP, OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT,
-    SEED_HELP_TOOLTIP, HelpRow, all_rows, rows_for, section_heading_style, sections_for,
-    window_heading_color,
+    FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTION_TITLE_SIZE, HELP_SECTIONS, HELP_WINDOW_TITLE_SIZE,
+    HelpRow, LEFT_CLICK_HELP_ACTION, LEFT_CLICK_HELP_INPUT, LEFT_CLICK_HELP_TOOLTIP,
+    OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT, SEED_HELP_TOOLTIP,
+    SOURCES_HELP_SECTION, all_rows, rows_for, section_heading_style, sections_for,
+    sources_help_rows, window_heading_color,
 };
 
 const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
@@ -94,7 +94,11 @@ fn assert_lists_once(rows: &[HelpRow], expected: &[(&str, &str)], what: &str) {
     }
     for (i, first) in rows.iter().enumerate() {
         for second in &rows[i + 1..] {
-            assert_ne!(first.input, second.input, "{what}: `{}` is listed twice", first.input);
+            assert_ne!(
+                first.input, second.input,
+                "{what}: `{}` is listed twice",
+                first.input
+            );
         }
     }
 }
@@ -141,8 +145,10 @@ fn the_left_click_selector_is_documented_in_both_views() {
     );
     for mode_3d in [false, true] {
         assert!(
-            rows_for(mode_3d).iter().any(|row| row.input == LEFT_CLICK_HELP_INPUT
-                && row.action == LEFT_CLICK_HELP_ACTION),
+            rows_for(mode_3d)
+                .iter()
+                .any(|row| row.input == LEFT_CLICK_HELP_INPUT
+                    && row.action == LEFT_CLICK_HELP_ACTION),
             "both view overlays carry the left-click selector line",
         );
         for key in ["S", "P"] {
@@ -185,7 +191,10 @@ fn the_overlay_and_window_share_one_table() {
     assert_eq!(titles, vec!["3D view", "2D view", "Global"]);
     assert_eq!(
         all_rows().len(),
-        HELP_SECTIONS.iter().map(|section| section.rows.len()).sum::<usize>(),
+        HELP_SECTIONS
+            .iter()
+            .map(|section| section.rows.len())
+            .sum::<usize>(),
         "the flattened rows are exactly the section rows",
     );
     let mut flattened: Vec<&str> = Vec::new();
@@ -193,15 +202,26 @@ fn the_overlay_and_window_share_one_table() {
         flattened.extend(section.rows.iter().map(|row| row.input));
     }
     let from_helper: Vec<&str> = all_rows().iter().map(|row| row.input).collect();
-    assert_eq!(flattened, from_helper, "all_rows is the same strings, not a copy");
+    assert_eq!(
+        flattened, from_helper,
+        "all_rows is the same strings, not a copy"
+    );
 }
 
 #[test]
 fn the_overlay_shows_only_the_active_view_and_global() {
-    for (mode_3d, active, inactive) in [(true, "3D view", "2D view"), (false, "2D view", "3D view")] {
+    for (mode_3d, active, inactive) in [(true, "3D view", "2D view"), (false, "2D view", "3D view")]
+    {
         let sections = sections_for(mode_3d);
-        assert_eq!(sections.len(), 2, "the overlay stays compact: one view group + Global");
-        assert_eq!(sections[0].title, active, "the active view group comes first");
+        assert_eq!(
+            sections.len(),
+            2,
+            "the overlay stays compact: one view group + Global"
+        );
+        assert_eq!(
+            sections[0].title, active,
+            "the active view group comes first"
+        );
         assert_eq!(sections[1].title, "Global");
         assert!(
             !sections.iter().any(|section| section.title == inactive),
@@ -260,14 +280,26 @@ fn both_modes_document_the_panel_shortcuts_and_their_text_field_rule() {
             .map(|row| format!("{}: {}", row.input, row.action))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("Ctrl+B"), "the Controls shortcut is documented: {text}");
-        assert!(text.contains("Ctrl+P"), "the Presets shortcut is documented: {text}");
+        assert!(
+            text.contains("Ctrl+B"),
+            "the Controls shortcut is documented: {text}"
+        );
+        assert!(
+            text.contains("Ctrl+P"),
+            "the Presets shortcut is documented: {text}"
+        );
         assert!(
             text.contains("not while typing"),
             "the help says shortcuts stay out of text fields: {text}",
         );
-        assert!(text.contains("Ctrl+Q"), "the quit shortcut is documented: {text}");
-        assert!(text.contains("F1"), "the help-overlay shortcut is documented: {text}");
+        assert!(
+            text.contains("Ctrl+Q"),
+            "the quit shortcut is documented: {text}"
+        );
+        assert!(
+            text.contains("F1"),
+            "the help-overlay shortcut is documented: {text}"
+        );
 
         let panel = rows
             .iter()
@@ -420,5 +452,26 @@ fn two_d_help_never_mentions_orbiting() {
             .iter()
             .any(|row| row.action.to_lowercase().contains("orbit")),
         "the 3D table still documents orbiting",
+    );
+}
+
+#[test]
+fn help_explains_source_mode_and_accuracy_opt_in() {
+    let text = sources_help_rows()
+        .iter()
+        .map(|row| format!("{} {}", row.input, row.action))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(text.contains("Sources"));
+    assert!(text.contains("accuracy not met"));
+    assert!(text.contains("formula"));
+    assert_eq!(SOURCES_HELP_SECTION.rows, sources_help_rows());
+    assert!(
+        sources_help_rows().iter().any(|row| {
+            row.action.contains("streamlines")
+                && row.action.contains("particles")
+                && row.action.contains("formula")
+        }),
+        "source help says streamlines, particles and click seeding stay formula features: {text}"
     );
 }
