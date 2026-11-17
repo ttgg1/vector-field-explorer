@@ -354,6 +354,41 @@ fn outline_uses_slice_intersection_only() {
 }
 
 #[test]
+fn coincident_nonzero_offset_slice_survives_f32_rounding() {
+    let boxed = domain();
+    // With 21 samples over [-2, 2] index 11 sits at the real coordinate 0.2,
+    // but the f32 plane arithmetic lands on 0.20000005. That error exceeds the
+    // old 1e-9-scaled f32 guard even though the slice is genuinely coincident.
+    let grid = UVec3::new(21, 21, 21);
+    let frame = z_frame(&boxed, grid, 11);
+    let mut scene = boundary(MaterialCase::DielectricBoundary, 4.0, 1.0, [1.0, 0.0, 0.0]);
+    scene.interface_axis = PlaneAxis::Z;
+    scene.interface_offset = 0.2;
+    let f32_error = (frame.normal.dot(frame.origin) - scene.interface_offset as f32).abs();
+    assert!(
+        f32_error > (1e-9 * scene.interface_offset.abs().max(1.0)) as f32,
+        "the setup must exceed the old f32 guard, error was {f32_error}"
+    );
+    assert!(
+        (frame.origin.z as f64 - scene.interface_offset).abs() <= 1e-6,
+        "the slice must be genuinely coincident"
+    );
+
+    let sampling = sample_materials(&scene, &boxed, UVec3::new(21, 21, 1), Some(&frame));
+    assert!(
+        sampling
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Slice lies on the interface; the field is discontinuous here."),
+        "warning was {:?}",
+        sampling.warning
+    );
+    let outline = material_outline(&scene, &boxed, Some(&frame));
+    assert!(!outline.is_empty(), "a coincident slice draws its square");
+}
+
+#[test]
 fn every_design_case_has_a_family_assumptions_and_fixed_colour() {
     let cases = [
         (

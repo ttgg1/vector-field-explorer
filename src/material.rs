@@ -45,6 +45,10 @@ pub const MATERIAL_COINCIDENT_SLICE_WARNING: &str =
 
 /// The exact-hit tolerance is scaled by the domain extent, not a fixed band.
 const EXACT_HIT_FACTOR: f64 = 1e-9;
+/// Tolerance factor for deciding a slice plane coincides with a planar
+/// interface. The dot product is formed in f64 because f32 plane coordinates
+/// round past the much tighter exact-hit guard at nonzero offsets.
+const COINCIDENT_SLICE_FACTOR: f64 = 1e-6;
 /// Vectors below this magnitude are degenerate and are not drawn.
 const DEGENERATE_MAGNITUDE: f32 = 1e-6;
 /// Great-circle/circle segment count for outlines.
@@ -333,6 +337,7 @@ pub fn sample_materials(
     let mut finite_response_seen = false;
     let mut any_nonzero_response = false;
 
+    let applied = material_applied(scene);
     if can_sample {
         for raw_local in effective_domain.grid_points(effective_grid) {
             let (position, world) = match plane {
@@ -349,7 +354,6 @@ pub fn sample_materials(
             let Ok(total) = material_field(scene, world) else {
                 continue;
             };
-            let applied = material_applied(scene);
             let response = total - applied;
             if response.is_finite() {
                 finite_response_seen = true;
@@ -668,9 +672,7 @@ fn boundary_slice_outline(
     let dot = normal.dot(frame.normal).abs();
     let parallel = (dot - 1.0).abs() <= 1e-6;
     if parallel {
-        let coincident = (normal.dot(frame.origin) - scene.interface_offset as f32).abs()
-            <= (EXACT_HIT_FACTOR * scene.interface_offset.abs().max(1.0)) as f32;
-        if !coincident {
+        if !plane_coincides_with_interface(scene, frame) {
             return Vec::new();
         }
         return local_square(frame, color);
@@ -770,10 +772,18 @@ fn coincident_interface_slice(scene: &MaterialScene, plane: Option<&PlaneFrame>)
     else {
         return false;
     };
+    plane_coincides_with_interface(scene, frame)
+}
+
+/// Whether `frame` is parallel to and lies on the planar interface. The dot is
+/// formed in f64 from the frame origin and axis components so a genuinely
+/// coincident nonzero-offset slice is not rejected by f32 rounding.
+fn plane_coincides_with_interface(scene: &MaterialScene, frame: &PlaneFrame) -> bool {
     let normal = axis_vector(scene.interface_axis);
     if (normal.dot(frame.normal).abs() - 1.0).abs() > 1e-6 {
         return false;
     }
-    (normal.dot(frame.origin) - scene.interface_offset as f32).abs()
-        <= (EXACT_HIT_FACTOR * scene.interface_offset.abs().max(1.0)) as f32
+    let dot = normal.as_dvec3().dot(frame.origin.as_dvec3());
+    let tolerance = COINCIDENT_SLICE_FACTOR * scene.interface_offset.abs().max(1.0);
+    (dot - scene.interface_offset).abs() <= tolerance
 }

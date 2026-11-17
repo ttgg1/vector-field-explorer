@@ -50,7 +50,7 @@ fn material_sampling_cap_benchmark() {
             let elapsed = started.elapsed();
             let samples = sampling.arrows.len() + sampling.omitted_interface;
             println!(
-                "MATERIAL BENCH host={host} case={case:?} view={label} samples={} ms={:.3} omitted={}",
+                "MATERIAL BENCH host={host} case={case:?} dim={label} samples={} ms={:.3} omitted={}",
                 samples,
                 elapsed.as_secs_f64() * 1000.0,
                 sampling.omitted_interface
