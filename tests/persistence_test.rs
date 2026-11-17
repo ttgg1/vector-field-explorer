@@ -9,6 +9,7 @@ use vector_field_explorer::VfApp;
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::induction::{InductionCase, InductionScene};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::plane::DIM_ALPHA;
@@ -2101,4 +2102,102 @@ fn global_reset_clears_source_scene_and_sampling_cache() {
         FieldMode::Formula,
         "global reset returns to the formula adapter",
     );
+}
+
+#[test]
+fn induction_scene_round_trips_and_legacy_defaults_to_formula() {
+    let scene = InductionScene {
+        case: InductionCase::Solenoid,
+        center: DVec3::new(0.5, -1.0, 2.0),
+        axis: DVec3::Y,
+        radius: 0.5,
+        length: 2.0,
+        turns: 8,
+        amplitude: 2.0,
+        frequency: 0.125,
+        display: SourceDisplay::Magnetic,
+        allow_inaccurate: true,
+    };
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Induction);
+    assert!(state.set_induction_scene(scene.clone()));
+
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.field_mode, FieldMode::Induction);
+    assert_eq!(record.induction_case, "solenoid");
+    assert_eq!(record.induction_center, [0.5, -1.0, 2.0]);
+    assert_eq!(record.induction_axis, [0.0, 1.0, 0.0]);
+    assert_eq!(record.induction_radius, 0.5);
+    assert_eq!(record.induction_length, 2.0);
+    assert_eq!(record.induction_turns, 8);
+    assert_eq!(record.induction_amplitude, 2.0);
+    assert_eq!(record.induction_frequency, 0.125);
+    assert_eq!(record.induction_display, SourceDisplay::Magnetic);
+    assert!(record.induction_allow_inaccurate);
+
+    let json = serde_json::to_string(&record).unwrap();
+    let back: ViewRecord = serde_json::from_str(&json).unwrap();
+    let mut restored = State::new(true);
+    let mut controls = Controls::new();
+    back.restore(&mut restored, &mut controls);
+    assert_eq!(restored.field_mode, FieldMode::Induction);
+    assert_eq!(restored.induction, scene);
+    assert!(restored.induction_error.is_none());
+
+    let legacy: ViewRecord = serde_json::from_str("{}").unwrap();
+    let mut legacy_state = State::new(false);
+    legacy.restore(&mut legacy_state, &mut Controls::new());
+    assert_eq!(legacy_state.field_mode, FieldMode::Formula);
+    assert_eq!(legacy_state.induction, InductionScene::default());
+    assert!(legacy_state.source_notice.is_none());
+    assert!(
+        legacy_state.induction_error.is_none(),
+        "an absent induction payload is valid and silent",
+    );
+}
+
+#[test]
+fn malformed_induction_fields_fall_back_and_report_the_error() {
+    let text = r#"{
+        "field_mode": "Induction",
+        "induction_case": "bogus",
+        "induction_center": [0.0, 0.0, 0.0],
+        "induction_axis": [0.0, 0.0, 2.0],
+        "induction_radius": -1.0,
+        "induction_frequency": -2.0
+    }"#;
+    let record: ViewRecord = serde_json::from_str(text).unwrap();
+    let mut state = State::new(true);
+    record.restore(&mut state, &mut Controls::new());
+    assert_eq!(state.induction, InductionScene::default());
+    assert!(
+        state
+            .induction_error
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains("induction"),
+        "the induction panel/status slot carries the reason: {:?}",
+        state.induction_error,
+    );
+    assert!(state.source_notice.is_none());
+}
+
+#[test]
+fn global_reset_clears_induction_cache_and_restores_defaults() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Induction);
+    let mut scene = app.state.induction.clone();
+    scene.radius = 1.75;
+    assert!(app.state.set_induction_scene(scene));
+    app.test_harness().advance_simulation();
+    assert!(app.test_harness().induction_prepared_arc().is_some());
+
+    app.test_harness().reset_all();
+
+    assert_eq!(app.state.field_mode, FieldMode::Formula);
+    assert_eq!(app.state.induction, InductionScene::default());
+    assert!(app.state.induction_prepared.is_none());
+    assert!(app.state.induction_sampling.is_none());
+    assert!(app.state.induction_error.is_none());
 }

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
+use crate::induction::{InductionCase, InductionScene};
 use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
     DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
@@ -28,7 +29,7 @@ use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
 use crate::viewmodel::{ArrowLengthMode, LeftClickAction, State, StreamlineSeedMode};
-use glam::Vec3;
+use glam::{DVec3, Vec3};
 
 /// Everything the app remembers across restarts. `style` is a required field
 /// on purpose: a ticket-07 record (a bare `AppStyle`) must *fail* this decode
@@ -194,6 +195,30 @@ pub struct ViewRecord {
     /// restores the opt-in; every other value becomes false.
     #[serde(default, deserialize_with = "deserialize_bool_or_false")]
     pub source_allow_inaccurate: bool,
+    /// The durable induction case token: `current_loop` or `solenoid`. Missing
+    /// on a legacy record; the default is the valid current-loop scene.
+    #[serde(default = "default_induction_case")]
+    pub induction_case: String,
+    /// Induction conductor center (design §8). Validated on restore.
+    #[serde(default = "default_induction_center")]
+    pub induction_center: [f64; 3],
+    /// Induction conductor axis; must be finite and unit length.
+    #[serde(default = "default_induction_axis")]
+    pub induction_axis: [f64; 3],
+    #[serde(default = "default_induction_radius")]
+    pub induction_radius: f64,
+    #[serde(default)]
+    pub induction_length: f64,
+    #[serde(default = "default_induction_turns")]
+    pub induction_turns: u32,
+    #[serde(default = "default_induction_amplitude")]
+    pub induction_amplitude: f64,
+    #[serde(default = "default_induction_frequency")]
+    pub induction_frequency: f64,
+    #[serde(default)]
+    pub induction_display: SourceDisplay,
+    #[serde(default, deserialize_with = "deserialize_bool_or_false")]
+    pub induction_allow_inaccurate: bool,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -268,6 +293,16 @@ impl ViewRecord {
             source_display: state.sources.display,
             source_softening: state.sources.softening,
             source_allow_inaccurate: state.sources.allow_inaccurate,
+            induction_case: induction_case_label(state.induction.case).to_string(),
+            induction_center: state.induction.center.to_array(),
+            induction_axis: state.induction.axis.to_array(),
+            induction_radius: state.induction.radius,
+            induction_length: state.induction.length,
+            induction_turns: state.induction.turns,
+            induction_amplitude: state.induction.amplitude,
+            induction_frequency: state.induction.frequency,
+            induction_display: state.induction.display,
+            induction_allow_inaccurate: state.induction.allow_inaccurate,
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -367,11 +402,17 @@ impl ViewRecord {
         scene.set_allow_inaccurate(self.source_allow_inaccurate);
         let valid_entries = scene.entries.len();
         let requested_sources = self.field_mode == FieldMode::Sources;
+        let requested_induction = self.field_mode == FieldMode::Induction;
+        let restored_induction = self.restored_induction_scene();
+        let induction_valid = restored_induction.is_ok();
         state.set_source_scene(scene);
         // A saved Sources mode without any usable entry cannot draw anything;
-        // fall back to Formula instead of presenting an empty source field.
+        // an invalid saved induction scene cannot either. Both fall back to
+        // Formula instead of presenting an empty field.
         state.set_field_mode(if requested_sources && valid_entries > 0 {
             FieldMode::Sources
+        } else if requested_induction && induction_valid {
+            FieldMode::Induction
         } else {
             FieldMode::Formula
         });
@@ -379,7 +420,49 @@ impl ViewRecord {
         if valid_entries != self.source_entries.len() {
             state.source_notice = Some("Some saved sources were invalid and were skipped".into());
         }
+        // The induction scene restores after the mode so its validation result
+        // owns `induction_error`; a bad payload falls back to the valid default
+        // scene and never fails startup.
+        match restored_induction {
+            Ok(scene) => {
+                let _ = state.set_induction_scene(scene);
+                state.induction_prepared = None;
+                state.induction_sampling = None;
+            }
+            Err(error) => {
+                state.induction = InductionScene::default();
+                state.induction_prepared = None;
+                state.induction_sampling = None;
+                state.induction_error = Some(error);
+            }
+        }
         state.mark_dirty();
+    }
+
+    /// Rebuild the persisted induction scene. Every field is serde-defaulted,
+    /// so an old payload yields the valid default scene; unknown case tokens
+    /// and invalid numbers are reported instead of silently poisoning the
+    /// sampler.
+    fn restored_induction_scene(&self) -> Result<InductionScene, String> {
+        let case = match self.induction_case.as_str() {
+            "current_loop" => InductionCase::CurrentLoop,
+            "solenoid" => InductionCase::Solenoid,
+            other => return Err(format!("induction case is not recognized: {other}")),
+        };
+        let scene = InductionScene {
+            case,
+            center: DVec3::from_array(self.induction_center),
+            axis: DVec3::from_array(self.induction_axis),
+            radius: self.induction_radius,
+            length: self.induction_length,
+            turns: self.induction_turns,
+            amplitude: self.induction_amplitude,
+            frequency: self.induction_frequency,
+            display: self.induction_display,
+            allow_inaccurate: self.induction_allow_inaccurate,
+        };
+        scene.validate()?;
+        Ok(scene)
     }
 }
 
@@ -421,6 +504,42 @@ fn default_proportional_exponent() -> f32 {
 /// The `source_softening` serde default: the evaluator's historical `0.1`.
 fn default_source_softening() -> f64 {
     0.1
+}
+
+/// The induction scene defaults (design §8): a valid, unsampled current loop.
+fn default_induction_case() -> String {
+    "current_loop".to_string()
+}
+
+fn default_induction_center() -> [f64; 3] {
+    [0.0, 0.0, 0.0]
+}
+
+fn default_induction_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
+}
+
+fn default_induction_radius() -> f64 {
+    1.0
+}
+
+fn default_induction_turns() -> u32 {
+    1
+}
+
+fn default_induction_amplitude() -> f64 {
+    1.0
+}
+
+fn default_induction_frequency() -> f64 {
+    0.25
+}
+
+fn induction_case_label(case: InductionCase) -> &'static str {
+    match case {
+        InductionCase::CurrentLoop => "current_loop",
+        InductionCase::Solenoid => "solenoid",
+    }
 }
 
 /// Decode the source list element by element so one wrong-typed or corrupt

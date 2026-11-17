@@ -757,7 +757,12 @@ never destroyed, only sampled against the 20³ (3D) or 80² (2D slice) cap. Indu
 consumer only while `is_animated()`; the app starts no second clock, draws no
 particles/streamlines/clicks, and pauses with the existing scalar-plot rule.
 `snapshot` returns arrows and empty line/trail/dot geometry; `rebuild_scene`
-composes the backdrop, one conductor glyph and those arrows.
+composes the backdrop, one conductor glyph and those arrows. `ViewRecord`
+persists the case token, center, axis, radius/length/turns, amplitude/frequency,
+display and opt-in; restore revalidates the scene and reports failures through
+`induction_error`. Exports capture `induction_export_provenance` at request
+time, covering the model line, accuracy/unavailable counts and missing or
+invalid sampling.
 
 **Pinned by.** [tests/induction_app_test.rs](../tests/induction_app_test.rs):
 caps and mode preservation, clock consumption and pause, time-only `Arc`
@@ -767,9 +772,7 @@ composition, density restore on leaving, and mirrored clock time. The model
 itself is pinned by `tests/induction_test.rs` as above.
 
 **Limitations.** CPU-only, quasistatic and softened: no displacement current,
-retardation or physical singular limit. The induction UI, persistence/export
-provenance, docs and integrated cap benchmark are later tasks. The cap benchmark
-is recorded in
+retardation or physical singular limit. The cap benchmark is recorded in
 [docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
 
 #### `src/source_presets.rs` — built-in source-scene presets
@@ -1349,8 +1352,8 @@ decisions that do not need a window.
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
   `source_sampling` and `reset_sources`.
 - Induction mode fields: `induction`, `induction_prepared`,
-  `induction_sampling` and `induction_error`; `set_induction_scene` and
-  `refresh_induction`.
+  `induction_sampling` and `induction_error`; `set_induction_scene`,
+  `refresh_induction` and `reset_induction`.
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1378,7 +1381,9 @@ decisions that do not need a window.
   edits never invalidate source or induction state. Entering Sources or toggling
   its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
   `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
-  has no transition bypass.
+  has no transition bypass. Global reset calls `reset_sources` and
+  `reset_induction` before selecting Formula; each restores its default scene
+  and clears its caches/error without touching the other adapter or the clock.
 - `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
   source/induction cache, source mode stores a fresh `SourceSampling`, induction
   mode re-prepares only on a changed `InductionKey` and otherwise rescales the
@@ -1466,7 +1471,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1491,8 +1496,16 @@ storage key, with migration and corruption tolerance.
    the accuracy opt-in is true only for an exact stored `true`, and Sources mode
    falls back to Formula when no valid entry remains. `formula` and the source
    scene never overwrite each other.
+10. Induction restores after the mode: the case token, center, axis and
+    parameters are revalidated through `InductionScene::validate`. Invalid
+    fields (unknown case, non-finite values, negative radius/frequency,
+    non-unit axis, or an invalid solenoid) restore the valid default scene,
+    clear the prepared/sampling caches and set `induction_error`; Induction
+    mode then falls back to Formula. An absent legacy induction payload is the
+    valid default scene and sets no error. The shared `source_softening` field
+    remains the one softening value.
 
-**Tested by.** `tests/persistence_test.rs` (51 tests):
+**Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -1510,7 +1523,10 @@ storage key, with migration and corruption tolerance.
 `malformed_source_records_are_skipped_without_losing_other_settings`,
 `a_record_without_valid_sources_forces_formula_mode`,
 `source_records_keep_order_and_skip_invalid_numbers`,
-`global_reset_clears_source_scene_and_sampling_cache`, and the
+`global_reset_clears_source_scene_and_sampling_cache`,
+`induction_scene_round_trips_and_legacy_defaults_to_formula`,
+`malformed_induction_fields_fall_back_and_report_the_error`,
+`global_reset_clears_induction_cache_and_restores_defaults`, and the
 restore/sanitize tests.
 
 **Limitations.** There is no explicit schema version number; compatibility is a
@@ -2113,25 +2129,41 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source export warning and metadata contract
+#### `src/export_provenance.rs` — source and induction export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
-derived from the validated `SourceScene` plus the cached `SourceSampling`; it
-never samples the field or creates vector data.
+derived from the validated `SourceScene` plus cached `SourceSampling`, or from
+the durable `InductionScene` plus shared softening and cached
+`InductionSampling`; it never samples the field or creates vector data.
 
-**Public API.** `ExportProvenance { warning_lines, metadata, source_mode }`,
-`source_export_provenance(mode, scene, sampling)`, `provenance_lines`,
-`provenance_metadata`, and the exact ASCII copy constants `MODEL_LINE`,
-`ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`, `NO_SAMPLING_LINE`.
+**Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
+induction_mode }`, `source_export_provenance(mode, scene, sampling)`,
+`induction_export_provenance(mode, scene, softening, sampling)`,
+`provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
+`MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
+`NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
+`INDUCTION_INVALID_LINE`.
 
 **Invariants.**
-- Formula mode returns `None`; Sources mode always returns `Some`.
+- Formula mode returns `None` from both helpers; Sources/Induction always return
+  `Some` for their own mode (`source_mode` / `induction_mode` respectively).
 - The softened-model line is always first. Missing sampling adds
-  `Source sampling unavailable`; a validation error adds the invalid line;
-  accuracy/unavailable lines appear only when their counts are nonzero.
-- `allow_inaccurate` changes the drawn count only; it never removes a warning.
-- Metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
+  `Source sampling unavailable` or `Induction sampling unavailable`; a
+  validation error adds the matching invalid line; accuracy/unavailable lines
+  appear only when their counts are nonzero.
+- Induction's model line is
+  `Induction - quasistatic axisymmetric softened model - a = {softening}` and
+  its metadata is exactly `vfe.model = quasistatic-axisymmetric-faraday`,
+  `vfe.induction_case`, `vfe.waveform`, `vfe.waveform_derivative`,
+  `vfe.amplitude`, `vfe.frequency`, `vfe.softening`, `vfe.display`, the three
+  count keys and `vfe.validation_error` only when present. Native CAS
+  derivative text is never exported.
+- A cached induction pass built at a different softening is treated as
+  unavailable, so counts never pair with a different model `a`.
+- `allow_inaccurate` changes the drawn count only; it never removes a warning
+  or relaxes a cap. Non-finite sampled values never enter warnings/metadata.
+- Source metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
   `vfe.accuracy_not_met_total`, `vfe.accuracy_not_met_drawn`,
   `vfe.unavailable`, and `vfe.validation_error` when present.
 
@@ -2139,7 +2171,10 @@ never samples the field or creates vector data.
 (`formula_exports_have_no_source_provenance`,
 `source_warning_lines_and_metadata_are_exact_and_separate`,
 `opt_in_adds_visible_data_but_never_removes_the_warning`,
-`missing_or_invalid_sampling_keeps_the_warning`).
+`missing_or_invalid_sampling_keeps_the_warning`) and
+`tests/induction_export_test.rs` (exact induction lines/metadata, missing and
+invalid sampling, opt-in/caps, decoded PNG banner/tEXt bytes and visible SVG
+text/metadata).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 
@@ -2197,10 +2232,10 @@ download paths.
 `png_request_pending`, `pending_png_provenance`, `pending_svg_provenance`,
 `sender`, `tick`, `fail`, `toast_text`, `toast`).
 `VfApp::request_png_export`/`request_svg_export` capture
-`source_export_provenance()` at request time; the viewport consumes it through
-the `take_*_with_provenance` variants. A Source-mode request made without
-provenance derives the fallback instead of exporting silently. Scalar plot
-captures always pass `None`.
+`field_export_provenance()` at request time; the viewport consumes it through
+the `take_*_with_provenance` variants. A Source- or Induction-mode request made
+without provenance derives the fallback instead of exporting silently. Scalar
+plot captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)

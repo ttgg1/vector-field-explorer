@@ -533,6 +533,17 @@ impl State {
         true
     }
 
+    /// Global reset's induction half: drop the cache and restore the default
+    /// valid scene. Formula/Sources durable state and the shared clock are
+    /// untouched; the caller selects Formula mode.
+    pub fn reset_induction(self: &mut State) -> bool {
+        self.induction = crate::induction::InductionScene::default();
+        self.induction_prepared = None;
+        self.induction_sampling = None;
+        self.induction_error = None;
+        self.mark_dirty()
+    }
+
     /// Rebuild the induction cache. A changed geometry/domain/grid/plane key
     /// re-prepares the unit-current cache; a time-only change rescales it. The
     /// prepared `Arc` identity is deliberately preserved on time-only frames.

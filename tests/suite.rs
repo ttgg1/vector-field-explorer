@@ -48,6 +48,7 @@ mod fonts_test;
 mod help_overlay_test;
 mod induction_app_test;
 mod induction_bench_test;
+mod induction_export_test;
 mod induction_panel_test;
 mod induction_test;
 mod layout_test;

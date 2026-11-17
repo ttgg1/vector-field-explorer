@@ -183,7 +183,7 @@ impl VfApp {
         let Some(provenance) = self.screenshot.take_svg_request_with_provenance() else {
             return SvgExportRoute::NoRequest;
         };
-        let provenance = provenance.or_else(|| self.source_export_provenance());
+        let provenance = provenance.or_else(|| self.field_export_provenance());
         self.svg_export_provenance = provenance;
         match self.svg_block_reason() {
             Some(message) => {
