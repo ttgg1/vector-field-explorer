@@ -478,52 +478,8 @@ impl VfApp {
         } else {
             Vec::new()
         };
-        let combined = if self.state.mode_3d {
-            let cached = self.scene.as_vector().expect("vector branch");
-            let mut instances =
-                combined_instances(cached.arrows.as_slice(), cached.dots.as_slice());
-            instances.extend(ode_markers.iter().copied());
-            sort_scene_back_to_front(&mut instances, view);
-            Arc::new(instances)
-        } else {
-            Arc::new(Vec::new())
-        };
-        let cached = self.scene.as_vector().expect("vector branch");
-        let arrows = if self.state.mode_3d {
-            Arc::clone(&cached.arrows)
-        } else {
-            Arc::new(sorted_arrows_back_to_front(cached.arrows.as_slice(), view))
-        };
-        let trails = Arc::new(sorted_lines_back_to_front(cached.trails.as_slice(), view));
-        let lines = Arc::clone(&cached.lines);
-        let dots = if !self.state.mode_3d && !ode_markers.is_empty() {
-            let mut dots = cached.dots.as_ref().clone();
-            dots.extend(ode_markers);
-            Arc::new(dots)
-        } else {
-            Arc::clone(&cached.dots)
-        };
-        let arrow_style = cached.arrow_style;
-        let arrow_style_2d = cached.arrow_style_2d;
-        let arrow_params = cached.arrow_params;
-        if self.state.field_mode != FieldMode::Ode
-            && let Some(cached) = self.scene.as_vector_mut()
-        {
-            // Ode's combined stream carries per-frame markers; never write it
-            // back into the cached scene.
-            cached.combined = Arc::clone(&combined);
-        }
-        SceneGPU {
-            arrows,
-            lines,
-            trails,
-            dots,
-            combined,
-            arrow_style,
-            arrow_style_2d,
-            arrow_params,
-            mode_3d: self.state.mode_3d,
-        }
+        let cached = self.scene.as_vector_mut().expect("vector branch");
+        assemble_vector_scene(&self.state, cached, &ode_markers, view)
     }
 
     /// Integration-test seam: assemble the scene exactly as `frame_viewport`

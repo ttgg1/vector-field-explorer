@@ -1,8 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
-use glam::{Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
+use crate::animation::AnimationError;
+use crate::animation_scene::AnimationSnapshot;
 use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use crate::domain::Domain;
 use crate::fly_camera::{
@@ -415,6 +417,36 @@ impl Default for VfApp {
     }
 }
 
+impl AnimationSnapshot {
+    /// Copy the live app's animatable state without mutating it.
+    pub fn capture(app: &VfApp) -> Result<Self, AnimationError> {
+        let clear = {
+            let visuals = if app.style.theme_dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            };
+            egui::Rgba::from(visuals.panel_fill)
+                .to_array()
+                .map(f64::from)
+        };
+        Ok(Self::from_parts(
+            app.state.clone(),
+            app.particles.clone(),
+            app.orbit,
+            app.fly,
+            clear,
+        ))
+    }
+}
+
+impl VfApp {
+    /// Snapshot the current view for a later animation export.
+    pub fn animation_snapshot(&self) -> Result<AnimationSnapshot, AnimationError> {
+        AnimationSnapshot::capture(self)
+    }
+}
+
 /// Fold the domain-matched backdrop, the grid-seeded streamlines and the click
 /// bursts into the one line collection the viewport paints. Rebuilt only on a
 /// scene rebuild or a click, so the per-frame path still clones an `Arc`. The
@@ -462,4 +494,158 @@ pub fn compose_lines_with_frame(
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
     lines
+}
+
+/// Compose the vector scene's line collection exactly as the live viewport
+/// does: reference grid/axes, the formula or click streamlines, then the
+/// mode-owned source/induction glyphs. Returns the glyph count so the app can
+/// keep its live status readout.
+pub(crate) fn compose_vector_lines(
+    state: &State,
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+) -> (Vec<LineInstanceGPU>, usize) {
+    let mut lines = compose_lines_with_frame(
+        flow,
+        clicks,
+        &state.scene_domain(),
+        state.is_3d(),
+        state.plane_frame(),
+        state.show_grid,
+        state.show_coordinate_system,
+    );
+    let glyphs = match state.field_mode {
+        FieldMode::Sources => {
+            let glyphs = crate::source_glyph::source_glyphs(
+                &state.sources,
+                &state.scene_domain(),
+                state.plane_frame().as_ref(),
+            );
+            crate::source_glyph::source_glyph_lines(&glyphs, &state.scene_domain())
+        }
+        FieldMode::Induction => {
+            let mut scene = crate::source_scene::SourceScene::default();
+            scene.entries.push(crate::source_scene::SourceEntry {
+                enabled: true,
+                source: state.induction.unit_source(),
+            });
+            let glyphs = crate::source_glyph::source_glyphs(
+                &scene,
+                &state.scene_domain(),
+                state.plane_frame().as_ref(),
+            );
+            crate::source_glyph::source_glyph_lines(&glyphs, &state.scene_domain())
+        }
+        FieldMode::Formula | FieldMode::Materials | FieldMode::Ode => Vec::new(),
+    };
+    let count = glyphs.len();
+    lines.extend(glyphs);
+    (lines, count)
+}
+
+/// The colour range shared by the field scene and its particle dots, matching
+/// the live rebuild: Induction/Materials use their own sampling, everything
+/// else samples the active field.
+pub(crate) fn scene_dots_range(state: &State) -> (f32, f32) {
+    match state.field_mode {
+        FieldMode::Induction => state
+            .induction_sampling
+            .as_ref()
+            .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
+            .unwrap_or((0.0, 1.0)),
+        FieldMode::Materials => state
+            .material_sampling
+            .as_ref()
+            .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
+            .unwrap_or((0.0, 1.0)),
+        _ => state.color_range(&state.sample()),
+    }
+}
+
+/// Build the live dot and trail instances for a cloud. Shared by the live
+/// app and the detached animation snapshot so both paint identical particles.
+pub(crate) fn particle_scene_instances(
+    state: &State,
+    particles: &Particles,
+    dots_range: (f32, f32),
+) -> (Arc<Vec<ArrowInstanceGPU>>, Arc<Vec<LineInstanceGPU>>) {
+    let appearance = state.particle_appearance.sanitized();
+    let spacing = state.spacing();
+    let flow = state.scene_flow();
+    let domain = state.scene_domain();
+    let speeds = speed_range(particles);
+    let dots = Arc::new(dot_instances_at(
+        particles,
+        &flow,
+        &domain,
+        state.colormap,
+        dots_range,
+        &appearance,
+        speeds,
+        state.particle_radius(spacing),
+        state.time,
+    ));
+    let trails = Arc::new(trail_instances_at(
+        particles,
+        &flow,
+        state.colormap,
+        dots_range,
+        &appearance,
+        speeds,
+        spacing,
+        state.time,
+    ));
+    (dots, trails)
+}
+
+/// Assemble one frame's renderer scene from the cached vector collections.
+/// Ticket 62: the combined stream is the single sorted source for 3D. The
+/// arrows stay frame-invariant (no write-back), so equal-depth ties are
+/// deterministic. 2D keeps its arrows-then-dots path and paints a stable
+/// far-to-near copy of the arrows.
+pub(crate) fn assemble_vector_scene(
+    state: &State,
+    cached: &mut SceneGPU,
+    ode_markers: &[ArrowInstanceGPU],
+    view: &Mat4,
+) -> SceneGPU {
+    let combined = if state.mode_3d {
+        let mut instances = combined_instances(cached.arrows.as_slice(), cached.dots.as_slice());
+        instances.extend(ode_markers.iter().copied());
+        sort_scene_back_to_front(&mut instances, view);
+        Arc::new(instances)
+    } else {
+        Arc::new(Vec::new())
+    };
+    let arrows = if state.mode_3d {
+        Arc::clone(&cached.arrows)
+    } else {
+        Arc::new(sorted_arrows_back_to_front(cached.arrows.as_slice(), view))
+    };
+    let trails = Arc::new(sorted_lines_back_to_front(cached.trails.as_slice(), view));
+    let lines = Arc::clone(&cached.lines);
+    let dots = if !state.mode_3d && !ode_markers.is_empty() {
+        let mut dots = cached.dots.as_ref().clone();
+        dots.extend_from_slice(ode_markers);
+        Arc::new(dots)
+    } else {
+        Arc::clone(&cached.dots)
+    };
+    let arrow_style = cached.arrow_style;
+    let arrow_style_2d = cached.arrow_style_2d;
+    let arrow_params = cached.arrow_params;
+    if state.field_mode != FieldMode::Ode {
+        cached.combined = Arc::clone(&combined);
+    }
+    SceneGPU {
+        arrows,
+        lines,
+        trails,
+        dots,
+        combined,
+        arrow_style,
+        arrow_style_2d,
+        arrow_params,
+        mode_3d: state.mode_3d,
+    }
 }

@@ -305,6 +305,38 @@ fake-ffmpeg process tests are Unix-only.
 frames; dithering is intentionally off. Video is native-only and requires a
 user-installed ffmpeg.
 
+#### `src/animation_scene.rs` — detached animation frame source
+
+**Purpose / API.** Owns the detached copy an animation export renders from:
+`AnimationSnapshot { state, particles, orbit, fly, clear }`,
+`AnimationFrame { scene, view_proj, eye }`,
+`AnimationSnapshot::{from_parts, capture, frame_at}`, and
+`VfApp::animation_snapshot`. `State: Clone` and `Particles: Clone` make the copy;
+`State` holds no GPU handles.
+
+**Invariants.** `capture` clones the live app state, cloud, orbit/fly pose and
+theme background without mutating playback. `frame_at(time, dt, first)`
+validates finite inputs, mirrors `time` into the detached state, marks it dirty,
+rebuilds through the live `snapshot_if_dirty` seam, and composes lines, glyphs
+and particles with the same shared app functions as the live viewport.
+Formula and Induction are supported; Sources, Materials and Ode are rejected as
+non-animatable. `first` keeps the captured particle positions; later frames
+advance by exactly `dt` through `particles::advance_exact` (1/120 substeps plus
+a remainder), never the GUI `MAX_STEP` clamp. Only Formula/Induction scenes with
+an enabled particle target advance a cloud. Scene ordering (3D combined sort,
+2D arrows-then-dots, trails behind) is the shared live assembly; `view_proj`
+uses the snapshot camera and a deterministic square aspect because the snapshot
+carries no viewport dimensions.
+
+**Pinned by.** [tests/animation_scene_test.rs](../tests/animation_scene_test.rs):
+time-dependent Formula sampling changes the frame, a 0.5 s particle frame moves
+by 0.5 world units (not one GUI-clamped step), and direct 60-substep advection
+matches each exact substep time.
+
+**Limitations.** The snapshot does not capture transient click seeds or the live
+viewport aspect. Induction is GUI-only by design; CLI animation covers Formula
+and particles.
+
 #### `src/cli.rs` — native plot export configuration and dispatch
 
 **Purpose.** Parse one-shot export flags and strict JSON, overlay config with
@@ -616,10 +648,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
   click bursts are retraced against the new domain/formula and then composed
-  with the backdrop. Source-mode rebuilds append `source_glyph_lines` for the
-  current `plane_frame` and record their segment count; the Formula branch
-  appends none. `source_glyph_line_count` and `viewport_line_count` expose the
-  result to the doc-hidden integration harness.
+  with the backdrop by `app::compose_vector_lines`, which also appends
+  mode-owned glyphs and reports their count. The Formula branch appends none.
+  `source_glyph_line_count` and `viewport_line_count` expose the result to the
+  doc-hidden integration harness.
 - `advance_particles` calls `retarget` only with the current target. A changed
   target trims or spawns only the difference; a click burst above the count
   survives until the count changes. Off or a two-component field produces
@@ -660,7 +692,9 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
   folded into `top_bar::wheel_zoom` by egui.
 - 3D builds the combined arrow+particle stream and sorts it far-to-near; 2D
   sorts only arrows and never reads `combined`; 2D plane-slice trails are sorted
-  and painted behind them, while ordinary two-component 2D has no trails.
+  and painted behind them, while ordinary two-component 2D has no trails. The
+  ordering lives in `app::assemble_vector_scene`, shared with the detached
+  animation snapshot.
 - Ode appends current-time marker dots to a copy of the 2D `dots` list or to
   the 3D combined stream before the sort. The cached scene is never mutated;
   markers use `PARTICLE_KIND` and the fixed ODE palette.
@@ -2075,8 +2109,8 @@ advection, and the dot/trail instance builders.
 `ParticleAppearance` (+ `sanitized`); `Particles` (`with_positions`, `history`
 test seams); `target_count`, `effective_particle_count`, `count`,
 `effective_trail_len`, `clear`, `spawn`, `resize`, `retarget`, `spawn_at`;
-`AdvectSettings`, `advect`, `speed_range`, `dot_instances`, `trail_instances`,
-`DOT_QUAD_CORNERS`, `dot_billboard_corners`.
+`AdvectSettings`, `advect`, `advance_exact`, `speed_range`, `dot_instances`,
+`trail_instances`, `DOT_QUAD_CORNERS`, `dot_billboard_corners`.
 
 **Invariants.**
 - The cloud has a constant size between target changes. A particle that leaves
@@ -2093,6 +2127,10 @@ test seams); `target_count`, `effective_particle_count`, `count`,
   no-op; speed is `|q - p| / dt`; trails append and trim to
   `effective_trail_len`; stagnation is judged on speed, not per-step
   displacement; a respawn resets trail/stuck/speed.
+- `advance_exact` splits an exported frame step into
+  `ANIMATION_PARTICLE_SUBSTEP` (1/120 s) steps plus a final remainder and calls
+  `advect` at each substep's exact time. It deliberately bypasses the GUI
+  clock's `MAX_STEP` clamp; non-finite or non-positive steps are no-ops.
 - Trails are capped at 32 points per particle and 100 000 points across the
   cloud; trail alpha fades toward the tail; width scales with grid spacing.
 - Dot instances use `origin.w = PARTICLE_KIND`, `dir_len.w = radius`; RGB follows

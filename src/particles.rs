@@ -22,6 +22,7 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+use crate::animation::ANIMATION_PARTICLE_SUBSTEP;
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::flow::Flow;
@@ -180,7 +181,12 @@ impl ParticleAppearance {
             color_mode: self.color_mode,
             // The picker edits RGB only; alpha is ignored at render, so the
             // stored colour is always opaque (ticket 48 fix round).
-            fixed_color: [self.fixed_color[0], self.fixed_color[1], self.fixed_color[2], 255],
+            fixed_color: [
+                self.fixed_color[0],
+                self.fixed_color[1],
+                self.fixed_color[2],
+                255,
+            ],
             trail_len: self.trail_len.min(MAX_TRAIL_LEN),
             trail_fade: finite_clamped(
                 self.trail_fade,
@@ -207,7 +213,11 @@ impl ParticleAppearance {
 
 /// Clamp a finite value into `lo..=hi`; a non-finite value takes `fallback`.
 fn finite_clamped(value: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
-    if value.is_finite() { value.clamp(lo, hi) } else { fallback }
+    if value.is_finite() {
+        value.clamp(lo, hi)
+    } else {
+        fallback
+    }
 }
 
 /// Park/Miller LCG constants: 64-bit multiplicative congruential, all u64
@@ -384,9 +394,12 @@ pub fn clear(particles: &mut Particles) {
 /// Inclusive axis-aligned containment (the `Domain` type has no `contains`
 /// method), the same rule the streamline tracer uses.
 fn inside(domain: &Domain, p: Vec3) -> bool {
-    p.x >= domain.min.x && p.x <= domain.max.x
-        && p.y >= domain.min.y && p.y <= domain.max.y
-        && p.z >= domain.min.z && p.z <= domain.max.z
+    p.x >= domain.min.x
+        && p.x <= domain.max.x
+        && p.y >= domain.min.y
+        && p.y <= domain.max.y
+        && p.z >= domain.min.z
+        && p.z <= domain.max.z
 }
 
 /// Flow at `p` and time `t`. A missing or non-finite evaluation reads as the
@@ -401,7 +414,9 @@ fn flow_at<F: Flow + ?Sized>(flow: &F, p: Vec3, t: f32) -> Vec3 {
 /// One step of the cloud's pseudo-random stream: the LCG state itself, kept in
 /// one function so every caller advances the same way.
 fn lcg_next(state: u64) -> u64 {
-    state.wrapping_mul(LCG_MULTIPLIER).wrapping_add(LCG_INCREMENT)
+    state
+        .wrapping_mul(LCG_MULTIPLIER)
+        .wrapping_add(LCG_INCREMENT)
 }
 
 /// Three independent 21-bit slices of one LCG output mapped onto [-1, 1): one
@@ -410,7 +425,11 @@ fn unit_triple(z: u64) -> (f32, f32, f32) {
     let a = ((z >> 42) & LCG_SLICE) as u32 as f32;
     let b = ((z >> 21) & LCG_SLICE) as u32 as f32;
     let c = (z & LCG_SLICE) as u32 as f32;
-    (a * UNIT_SCALE - 1.0, b * UNIT_SCALE - 1.0, c * UNIT_SCALE - 1.0)
+    (
+        a * UNIT_SCALE - 1.0,
+        b * UNIT_SCALE - 1.0,
+        c * UNIT_SCALE - 1.0,
+    )
 }
 
 /// A point in the domain's inset box: `center + jitter * band`, where `band`
@@ -468,9 +487,15 @@ fn rk4_step<F: Flow + ?Sized>(flow: &F, p: Vec3, h: f32, t: f32) -> Vec3 {
 pub fn spawn(particles: &mut Particles, domain: &Domain, count: usize, dimension: usize) {
     particles.align_parallel();
     let region = spawn_box(domain);
-    let band = if dimension == 3 { region.band } else { region.band * Vec3::new(1.0, 1.0, 0.0) };
+    let band = if dimension == 3 {
+        region.band
+    } else {
+        region.band * Vec3::new(1.0, 1.0, 0.0)
+    };
     let mut state = particles.rng;
-    particles.pos.reserve((particles.pos.len() + count).min(MAX_PARTICLES) - particles.pos.len());
+    particles
+        .pos
+        .reserve((particles.pos.len() + count).min(MAX_PARTICLES) - particles.pos.len());
     for _ in 0..count {
         if particles.pos.len() >= MAX_PARTICLES {
             break;
@@ -550,7 +575,11 @@ pub fn spawn_at(
         .into_iter()
         .filter(|extent| *extent > 0.0)
         .fold(f32::INFINITY, f32::min);
-    let reach = if smallest.is_finite() { CLICK_SPAWN_REACH * smallest } else { 0.0 };
+    let reach = if smallest.is_finite() {
+        CLICK_SPAWN_REACH * smallest
+    } else {
+        0.0
+    };
     let band = Vec3::new(reach, reach, if dimension == 3 { reach } else { 0.0 });
     let mut state = particles.rng;
     let mut added = 0;
@@ -697,12 +726,19 @@ pub fn advect<F: Flow + ?Sized>(
         MAX_STAGNATION_SECONDS,
         DEFAULT_STAGNATION_SECONDS,
     );
-    let settings = AdvectSettings { stagnation_seconds: threshold, ..settings };
+    let settings = AdvectSettings {
+        stagnation_seconds: threshold,
+        ..settings
+    };
     let mut state = particles.rng;
     for i in 0..particles.pos.len() {
         state = lcg_next(state);
         let p = particles.pos[i];
-        let q = if inside(domain, p) { rk4_step(flow, p, dt, settings.time) } else { Vec3::splat(NAN_F32) };
+        let q = if inside(domain, p) {
+            rk4_step(flow, p, dt, settings.time)
+        } else {
+            Vec3::splat(NAN_F32)
+        };
         if !q.is_finite() || !inside(domain, q) {
             // A plane slice is a lower-dimensional space: a purely normal
             // field has exactly zero in-plane velocity, which must leave the
@@ -741,6 +777,41 @@ pub fn advect<F: Flow + ?Sized>(
     particles.rng = state;
 }
 
+/// Advance with an exact exported frame step, never the GUI [`MAX_STEP`]
+/// clamp: split `dt` into [`ANIMATION_PARTICLE_SUBSTEP`] steps plus a final
+/// remainder, and evaluate the field at each substep's exact time.
+///
+/// [`MAX_STEP`]: crate::sim_clock::MAX_STEP
+pub fn advance_exact<F: Flow + ?Sized>(
+    particles: &mut Particles,
+    flow: &F,
+    domain: &Domain,
+    start_time: f32,
+    dt: f32,
+    settings: AdvectSettings,
+) {
+    if !(start_time.is_finite() && dt.is_finite() && dt > 0.0) {
+        return;
+    }
+    let mut time = f64::from(start_time);
+    let mut remaining = dt;
+    while remaining > 0.0 {
+        let step = remaining.min(ANIMATION_PARTICLE_SUBSTEP);
+        advect(
+            particles,
+            flow,
+            domain,
+            AdvectSettings {
+                dt: step,
+                time: time as f32,
+                ..settings
+            },
+        );
+        time += f64::from(step);
+        remaining -= step;
+    }
+}
+
 /// The observed speed range of the current cloud (ticket 48). `Speed`
 /// colouring auto-ranges to this each frame; an empty or all-equal cloud falls
 /// back to `0..1` so the ramp still has span.
@@ -756,7 +827,11 @@ pub fn speed_range(particles: &Particles) -> (f32, f32) {
             hi = hi.max(*speed);
         }
     }
-    if lo.is_finite() && hi.is_finite() && hi > lo { (lo, hi) } else { (0.0, 1.0) }
+    if lo.is_finite() && hi.is_finite() && hi > lo {
+        (lo, hi)
+    } else {
+        (0.0, 1.0)
+    }
 }
 
 /// The colour one dot or trail segment gets (ticket 48), in RGBA `0..1`.
@@ -822,7 +897,11 @@ pub fn dot_instances_at<F: Flow + ?Sized>(
 ) -> Vec<ArrowInstanceGPU> {
     let appearance = appearance.sanitized();
     let alpha = appearance.opacity;
-    let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
+    let radius = if radius.is_finite() {
+        radius.max(0.0)
+    } else {
+        0.0
+    };
     let mut dots = Vec::with_capacity(particles.pos.len().min(MAX_PARTICLES));
     for i in 0..particles.pos.len().min(MAX_PARTICLES) {
         let p = particles.pos[i];
@@ -870,7 +949,15 @@ pub fn dot_instances<F: Flow + ?Sized>(
     radius: f32,
 ) -> Vec<ArrowInstanceGPU> {
     dot_instances_at(
-        particles, flow, domain, colormap, color_range, appearance, speed_range, radius, 0.0,
+        particles,
+        flow,
+        domain,
+        colormap,
+        color_range,
+        appearance,
+        speed_range,
+        radius,
+        0.0,
     )
 }
 
@@ -890,7 +977,11 @@ pub fn trail_instances_at<F: Flow + ?Sized>(
     if effective < 2 {
         return Vec::new();
     }
-    let spacing = if spacing.is_finite() { spacing.max(0.0) } else { 0.0 };
+    let spacing = if spacing.is_finite() {
+        spacing.max(0.0)
+    } else {
+        0.0
+    };
     let width = appearance.trail_width * DOT_SPACING_FRACTION * spacing;
     let alpha = appearance.opacity.clamp(0.0, 1.0);
     let fade = appearance.trail_fade.clamp(0.0, 1.0);
@@ -945,7 +1036,14 @@ pub fn trail_instances<F: Flow + ?Sized>(
     spacing: f32,
 ) -> Vec<LineInstanceGPU> {
     trail_instances_at(
-        particles, flow, colormap, color_range, appearance, speed_range, spacing, 0.0,
+        particles,
+        flow,
+        colormap,
+        color_range,
+        appearance,
+        speed_range,
+        spacing,
+        0.0,
     )
 }
 
