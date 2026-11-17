@@ -141,7 +141,7 @@ _Avoid_: 2D slice
 **CAS**:
 The optional symbolic tool that differentiates formulas and derives gradient,
 divergence, and curl without solving equations. It edits the formula field only,
-never a source scene.
+never a source, induction, or ODE scene; it is disabled outside Formula.
 _Avoid_: solver, evaluator
 
 **Source scene**:
@@ -152,9 +152,9 @@ _Avoid_: source preset, source configuration
 
 **Field mode**:
 The exclusive choice among Formula (a typed vector expression), Sources (the
-editable source scene), and Induction (the Faraday teaching demo). Switching
-preserves every durable state and never merges them; loading a classic preset
-returns to Formula.
+editable source scene), Induction (the Faraday teaching demo), and Ode (the
+precomputed trajectory workbench). Switching preserves every durable state and
+never merges them; loading a classic preset returns to Formula.
 _Avoid_: source toggle, plot kind
 
 **Induction mode**:
@@ -175,6 +175,51 @@ The sinusoidal current `I(t) = amplitude * cos(2*pi*frequency*t)` and its
 analytic derivative. Zero amplitude or zero frequency makes the scene static and
 gives exactly zero induced E.
 _Avoid_: AC source, oscillator
+
+**ODE workbench**:
+The dedicated fourth concept mode for bounded dynamical-system teaching. It
+accepts typed 2D/3D first-order equations or integrates the current formula
+field, solves once with fixed-step RK4, and plays back precomputed trajectories
+on the shared clock with an x/y phase portrait and time-series charts. It is a
+trajectory viewer, not an adaptive or general solver.
+_Avoid_: ODE solver, solver mode
+
+**ODE scene**:
+The durable, persisted workbench configuration: source (typed equations or the
+current formula field), dimension, equation strings, seeds, duration, chart and
+visible time-series variables. It is never merged with a formula or source
+scene.
+_Avoid_: ODE preset, phase state
+
+**ODE seed**:
+One finite initial condition of the ODE scene, stored as a world position. Each
+seed produces its own trajectory and fixed palette colour; the scene allows up
+to eight. This is not a streamline seed, which starts field-tangent tracing.
+_Avoid_: initial point, streamline seed
+
+**Trajectory**:
+The precomputed solution curve for one ODE seed, stored as time-position
+samples. It is not a streamline, which is everywhere tangent to the spatial
+field.
+_Avoid_: streamline, path
+
+**RK4 step**:
+One fixed advance of the classical fourth-order Runge-Kutta integrator used by
+the ODE workbench, `h = 0.005`; production never adapts or subdivides it. The
+existing particle integrator is separate.
+_Avoid_: frame step, simulation tick
+
+**Phase portrait**:
+The ODE chart plotting trajectory state components against each other. The
+workbench draws the x/y projection, including x/y in a 3D scene; it is not a 3D
+phase cube.
+_Avoid_: phase plot, state plot
+
+**Time series** (ODE):
+The ODE chart plotting selected `x`, `y`, and/or `z` components against the
+integration time `t`, from the same precomputed samples as the phase portrait.
+It is not the shared playback clock.
+_Avoid_: waveform, trace
 
 **E/B display**:
 The Sources or Induction panel choice Electric, Magnetic or Both. Both draws E
@@ -248,9 +293,10 @@ The fading history of a particle's recent positions, drawn behind it.
 _Avoid_: trace, tail
 
 **Simulation clock**:
-The single time source for animated formulas, plots, particles, and induction
-fields. It owns the current simulation time, whether time is playing, and the
-speed multiplier.
+The single time source for animated formulas, plots, particles, induction
+fields, and ODE trajectory playback. It owns the current simulation time,
+whether time is playing, and the speed multiplier. ODE playback has no private
+timer or loop period of its own.
 _Avoid_: animation timer, per-feature clock
 
 **Scalar animation**:
@@ -288,9 +334,9 @@ _Avoid_: click mode, click behavior
 ## Physics (future scope)
 
 The following concepts are not implemented in v0.1.0; they are reserved for
-the post-v1 physics work (ADR 0003). Implemented source-scene terms — field
-mode, field source, superposition, 2D slice, 2D approximation, softening and
-CAS — are defined under Field and motion.
+the post-v1 physics work (ADR 0003). Implemented terms — field mode, field
+source, superposition, 2D slice, 2D approximation, softening, CAS, and the ODE
+workbench concepts — are defined under Field and motion.
 
 **Source configuration**:
 A named, persisted set of field sources that can be loaded into source mode.
@@ -337,16 +383,3 @@ _Avoid_: preset geometry
 A free-form 2D conductor boundary treated as an infinite cylinder; v1 solves it
 approximately and labels the approximation.
 _Avoid_: shape, polygon
-
-**ODE system**:
-A user-defined first-order system `dx/dt = f(x,t)` integrated from seeds into
-trajectories.
-_Avoid_: flow, field
-
-**Trajectory**:
-A solution curve of an ODE system from one initial condition.
-_Avoid_: streamline (that is a field-tangent curve)
-
-**Phase portrait**:
-A plot of trajectory state components against each other.
-_Avoid_: phase plot

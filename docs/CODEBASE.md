@@ -38,12 +38,12 @@ The field is formula-driven:
 - Sampling, arrows, streamlines, particles, colormaps, plane inspection, two
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
   screenshots, and persistence are all in this tree.
-- The app is a teaching-grade explorer, not a solver. The pure source-evaluator
-  slice in `src/sources` evaluates all eight softened source geometries: point
-  charges, finite charged lines, charged rings, charged thin discs, uniform
-  solid spheres, infinite straight wires, current loops and finite continuous
-  solenoids.
-  Maxwell/ODE work beyond that is described in
+- The app is a teaching-grade explorer, not a general numerical solver. The
+  pure source-evaluator slice in `src/sources` evaluates all eight softened
+  source geometries: point charges, finite charged lines, charged rings, charged
+  thin discs, uniform solid spheres, infinite straight wires, current loops and
+  finite continuous solenoids. The ODE workbench precomputes bounded fixed-step
+  RK4 teaching trajectories. Maxwell work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
 ### Source control and licence
@@ -700,9 +700,13 @@ Performance evidence and host numbers are in
 
 **Limitations.** Fixed-step RK4 only: no adaptive/stiff solver, symbolic
 solve, 3D phase cube or parameter sweep. This is a precomputed teaching
-trajectory solve, not a per-frame solver. Task 2 wires the mode, state and app
-playback through the shared clock; the panel/charts and persistence/export
-integration follow in later tasks. Particle RK4 is untouched.
+trajectory solve, not a per-frame solver. The responsive panel and charts,
+mode/state/shared-clock playback, persistence and PNG/SVG provenance are wired
+through [src/ui/ode_panel.rs](../src/ui/ode_panel.rs),
+[src/app/simulation.rs](../src/app/simulation.rs),
+[src/viewmodel.rs](../src/viewmodel.rs) and
+[src/export_provenance.rs](../src/export_provenance.rs). Particle RK4 is
+untouched.
 
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
@@ -1637,6 +1641,14 @@ storage key, with migration and corruption tolerance.
 `malformed_induction_fields_fall_back_and_report_the_error`,
 `global_reset_clears_induction_cache_and_restores_defaults`, and the
 restore/sanitize tests.
+
+ODE persistence is pinned separately by
+[tests/ode_persistence_test.rs](../tests/ode_persistence_test.rs):
+`ode_scene_round_trips_all_fields`, `malformed_ode_payload_falls_back_lazily`,
+`legacy_record_leaves_ode_unselected_and_error_free`,
+`global_reset_clears_ode_fields`, and
+`global_reset_returns_to_formula_and_clears_the_ode_loop_period`. ODE export
+provenance is pinned by [tests/ode_export_test.rs](../tests/ode_export_test.rs).
 
 **Limitations.** There is no explicit schema version number; compatibility is a
 set of serde defaults and aliases that must be maintained forever. Camera state,
@@ -3475,10 +3487,13 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 - **Fields may be time-dependent.** `meval` expressions bind `x`, `y`, `z`, and
   the shared time `t`; the Electrodynamics presets themselves are static
   spatial snapshots. Induction supplies the dedicated dynamic-field demo.
-- **Three separate adapters.** Formula, Sources, and Induction are exclusive
-  modes with durable state; there is no formula-to-source conversion.
+- **Four separate concept modes.** Formula, Sources, Induction, and Ode are
+  exclusive modes with durable state; there is no formula-to-source or
+  formula-to-ODE conversion.
 - **No general solver.** The native CAS differentiates formulas and derives
-  gradient, divergence, and curl; no ODE, PDE, or Maxwell solver is implemented.
+  gradient, divergence, and curl. The Ode workbench is a bounded, precomputed
+  fixed-step RK4 trajectory viewer, not an adaptive/stiff or symbolic solver; no
+  PDE or Maxwell solver is implemented.
 - **No depth/MSAA.** 3D ordering is CPU painter sort; no shadows, anti-aliasing
   beyond dot rims, or transparency sorting per triangle.
 - **One 3D draw budget.** Every instance pays for a 16-side cone even when the
