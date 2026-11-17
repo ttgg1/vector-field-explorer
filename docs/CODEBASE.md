@@ -752,8 +752,8 @@ edit records `induction_error`, returns false and leaves the previous scene,
 prepared `Arc` and arrows untouched; a valid edit clears the error.
 `refresh_induction` compares the `InductionKey`, re-prepares only on a geometry/
 domain/grid/plane/softening change, and otherwise rescales the same `Arc`.
-Entering Induction takes the 3D view; the stored density is never destroyed,
-only sampled against the 20³ (3D) or 80² (2D slice) cap. Induction is a clock
+Entering Induction preserves the current 2D/3D projection; the stored density is
+never destroyed, only sampled against the 20³ (3D) or 80² (2D slice) cap. Induction is a clock
 consumer only while `is_animated()`; the app starts no second clock, draws no
 particles/streamlines/clicks, and pauses with the existing scalar-plot rule.
 `snapshot` returns arrows and empty line/trail/dot geometry; `rebuild_scene`
@@ -1368,11 +1368,12 @@ decisions that do not need a window.
   3`. This gates the cube grid, density cap, plane frame/slice and streamline
   depth, so source/induction mode uses the existing 2D plane path in 2D and the
   world cube in 3D.
-- `set_field_mode` preserves the formula, source scene and induction scene,
-  clears the cached sampling/notice and marks dirty. Entering
-  Induction selects the 3D view but never rewrites the stored density; sampling
-  caps it at `MAX_INDUCTION_DENSITY_3D` in 3D and `MAX_INDUCTION_DENSITY_2D` on
-  a 2D slice, so leaving restores the untouched formula density.
+- `set_field_mode` preserves the formula, source scene, induction scene and the
+  current 2D/3D projection, clears the cached sampling/notice and marks dirty.
+  Entering Induction never rewrites the stored density or the projection;
+  sampling caps density at `MAX_INDUCTION_DENSITY_3D` in 3D and
+  `MAX_INDUCTION_DENSITY_2D` on a 2D slice, so leaving restores the untouched
+  formula density. A changed active dimension syncs the plane index.
   `set_source_scene` replaces the durable scene and clears the cache. Formula
   edits never invalidate source or induction state. Entering Sources or toggling
   its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and

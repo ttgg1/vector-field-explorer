@@ -29,6 +29,7 @@ fn induction_mode_uses_caps_and_preserves_formula_and_sources() {
     let formula = app.state.formula.clone();
     let sources = app.state.sources.clone();
     app.state.set_density(200);
+    app.state.set_mode(true);
     app.state.set_field_mode(FieldMode::Induction);
     app.test_harness().advance_simulation();
     let grid = app.state.plane_grid();
@@ -51,6 +52,22 @@ fn induction_mode_uses_caps_and_preserves_formula_and_sources() {
     );
     assert_eq!(app.state.formula, formula);
     assert_eq!(app.state.sources, sources);
+}
+
+#[test]
+fn induction_mode_preserves_the_current_projection() {
+    let mut app = VfApp::new();
+    assert!(!app.state.mode_3d, "a fresh app starts in 2D");
+    app.state.set_field_mode(FieldMode::Induction);
+    assert!(!app.state.mode_3d, "2D stays 2D");
+    assert!(!app.state.is_3d());
+    assert!(app.state.is_plane_slice());
+
+    app.state.set_mode(true);
+    app.state.set_field_mode(FieldMode::Formula);
+    app.state.set_field_mode(FieldMode::Induction);
+    assert!(app.state.mode_3d, "3D stays 3D");
+    assert!(app.state.is_3d());
 }
 
 #[test]
@@ -326,27 +343,33 @@ fn induction_snapshot_is_arrows_only_and_rebuild_composes_one_glyph() {
 
 #[test]
 fn induction_caps_apply_per_view_and_do_not_clamp_formula_density() {
+    // The 3D view caps both the sampling grid and the plane grid at 20³.
     let mut app = VfApp::new();
     app.state.set_density(200);
+    app.state.set_mode(true);
     app.state.set_field_mode(FieldMode::Induction);
-    // The 3D view caps both the sampling grid and the plane grid at 20³.
     assert_eq!(app.state.plane_grid(), glam::UVec3::splat(20));
-    app.state.set_mode(false);
-    assert!(app.state.set_density(80));
-    app.test_harness().advance_simulation();
-    let sampling = app.test_harness().induction_sampling().unwrap();
+
+    // A 2D slice keeps the user's projection and allows the 80² cap.
+    let mut slice = VfApp::new();
+    slice.state.set_density(200);
+    slice.state.set_field_mode(FieldMode::Induction);
+    assert!(!slice.state.mode_3d, "the projection is preserved");
+    assert!(slice.state.set_density(80));
+    slice.test_harness().advance_simulation();
+    let sampling = slice.test_harness().induction_sampling().unwrap();
     assert!(
         sampling.magnetic.drawn <= 80 * 80,
         "2D slice cap: {}",
         sampling.magnetic.drawn
     );
     assert!(sampling.arrows.len() <= 80 * 80);
-    assert_eq!(app.state.density, 80);
+    assert_eq!(slice.state.density, 80);
 
     // Leaving Induction restores the untouched stored density semantics.
-    app.state.set_field_mode(FieldMode::Formula);
-    assert_eq!(app.state.density, 80);
-    assert_eq!(app.state.grid(), glam::UVec3::new(80, 80, 1));
+    slice.state.set_field_mode(FieldMode::Formula);
+    assert_eq!(slice.state.density, 80);
+    assert_eq!(slice.state.grid(), glam::UVec3::new(80, 80, 1));
 
     let mut untouched = VfApp::new();
     untouched.state.set_density(200);

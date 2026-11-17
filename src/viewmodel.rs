@@ -475,15 +475,16 @@ impl State {
     }
 
     /// Switch between the formula, source and induction adapters. The formula,
-    /// parsed field, source scene and induction scene are preserved; only each
-    /// adapter's cached sampling and notice are cleared. Induction is a
-    /// volumetric demo, so entering it takes the 3D view; the stored density
-    /// itself is never destroyed, only sampled under the active cap.
+    /// parsed field, source scene, induction scene and the current 2D/3D
+    /// projection are preserved; only each adapter's cached sampling and
+    /// notice are cleared. The stored density itself is never destroyed, only
+    /// sampled under the active cap.
     pub fn set_field_mode(self: &mut State, mode: FieldMode) -> bool {
         if self.field_mode == mode {
             return false;
         }
         let previous_grid = self.plane_grid();
+        let previous_dimension = self.active_dimension();
         let previous_mode_3d = self.mode_3d;
         self.field_mode = mode;
         self.source_sampling = None;
@@ -494,12 +495,9 @@ impl State {
             // scene stays so returning re-prepares at the current clock time.
             self.induction_prepared = None;
         }
-        if mode == FieldMode::Induction {
-            self.mode_3d = true;
-            self.plot.vector_mode_3d = true;
-        }
+        let dimension_changed = previous_dimension != self.active_dimension();
         let clamped = self.clamp_source_density();
-        if clamped || self.mode_3d != previous_mode_3d || mode == FieldMode::Induction {
+        if clamped || self.mode_3d != previous_mode_3d || dimension_changed {
             self.sync_plane(previous_grid);
         }
         self.mark_dirty()
