@@ -308,7 +308,7 @@ Features are disabled with `Arrows only: streamlines, particles and click seedin
 `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied` (three f64), `material_view`.
 
 - Old records default to the dielectric sphere with `eps_bg=1`, `mu_bg=1`, `eps_in=4`, `mu_in=1`, `radius=1`, `axis=Z`, `offset=0`, `applied=[1,0,0]`, `view=Total`.
-- `restore` validates and stores the scene, no sampling; malformed values fall back to the default scene and set `material_error` with a readable message. A malformed material record must not promote `FieldMode::Materials` if the stored mode is absent.
+- `restore` validates and stores the scene, no sampling; malformed values fall back to the default scene. A malformed material record must not promote `FieldMode::Materials` if the stored mode is absent. The readable restore error is mirrored into `material_error` only when the stored mode is Materials; in any other mode it stays silent because no Material UI or sampling path can surface it, and entering Materials later starts from the valid default scene.
 - Global reset clears scene/error/sampling and returns to Formula; Materials section reset only restores the default scene, leaving Formula/Sources/Induction/ODE and the shared clock untouched.
 - No persisted camera or cache.
 
