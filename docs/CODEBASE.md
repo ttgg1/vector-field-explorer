@@ -352,7 +352,8 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `clock`, `screenshot`, and private scene/click/particle caches, including the
+  `material` (`MaterialPanelState`), `clock`, `screenshot`, and private
+  scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
   [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
@@ -517,8 +518,20 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   bar's one-shot `open_ode` request expands the wide rail or opens the compact
   sheet. Step, Fit and Reset dispatch to `VfApp::ode_step`, the shared Fit
   command and `State::reset_ode` plus the default Reset command.
+- The Materials rail/body and compact Materials tab draw
+  `material_panel::show`; the formula bar's one-shot `open_materials` request
+  expands the wide rail or opens the compact sheet. Fit uses the shared Fit
+  command; Reset calls `State::reset_material`, re-syncs the panel draft and
+  applies the default camera command. Entering Materials syncs the panel draft
+  from the committed scene only on entry, restore or reset, never every frame.
 - ODE mode status reports `State::ode_error`; the Features controls are
-  disabled with the ODE note and the Coloring section is not drawn.
+  disabled with the ODE note and the Coloring section is not drawn. Materials
+  status reports `State::material_error` or the current sampling warning; its
+  Features controls are disabled with the arrows-only note and its Coloring
+  section is hidden.
+- The viewport paints `Materials - {case} - {Total|Applied|Response}` in
+  Materials mode and shows `Response is identically zero for this view.` when
+  the sampling is response-empty. Leaving Materials closes its compact sheet.
 - The Controls panel is drawn before the dirty rebuild, so a control edit lands
   in this frame's snapshot and counts.
 - `recentre_domain` follows a domain change: 3D to the new centre, 2D in x/y
@@ -868,12 +881,13 @@ cache preparation, not frame time; it is recorded in
 
 #### `src/material.rs` — bounded analytic material cases and outlines
 
-**Purpose.** Pure Task 1 seam for the Materials mode. Four canonical analytic
-cases are supported: a dielectric sphere, a planar dielectric interface, a
-permeable sphere and a planar permeable interface. Each case exposes `Total`,
-`Applied` and `Response`; `response` is exactly `total - applied`. Electric and
-magnetic families are selected by case and are never summed. The module is CPU
-only and has no renderer, clock, source, persistence or export dependency.
+**Purpose.** Pure seam for the Materials mode. Four canonical analytic cases are
+supported: a dielectric sphere, a planar dielectric interface, a permeable
+sphere and a planar permeable interface. Each case exposes `Total`, `Applied`
+and `Response`; `response` is exactly `total - applied`. Electric and magnetic
+families are selected by case and are never summed. The module is CPU only and
+has no renderer, clock, source, persistence or export dependency; the app,
+panel, persistence and export adapters are documented in their own sections.
 
 **Public API.** `MaterialCase`, `MaterialView`, `MaterialFamily`,
 `MaterialScene` (`Debug`, `Clone`, `PartialEq`, `Default`), `MaterialError`,
@@ -933,13 +947,23 @@ warning. Every returned coordinate is finite.
 
 **App integration.** `FieldMode::Materials` and its State adapter live in
 [src/viewmodel.rs](../src/viewmodel.rs); the arrows-only scene branch and
-outline reach the viewport through `VfApp::advance_simulation`. The Materials
-panel, persistence and export provenance belong to later planned tasks.
+outline reach the viewport through `VfApp::advance_simulation`. The responsive
+panel and viewport label are in
+[src/ui/material_panel.rs](../src/ui/material_panel.rs) and
+[src/app/panels.rs](../src/app/panels.rs); persistence and lazy restore are in
+[src/persistence.rs](../src/persistence.rs); request-time export lines and
+metadata are in
+[src/export_provenance.rs](../src/export_provenance.rs). Materials is static:
+`has_time_dependent_consumer` is false and no formula/scalar/persisted particle
+or CAS path is sampled. The applied/response views use fixed family colours, and
+the 2D outline is the slice intersection only.
 
 **Limitations.** Exact catalog only: no general material solver, overlapping
 inclusions, anisotropic/nonlinear/dispersive media, conductors, free surface
 charge, hysteresis or eddy currents. 2D is a slice of the same 3D case. The
 benchmark measures analytic sampling, not frame time or browser performance.
+Browser/WebAssembly runtime and manual visual checks were owner-waived for this
+delivery and are not claimed as passed.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 

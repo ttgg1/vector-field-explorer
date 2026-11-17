@@ -32,6 +32,10 @@ instanced GPU scene:
   with separate E and B arrow families driven by the shared clock and
   reconstructed from a softened vector potential; see
   [Induction teaching demo](#induction-teaching-demo);
+- a Materials teaching mode for four bounded analytic cases — dielectric and
+  permeable spheres and plane boundaries — with separate Total, Applied and
+  Response arrow views and slice-only outlines; see
+  [Materials teaching cases](#materials-teaching-cases);
 - an ODE workbench for bounded dynamical-system teaching: type `dx/dt`,
   `dy/dt`, `dz/dt` or integrate the current formula field, then play back up to
   eight fixed-step RK4 trajectories with an x/y phase portrait and per-variable
@@ -285,9 +289,9 @@ leaving any saved source scene untouched; the formula remains editable.
 
 ### Induction teaching demo
 
-Choose **Induction** in the Formula/Sources selector to open the dedicated
-induction panel. It models one axisymmetric conductor: a circular current loop
-or a finite continuous solenoid. Radius, solenoid length and turns, signed
+Choose **Induction** in the Formula/Sources/Induction/ODE/Materials selector to
+open the dedicated induction panel. It models one axisymmetric conductor: a
+circular current loop or a finite continuous solenoid. Radius, solenoid length and turns, signed
 current amplitude, frequency, and the E/B/Both display are editable; the
 default shown current is `I(t) = amplitude * cos(2*pi*frequency*t)`. The shared
 scene-wide softening `a` is editable under **Advanced** and affects Sources and
@@ -341,11 +345,11 @@ visual checks are owner-waived for this delivery, not claimed as passed.
 
 ### ODE workbench
 
-Choose **ODE** in the Formula/Sources/Induction/ODE selector to open the
-dedicated ODE panel. It is the fourth vector concept mode: the viewport stays on
-the vector scene in the current 2D/3D projection, and the panel shows the scene
-summary with **Open ODE**. The workbench is a precomputed teaching trajectory
-viewer, not a general solver.
+Choose **ODE** in the Formula/Sources/Induction/ODE/Materials selector to open
+the dedicated ODE panel. It is the fourth vector concept mode: the viewport
+stays on the vector scene in the current 2D/3D projection, and the panel shows
+the scene summary with **Open ODE**. The workbench is a precomputed teaching
+trajectory viewer, not a general solver.
 
 **Sources.** **Equations** accepts a 2D or 3D first-order system as
 `dx/dt =`, `dy/dt =`, and (in 3D) `dz/dt =`, using the same expression parser,
@@ -412,6 +416,155 @@ Solve times are in
 one-shot precomputed solve measurements, not frame-time targets; the 33 ms
 particle target is not claimed for ODE. Browser/WebAssembly runtime and manual
 visual checks are owner-waived for this delivery, not claimed as passed.
+
+### Materials teaching cases
+
+Choose **Materials** in the Formula/Sources/Induction/ODE/Materials selector to
+open the dedicated Materials panel. It is the fifth vector concept mode and
+shows one of four bounded analytic cases: a dielectric sphere, a planar
+dielectric interface, a permeable sphere, or a planar permeable interface. Each
+case has one inclusion in an infinite homogeneous background and a uniform
+applied field at infinity. The model is homogeneous, linear, isotropic,
+nondispersive, nonconducting and quasistatic. The sampling domain is only a
+visualization window over the infinite solution; it is not a boundary or a
+material region of its own.
+
+This is an exact closed-form catalog, not a general material solver. There is
+no FEM/BEM, arbitrary geometry, overlapping or multiple inclusions,
+anisotropic/nonlinear/frequency-dependent media, conductors, free surface
+charge, hysteresis or eddy currents, and no general inverse problem. The catalog
+and its assumptions are always visible in the panel's **Advanced** section and
+in exports.
+
+For a sphere of radius `a`, with `r = |p|` and `rhat = p/r`, the applied field
+is `E0` or `B0`:
+
+```text
+Dielectric sphere: beta_e = (eps_in - eps_bg) / (eps_in + 2 eps_bg)
+  outside: E = E0 + beta_e a^3 (3 (E0 . rhat) rhat - E0) / r^3
+  inside:  E = 3 eps_bg / (eps_in + 2 eps_bg) E0
+
+Permeable sphere: beta_m = (mu_in - mu_bg) / (mu_in + 2 mu_bg)
+  outside: B = B0 + beta_m a^3 (3 (B0 . rhat) rhat - B0) / r^3
+  inside:  B = 3 mu_in / (mu_in + 2 mu_bg) B0
+```
+
+The sphere center uses the uniform inside value. The tangential electric field
+and normal electric displacement are continuous at `r = a`; the normal magnetic
+field and tangential magnetic field strength are continuous for the permeable
+sphere.
+
+For the plane cases, let `n` be the selected X/Y/Z interface normal and let
+`offset` place the plane along it. The background side is `n . p < offset` and
+the material side is `n . p > offset`:
+
+```text
+Dielectric boundary:
+  background: E = E0
+  material:   E = E0 - (1 - eps_bg / eps_in) (E0 . n) n
+              (tangential E and normal D continuous)
+
+Permeable boundary:
+  background: B = B0
+  material:   B = B0 + (mu_in / mu_bg - 1) (B0 . n) n
+              (normal B and tangential H continuous)
+```
+
+These formulas make the no-contrast limit explicit: `eps_in = eps_bg` or
+`mu_in = mu_bg` returns the applied field everywhere and an identically zero
+response. No Plummer softening is applied. The existing Sources/Induction
+softening setting is unrelated and is not shown as affecting Materials.
+
+**Total, Applied and Response.** The **View** selector draws exactly one field:
+the case total, the uniform applied `E0`/`B0`, or the response defined exactly
+as `total - applied`. The response is the bound/induced contribution. Electric
+and magnetic cases are always separate arrow families, coloured fixed amber for
+E and fixed cyan for B; they are never summed, averaged, or given one shared
+magnitude range. Materials has no colormap because the family colour is fixed.
+For a **Response** view whose selected response is below the degenerate
+threshold everywhere, the scene deliberately stays empty and shows
+`Response is identically zero for this view.`; that warning cannot be
+suppressed.
+
+**Exact-interface handling.** The analytic field is discontinuous at a sphere
+surface or plane interface. A sample exactly on the interface is omitted; the
+guard is `1e-9 * max(domain extent, 1.0)` for sampling and a corresponding
+radius/offset-scaled exact-hit check inside the evaluator. This is an exact-hit
+guard, not an omitted band: ordinary samples just on either side are retained.
+The field is never interpolated, averaged, or extrapolated across the
+discontinuity, and the grid is not a reconstructed interface. Whenever any
+sample is omitted the scene reports
+`Samples exactly on the interface are omitted because the analytic field is discontinuous there.`
+Grids in the default benchmark do not happen to land exactly on these
+interfaces, so their omitted count is zero; the omission behavior is pinned by
+tests rather than implied by those counts.
+
+**Validity and applicability.** Relative permittivity and permeability values
+must be finite and within `1.0..=100.0`; a sphere radius must be finite and
+greater than zero; a boundary offset must be finite; the applied field must be
+finite and nonzero. Both background constants and both material constants are
+shown and validated, though only the active family affects the field. An
+invalid draft never draws NaN/Inf: the panel shows an actionable field-naming
+error, the last valid scene and sampling stay visible, and the status bar
+repeats the error. An empty or impossible sampling domain reports a visible
+warning instead of arrows. The panel also states that the domain is only a
+visualization window, and it does not invent an uncertainty number for an exact
+formula.
+
+**2D and outlines.** The 2D view is a slice of the same 3D case through the
+existing `PlaneFrame`; there is no separate 2D solver. Values are evaluated at
+world positions and projected locally, so the slice matches the 3D field.
+Outlines show only the slice intersection: a sphere draws the circle where the
+plane cuts it (and nothing when the slice misses it); a boundary draws the
+intersection line, draws nothing for a parallel noncoincident slice, and draws
+the local square with `Slice lies on the interface; the field is discontinuous here.`
+when coincident. The 3D view draws the sphere's great circles or the interface
+square plus a small applied/normal reference marker.
+
+**Panel and view label.** The panel offers the case selector, sphere radius or
+boundary axis/offset, both background and both material constants, the applied
+vector with exact units (`V/m` for E, `T` for B), the view selector, **Fit** and
+**Reset Materials section**. Edits are draft-based and commit on focus
+loss/Enter, drag release, selector click or reset; a frame never commits merely
+because a value exists. The viewport identifies the painted scene as
+`Materials - {case} - {Total|Applied|Response}`. Materials is arrows-only:
+streamlines, particles and click seeding are off, Features is disabled with
+`Arrows only: streamlines, particles and click seeding stay off in Materials.`,
+Coloring is hidden, and CAS is disabled outside Formula. Materials is static, so
+it is not a consumer of the shared clock and adds no timer.
+
+**Persistence and reset.** The durable material scene persists with the view:
+case, both background relative constants, both material relative constants,
+sphere radius, interface axis and offset, applied vector and view. Older
+settings without these fields restore the default valid dielectric sphere;
+malformed fields fall back to that valid default and report the validation error
+only when the stored mode is explicitly Materials, so a damaged or legacy record
+never promotes Materials by itself. Restore is lazy: it validates and stores the
+scene without sampling, and the first Materials frame samples the restored or
+fallback scene. Global reset clears the material scene, sampling cache and error
+and returns to Formula; **Reset Materials section** restores only the default
+material scene and camera, leaving Formula, Sources, Induction, ODE and the
+shared clock untouched.
+
+**Export.** PNG and SVG exports always carry the Materials context: the bounded
+analytic/no-general-solver line, background and material constants, the visible
+Total/Applied/Response choice, the applied vector with units, the case
+assumptions, and any current interface, empty-response, empty-domain,
+coincident-slice, missing-sampling or invalid-scene warning. PNG writes the same
+context into its baked banner and tEXt metadata; SVG writes visible text plus
+`<metadata>` and remains 2D-only. Metadata keys include
+`vfe.model=materials-bounded-analytic`, case, family, both constant pairs, view,
+units, interface axis/offset, applied vector and, when present, the warning.
+Non-Materials exports carry no material metadata, and no opt-in or other mode can
+suppress a Materials warning. No nonfinite value is exported as arrow geometry.
+
+Sampling times for the 40³ 3D and 200² 2D caps are in
+[docs/perf/materials-performance.md](docs/perf/materials-performance.md). They
+are analytic per-sample measurements on the recorded host, not a frame-time
+target or an fps claim, and the cap is never silently lowered. Browser and
+WebAssembly runtime checks and manual visual inspection were owner-waived for
+this delivery and are not claimed as passed. The WebAssembly target check,
+when the target is installed, is recorded separately from browser evidence.
 
 ### Mouse and keyboard
 
@@ -516,10 +669,11 @@ survive a restart:
   settings, colouring, streamline and particle settings, the saved source scene
   (entries, display, softening and accuracy opt-in), the saved induction scene
   (case, center, axis, radius/length/turns, amplitude/frequency, display and
-  accuracy opt-in), and the saved ODE scene (source, dimension, equations,
-  seeds, duration, chart and visible variables) with its field mode, plus the
-  Show grid / Show coordinate system preferences (remembered across both
-  modes);
+  accuracy opt-in), the saved Materials scene (case, both relative-constant
+  pairs, radius or interface axis/offset, applied vector and view), and the
+  saved ODE scene (source, dimension, equations, seeds, duration, chart and
+  visible variables) with its field mode, plus the Show grid / Show coordinate
+  system preferences (remembered across both modes);
 - the layout: panel visibility, panel widths, and help-overlay visibility;
 - the appearance: theme, accent, rounding, spacing, and font size.
 
@@ -536,7 +690,11 @@ scene; malformed induction fields also fall back to that scene and report the
 validation error instead of failing startup. Older payloads without ODE fields
 leave Ode unselected and set no ODE error; malformed ODE fields keep an
 explicitly stored Ode mode, restore the default valid ODE scene, report the
-validation error, and solve lazily on the first Ode frame.
+validation error, and solve lazily on the first Ode frame. Older payloads
+without Materials fields restore the default dielectric sphere without selecting
+Materials; malformed Materials fields fall back to that valid scene, and the
+error is surfaced only when the stored mode is explicitly Materials. Materials
+sampling is lazy on the first Materials frame, never during restore.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
 logged and left untouched rather than silently overwritten (a missing file
 starts with an empty list), and save or delete failures surface a non-blocking
@@ -552,14 +710,22 @@ camera presets use `localStorage`.
   softened, with no displacement current, radiation, retardation, or physical
   singular limit. It is not a general Maxwell or inverse-Faraday solver, and
   the cap timings are preparation measurements rather than frame-time claims.
+- **Materials is a four-case closed catalog.** Dielectric and permeable spheres
+  and plane boundaries are exact in their stated quasistatic assumptions only:
+  one inclusion, an infinite homogeneous background, and linear isotropic
+  nondispersive nonconducting media. It is not a material boundary-value
+  solver; arbitrary geometry, multiple or overlapping inclusions, anisotropy,
+  conductors and free surface charge are unsupported. Its 2D view is a slice of
+  the same 3D case, and its sampling timings are not frame-time claims.
 - **No data import or export.** The input is a formula, a built-in preset, or an
-  editable source or induction scene. Screenshots are PNG, or 2D SVG; there is
-  no CSV, NumPy, or project-file import.
+  editable source, induction or materials scene. Screenshots are PNG, or 2D
+  SVG; there is no CSV, NumPy, or project-file import.
 - **No general solver.** The native CAS differentiates formulas and derives
   gradient, divergence, and curl. The ODE workbench is a bounded fixed-step RK4
   trajectory viewer: it has no adaptive/stiff solver, symbolic integration,
   parameter sweep, or 3D phase cube, and solve timings are not frame-time
-  claims. It does not solve PDEs or Maxwell's equations.
+  claims. The Materials mode evaluates four closed-form cases rather than a
+  material solver. Neither mode solves PDEs or Maxwell's equations.
 - **NaN and infinite samples are skipped.** A pole inside the domain leaves a
   hole in the arrows rather than crashing or blanking the scene; a parse error
   keeps the last valid field. Built-in singular-looking presets are softened.
