@@ -1,7 +1,7 @@
 # Induction teaching demo — detailed design
 
 **Issue:** #27 `[Physics / #17] Induction teaching demo — changing B, analytic/CAS derivatives and shared clock`
-**Status:** PROPOSED — detailed design awaiting owner approval
+**Status:** APPROVED by owner on 2026-11-17
 **Date:** 2026-11-17
 **Dependencies:** #24 source evaluator, #16 shared-clock animation, #12 scalar plotting, #13 plane slicing, #25/#26 source panel/glyphs/export provenance — all merged. #15 CLI work remains separate.
 **Owner decisions already made:** implementation after this design is approved, delivered through sub-issues under #27 using subagent-driven development. Physical scope: one editable current loop **and** one finite solenoid, with the rigorous softened vector-potential reconstruction for `E`.
