@@ -10,6 +10,13 @@ impl VfApp {
     /// scalar has no consumer, so the clock holds.
     pub(super) fn advance_clock(&mut self, dt: f32) {
         self.clock.advance_for(&self.state, dt);
+        if self.state.field_mode == FieldMode::Ode
+            && let Some(solution) = self.state.ode_solution.as_ref()
+        {
+            // The precomputed solution ends at its duration; stop there rather
+            // than replaying past the last sample. `clamp_time` pauses once.
+            self.clock.clamp_time(solution.duration as f32);
+        }
         // Mirror the clock's t into the state so a time-dependent field's
         // rebuild follows the clock automatically.
         self.state.set_time(self.clock.time);
@@ -32,6 +39,10 @@ impl VfApp {
     /// vector consumer; vector mode rebuilds and advects exactly as before.
     pub(super) fn advance_simulation(&mut self) {
         self.sync_field_mode();
+        if self.state.field_mode == FieldMode::Ode {
+            self.advance_ode();
+            return;
+        }
         if !self.state.is_vector_mode() {
             // Pause, never delete: cloud/trail/click/time state is untouched.
             self.refresh_plot_scene();
@@ -42,6 +53,36 @@ impl VfApp {
         self.advance_particles();
     }
 
+    /// Ode's frame path: solve only when its scene is pending, rebuild the
+    /// trajectory lines once per solved scene/edit, and never sample the field,
+    /// retrace clicks, spawn particles or append source/induction glyphs.
+    fn advance_ode(&mut self) {
+        self.state.refresh_ode_if_dirty();
+        let epoch = self.state.ode_epoch;
+        let epoch_changed = self.last_ode_epoch != Some(epoch);
+        if epoch_changed {
+            // A new solution is a new playback: restart the clock but keep the
+            // user's play/pause and speed choice.
+            self.clock.reset_time();
+            self.clock.loop_period = None;
+            self.last_ode_epoch = Some(epoch);
+        }
+        if epoch_changed || self.state.dirty {
+            self.rebuild_ode_lines();
+        }
+        // A failed lazy solve has no solution to frame yet, so keep the one-shot
+        // pending until the first valid solution arrives. A preserved solution
+        // with no new epoch clears it without moving the camera; later epochs
+        // never fit again.
+        if self.ode_autofit_pending && self.state.ode_solution.is_some() {
+            if epoch_changed {
+                self.apply_view_command(ViewCommand::Fit);
+            }
+            self.ode_autofit_pending = false;
+        }
+        self.state.dirty = false;
+    }
+
     /// Clear formula-owned transient geometry when the field mode changes.
     /// Durable formula and source state stays in the viewmodel untouched.
     fn sync_field_mode(&mut self) {
@@ -49,6 +90,7 @@ impl VfApp {
         if mode == self.last_field_mode {
             return;
         }
+        let leaving_ode = self.last_field_mode == FieldMode::Ode;
         self.last_field_mode = mode;
         clear(&mut self.particles);
         self.particle_target = None;
@@ -57,6 +99,21 @@ impl VfApp {
         self.flow_lines.clear();
         self.click_lines.clear();
         self.streamline_count = 0;
+        if leaving_ode {
+            // The next mode rebuilds its own lines; never repaint stale ODE
+            // trajectories in Formula/Sources/Induction.
+            self.ode_lines = Arc::new(Vec::new());
+        }
+        if mode == FieldMode::Ode {
+            // ODE bounds its playback by the solution duration, so a shared
+            // loop period must not wrap it. Arm the one auto-fit allowed for
+            // this entry; a preserved solution with no new epoch leaves the
+            // camera untouched.
+            self.clock.loop_period = None;
+            self.last_ode_epoch = Some(self.state.ode_epoch);
+            self.ode_autofit_pending = true;
+            self.ode.sync_from(&self.state);
+        }
         self.state.mark_dirty();
     }
 
@@ -126,7 +183,9 @@ impl VfApp {
                     );
                     crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
                 }
-                crate::source_scene::FieldMode::Formula => Vec::new(),
+                crate::source_scene::FieldMode::Formula | crate::source_scene::FieldMode::Ode => {
+                    Vec::new()
+                }
             };
             self.source_glyph_line_count = glyph_lines.len();
             lines.extend(glyph_lines);
@@ -155,6 +214,97 @@ impl VfApp {
                     .unwrap_or(0)
             );
         }
+    }
+
+    /// Rebuild the cached Ode line buffer from the current solution plus
+    /// coordinate axes. One trajectory line instance per finite segment; width
+    /// is the fixed fraction of the padded view-domain extent. Called only on
+    /// a new solution or an Ode-relevant edit, never per frame.
+    fn rebuild_ode_lines(&mut self) {
+        let Some(solution) = self.state.ode_solution.as_ref() else {
+            self.ode_lines = Arc::new(Vec::new());
+            self.set_ode_scene_geometry();
+            return;
+        };
+        let domain = solution.view_domain();
+        let size = domain.domain_size();
+        let extent = size.x.max(size.y).max(size.z).max(1e-6);
+        let width = (crate::ode::ODE_LINE_WIDTH_FACTOR as f32) * extent;
+        let mut lines = Vec::new();
+        for (start, end, color, _seed) in crate::ode::ode_trajectory_lines(solution) {
+            lines.push(LineInstanceGPU {
+                a: [start[0], start[1], start[2], 1.0],
+                b: [end[0], end[1], end[2], width],
+                color,
+            });
+        }
+        if self.state.show_coordinate_system {
+            // `active_dimension` reads the solved scene; never hardcode 3.
+            for (start, end, color) in crate::ode::ode_axes(domain, self.state.active_dimension()) {
+                lines.push(LineInstanceGPU {
+                    a: [start[0], start[1], start[2], 1.0],
+                    b: [end[0], end[1], end[2], width],
+                    color,
+                });
+            }
+        }
+        self.ode_lines = Arc::new(lines);
+        self.set_ode_scene_geometry();
+    }
+
+    /// Replace the cached vector scene with Ode's lines and empty feature
+    /// collections. The per-frame markers live only in `assemble_viewport_scene`.
+    fn set_ode_scene_geometry(&mut self) {
+        self.flow_lines.clear();
+        self.click_lines.clear();
+        self.streamline_count = 0;
+        self.source_glyph_line_count = 0;
+        self.dots_range = (0.0, 1.0);
+        if let Some(scene) = self.scene.as_vector_mut() {
+            scene.arrows = Arc::new(Vec::new());
+            scene.lines = Arc::clone(&self.ode_lines);
+            scene.trails = Arc::new(Vec::new());
+            scene.dots = Arc::new(Vec::new());
+            scene.combined = Arc::new(Vec::new());
+            scene.arrow_style = self.state.arrow_style;
+            scene.arrow_style_2d = self.state.arrow_style_2d;
+            scene.arrow_params = self.state.arrow_params;
+            scene.mode_3d = self.state.mode_3d;
+        }
+    }
+
+    /// Current-time markers for every trajectory, as dot instances. 2D appends
+    /// them to the cached dots copy; 3D joins the sorted combined stream. The
+    /// cached scene is never mutated.
+    pub(super) fn ode_marker_instances(&self) -> Vec<ArrowInstanceGPU> {
+        let Some(solution) = self.state.ode_solution.as_ref() else {
+            return Vec::new();
+        };
+        let domain = solution.view_domain();
+        let size = domain.domain_size();
+        let extent = size.x.max(size.y).max(size.z).max(1e-6);
+        let radius = (crate::ode::ODE_MARKER_RADIUS_FACTOR as f32) * extent;
+        solution
+            .markers_at(self.state.time as f64)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(seed, position)| {
+                let position: [f32; 3] = std::array::from_fn(|axis| position[axis] as f32);
+                if !position.iter().all(|value| value.is_finite()) {
+                    return None;
+                }
+                Some(ArrowInstanceGPU {
+                    origin: [
+                        position[0],
+                        position[1],
+                        position[2],
+                        crate::renderer::PARTICLE_KIND,
+                    ],
+                    dir_len: [0.0, 0.0, 1.0, radius],
+                    color: crate::ode::ODE_COLORS[seed % crate::ode::ODE_COLORS.len()],
+                })
+            })
+            .collect()
     }
 
     fn advance_particles(&mut self) {

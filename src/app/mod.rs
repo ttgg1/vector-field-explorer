@@ -18,7 +18,7 @@ use crate::plot_scene::{PlotScene, ViewportScene};
 use crate::reference::{reference_lines_visible, reference_plane_lines};
 use crate::render::Camera;
 use crate::renderer::{
-    DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
+    ArrowInstanceGPU, DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
     sort_scene_back_to_front, sorted_arrows_back_to_front, sorted_lines_back_to_front,
 };
 use crate::screenshot::{self, Instant, Screenshot};
@@ -29,6 +29,7 @@ use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::menu::{self, MenuAction};
+use crate::ui::ode_panel::OdePanelState;
 use crate::ui::presets::PresetPanel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::presets::default_preset_dir;
@@ -126,6 +127,9 @@ pub struct VfApp {
     /// Panel-local draft for the Induction rail/sheet; only valid edits reach
     /// the committed scene.
     pub induction: InductionPanelState,
+    /// Panel-local draft for the ODE rail/sheet; only valid edits reach the
+    /// committed scene.
+    pub ode: OdePanelState,
     /// Effective width for the later Presets phase; never persisted.
     wide_presets_width: f32,
     #[cfg(not(target_arch = "wasm32"))]
@@ -246,6 +250,14 @@ pub struct VfApp {
     flow_lines: Vec<LineInstanceGPU>,
     /// The current click bursts' streamline segments.
     click_lines: Vec<LineInstanceGPU>,
+    /// Ode's trajectory + axis lines, rebuilt once per solved scene/edit and
+    /// reused every frame. Empty outside Ode.
+    ode_lines: Arc<Vec<LineInstanceGPU>>,
+    /// The Ode epoch whose lines are cached; `Some` after the first Ode frame.
+    last_ode_epoch: Option<u64>,
+    /// Whether the first solution after entering Ode may auto-fit the camera.
+    /// Cleared after that frame so later epochs preserve the camera.
+    ode_autofit_pending: bool,
     /// The screenshot action (ticket 08): the pending capture request, the
     /// channel its save thread reports on, and the completion toast.
     pub screenshot: Screenshot,
@@ -305,6 +317,7 @@ impl VfApp {
         let last_plot_epoch = state.plot.transition_epoch;
         let last_plot_was_vector = state.is_vector_mode();
         let last_field_mode = state.field_mode;
+        let last_ode_epoch = Some(state.ode_epoch);
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
@@ -316,6 +329,7 @@ impl VfApp {
             controls,
             sources: SourcesPanelState::default(),
             induction: InductionPanelState::default(),
+            ode: OdePanelState::default(),
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),
@@ -371,6 +385,9 @@ impl VfApp {
             last_click_seed: None,
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
+            ode_lines: Arc::new(Vec::new()),
+            last_ode_epoch,
+            ode_autofit_pending: false,
             screenshot: Screenshot::new(),
             svg_export_provenance: None,
             scene_frame,

@@ -23,6 +23,7 @@ use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
 };
+use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
 };
@@ -308,6 +309,21 @@ pub struct State {
     pub induction_error: Option<String>,
     /// One-line source status/hint owned by the panel and status bar.
     pub source_notice: Option<String>,
+    /// Durable ODE workbench scene, preserved across mode switches.
+    pub ode: OdeScene,
+    /// Precomputed playback data; replaced only by a committed scene/edit.
+    pub ode_solution: Option<Arc<OdeSolution>>,
+    /// The last rejected ODE solve, shown by the panel/status bar.
+    pub ode_error: Option<String>,
+    /// Bumped once per newly solved ODE scene; the app rebuilds lines on it.
+    pub ode_epoch: u64,
+    /// Chart selection for the ODE panel.
+    pub ode_chart: OdeChart,
+    /// Variables plotted in the ODE time-series chart; at least one stays on.
+    pub ode_variables: [bool; 3],
+    /// Pending lazy solve while Ode is active. Private: callers use the scene
+    /// setters and [`State::refresh_ode_if_dirty`].
+    ode_dirty: bool,
     pub dirty: bool,
     /// Transient simulated time mirrored from the clock. Not persisted.
     pub time: f32,
@@ -315,9 +331,29 @@ pub struct State {
 
 impl State {
     /// Flag the state as needing a fresh scene, and report that it did.
+    ///
+    /// Presentation-only edits (style, colours, grid, particles, streamlines)
+    /// reach this seam but must not invalidate an Ode `CurrentField` solution:
+    /// only RHS changes (formula and domain) call
+    /// [`State::mark_ode_current_field_dirty`]. Typed-equation scenes are
+    /// independent of field edits and are never invalidated here.
+    /// [`State::set_ode_scene`] clears the pending flag after its own
+    /// synchronous solve.
     pub fn mark_dirty(self: &mut State) -> bool {
         self.dirty = true;
         true
+    }
+
+    /// Queue a lazy re-solve only when the active Ode RHS actually changes.
+    /// Formula and domain edits call this; presentation edits never do, so
+    /// playback is not restarted for a style change. Invalid formula edits
+    /// still queue so the error is surfaced while the retained solution stays.
+    fn mark_ode_current_field_dirty(self: &mut State) {
+        if self.field_mode == FieldMode::Ode
+            && self.ode.source == crate::ode::OdeSource::CurrentField
+        {
+            self.ode_dirty = true;
+        }
     }
 
     /// Mirror the clock's time into the state. Returns whether `t` changed.
@@ -343,6 +379,9 @@ impl State {
                         self.mark_dirty();
                     }
                 }
+                // Ode owns a precomputed solution; playback time is mirrored
+                // only and must never re-integrate or dirty the scene.
+                FieldMode::Ode => {}
                 FieldMode::Sources => {}
             }
         } else {
@@ -359,6 +398,9 @@ impl State {
             match self.field_mode {
                 FieldMode::Sources => false,
                 FieldMode::Induction => self.induction.is_animated(),
+                // A stored solution plays on the shared clock; a pending lazy
+                // solve keeps the clock alive long enough to produce it.
+                FieldMode::Ode => self.ode_solution.is_some() || self.ode_dirty,
                 FieldMode::Formula => {
                     self.particle_target().is_some() || self.field.is_time_dependent()
                 }
@@ -432,6 +474,13 @@ impl State {
             induction_sampling: None,
             induction_error: None,
             source_notice: None,
+            ode: OdeScene::default(),
+            ode_solution: None,
+            ode_error: None,
+            ode_epoch: 0,
+            ode_chart: OdeChart::Phase,
+            ode_variables: [true, true, false],
+            ode_dirty: false,
             dirty: true,
             time: 0.0,
         }
@@ -453,6 +502,7 @@ impl State {
                 self.field = field;
                 self.parse_error = String::new();
                 self.sync_plane(previous_grid);
+                self.mark_ode_current_field_dirty();
                 self.mark_dirty()
             }
             Err(error) => {
@@ -460,6 +510,7 @@ impl State {
                 // still shows the message; this is the stderr/console trail.
                 log::debug!("field parse failed: {error}");
                 self.parse_error = error.to_string();
+                self.mark_ode_current_field_dirty();
                 self.mark_dirty()
             }
         }
@@ -470,6 +521,13 @@ impl State {
     pub fn active_dimension(self: &State) -> usize {
         match self.field_mode {
             FieldMode::Sources | FieldMode::Induction => 3,
+            // The solved scene owns the dimension; before a lazy solve, the
+            // selected scene does. Never hardcode the projection here.
+            FieldMode::Ode => self
+                .ode_solution
+                .as_ref()
+                .map(|solution| solution.dimension)
+                .unwrap_or(self.ode.dimension),
             FieldMode::Formula => self.field.dimension,
         }
     }
@@ -482,6 +540,12 @@ impl State {
     pub fn set_field_mode(self: &mut State, mode: FieldMode) -> bool {
         if self.field_mode == mode {
             return false;
+        }
+        if mode == FieldMode::Ode && !self.is_vector_mode() {
+            // Ode is a vector-viewport concept: a scalar kind would hide the
+            // trajectory scene. Restoring the vector kind also restores the
+            // projection the vector view last held.
+            self.set_plot_kind(crate::plot::PlotKind::VectorField);
         }
         let previous_grid = self.plane_grid();
         let previous_dimension = self.active_dimension();
@@ -500,7 +564,18 @@ impl State {
         if clamped || self.mode_3d != previous_mode_3d || dimension_changed {
             self.sync_plane(previous_grid);
         }
-        self.mark_dirty()
+        self.mark_dirty();
+        if mode == FieldMode::Ode {
+            // Ode has no Induction notices and never solves synchronously. A
+            // preserved solution re-enters without a new epoch (playback time
+            // stays); a fresh/current-field scene queues the first lazy solve.
+            // The last Ode error stays until a successful solve or scene
+            // commit clears it, so re-entry cannot hide an actionable failure.
+            self.induction_error = None;
+            self.ode_dirty = self.ode_solution.is_none()
+                || self.ode.source == crate::ode::OdeSource::CurrentField;
+        }
+        true
     }
 
     /// Re-clamp the stored density when Sources makes the active sampling
@@ -542,6 +617,141 @@ impl State {
         self.induction_sampling = None;
         self.induction_error = None;
         self.mark_dirty()
+    }
+
+    /// Replace the durable ODE scene after validating and solving it. On
+    /// success the solution and scene switch together, the error clears and
+    /// the epoch bumps so the app rebuilds lines once. On failure the previous
+    /// scene/solution stay visible and the actionable error is recorded.
+    pub fn set_ode_scene(self: &mut State, scene: OdeScene) -> Result<(), OdeError> {
+        match solve_ode(self, &scene) {
+            Ok(solution) => {
+                self.ode = scene;
+                self.ode_solution = Some(Arc::new(solution));
+                self.ode_error = None;
+                self.ode_epoch = self.ode_epoch.wrapping_add(1);
+                self.ode_dirty = false;
+                self.dirty = true;
+                Ok(())
+            }
+            Err(error) => {
+                self.ode_error = Some(error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    /// Recompute the ODE solution only when Ode is active and a lazy solve is
+    /// pending. A broken `CurrentField` draft sets the error, clears the flag
+    /// and retains the last valid solution; typed scenes are never invalidated
+    /// by unrelated formula or colour edits.
+    pub fn refresh_ode_if_dirty(self: &mut State) {
+        if self.field_mode != FieldMode::Ode || !self.ode_dirty {
+            return;
+        }
+        self.ode_dirty = false;
+        if self.ode.source == crate::ode::OdeSource::CurrentField && !self.parse_error.is_empty() {
+            self.ode_error = Some(self.parse_error.clone());
+            return;
+        }
+        match solve_ode(self, &self.ode) {
+            Ok(solution) => {
+                self.ode_solution = Some(Arc::new(solution));
+                self.ode_error = None;
+                self.ode_epoch = self.ode_epoch.wrapping_add(1);
+                self.dirty = true;
+            }
+            Err(error) => {
+                self.ode_error = Some(error.to_string());
+            }
+        }
+    }
+
+    /// Restore a persisted ODE scene without solving it.
+    ///
+    /// Persistence is not an ODE interaction: this validates the stored scene
+    /// through the same [`prepare_ode`] path a real edit uses, stores the scene,
+    /// chart and variables, clears any stale solution/error, marks the lazy
+    /// solve pending and returns. The first Ode frame (or
+    /// [`State::refresh_ode_if_dirty`]) performs the solve. A malformed scene
+    /// falls back to [`OdeScene::default`], records the validation error and
+    /// still leaves the default scene pending. Variables that are all false
+    /// restore the default selection.
+    pub fn restore_ode_fields(
+        self: &mut State,
+        scene: OdeScene,
+        chart: OdeChart,
+        variables: [bool; 3],
+    ) -> Result<(), String> {
+        let variables = if variables.iter().any(|enabled| *enabled) {
+            variables
+        } else {
+            [true, true, false]
+        };
+        self.ode_chart = chart;
+        self.ode_variables = variables;
+        self.ode_solution = None;
+        match prepare_ode(self, &scene) {
+            Ok(_) => {
+                self.ode = scene;
+                self.ode_error = None;
+                self.ode_dirty = true;
+                Ok(())
+            }
+            Err(error) => {
+                self.ode = OdeScene::default();
+                self.ode_error = Some(error.to_string());
+                self.ode_dirty = true;
+                Err(error.to_string())
+            }
+        }
+    }
+
+    /// Global reset's ODE half: restore and synchronously solve the default
+    /// scene, clear the error, bump the epoch and mark the scene dirty.
+    /// Leaving Ode deliberately keeps the last solution; this reset is the
+    /// explicit way to replace it. Chart and variable selections return to
+    /// their defaults too. The caller owns the shared clock's loop period.
+    pub fn reset_ode(self: &mut State) {
+        let scene = OdeScene::default();
+        match solve_ode(self, &scene) {
+            Ok(solution) => {
+                self.ode_solution = Some(Arc::new(solution));
+                self.ode_error = None;
+            }
+            Err(error) => {
+                self.ode_solution = None;
+                self.ode_error = Some(error.to_string());
+            }
+        }
+        self.ode = scene;
+        self.ode_chart = OdeChart::Phase;
+        self.ode_variables = [true, true, false];
+        self.ode_epoch = self.ode_epoch.wrapping_add(1);
+        self.ode_dirty = false;
+        self.dirty = true;
+    }
+
+    /// Select the ODE chart. Returns whether it changed.
+    pub fn set_ode_chart(self: &mut State, chart: OdeChart) -> bool {
+        if self.ode_chart == chart {
+            return false;
+        }
+        self.ode_chart = chart;
+        true
+    }
+
+    /// Select the time-series variables. At least one must stay on; an
+    /// all-false request is rejected so the chart never becomes meaningless.
+    pub fn set_ode_variables(self: &mut State, variables: [bool; 3]) -> bool {
+        if !variables.iter().any(|enabled| *enabled) {
+            return false;
+        }
+        if self.ode_variables == variables {
+            return false;
+        }
+        self.ode_variables = variables;
+        true
     }
 
     /// Rebuild the induction cache. A changed geometry/domain/grid/plane key
@@ -707,6 +917,7 @@ impl State {
         self.plot.generation += 1;
         self.domain = domain;
         self.sync_plane(previous_grid);
+        self.mark_ode_current_field_dirty();
         self.mark_dirty()
     }
 
@@ -939,7 +1150,7 @@ impl State {
     /// that hides the click lines: off hides both and refuses new seeds, so
     /// re-enabling reproduces the previous clicks. Both modes accept clicks.
     pub fn accepts_click_seed(self: &State) -> bool {
-        self.streamlines
+        self.field_mode != FieldMode::Ode && self.streamlines
     }
 
     /// Particle tracing, not yet drawn.
@@ -998,7 +1209,10 @@ impl State {
     /// `None` otherwise. Ordinary two-component fields have no depth or slice
     /// flow for a dot to ride, so the off state still spawns nothing.
     pub fn particle_target(self: &State) -> Option<usize> {
-        if matches!(self.field_mode, FieldMode::Sources | FieldMode::Induction) {
+        if matches!(
+            self.field_mode,
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+        ) {
             return None;
         }
         (self.particles && self.active_dimension() == 3)
@@ -1094,13 +1308,17 @@ impl State {
 
     /// Whether 2D is showing a slice of a three-component field.
     pub fn is_plane_slice(self: &State) -> bool {
-        self.active_dimension() == 3 && !self.mode_3d
+        self.field_mode != FieldMode::Ode && self.active_dimension() == 3 && !self.mode_3d
     }
 
     /// The local frame of the selected slice, when 2D is showing one. The
     /// selection is re-clamped against the plane grid so a stale index written
     /// before the grid shrank can never build a frame past the last sample.
+    /// Ode has no field slice and always returns `None`.
     pub fn plane_frame(self: &State) -> Option<PlaneFrame> {
+        if self.field_mode == FieldMode::Ode {
+            return None;
+        }
         self.is_plane_slice().then(|| {
             let grid = self.plane_grid();
             PlaneFrame::new(&self.domain, self.plane.clamped(grid), grid)
@@ -1111,6 +1329,15 @@ impl State {
     /// domain; 3D uses the world domain; ordinary two-component 2D keeps the
     /// world X/Y box with z collapsed to its midpoint.
     pub fn scene_domain(self: &State) -> Domain {
+        if self.field_mode == FieldMode::Ode {
+            // The camera frames the precomputed trajectory bounds; before the
+            // first lazy solve the durable field domain is the stable fallback.
+            return self
+                .ode_solution
+                .as_ref()
+                .map(|solution| solution.view_domain())
+                .unwrap_or(self.domain);
+        }
         if let Some(frame) = self.plane_frame() {
             frame.local_domain()
         } else if self.mode_3d {
@@ -1328,8 +1555,12 @@ impl State {
     /// so its lines run with the depth they cross. [`streamlines::ray_seed`]
     /// turns a click into a seed inside the domain for the orbit view's click-to-seed.
     pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
-        // Source and induction modes draw arrows only; formula streamlines never leak.
-        if matches!(self.field_mode, FieldMode::Sources | FieldMode::Induction) {
+        // Source/induction draw arrows only and Ode draws its own
+        // trajectories; formula streamlines never leak into any of them.
+        if matches!(
+            self.field_mode,
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+        ) {
             return Vec::new();
         }
         // Off hides both seed sources; Click hides only the automatic grid.
@@ -1417,7 +1648,10 @@ impl State {
         color_range: (f32, f32),
         clicks: &[Vec3],
     ) -> Vec<LineInstanceGPU> {
-        if matches!(self.field_mode, FieldMode::Sources | FieldMode::Induction) || !self.streamlines
+        if matches!(
+            self.field_mode,
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+        ) || !self.streamlines
         {
             return Vec::new();
         }
@@ -1437,6 +1671,21 @@ impl State {
     /// the UI layer just stores the result; the field is sampled once and
     /// reused for the arrows and the streamline colour range.
     pub fn snapshot(self: &State) -> SceneGPU {
+        if self.field_mode == FieldMode::Ode {
+            // Ode owns precomputed trajectory lines and per-frame markers in
+            // the app; the pure field snapshot never samples the formula.
+            return SceneGPU {
+                arrows: Arc::new(Vec::new()),
+                lines: Arc::new(Vec::new()),
+                trails: Arc::new(Vec::new()),
+                dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
+                arrow_style: self.arrow_style,
+                arrow_style_2d: self.arrow_style_2d,
+                arrow_params: self.arrow_params,
+                mode_3d: self.mode_3d,
+            };
+        }
         if self.field_mode == FieldMode::Induction {
             // Arrows-only demo: no streamlines, click lines, trails or dots.
             let arrows = if self.arrows {

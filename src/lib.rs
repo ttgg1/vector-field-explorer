@@ -15,6 +15,7 @@ pub mod flow;
 pub mod fly_camera;
 pub mod fonts;
 pub mod induction;
+pub mod ode;
 pub mod particles;
 pub mod persistence;
 pub mod plane;

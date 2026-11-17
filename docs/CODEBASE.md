@@ -38,12 +38,12 @@ The field is formula-driven:
 - Sampling, arrows, streamlines, particles, colormaps, plane inspection, two
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
   screenshots, and persistence are all in this tree.
-- The app is a teaching-grade explorer, not a solver. The pure source-evaluator
-  slice in `src/sources` evaluates all eight softened source geometries: point
-  charges, finite charged lines, charged rings, charged thin discs, uniform
-  solid spheres, infinite straight wires, current loops and finite continuous
-  solenoids.
-  Maxwell/ODE work beyond that is described in
+- The app is a teaching-grade explorer, not a general numerical solver. The
+  pure source-evaluator slice in `src/sources` evaluates all eight softened
+  source geometries: point charges, finite charged lines, charged rings, charged
+  thin discs, uniform solid spheres, infinite straight wires, current loops and
+  finite continuous solenoids. The ODE workbench precomputes bounded fixed-step
+  RK4 teaching trajectories. Maxwell work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
 ### Source control and licence
@@ -147,8 +147,11 @@ Why the seam matters:
   markers follow the same selected `plane_frame` as the samples. In
   `FieldMode::Induction` it appends exactly the selected conductor's glyph and
   no streamline/click geometry; Formula mode preserves the durable scene but
-  appends none. The resulting `SceneGPU.lines` is shared by both viewport modes,
-  CLI export and screenshot capture.
+  appends none. In `FieldMode::Ode` the pure snapshot stays empty and the app
+  owns precomputed trajectory lines plus axes, rebuilt once per solved scene;
+  per-frame current-time markers are appended to a copy of `dots` (2D) or the
+  sorted `combined` stream (3D). The resulting `SceneGPU.lines` is shared by
+  both viewport modes, CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -350,6 +353,7 @@ and the helpers that belong to no single frame phase.
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
   `clock`, `screenshot`, and private scene/click/particle caches, including the
+  `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
   [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
@@ -506,6 +510,12 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 - The Sources rail/body and the compact Sources tab draw
   `sources_panel::show`; the formula bar's one-shot `open_sources` request
   expands the wide rail or opens the compact sheet, then clears.
+- The ODE rail/body and compact ODE tab draw `ode_panel::show`; the formula
+  bar's one-shot `open_ode` request expands the wide rail or opens the compact
+  sheet. Step, Fit and Reset dispatch to `VfApp::ode_step`, the shared Fit
+  command and `State::reset_ode` plus the default Reset command.
+- ODE mode status reports `State::ode_error`; the Features controls are
+  disabled with the ODE note and the Coloring section is not drawn.
 - The Controls panel is drawn before the dirty rebuild, so a control edit lands
   in this frame's snapshot and counts.
 - `recentre_domain` follows a domain change: 3D to the new centre, 2D in x/y
@@ -537,8 +547,16 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
 **Public API (crate-visible).** `advance_clock`, `frame_simulation`.
 
 **Invariants.**
-- `advance_simulation` runs `sync_scene_frame` first (see `src/app/plane.rs`),
-  then the dirty rebuild, then particle advection.
+- `advance_simulation` branches to `advance_ode` before the scalar/vector paths:
+  it lazily solves a pending Ode scene, rebuilds trajectory lines once when the
+  epoch or dirty flag changes, auto-fits the first solution after mode entry,
+  resets the clock time on a new epoch, and never samples the field, retraces
+  clicks, spawns particles or appends source/induction glyphs.
+- Otherwise `advance_simulation` runs `sync_scene_frame` first (see
+  `src/app/plane.rs`), then the dirty rebuild, then particle advection.
+- Ode's `advance_clock` clamps the shared clock to the solution duration and
+  pauses once; `state.time` mirrors the clamped value. The doc-hidden harness
+  adds `ode_step`, `ode_line_count`, `ode_marker_count` and `ode_epoch`.
 - `rebuild_scene` calls `snapshot_if_dirty`; `None` leaves the last scene
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
@@ -586,6 +604,9 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
 - 3D builds the combined arrow+particle stream and sorts it far-to-near; 2D
   sorts only arrows and never reads `combined`; 2D plane-slice trails are sorted
   and painted behind them, while ordinary two-component 2D has no trails.
+- Ode appends current-time marker dots to a copy of the 2D `dots` list or to
+  the 3D combined stream before the sort. The cached scene is never mutated;
+  markers use `PARTICLE_KIND` and the fixed ODE palette.
 - The screenshot runs before the paint callback, using the same `scene`,
   `view_proj` and eye position, so the capture is the displayed frame. A
   request is consumed once per capture.
@@ -631,11 +652,67 @@ differentiation in the formula parser; differentiation is the separate native
 CAS panel. A formula that references `t` is time-dependent and animates from
 the shared clock.
 
+#### `src/ode.rs` — bounded ODE workbench model and fixed-step RK4
+
+**Purpose.** Owns the pure ODE workbench seam: scene validation, typed-equation
+or current-field RHS preparation, bounded fixed-step RK4, deterministic samples,
+padded bounds, stop status and playback marker interpolation. It is CPU data
+only; it does not sample the field grid, use a `PlaneFrame`, or touch a renderer
+type.
+
+**Public API.** `OdeSource`, `OdeSeed`, `OdeScene` (with `Default`,
+`validate`), `OdeStop`, `OdeSample`, `OdeTrajectory`, `OdeBounds`,
+`OdeSolution` (with `sample_at`, `markers_at`, `view_domain`), `OdeError`,
+`OdePrepared`, `OdeChart`, `ODE_STEP`, `ODE_MAX_SAMPLES`, `ODE_MAX_DURATION`,
+`ODE_DEFAULT_DURATION`, `ODE_MAX_SEEDS`, `ODE_MIN_DIMENSION`,
+`ODE_MAX_DIMENSION`, `ODE_COLORS`, `ODE_LINE_WIDTH_FACTOR`,
+`ODE_MARKER_RADIUS_FACTOR`, `prepare_ode`, `integrate_ode`, `solve_ode`, the
+hidden `integrate_ode_with_step`, and the pure renderer-seam helpers
+`ode_trajectory_lines` / `ode_axes` (`OdeLine` / `OdeAxisLine` tuples).
+
+**Invariants.** Scenes accept 2-3 typed dimensions, at most eight finite seeds,
+and a finite duration in `(0, 25]`. `Equations` parses the first `dimension`
+entries into a three-component `FieldExpr` with `"0"` for unused slots; entries
+outside `dimension` are ignored. `CurrentField` clones the durable
+`State::field`, requires `state.field.dimension == scene.dimension` and rejects a
+non-empty `state.parse_error`; the durable `State::domain` is snapshotted, never
+a plane-local frame. Samples are stored at `n * ODE_STEP`, including `t = 0`;
+each seed independently ends `Complete`, `StepLimit` at
+`ODE_MAX_SAMPLES`, or `NonFinite` at the last finite sample. Bounds use only
+finite points, pad each axis extent by 5% with a `1e-3` minimum, and a flat
+`z` gets a symmetric view extent. Markers interpolate linearly between samples
+and clamp to `[0, duration]`. `FieldExpr::eval3_at_f64` exposes the f64
+evaluation boundary; the solver uses its f64 component seam so RK4 error is not
+floored by f32 rounding, while formula sampling is unchanged.
+
+**Pinned by.** [tests/ode_test.rs](../tests/ode_test.rs):
+`harmonic_oscillator_matches_the_analytic_circle`,
+`damped_oscillator_decays_like_the_reference`,
+`rk4_halving_the_step_reduces_error_by_at_least_eight`,
+`step_limit_is_explicit_and_bounded`,
+`nonfinite_evolution_stops_without_fake_points`,
+`current_field_and_typed_rhs_agree`,
+`invalid_scene_and_nonfinite_seed_are_rejected`, and
+`markers_clamp_and_interpolate_between_samples`. Task 2's app/mode/clock
+contract is pinned by [tests/ode_app_test.rs](../tests/ode_app_test.rs).
+Performance evidence and host numbers are in
+[docs/perf/ode-performance.md](perf/ode-performance.md).
+
+**Limitations.** Fixed-step RK4 only: no adaptive/stiff solver, symbolic
+solve, 3D phase cube or parameter sweep. This is a precomputed teaching
+trajectory solve, not a per-frame solver. The responsive panel and charts,
+mode/state/shared-clock playback, persistence and PNG/SVG provenance are wired
+through [src/ui/ode_panel.rs](../src/ui/ode_panel.rs),
+[src/app/simulation.rs](../src/app/simulation.rs),
+[src/viewmodel.rs](../src/viewmodel.rs) and
+[src/export_provenance.rs](../src/export_provenance.rs). Particle RK4 is
+untouched.
+
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula,
-Sources or Induction; `SourceDisplay` selects Electric, Magnetic or Both;
+Sources, Induction or Ode; `SourceDisplay` selects Electric, Magnetic or Both;
 `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
 softening and accuracy opt-in. The same module turns a scene into drawable
@@ -1358,6 +1435,11 @@ decisions that do not need a window.
 - Induction mode fields: `induction`, `induction_prepared`,
   `induction_sampling` and `induction_error`; `set_induction_scene`,
   `refresh_induction` and `reset_induction`.
+- Ode mode fields: `ode`, `ode_solution` (`Arc<OdeSolution>`), `ode_error`,
+  `ode_epoch`, `ode_chart`, `ode_variables` and private `ode_dirty`;
+  `set_ode_scene` (validate/solve atomically), `refresh_ode_if_dirty`,
+  `reset_ode`, `set_ode_chart` and `set_ode_variables` (at least one variable
+  stays on).
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1370,11 +1452,12 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `active_dimension()` is 3 in Sources and Induction mode and the formula's
-  component count otherwise; `is_3d()` means `mode_3d && active_dimension() ==
-  3`. This gates the cube grid, density cap, plane frame/slice and streamline
-  depth, so source/induction mode uses the existing 2D plane path in 2D and the
-  world cube in 3D.
+- `active_dimension()` is 3 in Sources and Induction, the solved scene's
+  dimension in Ode (the selected scene before the first lazy solve), and the
+  formula's component count otherwise; `is_3d()` means `mode_3d &&
+  active_dimension() == 3`. This gates the cube grid, density cap, plane
+  frame/slice and streamline depth, so source/induction mode uses the existing
+  2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
 - `set_field_mode` preserves the formula, source scene, induction scene and the
   current 2D/3D projection, clears the cached sampling/notice and marks dirty.
   Entering Induction never rewrites the stored density or the projection;
@@ -1385,15 +1468,29 @@ decisions that do not need a window.
   edits never invalidate source or induction state. Entering Sources or toggling
   its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
   `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
-  has no transition bypass. Global reset calls `reset_sources` and
-  `reset_induction` before selecting Formula; each restores its default scene
-  and clears its caches/error without touching the other adapter or the clock.
+  has no transition bypass. Global reset calls `reset_sources`,
+  `reset_induction` and `reset_ode` before selecting Formula; each restores its
+  default scene and clears its caches/error without touching the other adapter
+  or the clock. `reset_ode` synchronously solves the default scene and bumps
+  the epoch; merely leaving Ode preserves the last solution and epoch.
+- Entering Ode ensures the vector plot kind and preserves the projection,
+  formula/source/induction durable scenes and camera. It clears the shared loop
+  period (in the app cache), clears source/induction caches/notices, marks the
+  scene dirty and does not solve synchronously. A fresh or `CurrentField` scene
+  queues a lazy solve; a preserved typed solution re-enters without a new epoch
+  so playback time survives. `mark_dirty` only queues a `CurrentField` re-solve.
+- In Ode, `is_plane_slice` is false and `plane_frame` is `None`; `particle_target`
+  is `None`; `scene_domain` is the solved padded `view_domain` (durable domain
+  before a solve); streamlines/click bursts are empty and clicks are refused.
+  `set_time` mirrors only. `has_time_dependent_consumer` is true while a
+  solution exists or a lazy solve is pending.
 - `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
   source/induction cache, source mode stores a fresh `SourceSampling`, induction
   mode re-prepares only on a changed `InductionKey` and otherwise rescales the
   same prepared `Arc`. `snapshot` in Sources/Induction mode returns cached arrows
   only (empty if unsampled) and never samples the formula; Induction also emits
-  no lines, trails, dots or combined stream.
+  no lines, trails, dots or combined stream. In Ode the pure snapshot is an
+  empty vector scene: the app owns trajectory lines and per-frame markers.
 - Induction is a clock consumer exactly while `induction.is_animated()`; its
   `set_time` only dirties an animated waveform, so pause/resume and the scalar
   plot pause hold the sampled field at the shared time.
@@ -1420,7 +1517,8 @@ decisions that do not need a window.
 - Click bursts: 5 seeds, 8 % of the smallest positive extent, deterministic from
   the clicked bits; 2D pins z, 3D jitters depth.
 - `particle_target()` is `Some` only when `particles && active_dimension() == 3`
-  in Formula mode (never in Sources), independent of the view mode, so a
+  in Formula mode (never in Sources, Induction or Ode), independent of the view
+  mode, so a
   two-component formula gets no cloud in 3D while a three-component field gets
   one in the 2D plane slice.
 - `drag_channel`: middle always pans; secondary orbits in 3D unless Shift, pans
@@ -1475,7 +1573,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1508,6 +1606,17 @@ storage key, with migration and corruption tolerance.
     mode then falls back to Formula. An absent legacy induction payload is the
     valid default scene and sets no error. The shared `source_softening` field
     remains the one softening value.
+11. ODE restores lazily through `State::restore_ode_fields`: the source token,
+    dimension, equations, seeds, duration, chart and variables are validated by
+    the normal `prepare_ode` path, no solver runs during restore, any stale
+    solution is cleared and the first Ode frame/`refresh_ode_if_dirty` solves
+    the scene. Malformed values (unknown source, non-finite seed, invalid
+    dimension/duration, unparseable equation or a current-field mismatch) keep
+    an explicitly stored Ode mode but restore the valid default scene, record
+    `ode_error` and still leave the default scene pending. Legacy payloads keep
+    Formula selected and set no ODE error. Global reset restores the default
+    scene, chart `phase` and variables `[true,true,false]` and clears any shared
+    Ode loop period.
 
 **Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -1532,6 +1641,14 @@ storage key, with migration and corruption tolerance.
 `malformed_induction_fields_fall_back_and_report_the_error`,
 `global_reset_clears_induction_cache_and_restores_defaults`, and the
 restore/sanitize tests.
+
+ODE persistence is pinned separately by
+[tests/ode_persistence_test.rs](../tests/ode_persistence_test.rs):
+`ode_scene_round_trips_all_fields`, `malformed_ode_payload_falls_back_lazily`,
+`legacy_record_leaves_ode_unselected_and_error_free`,
+`global_reset_clears_ode_fields`, and
+`global_reset_returns_to_formula_and_clears_the_ode_loop_period`. ODE export
+provenance is pinned by [tests/ode_export_test.rs](../tests/ode_export_test.rs).
 
 **Limitations.** There is no explicit schema version number; compatibility is a
 set of serde defaults and aliases that must be maintained forever. Camera state,
@@ -1708,8 +1825,8 @@ animated induction scene.
 **Public API.** `MAX_STEP = 1/20`, `MIN_SPEED = 0.1`, `MAX_SPEED = 3.0`,
 `DEFAULT_SPEED = 1.0`; `SimClock { time, playing, speed, .. }` with `advance`,
 `advance_for`, `step_dt`, `set_playing`, `toggle_playing`, `set_speed`,
-`reset_time`, `reset`; `has_clock_consumer`, `transport_visible`,
-`should_animate`.
+`clamp_time`, `seek`, `reset_time`, `reset`; `has_clock_consumer`,
+`transport_visible`, `should_animate`.
 
 **Invariants.**
 - Non-finite/zero/negative frame times are ignored; a large frame clamps to
@@ -1718,8 +1835,11 @@ animated induction scene.
 - With no consumer, `advance_for` holds time and clears the step; re-enabling
   resumes from that time.
 - Speed clamps to 0.1..=3.0; a non-finite value becomes 1×.
+- `clamp_time(max)` shortens time to `max` and pauses once when it clamped;
+  `seek(time)` clamps non-negative, clears the step and pauses. Ode uses both
+  for duration-bounded playback and its Step action.
 - The clock is transient: a fresh session and `Reset all controls` start at
-  time 0, playing, 1×.
+  time 0, playing, 1×. Ode clears `loop_period` on mode entry.
 
 **Pinned by.** `tests/particle_playback_test.rs` (17 tests):
 `a_fresh_clock_is_playing_at_normal_speed`,
@@ -2133,29 +2253,44 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source and induction export warning contract
+#### `src/export_provenance.rs` — source, induction and ODE export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
-derived from the validated `SourceScene` plus cached `SourceSampling`, or from
-the durable `InductionScene` plus shared softening and cached
-`InductionSampling`; it never samples the field or creates vector data.
+derived from the validated `SourceScene` plus cached `SourceSampling`, from the
+durable `InductionScene` plus shared softening and cached
+`InductionSampling`, or from the durable `OdeScene` plus the already-computed
+`OdeSolution` and shared clock; it never samples the field, re-integrates the
+ODE scene or creates vector data.
 
 **Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
-induction_mode }`, `source_export_provenance(mode, scene, sampling)`,
+induction_mode, ode_mode }`, `source_export_provenance(mode, scene, sampling)`,
 `induction_export_provenance(mode, scene, softening, sampling)`,
+`ode_export_provenance(mode, scene, solution, error, timeline)`,
 `provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
 `MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
 `NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
-`INDUCTION_INVALID_LINE`.
+`INDUCTION_INVALID_LINE`, `ODE_MODEL_LINE`, `ODE_BOUNDED_LINE`,
+`ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`.
 
 **Invariants.**
-- Formula mode returns `None` from both helpers; Sources/Induction always return
-  `Some` for their own mode (`source_mode` / `induction_mode` respectively).
+- Formula mode returns `None` from all helpers; Sources/Induction/Ode always
+  return `Some` for their own mode (`source_mode` / `induction_mode` /
+  `ode_mode` respectively).
 - The softened-model line is always first. Missing sampling adds
   `Source sampling unavailable` or `Induction sampling unavailable`; a
   validation error adds the matching invalid line; accuracy/unavailable lines
   appear only when their counts are nonzero.
+- ODE's first line is always
+  `ODE - fixed-step RK4 teaching model - h = 0.005` (built from `ODE_STEP`),
+  followed by the bounded-trajectory line. An available solution adds
+  `timeline: duration = {duration}, step = {step}, t = {time}`; a missing
+  solution adds `ODE solution unavailable`. A retained `ode_error` adds
+  `ODE scene invalid: {error}` and `vfe.validation_error`.
+- ODE metadata is `vfe.model = ode-fixed-step-rk4` plus `vfe.ode_source`
+  (`equations`/`current_field`), `vfe.ode_dimension`, `vfe.ode_step` and
+  `vfe.ode_duration`; no CAS text, no non-finite sample data and no fabricated
+  trajectory geometry are exported. An export never re-solves or samples ODE.
 - Induction's model line is
   `Induction - quasistatic axisymmetric softened model - a = {softening}` and
   its metadata is exactly `vfe.model = quasistatic-axisymmetric-faraday`,
@@ -2165,7 +2300,7 @@ induction_mode }`, `source_export_provenance(mode, scene, sampling)`,
   derivative text is never exported.
 - A cached induction pass built at a different softening is treated as
   unavailable, so counts never pair with a different model `a`.
-- `allow_inaccurate` changes the drawn count only; it never removes a warning
+- An opt-in changes the drawn count only; it never removes a warning
   or relaxes a cap. Non-finite sampled values never enter warnings/metadata.
 - Source metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
   `vfe.accuracy_not_met_total`, `vfe.accuracy_not_met_drawn`,
@@ -2178,7 +2313,9 @@ induction_mode }`, `source_export_provenance(mode, scene, sampling)`,
 `missing_or_invalid_sampling_keeps_the_warning`) and
 `tests/induction_export_test.rs` (exact induction lines/metadata, missing and
 invalid sampling, opt-in/caps, decoded PNG banner/tEXt bytes and visible SVG
-text/metadata).
+text/metadata) and `tests/ode_export_test.rs` (request-time Ode provenance,
+decoded PNG banner/tEXt, visible SVG text/metadata, unavailable-solution
+warning with no fabricated geometry, and the 2D-only SVG rejection).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 
@@ -2237,9 +2374,9 @@ download paths.
 `sender`, `tick`, `fail`, `toast_text`, `toast`).
 `VfApp::request_png_export`/`request_svg_export` capture
 `field_export_provenance()` at request time; the viewport consumes it through
-the `take_*_with_provenance` variants. A Source- or Induction-mode request made
-without provenance derives the fallback instead of exporting silently. Scalar
-plot captures always pass `None`.
+the `take_*_with_provenance` variants. A Source-, Induction- or Ode-mode
+request made without provenance derives the fallback instead of exporting
+silently. Scalar plot captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)
@@ -2299,8 +2436,9 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`induction_panel`, `layout`, `menu`, `panel_rails`, `plot_panel`, `presets`,
-`sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+`induction_panel`, `layout`, `menu`, `ode_panel`, `panel_rails`, `plot_panel`,
+`presets`, `sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`,
+`transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -2430,18 +2568,61 @@ teaching demo.
 `induction_rail_expands_a_real_app_frame`) and
 `tests/layout_test.rs` for the persisted layout fields.
 
-#### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
+#### `src/ui/ode_panel.rs` — the responsive ODE workbench
+
+**Purpose.** The wide left rail/compact sheet body for `FieldMode::Ode`: source
+selector (equations/current field), typed dimension and equation rows, bounded
+initial conditions, scene duration, chart selector, time-series variables,
+Step/Fit/Reset actions, CPU charts and a closed Advanced solver/status block.
+
+**Public API.** `OdePanelState { draft, error, advanced }`,
+`OdePanelState::default`, `commit(&mut State) -> bool`,
+`sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
+Option<OdePanelAction>`, `OdePanelAction::{Step, Fit, Reset}`,
+`ode_help_rows`, `ODE_HELP_SECTION`.
+
+**Invariants.**
+- `commit` calls `State::set_ode_scene`; invalid text keeps both the committed
+  scene and the draft, and `error` comes from `State::ode_error`. A clean draft
+  is reloaded from the committed scene by `sync_from`, which the app calls on
+  mode entry, section reset and persistence restore — never on an ordinary frame
+  with a dirty draft.
+- Text commits on focus loss/Enter, DragValues on release, and seed/button
+  actions on click; no edit re-solves once per dragged frame.
+- Seeds stay finite and bounded to `ODE_MAX_SEEDS`; duration stays inside
+  `0.1..=ODE_MAX_DURATION`; at least one time-series variable stays selected and
+  the all-off attempt paints `Select at least one variable.`.
+- Phase portrait paints x/y only (a projection in 3D) from the shared solution
+  samples with `ODE_COLORS`, seed and current-time markers. Time series paints
+  the selected variables against `t` from the same samples. Empty/error
+  solutions paint an explanation and no fabricated lines.
+- Advanced states the fixed-step RK4 `h`, sample/step/stop counts and the current
+  field dimension when that source is active.
+- The panel returns actions only; the app owns clock seeking, Fit, scene reset
+  and camera reset.
+
+**Pinned by.** `tests/ode_panel_test.rs`
+(`ode_panel_exposes_equations_seeds_and_actions`,
+`ode_equation_edit_commits_valid_scene_only`,
+`ode_initial_conditions_are_bounded_and_distinct`,
+`time_series_variables_reject_all_false`,
+`ode_compact_and_wide_panels_reflow`,
+`ode_chart_switch_commits_state`,
+`ode_mode_disables_features_and_cas`,
+`open_ode_reaches_the_wide_rail_or_compact_sheet`).
+
+#### `src/ui/formula_bar.rs` — formula text and mode toggles
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text, open_sources, open_induction }`,
+**Public API.** `FormulaBarState { text, open_sources, open_induction, open_ode }`,
 `FormulaBarState::new`, `show(ui, state, bar, compact)`.
 
 **Invariants.**
-- In vector mode a Formula/Sources/Induction selector calls
-  `State::set_field_mode`; Sources and Induction hide the text editor and show
-  their own summary plus `Open Sources`/`Open induction`, which raise the
-  matching one-shot request for the app to consume.
+- In vector mode the Formula/Sources/Induction/ODE selector calls
+  `State::set_field_mode`; Sources, Induction and ODE hide the text editor and
+  show their own summary plus `Open Sources`/`Open induction`/`Open ODE`, which
+  raise the matching one-shot request for the app to consume.
 - Compact keeps the projection and adapter selectors on one horizontally
   scrollable row and puts the editor/summary beneath it, so a large font cannot
   squeeze the compact sheet out of existence.
@@ -2460,6 +2641,7 @@ teaching demo.
 
 **Pinned by.** `tests/sources_panel_test.rs::formula_bar_switches_mode_and_hides_the_editor`;
 `tests/induction_panel_test.rs::formula_bar_selects_induction_and_hides_the_formula_editor`;
+`tests/ode_panel_test.rs::formula_bar_selects_ode_and_hides_the_editor`;
 the setter contract is in `tests/viewmodel_test.rs`
 (`valid_formula_replaces_field_and_clears_error`,
 `garbage_formula_keeps_field_and_reports_error`), the width rule in
@@ -2478,8 +2660,9 @@ window.
 `section_heading_style`, `OVERLAY_HEADING_COLOR`, `window_heading_color`,
 `HelpRow`, `HelpSection`, `FLY_HELP_*`, `SEED_HELP_*`, `LEFT_CLICK_HELP_*`,
 `HELP_SECTIONS`, `SCALAR_HELP_SECTION`, `SOURCES_HELP_SECTION`,
-`INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `scalar_help_rows`,
-`sources_help_rows`, `induction_help_rows`, `all_rows`, `sections_for`,
+`INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `ODE_HELP_SECTION`,
+`ODE_HELP_ROWS`, `scalar_help_rows`, `sources_help_rows`,
+`induction_help_rows`, `ode_help_rows`, `all_rows`, `sections_for`,
 `rows_for`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
@@ -2522,7 +2705,7 @@ tab-bar/sheet plan.
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
 `DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
-`MIN_PANEL_WIDTH = 180`,
+`DEFAULT_ODE_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
 `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
@@ -2535,12 +2718,13 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores nine desktop fields (Controls,
-  Presets, Sources and Induction visibility/width plus help) and native-only
-  `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Sources` and `SheetState::Induction` share the one compact sheet.
-- Sources and Induction default to collapsed at 280 pt and sanitize to
-  180..=460; the Induction record is consulted only in Induction mode.
+- Compact is transient: `LayoutState` stores eleven desktop fields (Controls,
+  Presets, Sources, Induction and ODE visibility/width plus help) and
+  native-only `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
+- `SheetState::Sources`, `SheetState::Induction` and `SheetState::Ode` share the
+  one compact sheet.
+- Sources and Induction default to collapsed at 280 pt, ODE at 300 pt, and all
+  sanitize to 180..=460; each record is consulted only in its own field mode.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
@@ -3303,10 +3487,13 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 - **Fields may be time-dependent.** `meval` expressions bind `x`, `y`, `z`, and
   the shared time `t`; the Electrodynamics presets themselves are static
   spatial snapshots. Induction supplies the dedicated dynamic-field demo.
-- **Three separate adapters.** Formula, Sources, and Induction are exclusive
-  modes with durable state; there is no formula-to-source conversion.
+- **Four separate concept modes.** Formula, Sources, Induction, and Ode are
+  exclusive modes with durable state; there is no formula-to-source or
+  formula-to-ODE conversion.
 - **No general solver.** The native CAS differentiates formulas and derives
-  gradient, divergence, and curl; no ODE, PDE, or Maxwell solver is implemented.
+  gradient, divergence, and curl. The Ode workbench is a bounded, precomputed
+  fixed-step RK4 trajectory viewer, not an adaptive/stiff or symbolic solver; no
+  PDE or Maxwell solver is implemented.
 - **No depth/MSAA.** 3D ordering is CPU painter sort; no shadows, anti-aliasing
   beyond dot rims, or transparency sorting per triangle.
 - **One 3D draw budget.** Every instance pays for a 16-side cone even when the

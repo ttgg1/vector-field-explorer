@@ -140,6 +140,15 @@ impl VfApp {
                 self.layout.induction_expanded = true;
             }
         }
+        if self.bar.open_ode {
+            self.bar.open_ode = false;
+            if self.layout_mode == LayoutMode::Compact {
+                self.sheet.open(SheetState::Ode);
+                self.sheet_expanded = SheetSize::Default;
+            } else {
+                self.layout.ode_expanded = true;
+            }
+        }
     }
 
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
@@ -173,6 +182,14 @@ impl VfApp {
                 expanded: &mut self.layout.induction_expanded,
             });
         }
+        if self.state.field_mode == FieldMode::Ode {
+            entries.push(RailEntry {
+                id: "ode",
+                label: "ODE",
+                shortcut: None,
+                expanded: &mut self.layout.ode_expanded,
+            });
+        }
         show_rail_strip(
             ui,
             ("left_panel_rails", self.panel_generation),
@@ -195,6 +212,9 @@ impl VfApp {
         }
         if self.state.field_mode == FieldMode::Induction && self.layout.induction_expanded {
             requests.push(self.layout.induction_width);
+        }
+        if self.state.field_mode == FieldMode::Ode && self.layout.ode_expanded {
+            requests.push(self.layout.ode_width);
         }
         if self.layout.presets_expanded {
             requests.push(self.layout.presets_width);
@@ -327,6 +347,39 @@ impl VfApp {
                 self.apply_induction_panel_action(action);
             }
         }
+        if self.state.field_mode == FieldMode::Ode && self.layout.ode_expanded {
+            if self.last_field_mode != FieldMode::Ode {
+                self.ode.sync_from(&self.state);
+            }
+            let width = widths.next().unwrap();
+            let mut collapse = false;
+            let mut ode_action = None;
+            let response = egui::Panel::left(("ode_panel", self.panel_generation))
+                .exact_size(width)
+                .show(ui, |ui| {
+                    collapse =
+                        layout::collapse_button_named(ui, layout::RailSide::Left, "ODE", "ODE");
+                    egui::ScrollArea::vertical()
+                        .id_salt("ode_body")
+                        .show(ui, |ui| {
+                            ode_action = crate::ui::ode_panel::show(
+                                ui,
+                                &mut self.ode,
+                                &mut self.state,
+                                false,
+                            );
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.ode_width = width;
+            }
+            if collapse {
+                self.layout.ode_expanded = false;
+            }
+            if let Some(action) = ode_action {
+                self.apply_ode_panel_action(action);
+            }
+        }
         if self.layout.presets_expanded {
             self.wide_presets_width = widths.next().unwrap();
         }
@@ -373,6 +426,37 @@ impl VfApp {
     fn sync_presets_camera(&mut self) {
         self.camera.position = [self.orbit.target.x, self.orbit.target.y];
         self.camera.scale = self.orbit.ortho_zoom;
+    }
+
+    /// Apply the ODE panel's one-shot request through the existing seams.
+    fn apply_ode_panel_action(&mut self, action: crate::ui::ode_panel::OdePanelAction) {
+        match action {
+            crate::ui::ode_panel::OdePanelAction::Step => self.ode_step(),
+            crate::ui::ode_panel::OdePanelAction::Fit => {
+                self.apply_view_command(ViewCommand::Fit);
+            }
+            crate::ui::ode_panel::OdePanelAction::Reset => {
+                self.state.reset_ode();
+                self.apply_view_command(ViewCommand::Reset);
+                self.ode.sync_from(&self.state);
+            }
+        }
+    }
+
+    /// ODE panel Step: pause, seek one fixed step (bounded by the solution
+    /// duration), and mirror the clock into state time. No solve.
+    pub(super) fn ode_step(&mut self) {
+        let Some(duration) = self
+            .state
+            .ode_solution
+            .as_ref()
+            .map(|solution| solution.duration as f32)
+        else {
+            return;
+        };
+        let target = (self.clock.time + crate::ode::ODE_STEP as f32).min(duration);
+        self.clock.seek(target);
+        self.state.set_time(self.clock.time);
     }
 
     /// Apply the Induction panel's one-shot request through the existing seams.
@@ -466,8 +550,9 @@ impl VfApp {
         // segment count: `scene.lines` also holds the decorative backdrop.
         // Scalar mode reports its own status, never stale vector parse/counts.
         if let Some(scene) = self.scene.as_vector() {
-            self.status.parse_message = if self.state.field_mode == FieldMode::Induction {
-                self.state
+            self.status.parse_message = match self.state.field_mode {
+                FieldMode::Induction => self
+                    .state
                     .induction_error
                     .clone()
                     .or_else(|| {
@@ -476,9 +561,9 @@ impl VfApp {
                             .as_ref()
                             .and_then(|sampling| sampling.validation_error.clone())
                     })
-                    .unwrap_or_default()
-            } else {
-                self.state.parse_error.clone()
+                    .unwrap_or_default(),
+                FieldMode::Ode => self.state.ode_error.clone().unwrap_or_default(),
+                _ => self.state.parse_error.clone(),
             };
             self.status.arrow_count = scene.arrows.len();
             self.status.streamline_count = self.streamline_count;
@@ -565,6 +650,9 @@ impl VfApp {
                     if self.state.field_mode == FieldMode::Induction {
                         tabs.push((SheetState::Induction, "Induction"));
                     }
+                    if self.state.field_mode == FieldMode::Ode {
+                        tabs.push((SheetState::Ode, "ODE"));
+                    }
                     let available = (ui.available_width() - close_width).max(0.0);
                     egui::ScrollArea::horizontal()
                         .id_salt("compact_tabs")
@@ -630,6 +718,12 @@ impl VfApp {
             ui.ctx().request_repaint();
             return;
         }
+        if sheet == SheetState::Ode && self.state.field_mode != FieldMode::Ode {
+            self.sheet.close();
+            self.sheet_expanded = SheetSize::Default;
+            ui.ctx().request_repaint();
+            return;
+        }
         let window_height = ui.ctx().content_rect().height();
         let available_height = ui.available_height();
         let height = layout::sheet_height(window_height, available_height, self.sheet_expanded);
@@ -645,6 +739,7 @@ impl VfApp {
         let mut camera_request = None;
         let mut plot_action = None;
         let mut induction_action = None;
+        let mut ode_action = None;
         let controls_shown = sheet == SheetState::Controls;
         egui::Panel::bottom("compact_sheet")
             .exact_size(height)
@@ -657,6 +752,7 @@ impl VfApp {
                     SheetState::Presets => "Presets",
                     SheetState::Sources => "Sources",
                     SheetState::Induction => "Induction",
+                    SheetState::Ode => "ODE",
                     SheetState::None => "",
                 };
                 ui.horizontal(|ui| {
@@ -735,6 +831,13 @@ impl VfApp {
                             true,
                         );
                     }
+                    SheetState::Ode => {
+                        if self.last_field_mode != FieldMode::Ode {
+                            self.ode.sync_from(&self.state);
+                        }
+                        ode_action =
+                            crate::ui::ode_panel::show(ui, &mut self.ode, &mut self.state, true);
+                    }
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => self.show_cas_body(ui),
                     SheetState::None => {}
@@ -752,6 +855,9 @@ impl VfApp {
         }
         if let Some(action) = induction_action {
             self.apply_induction_panel_action(action);
+        }
+        if let Some(action) = ode_action {
+            self.apply_ode_panel_action(action);
         }
         self.finish_presets(camera_request);
         if controls_shown && layout::fly_allowed(self.layout_mode) {

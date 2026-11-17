@@ -576,6 +576,7 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
             all.push(&SCALAR_HELP_SECTION);
             all.push(&SOURCES_HELP_SECTION);
             all.push(&INDUCTION_HELP_SECTION);
+            all.push(&crate::ui::ode_panel::ODE_HELP_SECTION);
             table(ui, &all, heading_color);
         });
 }

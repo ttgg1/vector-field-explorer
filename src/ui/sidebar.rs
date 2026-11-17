@@ -822,12 +822,15 @@ fn show_inner(
         ui.label("Streamlines and particles use the formula field; switch to Formula to use them.");
     } else {
         let induction_mode = state.field_mode == crate::source_scene::FieldMode::Induction;
+        let ode_mode = state.field_mode == crate::source_scene::FieldMode::Ode;
         if induction_mode {
             ui.label(
                 "Arrows only: streamlines, particles and click seeding stay off in Induction.",
             );
+        } else if ode_mode {
+            ui.label("Streamlines, particles and click seeding stay off in Ode.");
         }
-        ui.add_enabled_ui(!induction_mode, |ui| {
+        ui.add_enabled_ui(!(induction_mode || ode_mode), |ui| {
             section(ui, Section::Features, controls, None, |ui, controls| {
                 if !vector_mode {
                     ui.label("Streamlines and particles are vector-only; their values are retained.");
@@ -1040,38 +1043,40 @@ fn show_inner(
         });
     }
 
-    section(ui, Section::Coloring, controls, None, |ui, controls| {
-        if !coloring_visible {
-            ui.label(BOTH_COLORING_NOTE);
-            return;
-        }
-        if !vector_mode {
-            ui.label(
-                "Vector magnitude range is disabled while plotting; plot colours live in Plot.",
-            );
-        }
-        ui.add_enabled_ui(vector_mode, |ui| {
-            button_row(ui, |ui| {
-                ui.label("Colormap");
-                for colormap in Colormap::ALL {
-                    ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
-                        .on_hover_text("Color map for field magnitude");
+    if state.field_mode != crate::source_scene::FieldMode::Ode {
+        section(ui, Section::Coloring, controls, None, |ui, controls| {
+            if !coloring_visible {
+                ui.label(BOTH_COLORING_NOTE);
+                return;
+            }
+            if !vector_mode {
+                ui.label(
+                    "Vector magnitude range is disabled while plotting; plot colours live in Plot.",
+                );
+            }
+            ui.add_enabled_ui(vector_mode, |ui| {
+                button_row(ui, |ui| {
+                    ui.label("Colormap");
+                    for colormap in Colormap::ALL {
+                        ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
+                            .on_hover_text("Color map for field magnitude");
+                    }
+                });
+                ui.checkbox(&mut controls.auto_fit, "Auto-fit color range")
+                    .on_hover_text("Fit the color range to the sampled magnitudes");
+                if !controls.auto_fit {
+                    ui.horizontal(|ui| {
+                        ui.label("Magnitude range:");
+                        ui.add(egui::DragValue::new(&mut controls.color_min).speed(0.01))
+                            .on_hover_text("Magnitude at the color ramp's low end");
+                        ui.label("to");
+                        ui.add(egui::DragValue::new(&mut controls.color_max).speed(0.01))
+                            .on_hover_text("Magnitude at the color ramp's high end");
+                    });
                 }
             });
-            ui.checkbox(&mut controls.auto_fit, "Auto-fit color range")
-                .on_hover_text("Fit the color range to the sampled magnitudes");
-            if !controls.auto_fit {
-                ui.horizontal(|ui| {
-                    ui.label("Magnitude range:");
-                    ui.add(egui::DragValue::new(&mut controls.color_min).speed(0.01))
-                        .on_hover_text("Magnitude at the color ramp's low end");
-                    ui.label("to");
-                    ui.add(egui::DragValue::new(&mut controls.color_max).speed(0.01))
-                        .on_hover_text("Magnitude at the color ramp's high end");
-                });
-            }
         });
-    });
+    }
 
     // The Domain editor renders only the axes the current sampling dimension
     // can use; reversed drags are handed over as-is and the seam's per-axis

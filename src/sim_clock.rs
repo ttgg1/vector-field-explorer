@@ -120,6 +120,32 @@ impl SimClock {
         };
     }
 
+    /// Clamp the stored time to `max` seconds and pause once at the end.
+    ///
+    /// Ode uses this after a normal clock advance: reaching a precomputed
+    /// solution's duration stops playback instead of running past the last
+    /// sample. Returns whether the clamp actually shortened time. A non-finite
+    /// or negative `max` is ignored so a corrupt solution cannot poison the
+    /// transport.
+    pub fn clamp_time(&mut self, max: f32) -> bool {
+        if !max.is_finite() || max < 0.0 || self.time <= max {
+            return false;
+        }
+        self.time = max;
+        self.step = 0.0;
+        self.playing = false;
+        true
+    }
+
+    /// Seek to a non-negative playback time, pausing the transport and
+    /// clearing the per-frame step. Ode's Step action uses this so clock and
+    /// state time move together without a private timer.
+    pub fn seek(&mut self, time: f32) {
+        self.time = if time.is_finite() { time.max(0.0) } else { 0.0 };
+        self.step = 0.0;
+        self.playing = false;
+    }
+
     /// Return time to zero without touching playback or speed. The particle
     /// cloud is untouched; the transport's reset-time button calls this.
     pub fn reset_time(&mut self) {

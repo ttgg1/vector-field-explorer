@@ -32,6 +32,10 @@ instanced GPU scene:
   with separate E and B arrow families driven by the shared clock and
   reconstructed from a softened vector potential; see
   [Induction teaching demo](#induction-teaching-demo);
+- an ODE workbench for bounded dynamical-system teaching: type `dx/dt`,
+  `dy/dt`, `dz/dt` or integrate the current formula field, then play back up to
+  eight fixed-step RK4 trajectories with an x/y phase portrait and per-variable
+  time series on the shared clock; see [ODE workbench](#ode-workbench);
 - a 2D orthographic view and a 3D orbit camera, plus a free-fly camera;
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
   plane-by-plane inspection, including 2D slices of three-component fields,
@@ -54,10 +58,11 @@ The source-evaluator API (eight softened source kinds, family-local accuracy
 and diagnostics) is summarized in the
 [source accuracy notes](docs/sources-accuracy.md).
 
-It is a teaching-grade explorer, not a numerical solver: the native CAS
-differentiates formulas and derives gradient, divergence, and curl, but there
-is no ODE, PDE, or Maxwell-equation solver. The architecture and module map are
-in [docs/CODEBASE.md](docs/CODEBASE.md);
+It is a teaching-grade explorer, not a general numerical solver: the native CAS
+differentiates formulas and derives gradient, divergence, and curl, and the ODE
+workbench precomputes bounded fixed-step RK4 teaching trajectories. There is no
+adaptive/stiff ODE solver, PDE solver, or Maxwell-equation solver. The
+architecture and module map are in [docs/CODEBASE.md](docs/CODEBASE.md);
 domain vocabulary and settled decisions are in [GLOSSARY.md](GLOSSARY.md) and
 [docs/adr/](docs/adr/).
 
@@ -334,6 +339,80 @@ are cache-preparation measurements, not a frame-time target; the 33 ms
 particle target is not claimed for induction. Browser/WebAssembly and manual
 visual checks are owner-waived for this delivery, not claimed as passed.
 
+### ODE workbench
+
+Choose **ODE** in the Formula/Sources/Induction/ODE selector to open the
+dedicated ODE panel. It is the fourth vector concept mode: the viewport stays on
+the vector scene in the current 2D/3D projection, and the panel shows the scene
+summary with **Open ODE**. The workbench is a precomputed teaching trajectory
+viewer, not a general solver.
+
+**Sources.** **Equations** accepts a 2D or 3D first-order system as
+`dx/dt =`, `dy/dt =`, and (in 3D) `dz/dt =`, using the same expression parser,
+functions, `pi`/`e` constants, and `x`, `y`, `z`, `t` variables as the formula
+field. **Current field** integrates the durable current formula field instead:
+it uses the field's dimension and the durable formula domain in world
+coordinates, not the ODE viewport's fitted trajectory bounds, and it uses no
+plane projection. A broken formula draft keeps the last valid ODE solution
+visible, reports the parse error, and does not re-solve the stale field; a
+successful parse queues the next solve.
+
+**Integration and limits.** The solver is a fixed-step classical RK4 with
+`h = 0.005`. Each seed starts at the integration time `t = 0`, and samples are
+stored at `n * h` on that integration time, independently of playback. The
+duration is 20 by default and editable from 0.1 to 25; up to eight finite
+initial conditions are allowed. The cap is **4096 stored samples per
+trajectory including `t = 0`**. At the default duration a trajectory stores
+4001 samples and ends **Complete**; at 25 it exhausts the cap and ends
+**StepLimit**, shown as a step-limit stop. A non-finite evolution stops only
+that trajectory at its last finite sample with **NonFinite**; other seeds
+continue, and no NaN/inf segment is drawn. An invalid scene or seed is
+rejected, the last valid scene and solution stay in place, and the actionable
+error appears in the panel and status bar.
+
+**Playback.** ODE uses the one shared simulation clock for Play/Pause, Step,
+reset-time, speed, and the time readout; **Step** advances exactly one RK4 step
+and pauses. There is no private ODE timer and no ODE loop period: entering ODE
+clears the shared loop period. Playback auto-pauses once at the solution
+duration and mirrors the clamped time into the view, so clock and state cannot
+drift. A valid scene edit or reset starts playback at `t = 0`; returning to Ode
+without a new solution epoch keeps the current time. The existing particle RK4
+implementation is unchanged; ODE adds no particle path.
+
+**Charts.** The phase portrait is the x/y projection of the trajectory samples
+(also x/y in a 3D scene; there is no 3D phase cube). The time series plots the
+selected `x`, `y`, and/or `z` components against the integration time `t`.
+Both read the same precomputed samples, never re-solve, and use up to eight
+fixed seed colours with seed and current-time markers. The chart choice and
+time-series variable selection persist with the view.
+
+**Vector-only scope.** ODE is a vector-viewport concept. Arrows, particles,
+streamlines, and click seeding are disabled or absent; the Features controls
+are disabled with an ODE note, and Coloring is hidden because trajectories use
+the fixed palette. Camera, Fit, and the coordinate-system toggle remain
+available. The native CAS is Formula-only: ODE does not use CAS and the CAS
+panel stays disabled outside Formula.
+
+**Export and persistence.** PNG and SVG exports always carry the visible ODE
+model warning (`ODE - fixed-step RK4 teaching model - h = 0.005`) and the
+bounded-trajectory line, plus a timeline line when a solution exists, an
+unavailable warning when it does not, and an invalid-scene warning when the
+retained scene failed. Metadata records the model, source, dimension, step, and
+duration. Non-finite samples are never exported, and no opt-in can suppress an
+ODE warning. SVG remains 2D-only. The durable ODE scene (source, dimension,
+equations, seeds, duration), chart choice, and visible variables persist with
+the field mode. Restore validates lazily: malformed ODE fields fall back to the
+default valid scene with an error, a legacy payload leaves Ode unselected, and
+the first Ode frame solves the restored or fallback scene without a synchronous
+solve during restore. Global reset restores the default ODE scene, clears its
+solution and error, and returns to Formula.
+
+Solve times are in
+[docs/perf/ode-performance.md](docs/perf/ode-performance.md). They are
+one-shot precomputed solve measurements, not frame-time targets; the 33 ms
+particle target is not claimed for ODE. Browser/WebAssembly runtime and manual
+visual checks are owner-waived for this delivery, not claimed as passed.
+
 ### Mouse and keyboard
 
 | Input | 3D view | 2D view |
@@ -437,8 +516,10 @@ survive a restart:
   settings, colouring, streamline and particle settings, the saved source scene
   (entries, display, softening and accuracy opt-in), the saved induction scene
   (case, center, axis, radius/length/turns, amplitude/frequency, display and
-  accuracy opt-in) with its field mode, and the Show grid / Show coordinate
-  system preferences (remembered across both modes);
+  accuracy opt-in), and the saved ODE scene (source, dimension, equations,
+  seeds, duration, chart and visible variables) with its field mode, plus the
+  Show grid / Show coordinate system preferences (remembered across both
+  modes);
 - the layout: panel visibility, panel widths, and help-overlay visibility;
 - the appearance: theme, accent, rounding, spacing, and font size.
 
@@ -452,7 +533,10 @@ Corrupt or partial settings fall back to defaults or clamp to valid ranges;
 older saved views without the guide preferences show both guides by default.
 Older payloads without induction fields restore the default valid current-loop
 scene; malformed induction fields also fall back to that scene and report the
-validation error instead of failing startup.
+validation error instead of failing startup. Older payloads without ODE fields
+leave Ode unselected and set no ODE error; malformed ODE fields keep an
+explicitly stored Ode mode, restore the default valid ODE scene, report the
+validation error, and solve lazily on the first Ode frame.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
 logged and left untouched rather than silently overwritten (a missing file
 starts with an empty list), and save or delete failures surface a non-blocking
@@ -472,8 +556,10 @@ camera presets use `localStorage`.
   editable source or induction scene. Screenshots are PNG, or 2D SVG; there is
   no CSV, NumPy, or project-file import.
 - **No general solver.** The native CAS differentiates formulas and derives
-  gradient, divergence, and curl. It does not solve ODEs, PDEs, or Maxwell's
-  equations.
+  gradient, divergence, and curl. The ODE workbench is a bounded fixed-step RK4
+  trajectory viewer: it has no adaptive/stiff solver, symbolic integration,
+  parameter sweep, or 3D phase cube, and solve timings are not frame-time
+  claims. It does not solve PDEs or Maxwell's equations.
 - **NaN and infinite samples are skipped.** A pole inside the domain leaves a
   hole in the arrows rather than crashing or blanking the scene; a parse error
   keeps the last valid field. Built-in singular-looking presets are softened.

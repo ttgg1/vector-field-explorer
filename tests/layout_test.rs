@@ -190,6 +190,8 @@ fn layout_state_serializes_exactly_its_platform_persisted_fields() {
         "sources_width",
         "induction_expanded",
         "induction_width",
+        "ode_expanded",
+        "ode_width",
         "help_visible",
         #[cfg(not(target_arch = "wasm32"))]
         "cas_expanded",

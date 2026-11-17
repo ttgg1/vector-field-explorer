@@ -3,7 +3,7 @@
 //! A field is written as `(u, v)` or `(u, v, w)` where each component is a
 //! math expression in `x`, `y`, `z` parsed by `meval`.
 
-use glam::{Vec2, Vec3};
+use glam::{DVec3, Vec2, Vec3};
 
 #[derive(Debug, Clone)]
 pub enum FieldError {
@@ -92,13 +92,14 @@ impl FieldExpr {
     /// Evaluates component `i` at `(x, y, z, t)`. `None` if it cannot be bound
     /// (unknown variables) or the result is NaN/infinite.
     fn eval_component(&self, i: usize, x: f64, y: f64, z: f64, t: f64) -> Option<f64> {
-        let f = self.components.get(i)?.clone().bind4("x", "y", "z", "t").ok()?;
+        let f = self
+            .components
+            .get(i)?
+            .clone()
+            .bind4("x", "y", "z", "t")
+            .ok()?;
         let v = f(x, y, z, t);
-        if v.is_finite() {
-            Some(v)
-        } else {
-            None
-        }
+        if v.is_finite() { Some(v) } else { None }
     }
 
     /// Whether any component references `t` as a free variable (detected at
@@ -114,21 +115,44 @@ impl FieldExpr {
         Some((u, v))
     }
 
-    /// Evaluates the field at a 3D point at time `t`. A 2D field evaluates
-    /// over `p.xy` and returns `Vec3::new(u, v, 0.0)`.
-    pub fn eval3_at(&self, p: Vec3, t: f32) -> Option<Vec3> {
-        let t = t as f64;
-        let x = p.x as f64;
-        let y = p.y as f64;
-        let z = if self.dimension == 3 { p.z } else { 0.0 } as f64;
-        let (u, v) = self.eval_uv(x, y, z, t)?;
+    /// Evaluates the field at a 3D point at time `t` in f64 precision. A 2D
+    /// field evaluates over `p.xy` and returns `Vec3::new(u, v, 0.0)`.
+    ///
+    /// This is the ODE integration boundary: the components are computed in
+    /// f64 and only the final finite result is cast to f32 for the existing
+    /// field API.
+    pub fn eval3_at_f64(&self, p: DVec3, t: f64) -> Option<Vec3> {
+        let components = self.eval3_components_at_f64(p, t)?;
+        let out = Vec3::new(
+            components[0] as f32,
+            components[1] as f32,
+            components[2] as f32,
+        );
+        if out.is_finite() { Some(out) } else { None }
+    }
+
+    /// f64 components behind [`FieldExpr::eval3_at_f64`]; the ODE solver uses
+    /// this directly so its RK4 error is not floored by f32 rounding.
+    pub(crate) fn eval3_components_at_f64(&self, p: DVec3, t: f64) -> Option<[f64; 3]> {
+        let z = if self.dimension == 3 { p.z } else { 0.0 };
+        let (u, v) = self.eval_uv(p.x, p.y, z, t)?;
         let w = if self.dimension == 3 {
-            self.eval_component(2, x, y, z, t)?
+            self.eval_component(2, p.x, p.y, z, t)?
         } else {
             0.0
         };
-        let out = Vec3::new(u as f32, v as f32, w as f32);
-        if out.is_finite() { Some(out) } else { None }
+        let out = [u, v, w];
+        if out.iter().all(|value| value.is_finite()) {
+            Some(out)
+        } else {
+            None
+        }
+    }
+
+    /// Evaluates the field at a 3D point at time `t`. A 2D field evaluates
+    /// over `p.xy` and returns `Vec3::new(u, v, 0.0)`.
+    pub fn eval3_at(&self, p: Vec3, t: f32) -> Option<Vec3> {
+        self.eval3_at_f64(DVec3::new(p.x as f64, p.y as f64, p.z as f64), t as f64)
     }
 
     /// Evaluates the field at a 3D point. Delegates to [`eval3_at`] at `t = 0`.
@@ -153,4 +177,3 @@ fn component_time_dependent(src: &str) -> bool {
         Err(_) => false,
     }
 }
-

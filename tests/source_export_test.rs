@@ -176,6 +176,7 @@ fn sample_provenance() -> ExportProvenance {
         ],
         source_mode: true,
         induction_mode: false,
+        ode_mode: false,
     }
 }
 
@@ -260,6 +261,7 @@ fn svg_warning_is_visible_and_metadata_is_present() {
         metadata: vec![("vfe.softening".to_string(), "0.1".to_string())],
         source_mode: true,
         induction_mode: false,
+        ode_mode: false,
     };
     let svg = vector_field_explorer::screenshot::scene_to_svg_with_provenance(
         &scene,
@@ -289,6 +291,7 @@ fn svg_text_and_metadata_are_xml_escaped() {
         )],
         source_mode: true,
         induction_mode: false,
+        ode_mode: false,
     };
     let svg = vector_field_explorer::screenshot::scene_to_svg_with_provenance(
         &scene,
@@ -327,6 +330,7 @@ fn svg_with_line(line: LineInstanceGPU) -> String {
             metadata: Vec::new(),
             source_mode: true,
             induction_mode: false,
+            ode_mode: false,
         }),
     )
 }

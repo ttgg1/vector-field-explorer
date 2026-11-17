@@ -115,13 +115,22 @@ impl VfApp {
     }
 
     /// Capture the export context for the active adapter now. Formula mode has
-    /// none; Sources and Induction always produce a warning-bearing provenance,
-    /// even before sampling. Induction uses the shared scene softening.
+    /// none; Sources, Induction and Ode always produce a warning-bearing
+    /// provenance, even before sampling or a lazy solve. Induction uses the
+    /// shared scene softening; Ode reads the durable scene, the cached solution
+    /// and the shared clock and never re-integrates.
     pub(super) fn field_export_provenance(
         &self,
     ) -> Option<crate::export_provenance::ExportProvenance> {
         match self.state.field_mode {
             FieldMode::Formula => None,
+            FieldMode::Ode => crate::export_provenance::ode_export_provenance(
+                self.state.field_mode,
+                &self.state.ode,
+                self.state.ode_solution.as_deref(),
+                self.state.ode_error.as_deref(),
+                &self.clock,
+            ),
             FieldMode::Sources => crate::export_provenance::source_export_provenance(
                 self.state.field_mode,
                 &self.state.sources,
@@ -250,6 +259,12 @@ impl VfApp {
             // touch the formula or the shared clock.
             self.state.reset_sources();
             self.state.reset_induction();
+            // Global reset restores the default ODE scene and solution before
+            // returning to Formula; a later ODE section reset is separate.
+            self.state.reset_ode();
+            // Ode never loops: clear any shared period left over so reset
+            // cannot leave a lingering Ode cadence behind.
+            self.clock.loop_period = None;
             self.state.set_field_mode(FieldMode::Formula);
         }
     }
@@ -468,10 +483,10 @@ impl VfApp {
         }
         if matches!(
             self.state.field_mode,
-            FieldMode::Sources | FieldMode::Induction
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
         ) {
-            // Source mode is static and Induction is arrows-only: no streamline
-            // seeds and no particle bursts.
+            // Source/Induction are static and Ode owns precomputed
+            // trajectories: no streamline seeds and no particle bursts.
             self.last_click_seed = None;
             return;
         }
@@ -572,6 +587,11 @@ impl VfApp {
     /// The pure `click_seed` seam maps the pointer to the orbit ray (3D) or the
     /// 2D plane; `None` means the point is off the domain.
     fn click_world_seed(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<Vec3> {
+        if self.state.field_mode == FieldMode::Ode {
+            // Explicit refusal even though Ode is a vector view: its scene is
+            // precomputed, so a click has no seed target.
+            return None;
+        }
         let width = rect.width().max(1.0);
         let height = rect.height().max(1.0);
         let ndc = Vec2::new(
@@ -596,6 +616,12 @@ impl VfApp {
     /// live in the pure [`undo_click_seed`] seam; this wrapper applies the
     /// particle truncation and recomposes the line collection.
     pub(super) fn undo_last_click_seed(&mut self, now: f64) {
+        if self.state.field_mode == FieldMode::Ode {
+            // No Ode click ever stored a seed or a particle burst, so the
+            // double-click reset has nothing to take back.
+            self.last_click_seed = None;
+            return;
+        }
         let undo = undo_click_seed(
             &self.click_seeds,
             self.last_click_seed.take(),
