@@ -470,10 +470,19 @@ impl VfApp {
     /// particles and 2D plane-slice particles both produce them, while ordinary
     /// two-component 2D simply has an empty list.
     fn assemble_viewport_scene(&mut self, view: &Mat4) -> SceneGPU {
+        // Ode markers are recomputed per frame and appended to copies: 2D uses
+        // the cached dots vector, 3D the sorted combined stream. The cached
+        // scene itself is never written.
+        let ode_markers = if self.state.field_mode == FieldMode::Ode {
+            self.ode_marker_instances()
+        } else {
+            Vec::new()
+        };
         let combined = if self.state.mode_3d {
             let cached = self.scene.as_vector().expect("vector branch");
             let mut instances =
                 combined_instances(cached.arrows.as_slice(), cached.dots.as_slice());
+            instances.extend(ode_markers.iter().copied());
             sort_scene_back_to_front(&mut instances, view);
             Arc::new(instances)
         } else {
@@ -487,11 +496,21 @@ impl VfApp {
         };
         let trails = Arc::new(sorted_lines_back_to_front(cached.trails.as_slice(), view));
         let lines = Arc::clone(&cached.lines);
-        let dots = Arc::clone(&cached.dots);
+        let dots = if !self.state.mode_3d && !ode_markers.is_empty() {
+            let mut dots = cached.dots.as_ref().clone();
+            dots.extend(ode_markers);
+            Arc::new(dots)
+        } else {
+            Arc::clone(&cached.dots)
+        };
         let arrow_style = cached.arrow_style;
         let arrow_style_2d = cached.arrow_style_2d;
         let arrow_params = cached.arrow_params;
-        if let Some(cached) = self.scene.as_vector_mut() {
+        if self.state.field_mode != FieldMode::Ode
+            && let Some(cached) = self.scene.as_vector_mut()
+        {
+            // Ode's combined stream carries per-frame markers; never write it
+            // back into the cached scene.
             cached.combined = Arc::clone(&combined);
         }
         SceneGPU {

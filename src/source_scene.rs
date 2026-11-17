@@ -20,13 +20,15 @@ pub const MIN_SOFTENING: f64 = 1e-6;
 /// Largest accepted scene-wide softening length.
 pub const MAX_SOFTENING: f64 = 1.0;
 
-/// Which field source the viewport shows: a formula or the source scene.
+/// Which field source the viewport shows: a formula, the source scene, the
+/// induction demo, or the ODE workbench (a vector-viewport concept mode).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FieldMode {
     #[default]
     Formula,
     Sources,
     Induction,
+    Ode,
 }
 
 /// Which field families the source scene displays.

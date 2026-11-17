@@ -320,7 +320,12 @@ pub fn ode_trajectory_lines(solution: &OdeSolution) -> Vec<OdeLine> {
 
 /// Axis line data from a padded view domain. 2D scenes get one line per
 /// visible axis; 3D scenes add `z`. Every line runs from `-extent` to
-/// `+extent` through the origin.
+/// `+extent` through the origin, where the half-extent is the larger absolute
+/// bound on that axis. That symmetric-max geometry is intentional: the axes
+/// must pass through the origin (an asymmetric padded trajectory domain need
+/// not be centred on it), so on an off-centre domain one end may extend past
+/// the padded bound. Task 1 review item 1 confirmed this is the intended
+/// drawing behaviour, not a fit bug.
 pub fn ode_axes(view_domain: Domain, dimension: usize) -> Vec<OdeAxisLine> {
     let min = view_domain.min;
     let max = view_domain.max;

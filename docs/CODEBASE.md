@@ -147,8 +147,11 @@ Why the seam matters:
   markers follow the same selected `plane_frame` as the samples. In
   `FieldMode::Induction` it appends exactly the selected conductor's glyph and
   no streamline/click geometry; Formula mode preserves the durable scene but
-  appends none. The resulting `SceneGPU.lines` is shared by both viewport modes,
-  CLI export and screenshot capture.
+  appends none. In `FieldMode::Ode` the pure snapshot stays empty and the app
+  owns precomputed trajectory lines plus axes, rebuilt once per solved scene;
+  per-frame current-time markers are appended to a copy of `dots` (2D) or the
+  sorted `combined` stream (3D). The resulting `SceneGPU.lines` is shared by
+  both viewport modes, CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -350,6 +353,7 @@ and the helpers that belong to no single frame phase.
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
   `clock`, `screenshot`, and private scene/click/particle caches, including the
+  `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
   [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
@@ -537,8 +541,16 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
 **Public API (crate-visible).** `advance_clock`, `frame_simulation`.
 
 **Invariants.**
-- `advance_simulation` runs `sync_scene_frame` first (see `src/app/plane.rs`),
-  then the dirty rebuild, then particle advection.
+- `advance_simulation` branches to `advance_ode` before the scalar/vector paths:
+  it lazily solves a pending Ode scene, rebuilds trajectory lines once when the
+  epoch or dirty flag changes, auto-fits the first solution after mode entry,
+  resets the clock time on a new epoch, and never samples the field, retraces
+  clicks, spawns particles or appends source/induction glyphs.
+- Otherwise `advance_simulation` runs `sync_scene_frame` first (see
+  `src/app/plane.rs`), then the dirty rebuild, then particle advection.
+- Ode's `advance_clock` clamps the shared clock to the solution duration and
+  pauses once; `state.time` mirrors the clamped value. The doc-hidden harness
+  adds `ode_step`, `ode_line_count`, `ode_marker_count` and `ode_epoch`.
 - `rebuild_scene` calls `snapshot_if_dirty`; `None` leaves the last scene
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
@@ -586,6 +598,9 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
 - 3D builds the combined arrow+particle stream and sorts it far-to-near; 2D
   sorts only arrows and never reads `combined`; 2D plane-slice trails are sorted
   and painted behind them, while ordinary two-component 2D has no trails.
+- Ode appends current-time marker dots to a copy of the 2D `dots` list or to
+  the 3D combined stream before the sort. The cached scene is never mutated;
+  markers use `PARTICLE_KIND` and the fixed ODE palette.
 - The screenshot runs before the paint callback, using the same `scene`,
   `view_proj` and eye position, so the capture is the displayed frame. A
   request is consumed once per capture.
@@ -672,19 +687,22 @@ floored by f32 rounding, while formula sampling is unchanged.
 `nonfinite_evolution_stops_without_fake_points`,
 `current_field_and_typed_rhs_agree`,
 `invalid_scene_and_nonfinite_seed_are_rejected`, and
-`markers_clamp_and_interpolate_between_samples`. Performance evidence and host
-numbers are in [docs/perf/ode-performance.md](perf/ode-performance.md).
+`markers_clamp_and_interpolate_between_samples`. Task 2's app/mode/clock
+contract is pinned by [tests/ode_app_test.rs](../tests/ode_app_test.rs).
+Performance evidence and host numbers are in
+[docs/perf/ode-performance.md](perf/ode-performance.md).
 
 **Limitations.** Fixed-step RK4 only: no adaptive/stiff solver, symbolic
 solve, 3D phase cube or parameter sweep. This is a precomputed teaching
-trajectory solve, not a per-frame solver. App/panel/persistence integration is
-delivered by later tasks; particle RK4 is untouched.
+trajectory solve, not a per-frame solver. Task 2 wires the mode, state and app
+playback through the shared clock; the panel/charts and persistence/export
+integration follow in later tasks. Particle RK4 is untouched.
 
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula,
-Sources or Induction; `SourceDisplay` selects Electric, Magnetic or Both;
+Sources, Induction or Ode; `SourceDisplay` selects Electric, Magnetic or Both;
 `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
 softening and accuracy opt-in. The same module turns a scene into drawable
@@ -1407,6 +1425,11 @@ decisions that do not need a window.
 - Induction mode fields: `induction`, `induction_prepared`,
   `induction_sampling` and `induction_error`; `set_induction_scene`,
   `refresh_induction` and `reset_induction`.
+- Ode mode fields: `ode`, `ode_solution` (`Arc<OdeSolution>`), `ode_error`,
+  `ode_epoch`, `ode_chart`, `ode_variables` and private `ode_dirty`;
+  `set_ode_scene` (validate/solve atomically), `refresh_ode_if_dirty`,
+  `reset_ode`, `set_ode_chart` and `set_ode_variables` (at least one variable
+  stays on).
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1419,11 +1442,12 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `active_dimension()` is 3 in Sources and Induction mode and the formula's
-  component count otherwise; `is_3d()` means `mode_3d && active_dimension() ==
-  3`. This gates the cube grid, density cap, plane frame/slice and streamline
-  depth, so source/induction mode uses the existing 2D plane path in 2D and the
-  world cube in 3D.
+- `active_dimension()` is 3 in Sources and Induction, the solved scene's
+  dimension in Ode (the selected scene before the first lazy solve), and the
+  formula's component count otherwise; `is_3d()` means `mode_3d &&
+  active_dimension() == 3`. This gates the cube grid, density cap, plane
+  frame/slice and streamline depth, so source/induction mode uses the existing
+  2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
 - `set_field_mode` preserves the formula, source scene, induction scene and the
   current 2D/3D projection, clears the cached sampling/notice and marks dirty.
   Entering Induction never rewrites the stored density or the projection;
@@ -1434,15 +1458,29 @@ decisions that do not need a window.
   edits never invalidate source or induction state. Entering Sources or toggling
   its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
   `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
-  has no transition bypass. Global reset calls `reset_sources` and
-  `reset_induction` before selecting Formula; each restores its default scene
-  and clears its caches/error without touching the other adapter or the clock.
+  has no transition bypass. Global reset calls `reset_sources`,
+  `reset_induction` and `reset_ode` before selecting Formula; each restores its
+  default scene and clears its caches/error without touching the other adapter
+  or the clock. `reset_ode` synchronously solves the default scene and bumps
+  the epoch; merely leaving Ode preserves the last solution and epoch.
+- Entering Ode ensures the vector plot kind and preserves the projection,
+  formula/source/induction durable scenes and camera. It clears the shared loop
+  period (in the app cache), clears source/induction caches/notices, marks the
+  scene dirty and does not solve synchronously. A fresh or `CurrentField` scene
+  queues a lazy solve; a preserved typed solution re-enters without a new epoch
+  so playback time survives. `mark_dirty` only queues a `CurrentField` re-solve.
+- In Ode, `is_plane_slice` is false and `plane_frame` is `None`; `particle_target`
+  is `None`; `scene_domain` is the solved padded `view_domain` (durable domain
+  before a solve); streamlines/click bursts are empty and clicks are refused.
+  `set_time` mirrors only. `has_time_dependent_consumer` is true while a
+  solution exists or a lazy solve is pending.
 - `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
   source/induction cache, source mode stores a fresh `SourceSampling`, induction
   mode re-prepares only on a changed `InductionKey` and otherwise rescales the
   same prepared `Arc`. `snapshot` in Sources/Induction mode returns cached arrows
   only (empty if unsampled) and never samples the formula; Induction also emits
-  no lines, trails, dots or combined stream.
+  no lines, trails, dots or combined stream. In Ode the pure snapshot is an
+  empty vector scene: the app owns trajectory lines and per-frame markers.
 - Induction is a clock consumer exactly while `induction.is_animated()`; its
   `set_time` only dirties an animated waveform, so pause/resume and the scalar
   plot pause hold the sampled field at the shared time.
@@ -1469,7 +1507,8 @@ decisions that do not need a window.
 - Click bursts: 5 seeds, 8 % of the smallest positive extent, deterministic from
   the clicked bits; 2D pins z, 3D jitters depth.
 - `particle_target()` is `Some` only when `particles && active_dimension() == 3`
-  in Formula mode (never in Sources), independent of the view mode, so a
+  in Formula mode (never in Sources, Induction or Ode), independent of the view
+  mode, so a
   two-component formula gets no cloud in 3D while a three-component field gets
   one in the 2D plane slice.
 - `drag_channel`: middle always pans; secondary orbits in 3D unless Shift, pans
@@ -1757,8 +1796,8 @@ animated induction scene.
 **Public API.** `MAX_STEP = 1/20`, `MIN_SPEED = 0.1`, `MAX_SPEED = 3.0`,
 `DEFAULT_SPEED = 1.0`; `SimClock { time, playing, speed, .. }` with `advance`,
 `advance_for`, `step_dt`, `set_playing`, `toggle_playing`, `set_speed`,
-`reset_time`, `reset`; `has_clock_consumer`, `transport_visible`,
-`should_animate`.
+`clamp_time`, `seek`, `reset_time`, `reset`; `has_clock_consumer`,
+`transport_visible`, `should_animate`.
 
 **Invariants.**
 - Non-finite/zero/negative frame times are ignored; a large frame clamps to
@@ -1767,8 +1806,11 @@ animated induction scene.
 - With no consumer, `advance_for` holds time and clears the step; re-enabling
   resumes from that time.
 - Speed clamps to 0.1..=3.0; a non-finite value becomes 1×.
+- `clamp_time(max)` shortens time to `max` and pauses once when it clamped;
+  `seek(time)` clamps non-negative, clears the step and pauses. Ode uses both
+  for duration-bounded playback and its Step action.
 - The clock is transient: a fresh session and `Reset all controls` start at
-  time 0, playing, 1×.
+  time 0, playing, 1×. Ode clears `loop_period` on mode entry.
 
 **Pinned by.** `tests/particle_playback_test.rs` (17 tests):
 `a_fresh_clock_is_playing_at_normal_speed`,

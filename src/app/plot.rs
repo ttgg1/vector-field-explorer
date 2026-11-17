@@ -639,6 +639,33 @@ impl PlotAppHarness<'_> {
         self.app.advance_simulation();
     }
 
+    /// Ode panel Step: pause, seek one fixed step (bounded by the solution
+    /// duration), and mirror the clock into state time. No solve.
+    pub fn ode_step(&mut self) {
+        let Some(solution) = self.app.state.ode_solution.as_ref() else {
+            return;
+        };
+        let duration = solution.duration as f32;
+        let target = (self.app.clock.time + crate::ode::ODE_STEP as f32).min(duration);
+        self.app.clock.seek(target);
+        self.app.state.set_time(self.app.clock.time);
+    }
+
+    /// Cached Ode trajectory + axis segment count.
+    pub fn ode_line_count(&self) -> usize {
+        self.app.ode_lines.len()
+    }
+
+    /// Current-time marker instances for every Ode trajectory.
+    pub fn ode_marker_count(&self) -> usize {
+        self.app.ode_marker_instances().len()
+    }
+
+    /// The current Ode solution epoch.
+    pub fn ode_epoch(&self) -> u64 {
+        self.app.state.ode_epoch
+    }
+
     pub fn sync_fly_capture(&mut self, ctx: &egui::Context) {
         self.app.sync_fly_capture(ctx);
     }
