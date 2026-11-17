@@ -167,8 +167,8 @@ fn snapshot_captures_the_time_dependent_formula_scene() {
         None,
         [0.0;4],
     );
-    let first = snapshot.clone().frame_at(0.25, true).expect("frame");
-    let later = snapshot.clone().frame_at(1.25, false).expect("frame");
+    let first = snapshot.clone().frame_at(0.25, 1.0 / 12.0, 1.0, true).expect("frame");
+    let later = snapshot.clone().frame_at(1.25, 1.0 / 12.0, 1.0, false).expect("frame");
     assert_ne!(first.scene.arrows[0].dir, later.scene.arrows[0].dir);
 }
 
@@ -187,7 +187,7 @@ fn frame_step_does_not_use_the_gui_step_limit() {
         [0.0;4],
     );
     let mut snapshot = snapshot;
-    let _frame = snapshot.frame_at(0.5, true).expect("frame");
+    let _frame = snapshot.frame_at(0.5, 1.0 / 12.0, 1.0, true).expect("frame");
     assert_eq!(snapshot.particles.pos.len(), 1);
     // A 0.5 s first frame is subdivided, not clamped to 1/20 s.
     assert!(snapshot.particles.pos[0].distance(start) > 0.0);
@@ -205,7 +205,7 @@ Run `cargo test --test suite animation_scene_test::`; expect missing `AnimationS
 - Add `Clone` to `State`; confirm all fields clone and no GPU handles are stored. Add `Particles` clone is already available.
 - Add `particles::advance_exact(particles, flow, domain, start_time, dt, settings)` that splits `dt` into `1/120` substeps plus remainder, calls the existing advection with exact substep time, and never clamps to `MAX_STEP`.
 - `AnimationSnapshot::from_parts(state, particles, camera, clear)` stores them. `capture(app)` is implemented in `app/mod.rs` where private app fields are visible.
-- `frame_at(time, first)`:
+- `frame_at(time, dt, aspect, first)`:
   - Formula: `state.set_time(time)`, mark dirty, build the vector scene with the extracted live assembly; do not advance particles unless particles are enabled.
   - Induction: set time, refresh induction sampling/rebuild, compose arrows + one conductor glyph; no field sampling if static/invalid.
   - Particles: on non-first frames advance the detached cloud by exact `1/fps`; set time; build dots/trails/combined.

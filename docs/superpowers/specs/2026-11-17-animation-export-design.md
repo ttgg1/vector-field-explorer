@@ -157,12 +157,20 @@ pub struct AnimationFrame {
 
 impl AnimationSnapshot {
     pub fn capture(app: &VfApp) -> Result<Self, AnimationError>;
-    pub fn frame_at(&mut self, time: f32, first: bool) -> Result<AnimationFrame, AnimationError>;
+    pub fn frame_at(
+        &mut self,
+        time: f32,
+        dt: f32,
+        aspect: f32,
+        first: bool,
+    ) -> Result<AnimationFrame, AnimationError>;
 }
 ```
 
 - Capture copies the current state, particle cloud and camera; live playback is paused during GUI export and restored afterward.
 - Formula: set `state.time`, resample the field scene at that time. Time-dependent formula sampling already exists.
+- `aspect` is the target export width/height and must be finite and positive; the snapshot does not store a viewport aspect, so every frame receives the output aspect explicitly.
+- `dt` is the deterministic frame interval (`1/fps`); it is passed explicitly so particle integration never reads the GUI clock step.
 - Induction: set `state.time`, refresh induction sampling and recompose arrows/glyph/conductor.
 - Particles: set `state.time` and advance the detached cloud by exactly `1/fps` between frames; the first frame uses the captured cloud. No `advance_for`/wall-clock dt.
 - 2D/3D camera and reference/glyph composition reuse the current vector scene assembly. A small refactor extracts the assembly currently in `app/simulation.rs` into a function usable by both the live app and the detached snapshot; behavior must remain identical for the live path.
