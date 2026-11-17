@@ -4272,6 +4272,7 @@ dependencies = [
  "env_logger",
  "exmex",
  "getrandom 0.2.17",
+ "gif",
  "glam",
  "image",
  "js-sys",

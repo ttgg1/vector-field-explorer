@@ -270,6 +270,41 @@ including the pre-start WebGPU gate and the static fallback UI.
 `navigator.gpu` and an adapter exist, not that every WebGPU feature the app uses
 is available.
 
+#### `src/animation.rs` — bounded animation spec and streaming encoders
+
+**Purpose / API.** Pure animation contract with no app, GPU or clock
+dependency. Exports `AnimationFormat`, `AnimationSpec`, `AnimationError`,
+`FrameSink`, `frame_count`, `frame_times`, `gif_delay_centiseconds`, `gif_sink`,
+`encode_gif_to_path`, `video_sink`, doc-hidden `video_sink_with_program`,
+`ffmpeg_available`, `ffmpeg_args` and `atomic_replace`, plus the
+`ANIMATION_*` limits. `AnimationSpec::default` is 0 s, 4 s, 12 fps, 1280×720,
+looping GIF.
+
+**Invariants.** `frame_count = ceil(duration * fps)` clamped to
+`1..=1800`; frame `i` is at `start + i / fps` with no duplicated endpoint.
+Validation rejects nonfinite times, fps outside `1..=30`, duration outside
+`0.1..=60`, zero dimensions, more than `8_388_608` pixels/frame, frame-budget
+overflow and odd MP4/WebM dimensions. `FrameSink` requires exactly
+`width*height*4` tightly packed RGBA bytes for the spec dimensions. GIF uses
+the direct `gif = "0.14"` encoder with per-frame local palettes, no dithering,
+and `Repeat::Infinite` only when `loop_gif` is true; single-play output omits
+the repeat extension. The counting writer aborts mid-stream at 512 MiB. Video
+args pipe raw RGBA to ffmpeg (`libx264`/`yuv420p`/`+faststart` for MP4,
+`libvpx-vp9` for WebM), capture stderr, and never fall back to GIF when ffmpeg
+is missing. `VFE_FFMPEG` overrides PATH detection. Every encoder writes a
+sibling `.tmp` file, checks the byte budget, and uses `atomic_replace`;
+failures and dropped sinks delete the temporary file. ffmpeg is invoked with
+`Command` arguments directly, never through a shell.
+
+**Pinned by.** [tests/animation_test.rs](../tests/animation_test.rs),
+[tests/animation_gif_test.rs](../tests/animation_gif_test.rs), and native
+[tests/animation_ffmpeg_test.rs](../tests/animation_ffmpeg_test.rs). The
+fake-ffmpeg process tests are Unix-only.
+
+**Limitation.** GIF color quantization may band on large viridis/neodymium
+frames; dithering is intentionally off. Video is native-only and requires a
+user-installed ffmpeg.
+
 #### `src/cli.rs` — native plot export configuration and dispatch
 
 **Purpose.** Parse one-shot export flags and strict JSON, overlay config with

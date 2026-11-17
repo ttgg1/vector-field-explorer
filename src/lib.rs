@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod app;
 pub mod arrow_geometry;
 pub mod arrow_style;
