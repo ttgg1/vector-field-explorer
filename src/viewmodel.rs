@@ -23,7 +23,7 @@ use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
 };
-use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, solve_ode};
+use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
 };
@@ -667,11 +667,51 @@ impl State {
         }
     }
 
+    /// Restore a persisted ODE scene without solving it.
+    ///
+    /// Persistence is not an ODE interaction: this validates the stored scene
+    /// through the same [`prepare_ode`] path a real edit uses, stores the scene,
+    /// chart and variables, clears any stale solution/error, marks the lazy
+    /// solve pending and returns. The first Ode frame (or
+    /// [`State::refresh_ode_if_dirty`]) performs the solve. A malformed scene
+    /// falls back to [`OdeScene::default`], records the validation error and
+    /// still leaves the default scene pending. Variables that are all false
+    /// restore the default selection.
+    pub fn restore_ode_fields(
+        self: &mut State,
+        scene: OdeScene,
+        chart: OdeChart,
+        variables: [bool; 3],
+    ) -> Result<(), String> {
+        let variables = if variables.iter().any(|enabled| *enabled) {
+            variables
+        } else {
+            [true, true, false]
+        };
+        self.ode_chart = chart;
+        self.ode_variables = variables;
+        self.ode_solution = None;
+        match prepare_ode(self, &scene) {
+            Ok(_) => {
+                self.ode = scene;
+                self.ode_error = None;
+                self.ode_dirty = true;
+                Ok(())
+            }
+            Err(error) => {
+                self.ode = OdeScene::default();
+                self.ode_error = Some(error.to_string());
+                self.ode_dirty = true;
+                Err(error.to_string())
+            }
+        }
+    }
+
     /// Global reset's ODE half: restore and synchronously solve the default
     /// scene, clear the error, bump the epoch and mark the scene dirty.
     /// Leaving Ode deliberately keeps the last solution; this reset is the
-    /// explicit way to replace it. The caller owns the shared clock's loop
-    /// period.
+    /// explicit way to replace it. Chart and variable selections return to
+    /// their defaults too. The caller owns the shared clock's loop period.
     pub fn reset_ode(self: &mut State) {
         let scene = OdeScene::default();
         match solve_ode(self, &scene) {
@@ -685,6 +725,8 @@ impl State {
             }
         }
         self.ode = scene;
+        self.ode_chart = OdeChart::Phase;
+        self.ode_variables = [true, true, false];
         self.ode_epoch = self.ode_epoch.wrapping_add(1);
         self.ode_dirty = false;
         self.dirty = true;

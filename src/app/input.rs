@@ -115,13 +115,22 @@ impl VfApp {
     }
 
     /// Capture the export context for the active adapter now. Formula mode has
-    /// none; Sources and Induction always produce a warning-bearing provenance,
-    /// even before sampling. Induction uses the shared scene softening.
+    /// none; Sources, Induction and Ode always produce a warning-bearing
+    /// provenance, even before sampling or a lazy solve. Induction uses the
+    /// shared scene softening; Ode reads the durable scene, the cached solution
+    /// and the shared clock and never re-integrates.
     pub(super) fn field_export_provenance(
         &self,
     ) -> Option<crate::export_provenance::ExportProvenance> {
         match self.state.field_mode {
-            FieldMode::Formula | FieldMode::Ode => None,
+            FieldMode::Formula => None,
+            FieldMode::Ode => crate::export_provenance::ode_export_provenance(
+                self.state.field_mode,
+                &self.state.ode,
+                self.state.ode_solution.as_deref(),
+                self.state.ode_error.as_deref(),
+                &self.clock,
+            ),
             FieldMode::Sources => crate::export_provenance::source_export_provenance(
                 self.state.field_mode,
                 &self.state.sources,
@@ -253,6 +262,9 @@ impl VfApp {
             // Global reset restores the default ODE scene and solution before
             // returning to Formula; a later ODE section reset is separate.
             self.state.reset_ode();
+            // Ode never loops: clear any shared period left over so reset
+            // cannot leave a lingering Ode cadence behind.
+            self.clock.loop_period = None;
             self.state.set_field_mode(FieldMode::Formula);
         }
     }

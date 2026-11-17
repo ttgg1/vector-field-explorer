@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::colormap::Colormap;
 use crate::induction::{InductionCase, InductionScene};
+use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
     DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
@@ -219,6 +220,31 @@ pub struct ViewRecord {
     pub induction_display: SourceDisplay,
     #[serde(default, deserialize_with = "deserialize_bool_or_false")]
     pub induction_allow_inaccurate: bool,
+    /// Durable ODE source token: `equations` or `current_field`. Missing on a
+    /// legacy record; the default is the typed harmonic scene.
+    #[serde(default = "default_ode_source")]
+    pub ode_source: String,
+    /// ODE scene dimension (2 or 3). Validated together with the rest of the
+    /// scene on restore; malformed values fall back to the default scene.
+    #[serde(default = "default_ode_dimension")]
+    pub ode_dimension: u8,
+    /// The three durable typed right-hand-side slots; unused slots may be any
+    /// string because validation parses only the first `ode_dimension`.
+    #[serde(default = "default_ode_equations")]
+    pub ode_equations: [String; 3],
+    /// Initial conditions as plain `[x, y, z]` arrays so `glam` never appears
+    /// in the persisted schema.
+    #[serde(default = "default_ode_seeds")]
+    pub ode_seeds: Vec<[f64; 3]>,
+    /// The ODE scene duration, validated to `(0, 25]` on restore.
+    #[serde(default = "default_ode_duration")]
+    pub ode_duration: f64,
+    /// ODE chart token: `phase` or `time_series`.
+    #[serde(default = "default_ode_chart")]
+    pub ode_chart: String,
+    /// Time-series variable selection; at least one is restored on.
+    #[serde(default = "default_ode_variables")]
+    pub ode_variables: [bool; 3],
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -303,6 +329,13 @@ impl ViewRecord {
             induction_frequency: state.induction.frequency,
             induction_display: state.induction.display,
             induction_allow_inaccurate: state.induction.allow_inaccurate,
+            ode_source: ode_source_label(state.ode.source).to_string(),
+            ode_dimension: state.ode.dimension as u8,
+            ode_equations: state.ode.equations.clone(),
+            ode_seeds: state.ode.seeds.iter().map(|seed| seed.position).collect(),
+            ode_duration: state.ode.duration,
+            ode_chart: ode_chart_label(state.ode_chart).to_string(),
+            ode_variables: state.ode_variables,
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -403,16 +436,39 @@ impl ViewRecord {
         let valid_entries = scene.entries.len();
         let requested_sources = self.field_mode == FieldMode::Sources;
         let requested_induction = self.field_mode == FieldMode::Induction;
+        let requested_ode = self.field_mode == FieldMode::Ode;
         let restored_induction = self.restored_induction_scene();
         let induction_valid = restored_induction.is_ok();
         state.set_source_scene(scene);
+        // ODE restores lazily: validate through the normal prepare path, store
+        // the durable scene/chart/variables, clear any stale solution and mark
+        // the first Ode frame pending. Malformed values keep the explicitly
+        // stored Ode mode but use the valid default scene and report the error.
+        let ode_chart = restored_ode_chart(&self.ode_chart);
+        let ode_variables = if self.ode_variables.iter().any(|enabled| *enabled) {
+            self.ode_variables
+        } else {
+            [true, true, false]
+        };
+        match self.restored_ode_scene() {
+            Ok(scene) => {
+                let _ = state.restore_ode_fields(scene, ode_chart, ode_variables);
+            }
+            Err(error) => {
+                let _ = state.restore_ode_fields(OdeScene::default(), ode_chart, ode_variables);
+                state.ode_error = Some(error);
+            }
+        }
         // A saved Sources mode without any usable entry cannot draw anything;
         // an invalid saved induction scene cannot either. Both fall back to
-        // Formula instead of presenting an empty field.
+        // Formula instead of presenting an empty field. Ode stays selected when
+        // it was stored explicitly; its lazy solve owns the error state.
         state.set_field_mode(if requested_sources && valid_entries > 0 {
             FieldMode::Sources
         } else if requested_induction && induction_valid {
             FieldMode::Induction
+        } else if requested_ode {
+            FieldMode::Ode
         } else {
             FieldMode::Formula
         });
@@ -464,6 +520,85 @@ impl ViewRecord {
         scene.validate()?;
         Ok(scene)
     }
+
+    /// Rebuild the persisted ODE scene. Every field is serde-defaulted, so an
+    /// old payload yields the valid default scene. Unknown source tokens are
+    /// reported; all numeric/equation validity is decided by
+    /// [`State::restore_ode_fields`] through the normal prepare path.
+    fn restored_ode_scene(&self) -> Result<OdeScene, String> {
+        let source = match self.ode_source.as_str() {
+            "equations" => OdeSource::Equations,
+            "current_field" => OdeSource::CurrentField,
+            other => return Err(format!("ODE source is not recognized: {other}")),
+        };
+        Ok(OdeScene {
+            source,
+            dimension: usize::from(self.ode_dimension),
+            equations: self.ode_equations.clone(),
+            seeds: self
+                .ode_seeds
+                .iter()
+                .map(|position| OdeSeed {
+                    position: *position,
+                })
+                .collect(),
+            duration: self.ode_duration,
+        })
+    }
+}
+
+/// Map the persisted chart token; unknown tokens restore the phase portrait.
+fn restored_ode_chart(token: &str) -> OdeChart {
+    match token {
+        "time_series" => OdeChart::TimeSeries,
+        _ => OdeChart::Phase,
+    }
+}
+
+fn ode_chart_label(chart: OdeChart) -> &'static str {
+    match chart {
+        OdeChart::Phase => "phase",
+        OdeChart::TimeSeries => "time_series",
+    }
+}
+
+fn ode_source_label(source: OdeSource) -> &'static str {
+    match source {
+        OdeSource::Equations => "equations",
+        OdeSource::CurrentField => "current_field",
+    }
+}
+
+fn default_ode_source() -> String {
+    ode_source_label(OdeScene::default().source).to_string()
+}
+
+fn default_ode_dimension() -> u8 {
+    OdeScene::default().dimension as u8
+}
+
+fn default_ode_equations() -> [String; 3] {
+    OdeScene::default().equations
+}
+
+fn default_ode_seeds() -> Vec<[f64; 3]> {
+    OdeScene::default()
+        .seeds
+        .into_iter()
+        .map(|seed| seed.position)
+        .collect()
+}
+
+fn default_ode_duration() -> f64 {
+    OdeScene::default().duration
+}
+
+fn default_ode_chart() -> String {
+    ode_chart_label(OdeChart::default()).to_string()
+}
+
+fn default_ode_variables() -> [bool; 3] {
+    [true, true, false]
 }
 
 /// `value` when finite, `fallback` otherwise.
