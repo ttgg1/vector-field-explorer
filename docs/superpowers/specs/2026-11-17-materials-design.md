@@ -215,7 +215,7 @@ pub fn validate_material(scene: &MaterialScene) -> Result<(), MaterialError>;
 pub fn material_field(scene: &MaterialScene, point: Vec3) -> Result<Vec3, MaterialError>;
 pub fn material_applied(scene: &MaterialScene) -> Vec3;
 pub fn material_response(scene: &MaterialScene, point: Vec3) -> Result<Vec3, MaterialError>;
-pub fn material_outline(scene: &MaterialScene, domain: &Domain) -> Vec<MaterialLine>;
+pub fn material_outline(scene: &MaterialScene, domain: &Domain, plane: Option<&PlaneFrame>) -> Vec<MaterialLine>;
 pub fn sample_materials(
     scene: &MaterialScene,
     domain: &Domain,
@@ -224,9 +224,9 @@ pub fn sample_materials(
 ) -> MaterialSampling;
 ```
 
-`MaterialLine { a: [f32;3], b: [f32;3], color: [f32;4] }` is renderer-independent; Task 2 converts it to `LineInstanceGPU`.
+`MaterialLine { a: [f32;3], b: [f32;3], color: [f32;4] }` is renderer-independent; Task 2 converts it to `LineInstanceGPU`. `material_outline` takes the active `PlaneFrame` when 2D is a slice; `None` means the 3D world outline. This keeps the pure outline geometry independent of renderer state while still letting 2D draw only the slice intersection.
 
-`material_field` returns total; `material_response` subtracts applied. `material_applied` returns the uniform applied vector.
+`material_field` returns total; `material_response` subtracts applied. `material_applied` returns the uniform applied vector. `material_field` is defined for points off the interface; an exactly-on-interface point returns `MaterialError::Unsupported` with the discontinuity message. Sampling applies its domain-scaled exact-hit guard before calling the evaluator.
 
 `sample_materials`:
 
