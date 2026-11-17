@@ -688,6 +688,39 @@ editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
 to Formula without clearing the scene, and native CAS refuses Sources mode. The
 user guide is [docs/sources-panel.md](../docs/sources-panel.md).
 
+#### `src/source_glyph.rs` — pure source-marker glyphs and line geometry
+
+**Purpose.** Turns an enabled, visible [`SourceScene`](../src/source_scene.rs)
+entry into a `SourceGlyph` carrying kind, family, signed charge/current, centre,
+axis, radius, length, solenoid turns and the marker sizing basis. It never
+samples the field. `source_glyph_lines` expands glyphs into ordinary
+`LineInstanceGPU` segments for the existing line pass: a three-axis cross,
+finite-line ticks, 32-segment rings/discs/sphere great circles, wire chevrons,
+right-hand current-loop chevrons and a capped solenoid helix, plus a two-stroke
+positive or one-stroke negative sign marker.
+
+**Public API.** `GlyphSign`, `SourceGlyph`, `source_glyphs(scene, domain,
+plane)` and `source_glyph_lines(glyphs, domain)`.
+
+**Invariants.** Electric kinds appear only for `Electric`/`Both` and magnetic
+kinds only for `Magnetic`/`Both`; disabled entries emit nothing. Family colours
+are fixed E amber and B cyan, independent of the colormap. On-slice/3D lines use
+alpha `0.9` and `0.005 ×` scene extent; off-slice lines use alpha `0.45`,
+`0.0035 ×` extent and `4/3 × domain_scale` on/off dashes. With a `PlaneFrame`
+the centre and axis are converted to local plane coordinates, `center.z` is
+zero, and an out-of-plane source is flagged `off_slice` when its normal
+distance exceeds `16 × f32::EPSILON × max(extent, 1.0)`. Marker geometry is
+sized from `domain_scale = 0.05 × max(extent, 1e-6)` so a degenerate domain
+still produces finite segments. Glyphs are contextual overlays, not
+depth-tested surfaces.
+
+**Pinned by.** [tests/source_glyph_test.rs](../tests/source_glyph_test.rs):
+`glyphs_cover_every_kind_with_family_colour_and_sign`,
+`negative_strengths_choose_the_minus_marker`,
+`glyph_center_and_axis_follow_the_source`,
+`family_selection_and_disabled_entries_filter_glyphs`, and
+`off_slice_glyphs_project_and_are_visually_distinct`.
+
 #### `src/sources/` — validated source model and bounded quadrature
 
 **Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for softened source
