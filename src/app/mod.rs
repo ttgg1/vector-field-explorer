@@ -210,6 +210,10 @@ pub struct VfApp {
     plot_release_pending: bool,
     renderer_ready: bool,
     streamline_count: usize,
+    /// Source-marker glyph segments appended to the latest vector scene's
+    /// composed lines. Zero in Formula mode; the app owns the count because
+    /// the snapshot's line collection holds only formula streamlines.
+    source_glyph_line_count: usize,
     /// The advected cloud behind the "Particles" toggle (ticket 05): 3D-view
     /// only; its per-frame dots ramp with `dots_range`, the same magnitude
     /// range the arrows were coloured with at the last scene rebuild.
@@ -241,6 +245,9 @@ pub struct VfApp {
     /// The screenshot action (ticket 08): the pending capture request, the
     /// channel its save thread reports on, and the completion toast.
     pub screenshot: Screenshot,
+    /// Provenance claimed with the SVG request at execution dispatch. `None`
+    /// means the active request had no source context.
+    svg_export_provenance: Option<crate::export_provenance::ExportProvenance>,
     /// The visible frame the cached scene and click seeds belong to (issue 13
     /// task 6); reconciled at the start of every vector simulation frame.
     scene_frame: SceneFrameKey,
@@ -350,6 +357,7 @@ impl VfApp {
             plot_release_pending: false,
             renderer_ready: false,
             streamline_count: 0,
+            source_glyph_line_count: 0,
             particles: Particles::default(),
             particle_target: None,
             clock: SimClock::default(),
@@ -359,6 +367,7 @@ impl VfApp {
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             screenshot: Screenshot::new(),
+            svg_export_provenance: None,
             scene_frame,
             particle_available,
             last_field_mode,

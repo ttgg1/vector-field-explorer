@@ -25,8 +25,9 @@ instanced GPU scene:
 - streamlines traced with RK4, seeded from the grid or from clicks;
 - animated particles with trails and speed or magnitude colouring;
 - a Sources panel for mixed electric/current scenes, all eight source editors,
-  E/B/Both display, scene-wide softening and a default-off accuracy opt-in; see
-  the [sources panel guide](docs/sources-panel.md);
+  E/B/Both display, scene-wide softening and a default-off accuracy opt-in,
+  with source glyphs, projected off-slice markers, illustrative source presets
+  and export warnings; see the [sources panel guide](docs/sources-panel.md);
 - a 2D orthographic view and a 3D orbit camera, plus a free-fly camera;
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
   plane-by-plane inspection, including 2D slices of three-component fields,

@@ -108,6 +108,7 @@ per-frame simulation state beside it.
         │ VfApp::rebuild_scene (app/simulation.rs)
          │  - compose_lines_with_frame(scene_domain, is_3d, plane_frame,
          │      reference lines + flow lines + click lines)
+        │  - in Sources mode, append source_glyph_lines after those lines
         │  - cache dots_range from the freshly sampled magnitudes
         │  - retrace click bursts on every dirty rebuild
         ▼
@@ -141,8 +142,11 @@ Why the seam matters:
   the grid and 3D box; `show_coordinate_system` selects only the coloured axes.
   `compose_lines_with_frame` consumes the active `scene_domain`/`plane_frame`, so
   a 2D slice never gets world-cube references; the snapshot's `lines` holds
-  grid-seeded streamlines only. The resulting `SceneGPU.lines` is shared by both
-  viewport modes, CLI export and screenshot capture.
+  grid-seeded streamlines only. In `FieldMode::Sources` the app also appends the
+  active scene's `source_glyph_lines` after the reference/flow/click lines, so
+  markers follow the same selected `plane_frame` as the samples; Formula mode
+  preserves the durable scene but appends none. The resulting `SceneGPU.lines`
+  is shared by both viewport modes, CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -537,7 +541,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
   click bursts are retraced against the new domain/formula and then composed
-  with the backdrop.
+  with the backdrop. Source-mode rebuilds append `source_glyph_lines` for the
+  current `plane_frame` and record their segment count; the Formula branch
+  appends none. `source_glyph_line_count` and `viewport_line_count` expose the
+  result to the doc-hidden integration harness.
 - `advance_particles` calls `retarget` only with the current target. A changed
   target trims or spawns only the difference; a click burst above the count
   survives until the count changes. Off or a two-component field produces
@@ -687,6 +694,76 @@ in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
 to Formula without clearing the scene, and native CAS refuses Sources mode. The
 user guide is [docs/sources-panel.md](../docs/sources-panel.md).
+
+#### `src/source_presets.rs` — built-in source-scene presets
+
+**Purpose.** The ten illustrative source scenes offered above the saved camera
+views in the Presets panel. Each is built from
+[`SourceKindTag::default_source`](../src/source_scene.rs) with unit
+charge/current, so the catalogue adds no new physics and no formula conversion.
+
+**Public API.** `SourcePreset { name, summary, build }`; `source_presets()`;
+`source_preset(name)`; `source_strength(&Source) -> f64`;
+`load_source_preset(&SourcePreset, &mut State) -> bool`.
+
+**Invariants.**
+- The catalogue order is `Coulomb point`, `Electric dipole`, `Charged line`,
+  `Uniform ring`, `Thin disc`, `Charged sphere`, `Infinite wire`,
+  `Current loop`, `Finite solenoid`, `Source gallery`; names are unique and the
+  gallery contains one entry of each of the eight kinds.
+- Strengths are finite and illustrative: unit magnitude everywhere, with the
+  dipole's charges at `+1`/`-1`. Every scene keeps the default `0.1` softening,
+  `Both` display and `allow_inaccurate = false`.
+- `load_source_preset` validates the built scene first, then uses the ordinary
+  setters to select `PlotKind::VectorField`, `FieldMode::Sources`, a 3D view,
+  the canonical `[-2, 2]^3` domain and the new scene. It returns false without
+  touching the state when validation fails.
+- Formula presets remain formulas; loading a source preset touches no saved
+  formula or camera-preset storage.
+
+**Pinned by.** [tests/source_presets_test.rs](../tests/source_presets_test.rs):
+`source_presets_have_unique_names_and_cover_all_eight_kinds`,
+`loading_a_source_preset_uses_real_setters_and_a_visible_domain`,
+`every_preset_strength_is_the_illustrative_unit_and_finite`,
+`legacy_formula_presets_keep_their_mode_and_label`, and
+`panel_source_preset_loads_the_scene_and_tracks_the_active_source`.
+
+**Limitations.** Presets are presentation examples, not calibrated physical
+sources. They do not persist, and the gallery's ring/disc/sphere overlap in the
+canonical domain.
+
+#### `src/source_glyph.rs` — pure source-marker glyphs and line geometry
+
+**Purpose.** Turns an enabled, visible [`SourceScene`](../src/source_scene.rs)
+entry into a `SourceGlyph` carrying kind, family, signed charge/current, centre,
+axis, radius, length, solenoid turns and the marker sizing basis. It never
+samples the field. `source_glyph_lines` expands glyphs into ordinary
+`LineInstanceGPU` segments for the existing line pass: a three-axis cross,
+finite-line ticks, 32-segment rings/discs/sphere great circles, wire chevrons,
+right-hand current-loop chevrons and a capped solenoid helix, plus a two-stroke
+positive or one-stroke negative sign marker.
+
+**Public API.** `GlyphSign`, `SourceGlyph`, `source_glyphs(scene, domain,
+plane)` and `source_glyph_lines(glyphs, domain)`.
+
+**Invariants.** Electric kinds appear only for `Electric`/`Both` and magnetic
+kinds only for `Magnetic`/`Both`; disabled entries emit nothing. Family colours
+are fixed E amber and B cyan, independent of the colormap. On-slice/3D lines use
+alpha `0.9` and `0.005 ×` scene extent; off-slice lines use alpha `0.45`,
+`0.0035 ×` extent and `4/3 × domain_scale` on/off dashes. With a `PlaneFrame`
+the centre and axis are converted to local plane coordinates, `center.z` is
+zero, and an out-of-plane source is flagged `off_slice` when its normal
+distance exceeds `16 × f32::EPSILON × max(extent, 1.0)`. Marker geometry is
+sized from `domain_scale = 0.05 × max(extent, 1e-6)` so a degenerate domain
+still produces finite segments. Glyphs are contextual overlays, not
+depth-tested surfaces.
+
+**Pinned by.** [tests/source_glyph_test.rs](../tests/source_glyph_test.rs):
+`glyphs_cover_every_kind_with_family_colour_and_sign`,
+`negative_strengths_choose_the_minus_marker`,
+`glyph_center_and_axis_follow_the_source`,
+`family_selection_and_disabled_entries_filter_glyphs`, and
+`off_slice_glyphs_project_and_are_visually_distinct`.
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -1089,7 +1166,8 @@ data.
 
 **Public API.** `PresetCategory { Classic, Electrostatics, Magnetostatics,
 Electrodynamics }` with `ALL`, `title`, `description`; `Preset { name, formula,
-dimension, category }`; `presets()`; `presets_in(category)`.
+dimension, category }`; `presets()`; `presets_in(category)`;
+`preset_approximation_label(name)`.
 
 **Invariants.**
 - Every formula parses and declares the right dimension.
@@ -1098,6 +1176,9 @@ dimension, category }`; `presets()`; `presets_in(category)`.
 - Names are unique; categories are ordered by `PresetCategory::ALL` and
   declaration order within a category.
 - `presets_in` is the single grouping seam used by the panel and tests.
+- `preset_approximation_label` returns `Some("2D approximation")` for exactly
+  `Dipole`, `Source and sink`, `Point charge`, `Like charges`, `Quadrupole` and
+  `Straight wire`; it is a display label only and never converts a formula.
 
 **Pinned by.** `tests/presets_test.rs`: `every_preset_parses_with_declared_dimension`,
 `every_preset_stays_finite_on_the_default_domain`, `preset_names_are_unique`,
@@ -1941,12 +2022,41 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
+#### `src/export_provenance.rs` — source export warning and metadata contract
+
+**Purpose.** One capture-time provenance object feeds the baked PNG banner,
+PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
+derived from the validated `SourceScene` plus the cached `SourceSampling`; it
+never samples the field or creates vector data.
+
+**Public API.** `ExportProvenance { warning_lines, metadata, source_mode }`,
+`source_export_provenance(mode, scene, sampling)`, `provenance_lines`,
+`provenance_metadata`, and the exact ASCII copy constants `MODEL_LINE`,
+`ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`, `NO_SAMPLING_LINE`.
+
+**Invariants.**
+- Formula mode returns `None`; Sources mode always returns `Some`.
+- The softened-model line is always first. Missing sampling adds
+  `Source sampling unavailable`; a validation error adds the invalid line;
+  accuracy/unavailable lines appear only when their counts are nonzero.
+- `allow_inaccurate` changes the drawn count only; it never removes a warning.
+- Metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
+  `vfe.accuracy_not_met_total`, `vfe.accuracy_not_met_drawn`,
+  `vfe.unavailable`, and `vfe.validation_error` when present.
+
+**Pinned by.** `tests/source_export_test.rs`
+(`formula_exports_have_no_source_provenance`,
+`source_warning_lines_and_metadata_are_exact_and_separate`,
+`opt_in_adds_visible_data_but_never_removes_the_warning`,
+`missing_or_invalid_sampling_keeps_the_warning`).
+
 #### `src/export.rs` — PNG encoding and camera-preset files
 
 **Purpose.** PNG encode/write, SVG placeholder, and camera-preset JSON
 persistence (native file or browser `localStorage`).
 
-**Public API.** `encode_png`, `save_png` (native), `save_svg` (placeholder);
+**Public API.** `encode_png`, `encode_png_with_text`, `sanitize_png_text`,
+`save_png` (native), `save_svg` (placeholder);
 `Preset { name, position, scale }`, `presets_to_json`, `presets_from_json`,
 `PRESETS_STORAGE_KEY`, `load_wasm_presets`, `save_wasm_presets`,
 `storage_note`, and native `save_preset`, `delete_preset`, `load_presets`.
@@ -1954,6 +2064,9 @@ persistence (native file or browser `localStorage`).
 **Invariants.**
 - `encode_png` rejects a frame whose length is not exactly `width * height * 4`
   and writes RGBA8.
+- `encode_png_with_text` writes the same RGBA8 pixels through the `png` encoder
+  and adds each metadata pair as a `tEXt` chunk; keywords and values are
+  sanitized to printable ASCII (newlines become spaces, other non-ASCII `?`).
 - Native preset files are `presets.json` under the chosen directory; save
   replaces by name, delete rewrites even when the list becomes empty.
 - The wasm list is JSON under `vector-field-explorer.camera-presets`, separate
@@ -1983,9 +2096,20 @@ download paths.
 **Public API.** `MAX_CAPTURE_EDGE` (4096 native / 2048 wasm), `TOAST_TTL`,
 `SaveOutcome`, `capture_size`, `padded_row_bytes`, `strip_row_padding`,
 `png_readback_check`, `to_rgba`, `date_stamp`, `default_filename`,
-`ensure_png_extension`, `spawn_save` (native), `finish_download` (wasm),
-`Screenshot` (`new`, `with_channel`, `request`, `take_request`, `sender`,
-`tick`, `fail`, `toast_text`, `toast`).
+`ensure_png_extension`, `spawn_save` (native; now takes the request-time
+`Option<ExportProvenance>`), `finish_download` (wasm; same provenance),
+`scene_to_svg`, `scene_to_svg_with_provenance`, `apply_export_banner`,
+`Screenshot` (`new`, `with_channel`, `request`, `request_with_provenance`,
+`request_svg`, `request_svg_with_provenance`, `take_request`,
+`take_request_with_provenance`, `take_svg_request`,
+`take_svg_request_with_provenance`, `svg_request_pending`,
+`png_request_pending`, `pending_png_provenance`, `pending_svg_provenance`,
+`sender`, `tick`, `fail`, `toast_text`, `toast`).
+`VfApp::request_png_export`/`request_svg_export` capture
+`source_export_provenance()` at request time; the viewport consumes it through
+the `take_*_with_provenance` variants. A Source-mode request made without
+provenance derives the fallback instead of exporting silently. Scalar plot
+captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)
@@ -2004,6 +2128,19 @@ download paths.
   completion, starts a download, and reports; a second click is ignored while a
   capture is in flight.
 - `toast` requests repaints while visible so it expires on time.
+- `apply_export_banner` bakes the provenance warning into the RGBA frame with a
+  dependency-free 5×7 bitmap font over a dark strip; a wrong frame length is an
+  error and is reported as `SaveOutcome::Failed`. With provenance the capturer
+  encodes through `encode_png_with_text`; without it the historical
+  `encode_png`/`save_png` bytes are unchanged.
+- `scene_to_svg` delegates to `scene_to_svg_with_provenance(..., None)`, so the
+  no-provenance document is unchanged. The provenance variant adds an escaped
+  `<metadata>` block and visible `<text>`, and converts line/trail widths from
+  world units to pixels from the projected endpoint span (`0.5..=3.0`, with the
+  historical `max(0.5)` fallback for a zero world span).
+- Pending PNG/SVG requests carry the provenance captured at request time;
+  `take_*_with_provenance` returns `Some(provenance)` for a live request and
+  `None` when idle.
 
 **Pinned by.** `tests/screenshot_test.rs` (18 tests):
 `capture_size_keeps_the_aspect_and_the_4096_cap`,
@@ -2016,6 +2153,12 @@ download paths.
 `completion_lands_as_a_toast_and_expires`,
 `a_click_asks_for_exactly_one_capture`,
 `native_allows_a_second_capture_while_one_is_in_flight`.
+Banner/stroke/SVG provenance behavior is pinned by `tests/source_export_test.rs`
+(`png_banner_and_text_chunks_are_in_the_decoded_file`,
+`svg_warning_is_visible_and_metadata_is_present`,
+`svg_stroke_width_converts_world_units_to_pixels_and_clamps`,
+`no_provenance_svg_keeps_existing_stroke_width_semantics`,
+`screenshot_request_keeps_the_provenance_captured_at_request_time`).
 
 **Limitations.** The GPU readback itself is only exercised by the runtime smoke
 test. The browser cap is lower (2048) because the PNG encode runs on the main
@@ -2307,19 +2450,25 @@ and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
 #### `src/ui/presets.rs` — field presets and saved camera views
 
 **Purpose.** The right Presets panel: built-in field presets grouped by
-category, camera Reset/Fit buttons, and saved view management.
+category, a `Source presets` section, camera Reset/Fit buttons, and saved view
+management.
 
 **Public API.** `default_preset_dir` (native); `CAMERA_BUTTONS`; `PresetPanel`
 with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
-`active_field_name`, `pending_delete`, `take_applied`, `clear_active`,
-`save_current`, `load`, `request_delete`, `cancel_delete`, `delete`,
-`load_field`, `show`.
+`active_field_name`, `active_source_name`, `pending_delete`, `take_applied`,
+`clear_active`, `save_current`, `load`, `request_delete`, `cancel_delete`,
+`delete`, `load_field`, `load_source_field`, `show`.
 
 **Invariants.**
 - Built-in field presets return to Formula first, then load formula and
   dimension through the viewmodel setters; the saved source scene is preserved
   and the highlight only appears when the clicked name matches the current
   formula and mode (duplicate formulas highlight one row).
+- Legacy 2D formula rows append ` (2D approximation)` from
+  `preset_approximation_label`; 3D rows keep their ` (3D)` suffix.
+- Clicking a source preset calls `load_source_field`, which validates and loads
+  the scene through `load_source_preset`, clears the formula highlight,
+  highlights the source row and asks the panel's caller for `ViewCommand::Fit`.
 - Saving with an existing name replaces it; the new row becomes active.
 - Delete asks for confirmation; delete removes from list and disk (or
   localStorage) and clears the highlight/request.

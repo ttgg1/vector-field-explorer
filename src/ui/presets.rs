@@ -11,8 +11,11 @@ use crate::export::{delete_preset, load_presets, save_preset};
 #[cfg(target_arch = "wasm32")]
 use crate::export::{load_wasm_presets, save_wasm_presets};
 use crate::plot::PlotKind;
-use crate::presets::{PresetCategory, START_HERE, presets, presets_in};
+use crate::presets::{
+    Preset, PresetCategory, START_HERE, preset_approximation_label, presets, presets_in,
+};
 use crate::render::Camera;
+use crate::source_presets::{source_preset, source_presets};
 use crate::source_scene::FieldMode;
 use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
@@ -38,6 +41,18 @@ pub const CAMERA_BUTTONS: &[(&str, ViewCommand)] = &[
     ("Fit domain", ViewCommand::Fit),
 ];
 
+/// The row label for a built-in formula preset. A 3D preset says so; a legacy
+/// 2D physics formula carries the honest approximation note.
+fn field_preset_label(preset: &Preset) -> String {
+    if preset.dimension == 3 {
+        return format!("{} (3D)", preset.name);
+    }
+    match preset_approximation_label(preset.name) {
+        Some(note) => format!("{} ({note})", preset.name),
+        None => preset.name.to_string(),
+    }
+}
+
 /// UI panel for managing camera presets, with the built-in field presets
 /// grouped by category above them. The panel's user-facing actions
 /// (`save_current`, `load`, `delete`, `load_field`) are factored into plain
@@ -59,6 +74,8 @@ pub struct PresetPanel {
     /// The built-in field preset last clicked, so duplicate formulas can
     /// highlight only the row the user picked.
     active_field: Option<String>,
+    /// The built-in source preset last clicked.
+    active_source: Option<String>,
     /// Preset awaiting the delete confirmation.
     pending_delete: Option<String>,
     /// A camera loaded this frame, for the app to hand to the live view. Taken
@@ -111,6 +128,7 @@ impl PresetPanel {
             new_name: String::new(),
             active: None,
             active_field: None,
+            active_source: None,
             pending_delete: None,
             applied: None,
             storage_note,
@@ -167,6 +185,11 @@ impl PresetPanel {
     /// The highlighted built-in field preset row, if any.
     pub fn active_field_name(&self) -> Option<&str> {
         self.active_field.as_deref()
+    }
+
+    /// The highlighted built-in source preset row, if any.
+    pub fn active_source_name(&self) -> Option<&str> {
+        self.active_source.as_deref()
     }
 
     /// The preset waiting for a delete confirmation, if any.
@@ -309,11 +332,34 @@ impl PresetPanel {
                 state.set_mode(preset.dimension == 3);
                 state.set_formula(preset.formula.to_string());
                 self.active_field = Some(name.to_owned());
+                self.active_source = None;
                 debug!("field preset loaded: {name}");
                 true
             }
             None => {
                 warn!("field preset load failed: no preset named {name}");
+                false
+            }
+        }
+    }
+
+    /// Load one built-in source preset through the ordinary source-scene
+    /// setters. Returns false — leaving the state and highlight untouched —
+    /// when no preset carries that name. Camera preset rows are unaffected.
+    pub fn load_source_field(&mut self, name: &str, state: &mut State) -> bool {
+        match source_preset(name) {
+            Some(preset) => {
+                if !crate::source_presets::load_source_preset(preset, state) {
+                    warn!("source preset load failed: {name} did not validate");
+                    return false;
+                }
+                self.active_source = Some(name.to_owned());
+                self.active_field = None;
+                debug!("source preset loaded: {name}");
+                true
+            }
+            None => {
+                warn!("source preset load failed: no preset named {name}");
                 false
             }
         }
@@ -382,11 +428,7 @@ impl PresetPanel {
                     let selected = self.active_field.as_deref() == Some(name)
                         && state.formula == preset.formula
                         && state.mode_3d == (preset.dimension == 3);
-                    let label = if preset.dimension == 3 {
-                        format!("{} (3D)", preset.name)
-                    } else {
-                        preset.name.to_string()
-                    };
+                    let label = field_preset_label(preset);
                     (label, selected)
                 }
                 None => (name.to_string(), false),
@@ -407,11 +449,7 @@ impl PresetPanel {
                 let selected = self.active_field.as_deref() == Some(preset.name)
                     && state.formula == preset.formula
                     && state.mode_3d == (preset.dimension == 3);
-                let label = if preset.dimension == 3 {
-                    format!("{} (3D)", preset.name)
-                } else {
-                    preset.name.to_string()
-                };
+                let label = field_preset_label(preset);
                 if ui
                     .selectable_label(selected, label)
                     .on_hover_text(format!(
@@ -422,6 +460,21 @@ impl PresetPanel {
                 {
                     self.load_field(preset.name, state);
                 }
+            }
+        }
+
+        ui.separator();
+        ui.weak("Source presets");
+        for preset in source_presets() {
+            let selected = state.field_mode == FieldMode::Sources
+                && self.active_source.as_deref() == Some(preset.name);
+            if ui
+                .selectable_label(selected, preset.name)
+                .on_hover_text(preset.summary)
+                .clicked()
+                && self.load_source_field(preset.name, state)
+            {
+                requested = Some(ViewCommand::Fit);
             }
         }
 

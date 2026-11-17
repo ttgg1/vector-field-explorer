@@ -272,7 +272,15 @@ impl VfApp {
                     f64::from(clear[2]),
                     f64::from(clear[3]),
                 ];
-                let svg = screenshot::scene_to_svg(&scene, view_proj, w, h, clear_f);
+                let provenance = self.take_svg_export_provenance();
+                let svg = screenshot::scene_to_svg_with_provenance(
+                    &scene,
+                    view_proj,
+                    w,
+                    h,
+                    clear_f,
+                    provenance.as_ref(),
+                );
                 let filename =
                     screenshot::default_svg_filename(screenshot::SystemTime::now(), "2D");
                 #[cfg(not(target_arch = "wasm32"))]
@@ -310,7 +318,11 @@ impl VfApp {
             // hand the pixels to a worker thread that shows the native save
             // dialog and writes the PNG. Nothing here touches the live
             // surface textures, and the readback is RGBA by contract.
-            if self.screenshot.take_request() {
+            if let Some(provenance) = self.screenshot.take_request_with_provenance() {
+                // A request made without capture-time provenance still carries
+                // the Sources warning: derive it from the current state rather
+                // than exporting a source frame silently.
+                let provenance = provenance.or_else(|| self.source_export_provenance());
                 // `rect` is in logical points; a capture must have the viewport's
                 // *physical* pixels, so scale by the display's pixels-per-point
                 // before rounding (HiDPI fix round 1). The cap applies after that.
@@ -366,6 +378,7 @@ impl VfApp {
                                 capture_width,
                                 capture_height,
                                 filename,
+                                provenance,
                             ),
                             None => self
                                 .screenshot
@@ -411,6 +424,7 @@ impl VfApp {
                                         filename,
                                         sink,
                                         ctx,
+                                        provenance,
                                     );
                                 },
                             )

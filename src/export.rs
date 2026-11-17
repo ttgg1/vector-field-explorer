@@ -18,6 +18,49 @@ pub fn encode_png(frame: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> 
     Ok(encoded)
 }
 
+/// Encode a packed RGBA8 frame as PNG with `tEXt` metadata chunks.
+///
+/// The source export path uses this instead of the image crate so the provenance
+/// bytes land in the same encoded file as the banner pixels. Values are
+/// sanitized to printable ASCII: a newline becomes a space and anything else
+/// outside `0x20..=0x7e` becomes `?`. Keywords are sanitized the same way.
+pub fn encode_png_with_text(
+    frame: &[u8],
+    width: u32,
+    height: u32,
+    metadata: &[(String, String)],
+) -> io::Result<Vec<u8>> {
+    let expected = u64::from(width) * u64::from(height) * 4;
+    if u64::try_from(frame.len()) != Ok(expected) {
+        return Err(io::Error::other("invalid frame size"));
+    }
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        for (key, value) in metadata {
+            encoder
+                .add_text_chunk(sanitize_png_text(key), sanitize_png_text(value))
+                .map_err(io::Error::other)?;
+        }
+        let mut writer = encoder.write_header().map_err(io::Error::other)?;
+        writer.write_image_data(frame).map_err(io::Error::other)?;
+    }
+    Ok(encoded)
+}
+
+/// Printable-ASCII sanitizer for PNG `tEXt` keywords and values.
+pub fn sanitize_png_text(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\n' | '\r' | '\t' => ' ',
+            ' '..='~' => c,
+            _ => '?',
+        })
+        .collect()
+}
+
 /// Save a rendered frame buffer as PNG.
 ///
 /// The frame is packed RGBA8 bytes (row-major, as produced by eframe/wgpu
@@ -48,9 +91,9 @@ pub fn ensure_svg_extension(path: std::path::PathBuf) -> std::path::PathBuf {
     }
 }
 
+use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CameraPreset {
@@ -125,7 +168,9 @@ pub fn load_wasm_presets() -> (Vec<CameraPreset>, Option<String>) {
 pub fn save_wasm_presets(presets: &[CameraPreset]) -> Result<(), String> {
     let storage = local_storage()?;
     let data = presets_to_json(presets).map_err(|error| error.to_string())?;
-    storage.set_item(PRESETS_STORAGE_KEY, &data).map_err(js_error)
+    storage
+        .set_item(PRESETS_STORAGE_KEY, &data)
+        .map_err(js_error)
 }
 
 /// Wording for the one non-blocking Presets-panel note.
@@ -139,7 +184,11 @@ pub fn storage_note() -> String {
 pub fn save_preset<P: AsRef<std::path::Path>>(dir: P, name: &str, cam: &Camera) -> io::Result<()> {
     let mut presets = load_presets(&dir)?;
     presets.retain(|p| p.name != name);
-    presets.push(CameraPreset { name: name.to_string(), position: cam.position, scale: cam.scale });
+    presets.push(CameraPreset {
+        name: name.to_string(),
+        position: cam.position,
+        scale: cam.scale,
+    });
     let data = serde_json::to_string_pretty(&presets).map_err(io::Error::other)?;
     fs::create_dir_all(dir.as_ref())?;
     fs::write(dir.as_ref().join("presets.json"), data)?;
@@ -162,7 +211,9 @@ pub fn delete_preset<P: AsRef<std::path::Path>>(dir: P, name: &str) -> io::Resul
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_presets<P: AsRef<std::path::Path>>(dir: P) -> io::Result<Vec<CameraPreset>> {
     let path = dir.as_ref().join("presets.json");
-    if !path.exists() { return Ok(vec![]); }
+    if !path.exists() {
+        return Ok(vec![]);
+    }
     let data = fs::read_to_string(path)?;
     let presets: Vec<CameraPreset> = serde_json::from_str(&data).map_err(io::Error::other)?;
     Ok(presets)

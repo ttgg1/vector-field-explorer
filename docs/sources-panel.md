@@ -45,11 +45,75 @@ results drawable, and an older saved payload can never enable it. The panel
 status counts hidden, shown-with-accuracy-not-met and unavailable results per
 family.
 
+## Source glyphs and the selected slice
+
+Every enabled source draws a line glyph in the viewport, coloured by family
+(amber for electric, cyan for magnetic). A glyph marks the source's position,
+axis and signed charge/current; it is a contextual marker, not a depth-tested
+surface, so it may show through field geometry.
+
+| Kind | Glyph |
+| --- | --- |
+| Point charge | Three-axis cross |
+| Finite line charge | Axis segment with end ticks |
+| Charged ring | Circle in the plane normal to the axis |
+| Charged disc | Ring plus two diameters |
+| Solid sphere | Three great circles |
+| Straight wire | Axis line with chevrons showing current direction |
+| Current loop | Circle plus right-hand-rule chevrons |
+| Solenoid | Helix, capped visible turns, end circles and a direction chevron |
+
+Positive sources get two perpendicular sign strokes; negative sources get one.
+The glyphs share the scene's redraw path, so a domain, density, display or
+plane change replaces them in the same rebuild as the arrows. There is no stale
+glyph cache and no second scene model.
+
+In 2D the glyph is projected into the selected plane at its in-plane location.
+Sources off the selected slice are **dashed and translucent** rather than
+hidden, so the slice does not pretend every source lies on it. On-slice and 3D
+glyphs are solid. A source marker never moves the source or changes the sampled
+field.
+
+## Presets
+
+The Presets panel has a separate **Sources (illustrative)** catalogue:
+
+- Coulomb point
+- Electric dipole
+- Charged line
+- Uniform ring
+- Thin disc
+- Charged sphere
+- Infinite wire
+- Current loop
+- Finite solenoid
+- Source gallery
+
+Each preset is an illustrative scene at unit strength with softening `0.1`,
+the accuracy opt-in off, and the canonical `[-2, 2]³` domain. Loading one
+selects Sources, a 3D view and the scene through the ordinary validated
+setters. These are not physical calibration claims. Classic formula presets
+stay formulas; the existing 2D physics rows are labelled **2D approximation**,
+and no preset conversion rewrites a saved formula or camera preset.
+
+## Exports
+
+Source PNG and SVG exports include the same warning context. PNG bakes a
+bottom-left banner into the pixels and adds `vfe.*` text metadata; SVG adds a
+visible warning and an escaped `<metadata>` block. The softened-model line is
+always present in Sources mode. Missing or invalid sampling, unavailable
+results, and finite results below the target each add their own line; the
+accuracy opt-in never removes a warning. Formula exports keep their previous
+bytes and semantics.
+
+Browser and desktop export paths use the same contract. Source-mode CLI export
+and any separate source animation clock are not part of this delivery.
+
 ## Formula-only features
 
 Streamlines, particles and click seeding remain formula features in this
-delivery. Sources mode draws static source arrows only; the Features section is
-hidden and the panel says so. There is no separate source clock.
+delivery. Sources mode draws static source arrows and glyphs only; the Features
+section is hidden and the panel says so. There is no separate source clock.
 
 ## Presets, CAS and persistence
 
