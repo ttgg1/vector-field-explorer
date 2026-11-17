@@ -613,6 +613,45 @@ them at a point.
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
 
+#### `src/source_scene.rs` — validated source scene and catalogue
+
+**Purpose.** Owns the editable source list and its scene-wide display settings
+without duplicating source math or validation. `FieldMode` selects Formula or
+Sources; `SourceDisplay` selects Electric, Magnetic or Both; `SourceEntry` pairs
+an enabled flag with a `Source`; `SourceScene` holds the entries, display,
+softening and accuracy opt-in.
+
+**Public API.** `FieldMode`, `SourceDisplay`, `SourceEntry`, `SourceScene`,
+`SourceSceneError`, `SourceKindTag` (with `ALL`, `label`, `family` and
+`default_source`), and `MIN_SOFTENING = 1e-6` / `MAX_SOFTENING = 1.0`.
+`SourceScene` exposes `add`, `remove`, `set_enabled`, `replace`, `reset_entry`,
+`reset`, `set_softening`, `set_display`, `set_allow_inaccurate`,
+`enabled_sources` and `validate`.
+
+**Invariants.** Defaults are Formula, Both, softening `0.1`, opt-in off and no
+entries. The catalogue defaults are center zero and axis +Z, charge/current
+`1.0`, line length/radius `1.0`, and a solenoid radius `0.5`, length `2.0` and
+eight turns. `add` rejects the 65th entry with `Limit { max: 64 }`; `add` and
+`replace` validate the candidate scene before committing. Softening must be
+finite and within the closed `1e-6..=1.0` range. `validate` copies only enabled
+sources through `SourceSet::new` with default `WorkLimits`, then validates
+`EvalOptions`; `InputError` maps to typed scene errors including a stable
+parameter name. `reset_entry` restores the kind defaults while keeping the
+entry's center, axis and enabled state; `reset` restores the whole default
+scene. Invalid indices make `remove`/`set_enabled`/`reset_entry` no-ops.
+
+**Pinned by.** [tests/source_scene_test.rs](../tests/source_scene_test.rs):
+`the_default_scene_is_empty_in_formula_mode`,
+`all_eight_kinds_have_valid_defaults_and_a_family`,
+`add_remove_enable_and_reset_change_only_the_scene`,
+`source_limit_stops_the_sixty_fifth_entry`,
+`invalid_geometry_is_rejected_with_a_parameter_name`,
+`softening_is_bounded_and_never_nan`, and
+`disabled_entries_are_not_part_of_the_validated_scene`.
+
+**Limitations.** This task adds no viewmodel, sampling, persistence or UI
+integration; those layers consume the scene later.
+
 #### `src/sources/` — validated source model and bounded quadrature
 
 **Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for softened source

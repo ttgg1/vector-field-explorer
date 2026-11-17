@@ -106,6 +106,22 @@ pub enum SourceKind {
     },
 }
 
+impl SourceKind {
+    /// The field family this source contributes to.
+    pub fn family(&self) -> FieldFamily {
+        match self {
+            Self::PointCharge { .. }
+            | Self::FiniteLineCharge { .. }
+            | Self::ChargedRing { .. }
+            | Self::ChargedDisc { .. }
+            | Self::SolidSphere { .. } => FieldFamily::Electric,
+            Self::StraightWire { .. } | Self::CurrentLoop { .. } | Self::Solenoid { .. } => {
+                FieldFamily::Magnetic
+            }
+        }
+    }
+}
+
 /// Requested numerical tolerance. Epsilon is not a certified bound and is
 /// independent of physical softening.
 #[derive(Debug, Clone, Copy, PartialEq)]
