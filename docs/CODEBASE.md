@@ -624,10 +624,11 @@ arrows through the real evaluator.
 
 **Public API.** `FieldMode`, `SourceDisplay`, `SourceEntry`, `SourceScene`,
 `SourceSceneError`, `SourceKindTag` (with `ALL`, `label`, `family` and
-`default_source`), and `MIN_SOFTENING = 1e-6` / `MAX_SOFTENING = 1.0`.
+`default_source`), `SourceRecord` (flat serde shape with `from_source` and
+`to_source`), and `MIN_SOFTENING = 1e-6` / `MAX_SOFTENING = 1.0`.
 `SourceScene` exposes `add`, `remove`, `set_enabled`, `replace`, `reset_entry`,
 `reset`, `set_softening`, `set_display`, `set_allow_inaccurate`,
-`enabled_sources` and `validate`. Sampling adds `SourceSampling`,
+`enabled_sources`, `validate`, `to_records` and `from_records`. Sampling adds `SourceSampling`,
 `SourceFamilyStatus`, `FamilyDisposition`, `classify_family_result`,
 `sample_source_scene`, and the fixed `ELECTRIC_COLOR = [255, 176, 64]` /
 `MAGNETIC_COLOR = [64, 196, 255]` used by `Both`.
@@ -643,6 +644,12 @@ sources through `SourceSet::new` with default `WorkLimits`, then validates
 parameter name. `reset_entry` restores the kind defaults while keeping the
 entry's center, axis and enabled state; `reset` restores the whole default
 scene. Invalid indices make `remove`/`set_enabled`/`reset_entry` no-ops.
+`to_records` flattens every entry (including disabled ones) into the stable
+`SourceRecord` kind spellings; `from_records` rebuilds a default scene in list
+order, revalidating each record through `SourceSet` and skipping unknown kinds,
+non-finite numbers and impossible dimensions. The global reset empties the
+scene, clears the sampling cache/notice and returns to Formula; plot-section
+reset leaves sources alone.
 
 **Sampling contract.** `sample_source_scene` validates the enabled scene through
 `SourceSet::new`/`EvalOptions`, then builds one `Evaluator`. A 3D view samples
@@ -666,8 +673,8 @@ accuracy-not-met total/drawn and unavailable per family.
 `disabled_entries_are_not_part_of_the_validated_scene`; source-mode behaviour is
 in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 
-**Limitations.** Sampling is CPU and static. This task adds no persistence or UI
-wiring; the panel and save format consume the scene later.
+**Limitations.** Sampling is CPU and static. Persistence now stores the scene,
+but the editable panel and its preset interaction are separate tasks.
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -1276,7 +1283,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `controls_width`, `presets_width`, `help_visible` | `#[serde(default)]`; widths sanitized |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1295,8 +1302,14 @@ storage key, with migration and corruption tolerance.
    `SeedStreamline`. Old `Pyramid`/`Line` spellings decode to Cone/Flat.
 8. Unknown future keys are ignored by serde; absent fields take their documented
    defaults.
+9. Source records restore after the formula/controls: each entry is revalidated
+   through `SourceScene::from_records`, malformed entries are skipped with a
+   one-line `source_notice`, softening outside `1e-6..=1.0` falls back to `0.1`,
+   the accuracy opt-in is true only for an exact stored `true`, and Sources mode
+   falls back to Formula when no valid entry remains. `formula` and the source
+   scene never overwrite each other.
 
-**Tested by.** `tests/persistence_test.rs` (39 tests):
+**Tested by.** `tests/persistence_test.rs` (51 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -1308,8 +1321,14 @@ storage key, with migration and corruption tolerance.
 `compact_mode_and_sheet_are_never_written_to_storage`,
 `a_bad_formula_in_the_record_keeps_the_last_good_field`,
 `each_reference_preference_survives_storage_restore_and_constructor_independently`,
-`a_partial_reference_record_defaults_only_the_missing_coordinate_flag`, and
-the restore/sanitize tests.
+`a_partial_reference_record_defaults_only_the_missing_coordinate_flag`,
+`source_scene_round_trips_through_the_view_record`,
+`a_legacy_record_opens_in_formula_with_opt_in_off`,
+`malformed_source_records_are_skipped_without_losing_other_settings`,
+`a_record_without_valid_sources_forces_formula_mode`,
+`source_records_keep_order_and_skip_invalid_numbers`,
+`global_reset_clears_source_scene_and_sampling_cache`, and the
+restore/sanitize tests.
 
 **Limitations.** There is no explicit schema version number; compatibility is a
 set of serde defaults and aliases that must be maintained forever. Camera state,

@@ -44,6 +44,119 @@ pub struct SourceEntry {
     pub source: Source,
 }
 
+/// The flat, serde-friendly form of one scene entry.
+///
+/// Every kind shares one shape: the numeric parameters a kind does not use are
+/// ignored, so adding a kind never grows the record. [`SourceRecord::to_source`]
+/// maps the `kind` string back to exactly one [`SourceKind`] and validates the
+/// result through the same [`SourceSet`] seam as the live scene.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SourceRecord {
+    pub enabled: bool,
+    pub kind: String,
+    pub center: [f64; 3],
+    pub axis: [f64; 3],
+    pub strength: f64,
+    pub radius: f64,
+    pub length: f64,
+    pub turns: u32,
+}
+
+impl SourceRecord {
+    /// Flatten one source, naming its kind by the stable serialized spelling.
+    pub fn from_source(source: &Source) -> Self {
+        let tag = SourceKindTag::of(&source.kind);
+        Self {
+            enabled: true,
+            kind: tag.name().to_owned(),
+            center: source.center.to_array(),
+            axis: source.axis.to_array(),
+            strength: match source.kind {
+                SourceKind::PointCharge { charge }
+                | SourceKind::FiniteLineCharge { charge, .. }
+                | SourceKind::ChargedRing { charge, .. }
+                | SourceKind::ChargedDisc { charge, .. }
+                | SourceKind::SolidSphere { charge, .. } => charge,
+                SourceKind::StraightWire { current }
+                | SourceKind::CurrentLoop { current, .. }
+                | SourceKind::Solenoid { current, .. } => current,
+            },
+            radius: match source.kind {
+                SourceKind::ChargedRing { radius, .. }
+                | SourceKind::ChargedDisc { radius, .. }
+                | SourceKind::SolidSphere { radius, .. }
+                | SourceKind::CurrentLoop { radius, .. }
+                | SourceKind::Solenoid { radius, .. } => radius,
+                _ => 0.0,
+            },
+            length: match source.kind {
+                SourceKind::FiniteLineCharge { length, .. }
+                | SourceKind::Solenoid { length, .. } => length,
+                _ => 0.0,
+            },
+            turns: match source.kind {
+                SourceKind::Solenoid { turns, .. } => turns,
+                _ => 0,
+            },
+        }
+    }
+
+    /// Rebuild and validate one source. Unknown kinds, non-finite numbers and
+    /// impossible dimensions all fail; the caller decides whether to skip.
+    pub fn to_source(&self) -> Result<Source, String> {
+        let Some(tag) = SourceKindTag::from_name(&self.kind) else {
+            return Err(format!("unknown source kind {:?}", self.kind));
+        };
+        let kind = match tag {
+            SourceKindTag::PointCharge => SourceKind::PointCharge {
+                charge: self.strength,
+            },
+            SourceKindTag::FiniteLineCharge => SourceKind::FiniteLineCharge {
+                charge: self.strength,
+                length: self.length,
+            },
+            SourceKindTag::ChargedRing => SourceKind::ChargedRing {
+                charge: self.strength,
+                radius: self.radius,
+            },
+            SourceKindTag::ChargedDisc => SourceKind::ChargedDisc {
+                charge: self.strength,
+                radius: self.radius,
+            },
+            SourceKindTag::SolidSphere => SourceKind::SolidSphere {
+                charge: self.strength,
+                radius: self.radius,
+            },
+            SourceKindTag::StraightWire => SourceKind::StraightWire {
+                current: self.strength,
+            },
+            SourceKindTag::CurrentLoop => SourceKind::CurrentLoop {
+                current: self.strength,
+                radius: self.radius,
+            },
+            SourceKindTag::Solenoid => SourceKind::Solenoid {
+                current: self.strength,
+                radius: self.radius,
+                length: self.length,
+                turns: self.turns,
+            },
+        };
+        let source = Source {
+            center: DVec3::from_array(self.center),
+            axis: DVec3::from_array(self.axis),
+            kind,
+        };
+        SourceSet::new(
+            std::slice::from_ref(&source),
+            &WorkLimits::default(),
+            &|| false,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(source)
+    }
+}
+
 /// The editable source scene settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceScene {
@@ -172,6 +285,35 @@ impl SourceKindTag {
             SourceKind::Solenoid { .. } => Self::Solenoid,
         }
     }
+
+    /// The stable spelling persisted in [`SourceRecord::kind`].
+    fn name(self) -> &'static str {
+        match self {
+            Self::PointCharge => "PointCharge",
+            Self::FiniteLineCharge => "FiniteLineCharge",
+            Self::ChargedRing => "ChargedRing",
+            Self::ChargedDisc => "ChargedDisc",
+            Self::SolidSphere => "SolidSphere",
+            Self::StraightWire => "StraightWire",
+            Self::CurrentLoop => "CurrentLoop",
+            Self::Solenoid => "Solenoid",
+        }
+    }
+
+    /// The inverse of [`SourceKindTag::name`]; unknown spellings are rejected.
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "PointCharge" => Some(Self::PointCharge),
+            "FiniteLineCharge" => Some(Self::FiniteLineCharge),
+            "ChargedRing" => Some(Self::ChargedRing),
+            "ChargedDisc" => Some(Self::ChargedDisc),
+            "SolidSphere" => Some(Self::SolidSphere),
+            "StraightWire" => Some(Self::StraightWire),
+            "CurrentLoop" => Some(Self::CurrentLoop),
+            "Solenoid" => Some(Self::Solenoid),
+            _ => None,
+        }
+    }
 }
 
 impl Default for SourceScene {
@@ -275,6 +417,38 @@ impl SourceScene {
     /// Set whether finite accuracy-not-met results may be drawn.
     pub fn set_allow_inaccurate(&mut self, allowed: bool) {
         self.allow_inaccurate = allowed;
+    }
+
+    /// Flatten every entry (enabled and disabled) in list order.
+    pub fn to_records(&self) -> Vec<SourceRecord> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let mut record = SourceRecord::from_source(&entry.source);
+                record.enabled = entry.enabled;
+                record
+            })
+            .collect()
+    }
+
+    /// Rebuild the scene entries from persisted records, skipping every record
+    /// that fails validation. Display, softening and the accuracy opt-in start
+    /// at their defaults; the restore path applies the saved settings.
+    pub fn from_records(records: &[SourceRecord]) -> Self {
+        let mut scene = Self::default();
+        for record in records {
+            if scene.entries.len() >= MAX_SOURCES {
+                break;
+            }
+            let Ok(source) = record.to_source() else {
+                continue;
+            };
+            scene.entries.push(SourceEntry {
+                enabled: record.enabled,
+                source,
+            });
+        }
+        scene
     }
 
     /// Only the enabled entries, in list order.
