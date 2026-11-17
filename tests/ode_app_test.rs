@@ -229,6 +229,44 @@ fn first_solution_after_entry_fits_once_and_later_epochs_preserve_the_camera() {
 }
 
 #[test]
+fn first_valid_solution_after_invalid_entry_autofits() {
+    let mut app = VfApp::new();
+    app.state.set_formula("y, -x +".into());
+    app.state.ode.source = OdeSource::CurrentField;
+    app.state.set_field_mode(FieldMode::Ode);
+    app.test_harness().advance_simulation();
+    assert!(
+        app.state.ode_solution.is_none(),
+        "an invalid CurrentField entry has no solution"
+    );
+    assert!(app.state.ode_error.is_some());
+
+    // A camera the deferred auto-fit cannot leave untouched.
+    app.orbit.target.x = 9.0;
+    app.orbit.target.y = -7.0;
+    app.orbit.target.z = 0.0;
+    app.orbit.ortho_zoom = 4.0;
+    let target = app.orbit.target;
+    let zoom = app.orbit.ortho_zoom;
+
+    app.state.set_formula("y, -x".into());
+    app.test_harness().advance_simulation();
+    let center = app
+        .state
+        .ode_solution
+        .as_ref()
+        .expect("late solution")
+        .view_domain()
+        .center();
+    assert!(app.state.ode_error.is_none());
+    assert_ne!(app.orbit.target, target, "the first solution refits");
+    assert_ne!(app.orbit.ortho_zoom, zoom, "the first solution refits zoom");
+    assert!(close(app.orbit.target.x, center.x));
+    assert!(close(app.orbit.target.y, center.y));
+    assert!(close(app.orbit.target.z, center.z));
+}
+
+#[test]
 fn set_time_mirrors_only_and_never_bumps_the_solution_epoch() {
     let mut app = VfApp::new();
     app.state.set_field_mode(FieldMode::Ode);

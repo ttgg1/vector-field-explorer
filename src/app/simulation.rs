@@ -69,11 +69,17 @@ impl VfApp {
         }
         if epoch_changed || self.state.dirty {
             self.rebuild_ode_lines();
-            if epoch_changed && self.ode_autofit_pending {
+        }
+        // A failed lazy solve has no solution to frame yet, so keep the one-shot
+        // pending until the first valid solution arrives. A preserved solution
+        // with no new epoch clears it without moving the camera; later epochs
+        // never fit again.
+        if self.ode_autofit_pending && self.state.ode_solution.is_some() {
+            if epoch_changed {
                 self.apply_view_command(ViewCommand::Fit);
             }
+            self.ode_autofit_pending = false;
         }
-        self.ode_autofit_pending = false;
         self.state.dirty = false;
     }
 
