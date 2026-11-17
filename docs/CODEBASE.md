@@ -631,6 +631,55 @@ differentiation in the formula parser; differentiation is the separate native
 CAS panel. A formula that references `t` is time-dependent and animates from
 the shared clock.
 
+#### `src/ode.rs` — bounded ODE workbench model and fixed-step RK4
+
+**Purpose.** Owns the pure ODE workbench seam: scene validation, typed-equation
+or current-field RHS preparation, bounded fixed-step RK4, deterministic samples,
+padded bounds, stop status and playback marker interpolation. It is CPU data
+only; it does not sample the field grid, use a `PlaneFrame`, or touch a renderer
+type.
+
+**Public API.** `OdeSource`, `OdeSeed`, `OdeScene` (with `Default`,
+`validate`), `OdeStop`, `OdeSample`, `OdeTrajectory`, `OdeBounds`,
+`OdeSolution` (with `sample_at`, `markers_at`, `view_domain`), `OdeError`,
+`OdePrepared`, `OdeChart`, `ODE_STEP`, `ODE_MAX_SAMPLES`, `ODE_MAX_DURATION`,
+`ODE_DEFAULT_DURATION`, `ODE_MAX_SEEDS`, `ODE_MIN_DIMENSION`,
+`ODE_MAX_DIMENSION`, `ODE_COLORS`, `ODE_LINE_WIDTH_FACTOR`,
+`ODE_MARKER_RADIUS_FACTOR`, `prepare_ode`, `integrate_ode`, `solve_ode`, the
+hidden `integrate_ode_with_step`, and the pure renderer-seam helpers
+`ode_trajectory_lines` / `ode_axes` (`OdeLine` / `OdeAxisLine` tuples).
+
+**Invariants.** Scenes accept 2-3 typed dimensions, at most eight finite seeds,
+and a finite duration in `(0, 25]`. `Equations` parses the first `dimension`
+entries into a three-component `FieldExpr` with `"0"` for unused slots; entries
+outside `dimension` are ignored. `CurrentField` clones the durable
+`State::field`, requires `state.field.dimension == scene.dimension` and rejects a
+non-empty `state.parse_error`; the durable `State::domain` is snapshotted, never
+a plane-local frame. Samples are stored at `n * ODE_STEP`, including `t = 0`;
+each seed independently ends `Complete`, `StepLimit` at
+`ODE_MAX_SAMPLES`, or `NonFinite` at the last finite sample. Bounds use only
+finite points, pad each axis extent by 5% with a `1e-3` minimum, and a flat
+`z` gets a symmetric view extent. Markers interpolate linearly between samples
+and clamp to `[0, duration]`. `FieldExpr::eval3_at_f64` exposes the f64
+evaluation boundary; the solver uses its f64 component seam so RK4 error is not
+floored by f32 rounding, while formula sampling is unchanged.
+
+**Pinned by.** [tests/ode_test.rs](../tests/ode_test.rs):
+`harmonic_oscillator_matches_the_analytic_circle`,
+`damped_oscillator_decays_like_the_reference`,
+`rk4_halving_the_step_reduces_error_by_at_least_eight`,
+`step_limit_is_explicit_and_bounded`,
+`nonfinite_evolution_stops_without_fake_points`,
+`current_field_and_typed_rhs_agree`,
+`invalid_scene_and_nonfinite_seed_are_rejected`, and
+`markers_clamp_and_interpolate_between_samples`. Performance evidence and host
+numbers are in [docs/perf/ode-performance.md](perf/ode-performance.md).
+
+**Limitations.** Fixed-step RK4 only: no adaptive/stiff solver, symbolic
+solve, 3D phase cube or parameter sweep. This is a precomputed teaching
+trajectory solve, not a per-frame solver. App/panel/persistence integration is
+delivered by later tasks; particle RK4 is untouched.
+
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
