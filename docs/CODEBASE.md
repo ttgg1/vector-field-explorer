@@ -1190,7 +1190,10 @@ decisions that do not need a window.
 - `set_field_mode` preserves formula, source scene and the 2D/3D projection,
   clears the cached sampling/notice and marks dirty; `set_source_scene` replaces
   the durable scene and clears the cache. Formula edits never invalidate source
-  state, and source edits never invalidate formula state.
+  state, and source edits never invalidate formula state. Entering Sources or
+  toggling its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
+  `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
+  has no transition bypass.
 - `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
   source cache, source mode stores a fresh `SourceSampling`. `snapshot` in
   Sources mode returns cached arrows only (empty if unsampled) and never samples

@@ -1,13 +1,13 @@
 //! Task 2 field modes, source sampling and source-mode gating coverage.
 
-use glam::DVec3;
+use glam::{DVec3, UVec3};
 use vector_field_explorer::source_scene::{
     FamilyDisposition, FieldMode, SourceDisplay, SourceKindTag, SourceScene, classify_family_result,
 };
 use vector_field_explorer::sources::{
     Diagnostics, Estimate, FamilyResult, FieldFamily, StopReason,
 };
-use vector_field_explorer::viewmodel::State;
+use vector_field_explorer::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, State};
 
 fn one_point() -> SourceScene {
     let mut scene = SourceScene::default();
@@ -170,4 +170,34 @@ fn formula_edits_do_not_replace_source_samples() {
     state.snapshot_if_dirty();
     let after = state.source_sampling().unwrap().arrows.clone();
     assert_eq!(before, after);
+}
+
+#[test]
+fn source_mode_never_samples_above_the_3d_density_cap() {
+    // A legal 2D source view keeps the 200² cap, but toggling the user-controlled
+    // 3D view must re-clamp the density to 40³ rather than sampling 200³.
+    let mut state = State::new(false);
+    state.set_source_scene(one_point());
+    assert!(state.set_density(MAX_DENSITY_2D));
+    assert_eq!(state.density, MAX_DENSITY_2D);
+    assert!(state.set_field_mode(FieldMode::Sources));
+    assert_eq!(
+        state.density, MAX_DENSITY_2D,
+        "2D source sampling still affords the 2D cap"
+    );
+    assert_eq!(state.grid(), UVec3::new(MAX_DENSITY_2D, MAX_DENSITY_2D, 1));
+    assert!(state.set_mode(true));
+    assert_eq!(state.density, MAX_DENSITY_3D);
+    assert_eq!(state.grid(), UVec3::splat(MAX_DENSITY_3D));
+
+    // Entering Sources from an already-3D two-component formula view must also
+    // re-clamp, because Sources makes that view cubic.
+    let mut already_3d = State::new(false);
+    assert!(already_3d.set_mode(true));
+    assert!(already_3d.set_density(MAX_DENSITY_2D));
+    assert_eq!(already_3d.density, MAX_DENSITY_2D);
+    already_3d.set_source_scene(one_point());
+    assert!(already_3d.set_field_mode(FieldMode::Sources));
+    assert_eq!(already_3d.density, MAX_DENSITY_3D);
+    assert_eq!(already_3d.grid(), UVec3::splat(MAX_DENSITY_3D));
 }

@@ -452,10 +452,27 @@ impl State {
         if self.field_mode == mode {
             return false;
         }
+        let previous_grid = self.plane_grid();
         self.field_mode = mode;
         self.source_sampling = None;
         self.source_notice = None;
+        if self.clamp_source_density() {
+            self.sync_plane(previous_grid);
+        }
         self.mark_dirty()
+    }
+
+    /// Re-clamp the stored density when Sources makes the active sampling
+    /// cubic. This is the one path that can turn a legal 200² 2D density into
+    /// 3D sampling, so the 40³ cap must apply here even though `set_density`
+    /// already clamps at edit time.
+    fn clamp_source_density(self: &mut State) -> bool {
+        if self.field_mode == FieldMode::Sources && self.is_3d() && self.density > MAX_DENSITY_3D {
+            self.density = MAX_DENSITY_3D;
+            true
+        } else {
+            false
+        }
     }
 
     /// Replace the durable source scene and invalidate its cached sampling.
@@ -518,6 +535,7 @@ impl State {
         let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
         self.plot.vector_mode_3d = mode_3d;
+        self.clamp_source_density();
         self.sync_plane(previous_grid);
         self.mark_dirty()
     }
@@ -938,7 +956,7 @@ impl State {
     /// even while 2D renders one `n`×`n` layer; a two-component field keeps
     /// the flat `n`×`n`×`1` grid it has always had.
     pub fn plane_grid(self: &State) -> UVec3 {
-        let n = self.density.max(MIN_DENSITY);
+        let n = self.capped_density();
         if self.active_dimension() == 3 {
             UVec3::new(n, n, n)
         } else {
@@ -994,11 +1012,23 @@ impl State {
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
     /// `n`×`n`×`n` when sampling runs three-dimensional.
     pub fn grid(self: &State) -> UVec3 {
-        let n = self.density.max(MIN_DENSITY);
+        let n = self.capped_density();
         if self.is_3d() {
             UVec3::new(n, n, n)
         } else {
             UVec3::new(n, n, 1)
+        }
+    }
+
+    /// The stored density with the source-mode 3D ceiling applied defensively.
+    /// Transition setters clamp `density` itself; this also covers any direct
+    /// field write so sampling can never exceed 40³ in Source mode.
+    fn capped_density(self: &State) -> u32 {
+        let n = self.density.max(MIN_DENSITY);
+        if self.field_mode == FieldMode::Sources && self.is_3d() {
+            n.min(MAX_DENSITY_3D)
+        } else {
+            n
         }
     }
 
