@@ -471,9 +471,11 @@ impl AnimationJob {
     }
 }
 
-/// Shared streaming-output budget check. The native `CountingWriter` enforces
-/// the same wording; the browser's in-memory GIF sink calls this after each
-/// frame so its `Vec` cannot grow unbounded.
+/// Shared streaming-output budget check for sinks that buffer in memory. The
+/// browser's in-memory GIF sink calls this after each frame so its `Vec` cannot
+/// grow unbounded. The native `CountingWriter` aborts at the same byte limit,
+/// but its failure travels through the GIF frame error path, so only the inner
+/// "animation output exceeds…" sentence is shared.
 #[doc(hidden)]
 pub fn check_animation_byte_cap(bytes: u64, limit: u64) -> Result<(), AnimationError> {
     if bytes > limit {

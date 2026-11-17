@@ -280,8 +280,9 @@ pub struct VfApp {
     /// Done, Cancelled and error.
     animation_restore_playing: Option<bool>,
     /// One async offscreen readback in flight on the browser: the callback
-    /// sends RGBA here and the next app update pushes it to the job.
-    #[cfg(target_arch = "wasm32")]
+    /// sends RGBA here and the next app update pushes it to the job. Always
+    /// present so the clearing rule has a native test seam; only the wasm
+    /// update path ever populates it.
     animation_wasm_rx: Option<std::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
     /// Provenance claimed with the SVG request at execution dispatch. `None`
     /// means the active request had no source context.
@@ -422,7 +423,6 @@ impl VfApp {
             animation: AnimationDialogState::default(),
             animation_job: None,
             animation_restore_playing: None,
-            #[cfg(target_arch = "wasm32")]
             animation_wasm_rx: None,
             svg_export_provenance: None,
             scene_frame,
@@ -465,6 +465,13 @@ impl VfApp {
     /// Snapshot the current view for a later animation export.
     pub fn animation_snapshot(&self) -> Result<AnimationSnapshot, AnimationError> {
         AnimationSnapshot::capture(self)
+    }
+
+    /// Drop a stale browser readback. A terminal job must never let its old
+    /// callback complete against a newer job, and a new job starts with no
+    /// receiver in flight.
+    fn clear_animation_readback(&mut self) {
+        self.animation_wasm_rx = None;
     }
 }
 

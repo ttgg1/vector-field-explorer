@@ -1437,27 +1437,3 @@ impl VfApp {
         self.prepare_animation_start().is_some()
     }
 }
-
-#[cfg(target_arch = "wasm32")]
-impl VfApp {
-    /// Drop a stale browser readback. A terminal job must never let its old
-    /// callback complete against a newer job, and a new job starts with no
-    /// receiver in flight.
-    fn clear_animation_readback(&mut self) {
-        self.animation_wasm_rx = None;
-    }
-}
-
-#[cfg(all(test, target_arch = "wasm32"))]
-mod wasm_readback_tests {
-    #[test]
-    fn clearing_a_stale_readback_disconnects_its_receiver() {
-        let mut app = crate::app::VfApp::new();
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.animation_wasm_rx = Some(rx);
-        app.clear_animation_readback();
-        assert!(app.animation_wasm_rx.is_none());
-        // The old callback's send now fails instead of reaching a new job.
-        assert!(tx.send(Ok(Vec::new())).is_err());
-    }
-}

@@ -298,6 +298,29 @@ fn a_completion_without_an_outstanding_request_is_rejected() {
 }
 
 #[test]
+fn clearing_a_stale_browser_readback_disconnects_its_sender() {
+    let mut app = VfApp::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let mut harness = app.test_harness();
+        harness.plant_animation_readback(rx);
+        assert!(
+            harness.animation_readback_present(),
+            "the stale receiver must be planted"
+        );
+        harness.clear_animation_readback();
+        assert!(
+            !harness.animation_readback_present(),
+            "the production clearing path must drop the receiver"
+        );
+    }
+    assert!(
+        tx.send(Ok(Vec::new())).is_err(),
+        "the stale callback must not reach a newer job"
+    );
+}
+
+#[test]
 fn the_animation_byte_cap_reports_its_limit() {
     use vector_field_explorer::animation_job::check_animation_byte_cap;
 

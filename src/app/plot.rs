@@ -863,4 +863,22 @@ impl PlotAppHarness<'_> {
     pub fn plot_release_pending(&self) -> bool {
         self.app.plot_release_pending
     }
+
+    /// Test seam: plant a stale browser animation readback receiver.
+    pub fn plant_animation_readback(
+        &mut self,
+        rx: std::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
+    ) {
+        self.app.animation_wasm_rx = Some(rx);
+    }
+
+    /// Test seam: whether a browser animation readback is in flight.
+    pub fn animation_readback_present(&self) -> bool {
+        self.app.animation_wasm_rx.is_some()
+    }
+
+    /// Test seam: run the production stale-readback clearing path.
+    pub fn clear_animation_readback(&mut self) {
+        self.app.clear_animation_readback();
+    }
 }
