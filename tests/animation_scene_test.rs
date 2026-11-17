@@ -1,5 +1,6 @@
 //! Task 2: the detached animation snapshot advances its own state and cloud.
 
+use vector_field_explorer::VfApp;
 use vector_field_explorer::animation::{ANIMATION_PARTICLE_SUBSTEP, AnimationError};
 use vector_field_explorer::animation_scene::{AnimationFrame, AnimationSnapshot};
 use vector_field_explorer::camera::OrbitCamera;
@@ -155,4 +156,46 @@ fn frame_at_rejects_nonpositive_or_nonfinite_aspect() {
             "aspect {aspect} must be rejected"
         );
     }
+}
+
+#[test]
+fn first_frame_renders_the_captured_particle_cloud() {
+    let mut app = VfApp::new();
+    app.state.set_mode(true);
+    app.state.set_formula("1, 0, 0".into());
+    app.state.set_particles(true);
+    app.state.particle_appearance.trail_len = 8;
+    app.test_harness().advance_clock(0.05);
+    app.test_harness().advance_simulation();
+
+    let mut snapshot = app.animation_snapshot().expect("snapshot");
+    let captured_positions = snapshot.particles.pos.clone();
+    assert!(
+        !captured_positions.is_empty(),
+        "the captured app must have a particle cloud"
+    );
+    let time = snapshot.state.time;
+
+    let frame = snapshot
+        .frame_at(time, 0.0, 1.0, true)
+        .expect("first frame");
+
+    assert!(
+        !frame.scene.dots.is_empty(),
+        "the first frame must render the captured cloud"
+    );
+    assert_eq!(frame.scene.dots.len(), captured_positions.len());
+    for (dot, position) in frame.scene.dots.iter().zip(captured_positions.iter()) {
+        assert!((dot.origin[0] - position.x).abs() < 1e-5);
+        assert!((dot.origin[1] - position.y).abs() < 1e-5);
+        assert!((dot.origin[2] - position.z).abs() < 1e-5);
+    }
+    assert!(
+        !frame.scene.trails.is_empty(),
+        "captured trail history must render on the first frame"
+    );
+    assert!(
+        !frame.scene.combined.is_empty(),
+        "the 3D combined stream must include the captured dots"
+    );
 }

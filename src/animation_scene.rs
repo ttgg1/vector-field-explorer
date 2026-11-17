@@ -96,24 +96,28 @@ impl AnimationSnapshot {
             .ok_or_else(|| AnimationError::InvalidSpec("animation scene did not rebuild".into()))?;
         let dots_range = crate::app::scene_dots_range(&self.state);
 
-        if !first && self.state.particles && self.state.particle_target().is_some() && dt > 0.0 {
-            let flow = self.state.scene_flow();
-            let domain = self.state.scene_domain();
+        if self.state.particles && self.state.particle_target().is_some() {
             let appearance = self.state.particle_appearance.sanitized();
-            advance_exact(
-                &mut self.particles,
-                &flow,
-                &domain,
-                start_time,
-                dt,
-                AdvectSettings {
+            if !first {
+                let flow = self.state.scene_flow();
+                let domain = self.state.scene_domain();
+                advance_exact(
+                    &mut self.particles,
+                    &flow,
+                    &domain,
+                    start_time,
                     dt,
-                    time: start_time,
-                    trail_len: appearance.trail_len,
-                    loop_on_stagnation: appearance.loop_on_stagnation,
-                    stagnation_seconds: appearance.stagnation_seconds,
-                },
-            );
+                    AdvectSettings {
+                        trail_len: appearance.trail_len,
+                        loop_on_stagnation: appearance.loop_on_stagnation,
+                        stagnation_seconds: appearance.stagnation_seconds,
+                        ..AdvectSettings::default()
+                    },
+                );
+            }
+            // The first frame still paints the captured cloud: `State::snapshot`
+            // never carries per-frame dots or trails, so the detached instances
+            // must be built whether or not this frame advanced the particles.
             let (dots, trails) =
                 crate::app::particle_scene_instances(&self.state, &self.particles, dots_range);
             base.dots = dots;

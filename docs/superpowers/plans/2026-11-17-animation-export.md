@@ -175,7 +175,7 @@ fn snapshot_captures_the_time_dependent_formula_scene() {
 #[test]
 fn frame_step_does_not_use_the_gui_step_limit() {
     let mut state = State::new(true);
-    state.set_formula("0, 0, 0");
+    state.set_formula("1, 0, 0");
     let mut particles = Particles::default();
     particles::spawn(&mut particles, &state.domain, 1, 3);
     let start = particles.pos[0];
@@ -187,9 +187,9 @@ fn frame_step_does_not_use_the_gui_step_limit() {
         [0.0;4],
     );
     let mut snapshot = snapshot;
-    let _frame = snapshot.frame_at(0.5, 1.0 / 12.0, 1.0, true).expect("frame");
+    let _frame = snapshot.frame_at(0.5, 0.5, 1.0, false).expect("frame");
     assert_eq!(snapshot.particles.pos.len(), 1);
-    // A 0.5 s first frame is subdivided, not clamped to 1/20 s.
+    // A 0.5 s non-first frame is subdivided, not clamped to 1/20 s.
     assert!(snapshot.particles.pos[0].distance(start) > 0.0);
 }
 ```
