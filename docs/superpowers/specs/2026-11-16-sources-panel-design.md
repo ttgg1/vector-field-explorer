@@ -1,6 +1,6 @@
 # Sources panel — design
 
-**Status:** PROPOSED — pending owner approval.
+**Status:** APPROVED by owner on 2026-11-17.
 
 **Issue:** [#25](https://github.com/ttgg1/vector-field-explorer/issues/25), child of the
 [#17 physics epic](https://github.com/ttgg1/vector-field-explorer/issues/17).
