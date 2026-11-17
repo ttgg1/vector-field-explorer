@@ -306,7 +306,10 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
-    let disabled_mode = matches!(state.field_mode, FieldMode::Induction | FieldMode::Ode);
+    let disabled_mode = matches!(
+        state.field_mode,
+        FieldMode::Induction | FieldMode::Ode | FieldMode::Materials
+    );
     if disabled_mode {
         ui.label("CAS edits the formula field; switch to Formula.");
     }

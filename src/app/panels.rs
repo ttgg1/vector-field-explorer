@@ -15,6 +15,7 @@ impl VfApp {
         self.show_top_bar(ui, ctx);
         self.show_formula_bar(ui);
         self.apply_pending_panel_request();
+        self.sync_materials_draft_on_entry();
 
         // Free flight is 3D-only: the formula bar's 2D/3D toggle (or a formula
         // that loses its third component) drops the fly camera before any
@@ -149,10 +150,31 @@ impl VfApp {
                 self.layout.ode_expanded = true;
             }
         }
+        if self.bar.open_materials {
+            self.bar.open_materials = false;
+            if self.layout_mode == LayoutMode::Compact {
+                self.sheet.open(SheetState::Materials);
+                self.sheet_expanded = SheetSize::Default;
+            } else {
+                self.layout.materials_expanded = true;
+            }
+        }
+    }
+
+    /// Materials owns a draft separate from the committed scene. Entering the
+    /// mode (or Reset, routed below) refreshes it once; a dirty draft survives
+    /// every ordinary frame.
+    fn sync_materials_draft_on_entry(&mut self) {
+        if self.state.field_mode == FieldMode::Materials
+            && self.last_field_mode != FieldMode::Materials
+        {
+            self.material.sync_from(&self.state);
+        }
     }
 
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
+        self.sync_materials_draft_on_entry();
         let mut entries = vec![
             RailEntry {
                 id: "controls",
@@ -190,6 +212,14 @@ impl VfApp {
                 expanded: &mut self.layout.ode_expanded,
             });
         }
+        if self.state.field_mode == FieldMode::Materials {
+            entries.push(RailEntry {
+                id: "materials",
+                label: "Materials",
+                shortcut: None,
+                expanded: &mut self.layout.materials_expanded,
+            });
+        }
         show_rail_strip(
             ui,
             ("left_panel_rails", self.panel_generation),
@@ -215,6 +245,9 @@ impl VfApp {
         }
         if self.state.field_mode == FieldMode::Ode && self.layout.ode_expanded {
             requests.push(self.layout.ode_width);
+        }
+        if self.state.field_mode == FieldMode::Materials && self.layout.materials_expanded {
+            requests.push(self.layout.materials_width);
         }
         if self.layout.presets_expanded {
             requests.push(self.layout.presets_width);
@@ -380,6 +413,40 @@ impl VfApp {
                 self.apply_ode_panel_action(action);
             }
         }
+        if self.state.field_mode == FieldMode::Materials && self.layout.materials_expanded {
+            let width = widths.next().unwrap();
+            let mut collapse = false;
+            let mut material_action = None;
+            let response = egui::Panel::left(("materials_panel", self.panel_generation))
+                .exact_size(width)
+                .show(ui, |ui| {
+                    collapse = layout::collapse_button_named(
+                        ui,
+                        layout::RailSide::Left,
+                        "Materials",
+                        "Materials",
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("materials_body")
+                        .show(ui, |ui| {
+                            material_action = crate::ui::material_panel::show(
+                                ui,
+                                &mut self.material,
+                                &mut self.state,
+                                false,
+                            );
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.materials_width = width;
+            }
+            if collapse {
+                self.layout.materials_expanded = false;
+            }
+            if let Some(action) = material_action {
+                self.apply_material_panel_action(action);
+            }
+        }
         if self.layout.presets_expanded {
             self.wide_presets_width = widths.next().unwrap();
         }
@@ -471,6 +538,24 @@ impl VfApp {
             crate::ui::induction_panel::InductionPanelAction::Reset => {
                 self.state
                     .set_induction_scene(crate::induction::InductionScene::default());
+            }
+        }
+    }
+
+    /// Apply the Materials panel's one-shot request. Reset restores the default
+    /// material scene *and* the default camera; Fit reuses the shared seam.
+    fn apply_material_panel_action(
+        &mut self,
+        action: crate::ui::material_panel::MaterialPanelAction,
+    ) {
+        match action {
+            crate::ui::material_panel::MaterialPanelAction::Fit => {
+                self.apply_view_command(ViewCommand::Fit);
+            }
+            crate::ui::material_panel::MaterialPanelAction::Reset => {
+                self.state.reset_material();
+                self.material.sync_from(&self.state);
+                self.apply_view_command(ViewCommand::Reset);
             }
         }
     }
@@ -664,6 +749,9 @@ impl VfApp {
                     if self.state.field_mode == FieldMode::Ode {
                         tabs.push((SheetState::Ode, "ODE"));
                     }
+                    if self.state.field_mode == FieldMode::Materials {
+                        tabs.push((SheetState::Materials, "Materials"));
+                    }
                     let available = (ui.available_width() - close_width).max(0.0);
                     egui::ScrollArea::horizontal()
                         .id_salt("compact_tabs")
@@ -720,6 +808,7 @@ impl VfApp {
         if !sheet.is_open() {
             return;
         }
+        self.sync_materials_draft_on_entry();
         // The Induction surface exists only while its adapter is active; an
         // open sheet must not outlive a mode switch (the wide rail is gated the
         // same way in `show_left_panels`).
@@ -730,6 +819,12 @@ impl VfApp {
             return;
         }
         if sheet == SheetState::Ode && self.state.field_mode != FieldMode::Ode {
+            self.sheet.close();
+            self.sheet_expanded = SheetSize::Default;
+            ui.ctx().request_repaint();
+            return;
+        }
+        if sheet == SheetState::Materials && self.state.field_mode != FieldMode::Materials {
             self.sheet.close();
             self.sheet_expanded = SheetSize::Default;
             ui.ctx().request_repaint();
@@ -751,6 +846,7 @@ impl VfApp {
         let mut plot_action = None;
         let mut induction_action = None;
         let mut ode_action = None;
+        let mut material_action = None;
         let controls_shown = sheet == SheetState::Controls;
         egui::Panel::bottom("compact_sheet")
             .exact_size(height)
@@ -764,6 +860,7 @@ impl VfApp {
                     SheetState::Sources => "Sources",
                     SheetState::Induction => "Induction",
                     SheetState::Ode => "ODE",
+                    SheetState::Materials => "Materials",
                     SheetState::None => "",
                 };
                 ui.horizontal(|ui| {
@@ -849,6 +946,14 @@ impl VfApp {
                         ode_action =
                             crate::ui::ode_panel::show(ui, &mut self.ode, &mut self.state, true);
                     }
+                    SheetState::Materials => {
+                        material_action = crate::ui::material_panel::show(
+                            ui,
+                            &mut self.material,
+                            &mut self.state,
+                            true,
+                        );
+                    }
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => self.show_cas_body(ui),
                     SheetState::None => {}
@@ -869,6 +974,9 @@ impl VfApp {
         }
         if let Some(action) = ode_action {
             self.apply_ode_panel_action(action);
+        }
+        if let Some(action) = material_action {
+            self.apply_material_panel_action(action);
         }
         self.finish_presets(camera_request);
         if controls_shown && layout::fly_allowed(self.layout_mode) {
@@ -922,6 +1030,40 @@ impl VfApp {
             let anchor = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
             if crate::ui::help_overlay::show(ui.ctx(), anchor, self.state.mode_3d) {
                 self.layout.help_visible = false;
+            }
+        }
+
+        // Materials: presentation chrome naming the painted case and view. The
+        // Response-empty note comes from the current sampling only.
+        if self.state.field_mode == FieldMode::Materials
+            && let Some(rect) = self.last_viewport_rect
+        {
+            let label = format!(
+                "Materials - {} - {}",
+                crate::ui::material_panel::case_label(self.state.material.case),
+                crate::ui::material_panel::view_label(self.state.material.view),
+            );
+            let pos = egui::pos2(rect.left() + 12.0, rect.top() + 12.0);
+            ui.painter().text(
+                pos,
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::FontId::proportional(13.0),
+                egui::Color32::WHITE,
+            );
+            if self
+                .state
+                .material_sampling
+                .as_ref()
+                .is_some_and(|sampling| sampling.response_empty)
+            {
+                ui.painter().text(
+                    egui::pos2(rect.left() + 12.0, rect.top() + 34.0),
+                    egui::Align2::LEFT_TOP,
+                    crate::material::MATERIAL_RESPONSE_EMPTY_WARNING,
+                    egui::FontId::proportional(13.0),
+                    egui::Color32::WHITE,
+                );
             }
         }
 

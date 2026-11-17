@@ -2666,6 +2666,44 @@ teaching demo.
 `induction_rail_expands_a_real_app_frame`) and
 `tests/layout_test.rs` for the persisted layout fields.
 
+#### `src/ui/material_panel.rs` — the responsive Materials panel
+
+**Purpose.** The wide left rail/compact sheet body for `FieldMode::Materials`,
+plus the shared case/view names, viewport summary and help rows.
+
+**Public API.** `MaterialPanelState { draft, error, advanced }`,
+`MaterialPanelState::default`, `commit(&mut State) -> bool`, `sync_from(&State)`,
+`show(ui, &mut panel, &mut State, compact) -> Option<MaterialPanelAction>`,
+`MaterialPanelAction::{Fit, Reset}`, `case_label`, `view_label`,
+`family_symbol`, `family_unit`, `summary`, `MATERIAL_HELP_ROWS`,
+`material_help_rows`, `MATERIALS_ONLY_NOTE`.
+
+**Invariants.**
+- `commit` calls `State::set_material_scene`; an invalid draft keeps the last
+  valid scene/sampling and records an actionable error naming the field.
+  `sync_from` runs on mode entry, Reset and future persistence restore, never
+  every frame, so a dirty draft survives.
+- Case, geometry, both background and both material constants, the applied
+  vector and the view commit through the draft on click or release; a frame
+  never commits merely because a value exists.
+- The applied family uses the exact design units: `V/m` for electric cases and
+  `T` for magnetic cases. The panel never converts to generic display units.
+- Advanced is closed by default and shows the case assumptions, the interface
+  tolerance, the current sampling status/count, the current warning only, and
+  `No general material solver`.
+- A rejected draft error is shown until the next successful commit or Reset;
+  warnings come only from the sampling that belongs to the committed scene, so
+  a valid scene edit cannot present a prior scene's warning as current.
+- `Reset` restores the default material scene and the default camera through
+  the app's shared Reset seam; `Fit` uses the existing view-command seam.
+- Materials is arrows-only, with the exact note
+  `Arrows only: streamlines, particles and click seeding stay off in Materials.`
+
+**Pinned by.** `tests/material_panel_test.rs` (wide/compact controls, commit
+and rejection, view/Reset, exact units, disabled Features/CAS, help rows,
+viewport label, current-only warning, rail/sheet requests) and
+`tests/layout_test.rs` for `materials_expanded`/`materials_width`.
+
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 
 **Purpose.** The wide left rail/compact sheet body for `FieldMode::Ode`: source
@@ -2713,14 +2751,17 @@ Option<OdePanelAction>`, `OdePanelAction::{Step, Fit, Reset}`,
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text, open_sources, open_induction, open_ode }`,
+**Public API.** `FormulaBarState { text, open_sources, open_induction, open_ode, open_materials }`,
 `FormulaBarState::new`, `show(ui, state, bar, compact)`.
 
 **Invariants.**
-- In vector mode the Formula/Sources/Induction/ODE selector calls
-  `State::set_field_mode`; Sources, Induction and ODE hide the text editor and
-  show their own summary plus `Open Sources`/`Open induction`/`Open ODE`, which
-  raise the matching one-shot request for the app to consume.
+- In vector mode the Formula/Sources/Induction/ODE/Materials selector calls
+  `State::set_field_mode`; Sources, Induction, ODE and Materials hide the text
+  editor and show their own summary plus
+  `Open Sources`/`Open induction`/`Open ODE`/`Open materials`, which raise the
+  matching one-shot request for the app to consume.
+- The Materials summary names the selected case and view and the applied field
+  with its exact unit (`V/m` or `T`).
 - Compact keeps the projection and adapter selectors on one horizontally
   scrollable row and puts the editor/summary beneath it, so a large font cannot
   squeeze the compact sheet out of existence.

@@ -18,6 +18,7 @@ pub struct FormulaBarState {
     pub open_sources: bool,
     pub open_induction: bool,
     pub open_ode: bool,
+    pub open_materials: bool,
 }
 
 impl FormulaBarState {
@@ -118,6 +119,15 @@ fn adapter_selectors(ui: &mut egui::Ui, state: &mut State) {
     {
         state.set_field_mode(FieldMode::Ode);
     }
+    if ui
+        .selectable_label(state.field_mode == FieldMode::Materials, "Materials")
+        .on_hover_text(
+            "Bounded analytic teaching cases: dielectric and permeable spheres or planar interfaces",
+        )
+        .clicked()
+    {
+        state.set_field_mode(FieldMode::Materials);
+    }
 }
 
 fn show_active_source(
@@ -169,6 +179,18 @@ fn show_active_source_with_width(
             .clicked()
         {
             bar.open_ode = true;
+        }
+        return;
+    }
+    if state.is_vector_mode() && state.field_mode == FieldMode::Materials {
+        ui.label("Materials scene summary");
+        ui.label(crate::ui::material_panel::summary(state));
+        if ui
+            .button("Open materials")
+            .on_hover_text("Expand or focus the Materials panel")
+            .clicked()
+        {
+            bar.open_materials = true;
         }
         return;
     }
