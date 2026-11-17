@@ -40,8 +40,11 @@ Release profile, standard issue-26 environment (`CARGO_TARGET_DIR`,
 | Source gallery, `40³` | 64 000 | 128 000 | 6698.754 ms |
 | Source gallery, `200²` | 40 000 | 80 000 | 8311.437 ms |
 
-A first run before final formatting measured 6622.986 ms and 8220.413 ms; the
-spread is ordinary shared-machine noise, not a regression signal.
+A first run before final formatting measured 6622.986 ms and 8220.413 ms, and
+an independent controller rerun after review measured 6252.975 ms and
+8510.180 ms; the spread is ordinary shared-machine noise, not a regression
+signal. Raw controller output:
+`.superpowers/sdd/2026-11-17-source-visualization/evidence/task-5/controller-benchmark.log`.
 
 These are slow: both sample passes are seconds, not tens of milliseconds. The
 33 ms “densest frame” context from the particle benchmark is **not met** by
