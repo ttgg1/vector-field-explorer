@@ -3,6 +3,7 @@ pub mod branding;
 pub mod cas_panel;
 pub mod formula_bar;
 pub mod help_overlay;
+pub mod induction_panel;
 pub mod layout;
 pub mod menu;
 pub mod panel_rails;

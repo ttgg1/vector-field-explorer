@@ -9,10 +9,11 @@ use eframe::egui;
 use crate::support;
 
 use vector_field_explorer::ui::layout::{
-    DEFAULT_CONTROLS_WIDTH, DEFAULT_PRESETS_WIDTH, DEFAULT_SOURCES_WIDTH, LayoutMode, LayoutState,
-    MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE,
-    RAIL_WIDTH, RailLabel, RailSide, clamp_width, collapse_chevron, compact_plan, layout_mode,
-    rail_chevron, rail_chevron_pos, rail_text_angle, rail_tooltip,
+    DEFAULT_CONTROLS_WIDTH, DEFAULT_INDUCTION_WIDTH, DEFAULT_PRESETS_WIDTH, DEFAULT_SOURCES_WIDTH,
+    LayoutMode, LayoutState, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE,
+    RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel, RailSide, clamp_width,
+    collapse_chevron, compact_plan, layout_mode, rail_chevron, rail_chevron_pos, rail_text_angle,
+    rail_tooltip,
 };
 
 // The rail must stay narrower than any expanded panel.
@@ -45,6 +46,11 @@ fn first_launch_expands_both_panels_and_shows_help() {
         "the Sources panel starts collapsed to its rail"
     );
     assert_eq!(layout.sources_width, DEFAULT_SOURCES_WIDTH);
+    assert!(
+        !layout.induction_expanded,
+        "the Induction panel starts collapsed to its rail"
+    );
+    assert_eq!(layout.induction_width, DEFAULT_INDUCTION_WIDTH);
     let rail = RAIL_WIDTH;
     assert!(
         (16.0..=40.0).contains(&rail),
@@ -117,12 +123,14 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
         controls_width: f32::NAN,
         presets_width: 5000.0,
         sources_width: 10.0,
+        induction_width: f32::NAN,
         ..Default::default()
     }
     .sanitized();
     assert_eq!(corrupt.controls_width, DEFAULT_CONTROLS_WIDTH);
     assert_eq!(corrupt.presets_width, MAX_PANEL_WIDTH);
     assert_eq!(corrupt.sources_width, MIN_PANEL_WIDTH);
+    assert_eq!(corrupt.induction_width, DEFAULT_INDUCTION_WIDTH);
     assert!(
         corrupt.controls_expanded && corrupt.presets_expanded,
         "visibility survives"
@@ -180,6 +188,8 @@ fn layout_state_serializes_exactly_its_platform_persisted_fields() {
         "presets_width",
         "sources_expanded",
         "sources_width",
+        "induction_expanded",
+        "induction_width",
         "help_visible",
         #[cfg(not(target_arch = "wasm32"))]
         "cas_expanded",
@@ -203,6 +213,8 @@ fn old_layout_defaults_only_new_fields_and_round_trips() {
     assert!(!layout.help_visible);
     assert!(!layout.sources_expanded);
     assert_eq!(layout.sources_width, DEFAULT_SOURCES_WIDTH);
+    assert!(!layout.induction_expanded);
+    assert_eq!(layout.induction_width, DEFAULT_INDUCTION_WIDTH);
     #[cfg(not(target_arch = "wasm32"))]
     {
         assert!(!layout.cas_expanded);

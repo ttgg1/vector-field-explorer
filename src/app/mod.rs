@@ -26,6 +26,7 @@ use crate::sim_clock::SimClock;
 use crate::source_scene::FieldMode;
 use crate::streamlines::click_seed;
 use crate::ui::formula_bar::FormulaBarState;
+use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::menu::{self, MenuAction};
 use crate::ui::presets::PresetPanel;
@@ -122,6 +123,9 @@ pub struct VfApp {
     /// Panel-local drafts for the Sources rail/sheet; invalid text survives
     /// frames without touching the committed scene.
     pub sources: SourcesPanelState,
+    /// Panel-local draft for the Induction rail/sheet; only valid edits reach
+    /// the committed scene.
+    pub induction: InductionPanelState,
     /// Effective width for the later Presets phase; never persisted.
     wide_presets_width: f32,
     #[cfg(not(target_arch = "wasm32"))]
@@ -311,6 +315,7 @@ impl VfApp {
             bar: FormulaBarState::new(),
             controls,
             sources: SourcesPanelState::default(),
+            induction: InductionPanelState::default(),
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),

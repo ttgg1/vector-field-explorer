@@ -2260,8 +2260,8 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`layout`, `menu`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
-`sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+`induction_panel`, `layout`, `menu`, `panel_rails`, `plot_panel`, `presets`,
+`sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -2360,17 +2360,52 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
 `add_is_disabled_at_the_source_limit`), and
 `tests/button_sizing_test.rs::compact_sources_panel_buttons_keep_touch_targets`.
 
+#### `src/ui/induction_panel.rs` — the dedicated induction editor
+
+**Purpose.** The wide left rail/compact sheet body for the `FieldMode::Induction`
+teaching demo.
+
+**Public API.** `InductionPanelState { scene, error, advanced }`,
+`InductionPanelState::default`, `commit(&mut State) -> bool`,
+`show(ui, &mut panel, &mut State, compact) -> Option<InductionPanelAction>`,
+`InductionPanelAction::{Fit, Reset}`, and `status_text`.
+
+**Invariants.**
+- `commit` calls `State::set_induction_scene`; an invalid draft never replaces
+  the committed scene, and the error names the failing field.
+- A clean draft mirrors `State::induction`; a draft that failed to commit keeps
+  its error and text until it is corrected or the section is reset.
+- Case, geometry, amplitude, frequency, display and the default-off accuracy
+  opt-in all commit through the same draft; `Fit` and `Reset induction section`
+  are one-shot actions the app applies through the view-command and default-
+  scene seams.
+- Advanced contains the shared source-scene softening editor (clearing both
+  adapter caches), E/B status counters, the assumptions note, and the native CAS
+  derivative provenance when available.
+- Induction is arrows-only; the panel states that streamlines, particles and
+  click seeding stay off.
+
+**Pinned by.** `tests/induction_panel_test.rs`
+(`induction_panel_wide_and_compact_expose_all_controls`,
+`edits_validate_and_keep_the_last_valid_scene`,
+`induction_rail_expands_a_real_app_frame`) and
+`tests/layout_test.rs` for the persisted layout fields.
+
 #### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text, open_sources }`, `FormulaBarState::new`,
-`show(ui, state, bar, compact)`.
+**Public API.** `FormulaBarState { text, open_sources, open_induction }`,
+`FormulaBarState::new`, `show(ui, state, bar, compact)`.
 
 **Invariants.**
-- In vector mode a Formula/Sources selector calls `State::set_field_mode`;
-  Sources hides the text editor and shows a source summary plus `Open Sources`,
-  which raises `bar.open_sources` for the app to consume.
+- In vector mode a Formula/Sources/Induction selector calls
+  `State::set_field_mode`; Sources and Induction hide the text editor and show
+  their own summary plus `Open Sources`/`Open induction`, which raise the
+  matching one-shot request for the app to consume.
+- Compact keeps the projection and adapter selectors on one horizontally
+  scrollable row and puts the editor/summary beneath it, so a large font cannot
+  squeeze the compact sheet out of existence.
 - The bar's text mirror is refreshed from `state.active_source()` when they
   differ, so presets, restores and kind changes update the field without
   overwriting a preserved scalar draft.
@@ -2385,6 +2420,7 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
   the field fill the remainder.
 
 **Pinned by.** `tests/sources_panel_test.rs::formula_bar_switches_mode_and_hides_the_editor`;
+`tests/induction_panel_test.rs::formula_bar_selects_induction_and_hides_the_formula_editor`;
 the setter contract is in `tests/viewmodel_test.rs`
 (`valid_formula_replaces_field_and_clears_error`,
 `garbage_formula_keeps_field_and_reports_error`), the width rule in
@@ -2403,18 +2439,22 @@ window.
 `section_heading_style`, `OVERLAY_HEADING_COLOR`, `window_heading_color`,
 `HelpRow`, `HelpSection`, `FLY_HELP_*`, `SEED_HELP_*`, `LEFT_CLICK_HELP_*`,
 `HELP_SECTIONS`, `SCALAR_HELP_SECTION`, `SOURCES_HELP_SECTION`,
-`scalar_help_rows`, `sources_help_rows`, `all_rows`, `sections_for`,
+`INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `scalar_help_rows`,
+`sources_help_rows`, `induction_help_rows`, `all_rows`, `sections_for`,
 `rows_for`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
 - `HELP_SECTIONS` is the single source of strings; the overlay shows the active
-  view + Global, the window shows all three groups plus the Scalar plots and
-  Sources sections. A static, not a const, so both surfaces can be proven to
-  share the allocation.
+  view + Global, the window shows all three groups plus the Scalar plots,
+  Sources and Induction sections. A static, not a const, so both surfaces can be
+  proven to share the allocation.
 - The Sources section covers formula/source separation, all eight editors,
   E/B/Both without summation, scene-wide softening, the default-off accuracy
   opt-in, hidden non-finite/unavailable results, and that streamlines,
   particles and click seeding remain formula features.
+- The Induction section covers the quasistatic softened model, vector-potential
+  reconstruction (arbitrary B alone cannot determine E), the shared clock,
+  static-field zero induced E, arrows-only scope and the shared softening.
 - `?`/F1 toggle the overlay; Esc and the × dismiss it; the window has its own
   open flag.
 - Headings and rows use pinned sizes/colours; the window heading is the theme's
@@ -2442,7 +2482,8 @@ tab-bar/sheet plan.
 **Public API.** `RAIL_WIDTH = 32`, `RAIL_FRAME_MARGIN = 4`,
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
-`DEFAULT_SOURCES_WIDTH = 280`, `MIN_PANEL_WIDTH = 180`,
+`DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
+`MIN_PANEL_WIDTH = 180`,
 `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
@@ -2455,11 +2496,12 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores seven desktop fields (Controls,
-  Presets and Sources visibility/width plus help) and native-only
+- Compact is transient: `LayoutState` stores nine desktop fields (Controls,
+  Presets, Sources and Induction visibility/width plus help) and native-only
   `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Sources` shares the one compact sheet.
-- Sources defaults to collapsed at 280 pt and sanitizes to 180..=460.
+- `SheetState::Sources` and `SheetState::Induction` share the one compact sheet.
+- Sources and Induction default to collapsed at 280 pt and sanitize to
+  180..=460; the Induction record is consulted only in Induction mode.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
