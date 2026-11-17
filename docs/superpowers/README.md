@@ -21,6 +21,7 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 | [Sources panel design](specs/2026-11-16-sources-panel-design.md) | GitHub #25 dedicated source CRUD panel, explicit Formula/Sources modes, fixed E/B Both colours and legend, accuracy opt-in and persistence; owner-approved 2026-11-17 and implemented. |
 | [Sources panel plan](plans/2026-11-16-sources-panel.md) | GitHub #25 bounded TDD/review units; owner-approved 2026-11-17 implementation basis, completed and verified in Git history. |
 | [Source visualization design](specs/2026-11-17-source-visualization-design.md) | GitHub #26 glyphs, projected selected-slice treatment, illustrative source presets, and shared export accuracy/model warnings; owner-approved 2026-11-17. |
+| [Source visualization plan](plans/2026-11-17-source-visualization.md) | GitHub #26 five bounded TDD/review units for glyphs, slice integration, presets, export provenance and final gates; implementation basis pending owner plan approval. |
 | [Public-catalog workflow design](specs/2026-11-15-public-catalog-workflow-design.md) | Superseded historical ruling: public rates only, no benchmark or accepted-work efficiency ratios. |
 | [Public-catalog workflow plan](plans/2026-11-15-public-catalog-workflow.md) | Superseded historical report-surface change; see Markdown-first workflow records. |
 | [Markdown-first agent workflow design](specs/2026-11-16-markdown-first-agent-workflow-design.md) | Owner-approved retirement of Python orchestration; native OpenCode Markdown roles and Python metrics only. |
