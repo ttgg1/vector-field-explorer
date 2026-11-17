@@ -253,7 +253,7 @@ Use the fixed eight-panel, 32-point Gauss–Legendre azimuthal quadrature from t
 
 - [ ] **Step 7: Add benchmark and freeze caps**
 
-Create `tests/induction_bench_test.rs` that returns immediately unless `VFE_INDUCTION_BENCH` is set; otherwise prepares both cases at 20³ and 120² and prints `INDUCTION BENCH case=... points=... ms=...`. Create `scripts/bench-induction.sh` setting the env var and running the exact test with `--nocapture`. Record the measured times in `docs/perf/induction-performance.md`; lower either cap before Task 2 if a cap exceeds 2 s on the recorded host. Update the design/plan cap values if lowered.
+Create `tests/induction_bench_test.rs` that returns immediately unless `VFE_INDUCTION_BENCH` is set; otherwise prepares both cases at 20³ and 120² (provisional) plus the frozen 80² cap, and prints `INDUCTION BENCH case=... view=... points=... ms=...`. Create `scripts/bench-induction.sh` setting the env var and running the exact test with `--nocapture`. Record the measured times in `docs/perf/induction-performance.md`; the Task 1 run lowered `MAX_INDUCTION_DENSITY_2D` from 120 to 80 because 120² exceeded 2 s. Update the design/plan cap values if lowered.
 
 - [ ] **Step 8: Verify and commit**
 
@@ -295,7 +295,7 @@ fn induction_mode_uses_caps_and_preserves_formula_and_sources() {
     let grid = app.state.plane_grid();
     assert!(grid.x.max(grid.y).max(grid.z) <= 20, "3D induction cap: {grid:?}");
     let sampling = app.test_harness().induction_sampling().expect("sampling");
-    assert!(sampling.arrows.len() <= 120 * 120, "at most the 2D cap");
+    assert!(sampling.arrows.len() <= 80 * 80, "at most the 2D cap");
     assert_eq!(app.state.formula, formula);
     assert_eq!(app.state.sources, sources);
 }
@@ -434,7 +434,7 @@ fn scalar_plot_switch_pauses_induction_and_preserves_time() {
 }
 ```
 
-Assert `grid()`/`plane_grid()` are at most 20³/120², `source_sampling` is unchanged, formula particle cloud is preserved but `particle_target()` is `None`, and empty lines/trails/dots. For cache identity, compare `Arc::ptr_eq` before/after a time-only step and `sample.current` changes; after an axis/radius edit the prepared Arc must differ and positions update. `Both` arrows must contain exact amber/cyan; `Electric`/`Magnetic` arrows must not include the other family colour. Plane slice positions must have local `z == 0`; a plane axis/index change must resample.
+Assert `grid()`/`plane_grid()` are at most 20³/80², `source_sampling` is unchanged, formula particle cloud is preserved but `particle_target()` is `None`, and empty lines/trails/dots. For cache identity, compare `Arc::ptr_eq` before/after a time-only step and `sample.current` changes; after an axis/radius edit the prepared Arc must differ and positions update. `Both` arrows must contain exact amber/cyan; `Electric`/`Magnetic` arrows must not include the other family colour. Plane slice positions must have local `z == 0`; a plane axis/index change must resample.
 
 - [ ] **Step 2: Run RED**
 

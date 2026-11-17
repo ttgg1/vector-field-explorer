@@ -695,6 +695,59 @@ editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
 to Formula without clearing the scene, and native CAS refuses Sources mode. The
 user guide is [docs/sources-panel.md](../docs/sources-panel.md).
 
+#### `src/induction.rs` — induction scene, vector-potential E and unit-current cache
+
+**Purpose.** Pure Task 1 seam for the Faraday teaching demo. One axisymmetric
+current loop or finite continuous solenoid carries
+`I(t) = amplitude*cos(2*pi*frequency*t)`. `B` is the existing softened source
+evaluator at unit current, scaled by `I(t)`; `E` is reconstructed from the
+softened azimuthal vector potential as `-dI/dt * A_phi(unit current) * phi_hat`
+and is never a finite time difference or an inverse-Faraday solve. The two
+families remain separate.
+
+**Public API.** `InductionCase`, `InductionScene` (`Debug`, `Clone`,
+`PartialEq`, `Default`), `InductionKey`, `InductionPrepared`,
+`InductionSampling`, `InductionFamilyResult`, `InductionEstimate`,
+`InductionFamilyStatus`, `InductionPointSample`, `induction_key`,
+`prepare_induction`, `sample_induction`, `evaluate_induction_point`, and the
+frozen caps `MAX_INDUCTION_DENSITY_3D = 20` / `MAX_INDUCTION_DENSITY_2D = 80`.
+`InductionScene` exposes `current`, `current_derivative`, `is_animated`,
+`validate`, `unit_source` and `unit_vector_potential`.
+
+**Invariants.** The waveform derivative is analytic; `is_animated()` is exactly
+`amplitude != 0.0 && frequency > 0.0`. Softening is one positive finite shared
+value. The loop potential uses `D_loop^2 = r^2 + R^2 - 2rR cos(phi) + z^2 + a^2`;
+the solenoid's analytic axial integral uses
+`D_solenoid^2 = r^2 + R^2 - 2rR cos(phi) + a^2` (no `z^2`). Both integrate the
+symmetric `[0, pi]` half-range with eight panels of 32-point Gauss-Legendre
+nodes and double it; a four-panel pass supplies
+`max(|fine-coarse|, 32*EPSILON*|fine|)`. On-axis `E` is exactly zero. The
+prepared cache is keyed by case/geometry/domain/grid/plane/softening/accuracy
+and stores positions, unit-current E with uncertainty, and compact B
+value/uncertainty/stop reason. `sample_induction` only rescales and
+reclassifies: E by `dI/dt`, B by `I(t)`. Non-finite or over-target results are
+`Unavailable`/`AccuracyNotMet`, never drawable confident arrows; accuracy-not-met
+is hidden unless the opt-in is set. `Both` emits E amber `[255,176,64]` then B
+cyan `[64,196,255]`; a single family uses the normal colormap magnitude range.
+Native-only sampling may report the CAS waveform derivative string as
+diagnostics; the induced field itself never depends on CAS.
+
+**Pinned by.** [tests/induction_test.rs](../tests/induction_test.rs):
+`waveform_and_static_predicate_are_exact`,
+`loop_vector_potential_matches_independent_fixtures`,
+`solenoid_vector_potential_matches_independent_fixtures_and_curl_matches_b`,
+`faraday_contour_matches_flux_rate_for_both_cases`,
+`static_current_has_exactly_zero_induced_field`,
+`nonfinite_scene_is_rejected`, `validation_rejects_bad_geometry`, and the
+native-only `cas_derivative_matches_the_analytic_waveform`. Fixtures and their
+independent mpmath generator live in `tests/support/induction/`.
+
+**Limitations.** CPU-only, quasistatic and softened: no displacement current,
+retardation or physical singular limit. Task 1 provides the model/evaluator
+only; mode integration, UI, persistence and export warnings are later tasks.
+The cap benchmark is recorded in
+[docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
+
 #### `src/source_presets.rs` — built-in source-scene presets
 
 **Purpose.** The ten illustrative source scenes offered above the saved camera

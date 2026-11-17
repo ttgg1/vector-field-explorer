@@ -14,6 +14,7 @@ pub mod field;
 pub mod flow;
 pub mod fly_camera;
 pub mod fonts;
+pub mod induction;
 pub mod particles;
 pub mod persistence;
 pub mod plane;

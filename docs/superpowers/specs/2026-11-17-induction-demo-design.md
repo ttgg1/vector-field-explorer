@@ -332,7 +332,7 @@ remains for physics tests and is not the frame path.
 `InductionPrepared` stores `Vec3` positions (local on a 2D slice, world in 3D),
 the world query point, the unit-current `E` vector (including the azimuthal
 basis and exact zero on axis), its unit uncertainty, the existing evaluator's
-unit-current `B` result, and its unit uncertainty. At 14,400 arrows it is a
+unit-current `B` result, and its unit uncertainty. At 6,400 arrows it is a
 small bounded vector of fixed-size records; the cache is replaced atomically on
 a key change and dropped on leaving Induction/global reset.
 
@@ -412,7 +412,8 @@ Initial engineering caps (subject to benchmark evidence before finalizing the
 plan):
 
 - `MAX_INDUCTION_DENSITY_3D = 20` (8,000 arrows)
-- `MAX_INDUCTION_DENSITY_2D = 120` (14,400 arrows)
+- `MAX_INDUCTION_DENSITY_2D = 80` (6,400 arrows; lowered by the Task 1 benchmark
+  from the provisional 120, which measured 2.7–4.1 s on the recorded host)
 - one source only; no source list in Induction mode
 - azimuthal quadrature bounded per point; no unbounded recursion or allocation
 - geometry cache keyed by case/geometry/domain/grid/plane/display/softening/
