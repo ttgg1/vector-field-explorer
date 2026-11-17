@@ -112,6 +112,7 @@ impl VfApp {
             self.clock.loop_period = None;
             self.last_ode_epoch = Some(self.state.ode_epoch);
             self.ode_autofit_pending = true;
+            self.ode.sync_from(&self.state);
         }
         self.state.mark_dirty();
     }

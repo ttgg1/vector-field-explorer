@@ -17,6 +17,7 @@ pub struct FormulaBarState {
     pub text: String,
     pub open_sources: bool,
     pub open_induction: bool,
+    pub open_ode: bool,
 }
 
 impl FormulaBarState {
@@ -110,6 +111,13 @@ fn adapter_selectors(ui: &mut egui::Ui, state: &mut State) {
     {
         state.set_field_mode(FieldMode::Induction);
     }
+    if ui
+        .selectable_label(state.field_mode == FieldMode::Ode, "ODE")
+        .on_hover_text("Integrate typed equations or the current formula field")
+        .clicked()
+    {
+        state.set_field_mode(FieldMode::Ode);
+    }
 }
 
 fn show_active_source(
@@ -149,6 +157,18 @@ fn show_active_source_with_width(
             .clicked()
         {
             bar.open_induction = true;
+        }
+        return;
+    }
+    if state.is_vector_mode() && state.field_mode == FieldMode::Ode {
+        ui.label("ODE scene summary");
+        ui.label(ode_summary(state));
+        if ui
+            .button("Open ODE")
+            .on_hover_text("Expand or focus the ODE workbench panel")
+            .clicked()
+        {
+            bar.open_ode = true;
         }
         return;
     }
@@ -192,6 +212,19 @@ fn induction_summary(state: &State) -> String {
     format!(
         "{case} · {display} · amplitude {:.2} · {:.2} Hz · softening {:.3}",
         scene.amplitude, scene.frequency, state.sources.softening
+    )
+}
+
+fn ode_summary(state: &State) -> String {
+    let source = match state.ode.source {
+        crate::ode::OdeSource::Equations => "Equations",
+        crate::ode::OdeSource::CurrentField => "Current field",
+    };
+    format!(
+        "{source} · {}D · {} seed(s) · {:.1} s",
+        state.ode.dimension,
+        state.ode.seeds.len(),
+        state.ode.duration,
     )
 }
 

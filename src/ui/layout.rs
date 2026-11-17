@@ -63,6 +63,9 @@ pub const DEFAULT_SOURCES_WIDTH: f32 = 280.0;
 /// Default expanded width of the left Induction panel, points.
 pub const DEFAULT_INDUCTION_WIDTH: f32 = 280.0;
 
+/// Default expanded width of the left ODE workbench panel, points.
+pub const DEFAULT_ODE_WIDTH: f32 = 300.0;
+
 /// Narrowest an expanded panel may be dragged to.
 pub const MIN_PANEL_WIDTH: f32 = 180.0;
 
@@ -175,6 +178,8 @@ pub enum SheetState {
     Sources,
     /// The left Induction panel, as a bottom sheet.
     Induction,
+    /// The left ODE workbench panel, as a bottom sheet.
+    Ode,
 }
 
 impl SheetState {
@@ -435,6 +440,9 @@ pub struct LayoutState {
     /// Induction panel (left) expanded rather than collapsed to its rail.
     /// Shown only while the field adapter is `FieldMode::Induction`.
     pub induction_expanded: bool,
+    /// ODE workbench panel (left) expanded rather than collapsed to its rail.
+    /// Shown only while the field adapter is `FieldMode::Ode`.
+    pub ode_expanded: bool,
     /// Expanded width of the Controls panel, points; kept while collapsed so
     /// re-expanding restores the user's width.
     pub controls_width: f32,
@@ -444,6 +452,8 @@ pub struct LayoutState {
     pub sources_width: f32,
     /// Expanded width of the Induction panel, points.
     pub induction_width: f32,
+    /// Expanded width of the ODE workbench panel, points.
+    pub ode_width: f32,
     /// Whether the viewport's help overlay is visible.
     pub help_visible: bool,
     /// Native symbolic tools are independently visible, initially closed.
@@ -461,10 +471,12 @@ impl Default for LayoutState {
             presets_expanded: true,
             sources_expanded: false,
             induction_expanded: false,
+            ode_expanded: false,
             controls_width: DEFAULT_CONTROLS_WIDTH,
             presets_width: DEFAULT_PRESETS_WIDTH,
             sources_width: DEFAULT_SOURCES_WIDTH,
             induction_width: DEFAULT_INDUCTION_WIDTH,
+            ode_width: DEFAULT_ODE_WIDTH,
             help_visible: true,
             #[cfg(not(target_arch = "wasm32"))]
             cas_expanded: false,
@@ -483,6 +495,7 @@ impl LayoutState {
         self.presets_width = clamp_width(self.presets_width, DEFAULT_PRESETS_WIDTH);
         self.sources_width = clamp_width(self.sources_width, DEFAULT_SOURCES_WIDTH);
         self.induction_width = clamp_width(self.induction_width, DEFAULT_INDUCTION_WIDTH);
+        self.ode_width = clamp_width(self.ode_width, DEFAULT_ODE_WIDTH);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.cas_width = clamp_width(self.cas_width, DEFAULT_CAS_WIDTH);
@@ -514,6 +527,11 @@ impl LayoutState {
     /// Show the Induction panel (or its rail).
     pub fn toggle_induction(&mut self) {
         self.induction_expanded = !self.induction_expanded;
+    }
+
+    /// Show the ODE workbench panel (or its rail).
+    pub fn toggle_ode(&mut self) {
+        self.ode_expanded = !self.ode_expanded;
     }
 
     /// Toggle only the native CAS panel, preserving all requested widths.

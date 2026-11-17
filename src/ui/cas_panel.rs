@@ -304,11 +304,11 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
-    let induction_mode = state.field_mode == FieldMode::Induction;
-    if induction_mode {
+    let disabled_mode = matches!(state.field_mode, FieldMode::Induction | FieldMode::Ode);
+    if disabled_mode {
         ui.label("CAS edits the formula field; switch to Formula.");
     }
-    ui.add_enabled_ui(!induction_mode, |ui| show_enabled(ui, state, panel));
+    ui.add_enabled_ui(!disabled_mode, |ui| show_enabled(ui, state, panel));
 }
 
 fn show_enabled(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {

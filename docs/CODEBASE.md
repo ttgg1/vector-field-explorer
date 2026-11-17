@@ -510,6 +510,12 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 - The Sources rail/body and the compact Sources tab draw
   `sources_panel::show`; the formula bar's one-shot `open_sources` request
   expands the wide rail or opens the compact sheet, then clears.
+- The ODE rail/body and compact ODE tab draw `ode_panel::show`; the formula
+  bar's one-shot `open_ode` request expands the wide rail or opens the compact
+  sheet. Step, Fit and Reset dispatch to `VfApp::ode_step`, the shared Fit
+  command and `State::reset_ode` plus the default Reset command.
+- ODE mode status reports `State::ode_error`; the Features controls are
+  disabled with the ODE note and the Coloring section is not drawn.
 - The Controls panel is drawn before the dirty rebuild, so a control edit lands
   in this frame's snapshot and counts.
 - `recentre_domain` follows a domain change: 3D to the new centre, 2D in x/y
@@ -2390,8 +2396,9 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`induction_panel`, `layout`, `menu`, `panel_rails`, `plot_panel`, `presets`,
-`sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+`induction_panel`, `layout`, `menu`, `ode_panel`, `panel_rails`, `plot_panel`,
+`presets`, `sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`,
+`transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -2521,18 +2528,61 @@ teaching demo.
 `induction_rail_expands_a_real_app_frame`) and
 `tests/layout_test.rs` for the persisted layout fields.
 
-#### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
+#### `src/ui/ode_panel.rs` — the responsive ODE workbench
+
+**Purpose.** The wide left rail/compact sheet body for `FieldMode::Ode`: source
+selector (equations/current field), typed dimension and equation rows, bounded
+initial conditions, scene duration, chart selector, time-series variables,
+Step/Fit/Reset actions, CPU charts and a closed Advanced solver/status block.
+
+**Public API.** `OdePanelState { draft, error, advanced }`,
+`OdePanelState::default`, `commit(&mut State) -> bool`,
+`sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
+Option<OdePanelAction>`, `OdePanelAction::{Step, Fit, Reset}`,
+`ode_help_rows`, `ODE_HELP_SECTION`.
+
+**Invariants.**
+- `commit` calls `State::set_ode_scene`; invalid text keeps both the committed
+  scene and the draft, and `error` comes from `State::ode_error`. A clean draft
+  is reloaded from the committed scene by `sync_from`, which the app calls on
+  mode entry, section reset and persistence restore — never on an ordinary frame
+  with a dirty draft.
+- Text commits on focus loss/Enter, DragValues on release, and seed/button
+  actions on click; no edit re-solves once per dragged frame.
+- Seeds stay finite and bounded to `ODE_MAX_SEEDS`; duration stays inside
+  `0.1..=ODE_MAX_DURATION`; at least one time-series variable stays selected and
+  the all-off attempt paints `Select at least one variable.`.
+- Phase portrait paints x/y only (a projection in 3D) from the shared solution
+  samples with `ODE_COLORS`, seed and current-time markers. Time series paints
+  the selected variables against `t` from the same samples. Empty/error
+  solutions paint an explanation and no fabricated lines.
+- Advanced states the fixed-step RK4 `h`, sample/step/stop counts and the current
+  field dimension when that source is active.
+- The panel returns actions only; the app owns clock seeking, Fit, scene reset
+  and camera reset.
+
+**Pinned by.** `tests/ode_panel_test.rs`
+(`ode_panel_exposes_equations_seeds_and_actions`,
+`ode_equation_edit_commits_valid_scene_only`,
+`ode_initial_conditions_are_bounded_and_distinct`,
+`time_series_variables_reject_all_false`,
+`ode_compact_and_wide_panels_reflow`,
+`ode_chart_switch_commits_state`,
+`ode_mode_disables_features_and_cas`,
+`open_ode_reaches_the_wide_rail_or_compact_sheet`).
+
+#### `src/ui/formula_bar.rs` — formula text and mode toggles
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text, open_sources, open_induction }`,
+**Public API.** `FormulaBarState { text, open_sources, open_induction, open_ode }`,
 `FormulaBarState::new`, `show(ui, state, bar, compact)`.
 
 **Invariants.**
-- In vector mode a Formula/Sources/Induction selector calls
-  `State::set_field_mode`; Sources and Induction hide the text editor and show
-  their own summary plus `Open Sources`/`Open induction`, which raise the
-  matching one-shot request for the app to consume.
+- In vector mode the Formula/Sources/Induction/ODE selector calls
+  `State::set_field_mode`; Sources, Induction and ODE hide the text editor and
+  show their own summary plus `Open Sources`/`Open induction`/`Open ODE`, which
+  raise the matching one-shot request for the app to consume.
 - Compact keeps the projection and adapter selectors on one horizontally
   scrollable row and puts the editor/summary beneath it, so a large font cannot
   squeeze the compact sheet out of existence.
@@ -2551,6 +2601,7 @@ teaching demo.
 
 **Pinned by.** `tests/sources_panel_test.rs::formula_bar_switches_mode_and_hides_the_editor`;
 `tests/induction_panel_test.rs::formula_bar_selects_induction_and_hides_the_formula_editor`;
+`tests/ode_panel_test.rs::formula_bar_selects_ode_and_hides_the_editor`;
 the setter contract is in `tests/viewmodel_test.rs`
 (`valid_formula_replaces_field_and_clears_error`,
 `garbage_formula_keeps_field_and_reports_error`), the width rule in
@@ -2569,8 +2620,9 @@ window.
 `section_heading_style`, `OVERLAY_HEADING_COLOR`, `window_heading_color`,
 `HelpRow`, `HelpSection`, `FLY_HELP_*`, `SEED_HELP_*`, `LEFT_CLICK_HELP_*`,
 `HELP_SECTIONS`, `SCALAR_HELP_SECTION`, `SOURCES_HELP_SECTION`,
-`INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `scalar_help_rows`,
-`sources_help_rows`, `induction_help_rows`, `all_rows`, `sections_for`,
+`INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `ODE_HELP_SECTION`,
+`ODE_HELP_ROWS`, `scalar_help_rows`, `sources_help_rows`,
+`induction_help_rows`, `ode_help_rows`, `all_rows`, `sections_for`,
 `rows_for`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
@@ -2613,7 +2665,7 @@ tab-bar/sheet plan.
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
 `DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
-`MIN_PANEL_WIDTH = 180`,
+`DEFAULT_ODE_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
 `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
@@ -2626,12 +2678,13 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores nine desktop fields (Controls,
-  Presets, Sources and Induction visibility/width plus help) and native-only
-  `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Sources` and `SheetState::Induction` share the one compact sheet.
-- Sources and Induction default to collapsed at 280 pt and sanitize to
-  180..=460; the Induction record is consulted only in Induction mode.
+- Compact is transient: `LayoutState` stores eleven desktop fields (Controls,
+  Presets, Sources, Induction and ODE visibility/width plus help) and
+  native-only `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
+- `SheetState::Sources`, `SheetState::Induction` and `SheetState::Ode` share the
+  one compact sheet.
+- Sources and Induction default to collapsed at 280 pt, ODE at 300 pt, and all
+  sanitize to 180..=460; each record is consulted only in its own field mode.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point

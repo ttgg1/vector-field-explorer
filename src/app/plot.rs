@@ -642,13 +642,7 @@ impl PlotAppHarness<'_> {
     /// Ode panel Step: pause, seek one fixed step (bounded by the solution
     /// duration), and mirror the clock into state time. No solve.
     pub fn ode_step(&mut self) {
-        let Some(solution) = self.app.state.ode_solution.as_ref() else {
-            return;
-        };
-        let duration = solution.duration as f32;
-        let target = (self.app.clock.time + crate::ode::ODE_STEP as f32).min(duration);
-        self.app.clock.seek(target);
-        self.app.state.set_time(self.app.clock.time);
+        self.app.ode_step();
     }
 
     /// Cached Ode trajectory + axis segment count.
