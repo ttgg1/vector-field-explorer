@@ -693,6 +693,19 @@ impl PlotAppHarness<'_> {
         self.app.click_seeds.len()
     }
 
+    /// Source-marker line segments in the latest vector rebuild.
+    pub fn source_glyph_line_count(&self) -> usize {
+        self.app.source_glyph_line_count
+    }
+
+    /// Every line in the current vector viewport scene, backdrop included.
+    pub fn viewport_line_count(&self) -> usize {
+        match &self.app.scene {
+            ViewportScene::Vector(scene) => scene.lines.len(),
+            ViewportScene::Plot(_) => 0,
+        }
+    }
+
     pub fn plot_scene(&self) -> Option<Arc<PlotScene>> {
         self.app.scene.as_plot().cloned()
     }

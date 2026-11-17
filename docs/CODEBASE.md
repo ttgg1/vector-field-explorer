@@ -108,6 +108,7 @@ per-frame simulation state beside it.
         │ VfApp::rebuild_scene (app/simulation.rs)
          │  - compose_lines_with_frame(scene_domain, is_3d, plane_frame,
          │      reference lines + flow lines + click lines)
+        │  - in Sources mode, append source_glyph_lines after those lines
         │  - cache dots_range from the freshly sampled magnitudes
         │  - retrace click bursts on every dirty rebuild
         ▼
@@ -141,8 +142,11 @@ Why the seam matters:
   the grid and 3D box; `show_coordinate_system` selects only the coloured axes.
   `compose_lines_with_frame` consumes the active `scene_domain`/`plane_frame`, so
   a 2D slice never gets world-cube references; the snapshot's `lines` holds
-  grid-seeded streamlines only. The resulting `SceneGPU.lines` is shared by both
-  viewport modes, CLI export and screenshot capture.
+  grid-seeded streamlines only. In `FieldMode::Sources` the app also appends the
+  active scene's `source_glyph_lines` after the reference/flow/click lines, so
+  markers follow the same selected `plane_frame` as the samples; Formula mode
+  preserves the durable scene but appends none. The resulting `SceneGPU.lines`
+  is shared by both viewport modes, CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -537,7 +541,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
   click bursts are retraced against the new domain/formula and then composed
-  with the backdrop.
+  with the backdrop. Source-mode rebuilds append `source_glyph_lines` for the
+  current `plane_frame` and record their segment count; the Formula branch
+  appends none. `source_glyph_line_count` and `viewport_line_count` expose the
+  result to the doc-hidden integration harness.
 - `advance_particles` calls `retarget` only with the current target. A changed
   target trims or spawns only the difference; a click burst above the count
   survives until the count changes. Off or a two-component field produces

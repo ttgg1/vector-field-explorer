@@ -210,6 +210,10 @@ pub struct VfApp {
     plot_release_pending: bool,
     renderer_ready: bool,
     streamline_count: usize,
+    /// Source-marker glyph segments appended to the latest vector scene's
+    /// composed lines. Zero in Formula mode; the app owns the count because
+    /// the snapshot's line collection holds only formula streamlines.
+    source_glyph_line_count: usize,
     /// The advected cloud behind the "Particles" toggle (ticket 05): 3D-view
     /// only; its per-frame dots ramp with `dots_range`, the same magnitude
     /// range the arrows were coloured with at the last scene rebuild.
@@ -350,6 +354,7 @@ impl VfApp {
             plot_release_pending: false,
             renderer_ready: false,
             streamline_count: 0,
+            source_glyph_line_count: 0,
             particles: Particles::default(),
             particle_target: None,
             clock: SimClock::default(),

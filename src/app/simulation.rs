@@ -79,7 +79,7 @@ impl VfApp {
                 .state
                 .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            let lines = Arc::new(compose_lines_with_frame(
+            let mut lines = compose_lines_with_frame(
                 &self.flow_lines,
                 &self.click_lines,
                 &self.state.scene_domain(),
@@ -87,7 +87,23 @@ impl VfApp {
                 self.state.plane_frame(),
                 self.state.show_grid,
                 self.state.show_coordinate_system,
-            ));
+            );
+            // Source markers are contextual overlays on the current sampling
+            // scene. Only the source adapter emits them; Formula preserves the
+            // durable scene but draws none.
+            let glyph_lines = if self.state.field_mode == crate::source_scene::FieldMode::Sources {
+                let glyphs = crate::source_glyph::source_glyphs(
+                    &self.state.sources,
+                    &self.state.scene_domain(),
+                    self.state.plane_frame().as_ref(),
+                );
+                crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
+            } else {
+                Vec::new()
+            };
+            self.source_glyph_line_count = glyph_lines.len();
+            lines.extend(glyph_lines);
+            let lines = Arc::new(lines);
             if let Some(scene) = self.scene.as_vector_mut() {
                 scene.arrow_style = arrow_style;
                 scene.arrow_style_2d = arrow_style_2d;

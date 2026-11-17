@@ -94,6 +94,7 @@ mod sidebar_sections_test;
 mod source_glyph_test;
 mod source_mode_test;
 mod source_scene_test;
+mod source_slice_test;
 mod sources_electric_test;
 mod sources_evaluate_test;
 mod sources_magnetic_test;
