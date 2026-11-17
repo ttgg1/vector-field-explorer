@@ -5,11 +5,14 @@
 //! numerical validation remain in [`crate::sources`]; this module only maps a
 //! candidate scene through the existing [`SourceSet`] and [`EvalOptions`] seams.
 
-use glam::DVec3;
+use glam::{DVec3, UVec3, Vec3};
 
+use crate::domain::Domain;
+use crate::plane::PlaneFrame;
+use crate::sampling::{ArrowData, ViewOptions, magnitude_range};
 use crate::sources::{
-    EvalOptions, FieldFamily, InputError, InvalidOption, MAX_SOURCES, Source, SourceKind,
-    SourceParameter, SourceSet, WorkLimits,
+    EvalOptions, Evaluator, FamilyResult, FieldFamily, InputError, InvalidOption, MAX_SOURCES,
+    Source, SourceKind, SourceParameter, SourceSet, WorkLimits,
 };
 
 /// Smallest accepted scene-wide softening length.
@@ -325,4 +328,277 @@ fn parameter_name(parameter: SourceParameter) -> &'static str {
         SourceParameter::Length => "length",
         SourceParameter::Turns => "turns",
     }
+}
+
+/// Fixed electric-family arrow colour in `Both` display: amber.
+pub const ELECTRIC_COLOR: [u8; 3] = [255, 176, 64];
+/// Fixed magnetic-family arrow colour in `Both` display: cyan.
+pub const MAGNETIC_COLOR: [u8; 3] = [64, 196, 255];
+
+/// Per-family counters for one source sampling pass.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SourceFamilyStatus {
+    /// Enabled sources that contribute to this family.
+    pub sources: usize,
+    /// Arrows emitted for this family in the active display.
+    pub drawn: usize,
+    /// Query results whose accuracy target was met.
+    pub target_met: usize,
+    /// Every `AccuracyNotMet` result, drawn or hidden.
+    pub accuracy_not_met_total: usize,
+    /// `AccuracyNotMet` results drawn because the opt-in is on.
+    pub accuracy_not_met_drawn: usize,
+    /// Results the evaluator could not publish as a finite vector.
+    pub unavailable: usize,
+    /// The family has no enabled sources; zero is its exact value, not an error.
+    pub empty: bool,
+}
+
+/// The arrows and honest per-family status for one source sampling pass.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SourceSampling {
+    pub arrows: Vec<ArrowData>,
+    pub electric: SourceFamilyStatus,
+    pub magnetic: SourceFamilyStatus,
+    pub softening: f64,
+    pub allow_inaccurate: bool,
+    pub validation_error: Option<String>,
+}
+
+/// What one family result contributes to the active display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FamilyDisposition {
+    Draw,
+    HiddenAccuracy,
+    Unavailable,
+}
+
+/// Whether a family estimate may become an arrow, given the accuracy opt-in.
+pub fn classify_family_result(result: &FamilyResult, allow_inaccurate: bool) -> FamilyDisposition {
+    match result {
+        FamilyResult::TargetMet(estimate) if drawable(estimate) => FamilyDisposition::Draw,
+        FamilyResult::AccuracyNotMet(estimate, _) if allow_inaccurate && drawable(estimate) => {
+            FamilyDisposition::Draw
+        }
+        FamilyResult::AccuracyNotMet(_, _) => FamilyDisposition::HiddenAccuracy,
+        FamilyResult::Unavailable(_) => FamilyDisposition::Unavailable,
+        FamilyResult::TargetMet(_) => FamilyDisposition::Unavailable,
+    }
+}
+
+/// Sample the scene's enabled sources through the real evaluator.
+///
+/// A 3D view samples `domain.grid_points(grid)` in world coordinates. A 2D view
+/// samples the existing [`PlaneFrame`]'s local grid, evaluates in world, projects
+/// each vector onto the plane and returns local positions. Invalid scenes return
+/// their typed message and no arrows; an empty family is an exact zero.
+pub fn sample_source_scene(
+    scene: &SourceScene,
+    domain: &Domain,
+    grid: UVec3,
+    plane: Option<&PlaneFrame>,
+    view: &ViewOptions,
+) -> SourceSampling {
+    let electric = family_status(scene, FieldFamily::Electric);
+    let magnetic = family_status(scene, FieldFamily::Magnetic);
+    let invalid = |message: String| SourceSampling {
+        arrows: Vec::new(),
+        electric: electric.clone(),
+        magnetic: magnetic.clone(),
+        softening: scene.softening,
+        allow_inaccurate: scene.allow_inaccurate,
+        validation_error: Some(message),
+    };
+
+    if let Err(error) = scene.validate() {
+        return invalid(scene_error_message(&error));
+    }
+    let sources: Vec<Source> = scene.enabled_sources().copied().collect();
+    let set = match SourceSet::new(&sources, &WorkLimits::default(), &|| false) {
+        Ok(set) => set,
+        Err(error) => return invalid(error.to_string()),
+    };
+    let options = EvalOptions {
+        softening: scene.softening,
+        ..EvalOptions::default()
+    };
+    let mut evaluator = match Evaluator::new(&set, options, &|| false) {
+        Ok(evaluator) => evaluator,
+        Err(error) => return invalid(error.to_string()),
+    };
+
+    let mut electric_status = electric;
+    let mut magnetic_status = magnetic;
+    let electric_displayed = matches!(scene.display, SourceDisplay::Electric | SourceDisplay::Both);
+    let magnetic_displayed = matches!(scene.display, SourceDisplay::Magnetic | SourceDisplay::Both);
+    let mut electric_points = Vec::new();
+    let mut magnetic_points = Vec::new();
+
+    let mut visit = |position: Vec3, world: Vec3| {
+        let sample = evaluator.evaluate(world.as_dvec3(), &|| false);
+        observe_family(
+            &sample.electric,
+            scene.allow_inaccurate,
+            electric_displayed,
+            position,
+            plane,
+            &mut electric_status,
+            &mut electric_points,
+        );
+        observe_family(
+            &sample.magnetic,
+            scene.allow_inaccurate,
+            magnetic_displayed,
+            position,
+            plane,
+            &mut magnetic_status,
+            &mut magnetic_points,
+        );
+    };
+
+    if let Some(frame) = plane {
+        for local in frame
+            .local_domain()
+            .grid_points(UVec3::new(grid.x, grid.y, 1))
+        {
+            visit(local, frame.to_world(local));
+        }
+    } else {
+        for world in domain.grid_points(grid) {
+            visit(world, world);
+        }
+    }
+
+    let arrows = match scene.display {
+        SourceDisplay::Both => {
+            let mut arrows = Vec::with_capacity(electric_points.len() + magnetic_points.len());
+            arrows.extend(
+                electric_points
+                    .into_iter()
+                    .map(|(position, dir, mag)| ArrowData {
+                        position,
+                        dir,
+                        mag,
+                        color: ELECTRIC_COLOR,
+                    }),
+            );
+            arrows.extend(
+                magnetic_points
+                    .into_iter()
+                    .map(|(position, dir, mag)| ArrowData {
+                        position,
+                        dir,
+                        mag,
+                        color: MAGNETIC_COLOR,
+                    }),
+            );
+            arrows
+        }
+        SourceDisplay::Electric => color_family(electric_points, view),
+        SourceDisplay::Magnetic => color_family(magnetic_points, view),
+    };
+
+    SourceSampling {
+        arrows,
+        electric: electric_status,
+        magnetic: magnetic_status,
+        softening: scene.softening,
+        allow_inaccurate: scene.allow_inaccurate,
+        validation_error: None,
+    }
+}
+
+fn family_status(scene: &SourceScene, family: FieldFamily) -> SourceFamilyStatus {
+    let sources = scene
+        .enabled_sources()
+        .filter(|source| source.kind.family() == family)
+        .count();
+    SourceFamilyStatus {
+        sources,
+        empty: sources == 0,
+        ..SourceFamilyStatus::default()
+    }
+}
+
+fn observe_family(
+    result: &FamilyResult,
+    allow_inaccurate: bool,
+    displayed: bool,
+    position: Vec3,
+    plane: Option<&PlaneFrame>,
+    status: &mut SourceFamilyStatus,
+    points: &mut Vec<(Vec3, Vec3, f32)>,
+) {
+    match result {
+        FamilyResult::TargetMet(_) => status.target_met += 1,
+        FamilyResult::AccuracyNotMet(_, _) => status.accuracy_not_met_total += 1,
+        FamilyResult::Unavailable(_) => status.unavailable += 1,
+    }
+    if !displayed || classify_family_result(result, allow_inaccurate) != FamilyDisposition::Draw {
+        return;
+    }
+    let estimate = match result {
+        FamilyResult::TargetMet(estimate) | FamilyResult::AccuracyNotMet(estimate, _) => estimate,
+        FamilyResult::Unavailable(_) => return,
+    };
+    let Some(world) = finite_vec(estimate.value) else {
+        return;
+    };
+    let (dir, mag) = match plane {
+        Some(frame) => {
+            let projected = frame.project(world);
+            let mag = projected.length();
+            if !mag.is_finite() || mag < 1e-6 {
+                return;
+            }
+            (projected / mag, mag)
+        }
+        None => {
+            let mag = world.length();
+            if !mag.is_finite() || mag < 1e-6 {
+                return;
+            }
+            (world / mag, mag)
+        }
+    };
+    points.push((position, dir, mag));
+    status.drawn += 1;
+    if matches!(result, FamilyResult::AccuracyNotMet(_, _)) {
+        status.accuracy_not_met_drawn += 1;
+    }
+}
+
+fn color_family(points: Vec<(Vec3, Vec3, f32)>, view: &ViewOptions) -> Vec<ArrowData> {
+    let mut arrows: Vec<ArrowData> = points
+        .into_iter()
+        .map(|(position, dir, mag)| ArrowData {
+            position,
+            dir,
+            mag,
+            color: [128, 128, 128],
+        })
+        .collect();
+    let (min, max) = view.color_range.unwrap_or_else(|| magnitude_range(&arrows));
+    for arrow in &mut arrows {
+        arrow.color = view.colormap.colormap(arrow.mag, min, max);
+    }
+    arrows
+}
+
+fn drawable(estimate: &crate::sources::Estimate) -> bool {
+    estimate.value.is_finite()
+        && estimate.value.length().is_finite()
+        && estimate.value.length() >= 1e-6
+}
+
+fn finite_vec(value: DVec3) -> Option<Vec3> {
+    if !value.is_finite() {
+        return None;
+    }
+    let vector = Vec3::new(value.x as f32, value.y as f32, value.z as f32);
+    vector.is_finite().then_some(vector)
+}
+
+fn scene_error_message(error: &SourceSceneError) -> String {
+    format!("{error:?}")
 }

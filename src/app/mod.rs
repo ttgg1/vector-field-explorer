@@ -23,6 +23,7 @@ use crate::renderer::{
 };
 use crate::screenshot::{self, Instant, Screenshot};
 use crate::sim_clock::SimClock;
+use crate::source_scene::FieldMode;
 use crate::streamlines::click_seed;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
@@ -242,6 +243,8 @@ pub struct VfApp {
     /// Whether the previous frame had particle availability (a three-component
     /// field); a true-to-false transition drops the cloud and burst undo.
     particle_available: bool,
+    /// The field mode observed last frame; a change clears formula transients.
+    last_field_mode: FieldMode,
 }
 impl VfApp {
     /// App with no persistent storage (defaults for every persisted record).
@@ -286,6 +289,7 @@ impl VfApp {
         let particle_available = state.field.dimension == 3;
         let last_plot_epoch = state.plot.transition_epoch;
         let last_plot_was_vector = state.is_vector_mode();
+        let last_field_mode = state.field_mode;
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
@@ -352,6 +356,7 @@ impl VfApp {
             screenshot: Screenshot::new(),
             scene_frame,
             particle_available,
+            last_field_mode,
         }
     }
 }

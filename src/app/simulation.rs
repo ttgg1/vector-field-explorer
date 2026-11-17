@@ -31,6 +31,7 @@ impl VfApp {
     /// time-dependent source at the mirrored `state.time`) and pauses every
     /// vector consumer; vector mode rebuilds and advects exactly as before.
     pub(super) fn advance_simulation(&mut self) {
+        self.sync_field_mode();
         if !self.state.is_vector_mode() {
             // Pause, never delete: cloud/trail/click/time state is untouched.
             self.refresh_plot_scene();
@@ -39,6 +40,24 @@ impl VfApp {
         self.sync_scene_frame();
         self.rebuild_scene();
         self.advance_particles();
+    }
+
+    /// Clear formula-owned transient geometry when the field mode changes.
+    /// Durable formula and source state stays in the viewmodel untouched.
+    fn sync_field_mode(&mut self) {
+        let mode = self.state.field_mode;
+        if mode == self.last_field_mode {
+            return;
+        }
+        self.last_field_mode = mode;
+        clear(&mut self.particles);
+        self.particle_target = None;
+        self.click_seeds.clear();
+        self.last_click_seed = None;
+        self.flow_lines.clear();
+        self.click_lines.clear();
+        self.streamline_count = 0;
+        self.state.mark_dirty();
     }
 
     fn rebuild_scene(&mut self) {

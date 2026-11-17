@@ -613,20 +613,24 @@ them at a point.
 **Limitations.** No time variable (v0.1.0 is static), no implicit
 multiplication (`2x` is invalid), and no symbolic differentiation.
 
-#### `src/source_scene.rs` — validated source scene and catalogue
+#### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula or
 Sources; `SourceDisplay` selects Electric, Magnetic or Both; `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
-softening and accuracy opt-in.
+softening and accuracy opt-in. The same module turns a scene into drawable
+arrows through the real evaluator.
 
 **Public API.** `FieldMode`, `SourceDisplay`, `SourceEntry`, `SourceScene`,
 `SourceSceneError`, `SourceKindTag` (with `ALL`, `label`, `family` and
 `default_source`), and `MIN_SOFTENING = 1e-6` / `MAX_SOFTENING = 1.0`.
 `SourceScene` exposes `add`, `remove`, `set_enabled`, `replace`, `reset_entry`,
 `reset`, `set_softening`, `set_display`, `set_allow_inaccurate`,
-`enabled_sources` and `validate`.
+`enabled_sources` and `validate`. Sampling adds `SourceSampling`,
+`SourceFamilyStatus`, `FamilyDisposition`, `classify_family_result`,
+`sample_source_scene`, and the fixed `ELECTRIC_COLOR = [255, 176, 64]` /
+`MAGNETIC_COLOR = [64, 196, 255]` used by `Both`.
 
 **Invariants.** Defaults are Formula, Both, softening `0.1`, opt-in off and no
 entries. The catalogue defaults are center zero and axis +Z, charge/current
@@ -640,6 +644,18 @@ parameter name. `reset_entry` restores the kind defaults while keeping the
 entry's center, axis and enabled state; `reset` restores the whole default
 scene. Invalid indices make `remove`/`set_enabled`/`reset_entry` no-ops.
 
+**Sampling contract.** `sample_source_scene` validates the enabled scene through
+`SourceSet::new`/`EvalOptions`, then builds one `Evaluator`. A 3D view samples
+`Domain::grid_points`; a 2D view samples the existing `PlaneFrame` local grid,
+evaluates in world and projects onto the plane, returning local `(u, v, 0)`
+positions. `TargetMet` is drawable; `AccuracyNotMet` is drawable only with the
+opt-in; `Unavailable` and non-finite values never are. `Both` tags E amber and B
+cyan without summing or sharing one magnitude scale; a single family uses the
+normal colormap over its drawn magnitudes. An enabled family with no sources is
+`empty: true` with zero arrows and no error, and invalid scenes return their
+typed message with no arrows. Counters track sources, drawn arrows, target-met,
+accuracy-not-met total/drawn and unavailable per family.
+
 **Pinned by.** [tests/source_scene_test.rs](../tests/source_scene_test.rs):
 `the_default_scene_is_empty_in_formula_mode`,
 `all_eight_kinds_have_valid_defaults_and_a_family`,
@@ -647,10 +663,11 @@ scene. Invalid indices make `remove`/`set_enabled`/`reset_entry` no-ops.
 `source_limit_stops_the_sixty_fifth_entry`,
 `invalid_geometry_is_rejected_with_a_parameter_name`,
 `softening_is_bounded_and_never_nan`, and
-`disabled_entries_are_not_part_of_the_validated_scene`.
+`disabled_entries_are_not_part_of_the_validated_scene`; source-mode behaviour is
+in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 
-**Limitations.** This task adds no viewmodel, sampling, persistence or UI
-integration; those layers consume the scene later.
+**Limitations.** Sampling is CPU and static. This task adds no persistence or UI
+wiring; the panel and save format consume the scene later.
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -1141,7 +1158,8 @@ decisions that do not need a window.
   `LeftClickAction { SeedStreamline, AddParticles }`.
 - `State` with all visible fields and setters. Every setter returns `bool`
   (“did this actually change?”) and marks dirty only on a real change. Key
-  setters: `set_formula`, `set_mode`, `set_density`, `set_domain`,
+  setters: `set_formula`, `set_mode`, `set_field_mode`, `set_source_scene`,
+  `set_density`, `set_domain`,
   `set_arrow_scale`, `set_arrow_opacity`, `set_plane_dim_opacity`,
   `set_arrow_length_mode`, `set_magnitude_scale`, `set_proportional_exponent`,
   `set_colormap`, `set_auto_fit`, `set_color_range`, `set_arrows`,
@@ -1150,6 +1168,9 @@ decisions that do not need a window.
   `set_streamlines`, `set_seed_mode`, `set_left_click_action`, `set_particles`,
   `set_particle_size`, `set_particle_count`, `set_particle_appearance`,
   `set_plane`, `set_plane_enabled`, `set_plane_axis`, `set_plane_index`.
+- Source mode fields: `field_mode`, `sources`, `source_sampling` and
+  `source_notice`; `active_dimension`, `refresh_source_sampling`,
+  `source_sampling` and `reset_sources`.
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1162,8 +1183,18 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `is_3d()` means `mode_3d && field.dimension == 3`; this gates the cube grid,
-  density cap, plane mode, and streamline depth.
+- `active_dimension()` is 3 in Sources mode and the formula's component count
+  otherwise; `is_3d()` means `mode_3d && active_dimension() == 3`. This gates
+  the cube grid, density cap, plane frame/slice and streamline depth, so source
+  mode uses the existing 2D plane path in 2D and the world cube in 3D.
+- `set_field_mode` preserves formula, source scene and the 2D/3D projection,
+  clears the cached sampling/notice and marks dirty; `set_source_scene` replaces
+  the durable scene and clears the cache. Formula edits never invalidate source
+  state, and source edits never invalidate formula state.
+- `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
+  source cache, source mode stores a fresh `SourceSampling`. `snapshot` in
+  Sources mode returns cached arrows only (empty if unsampled) and never samples
+  the formula.
 - `set_formula` keeps the last good `FieldExpr` on a parse error and still marks
   dirty so the status bar updates; `set_mode`/density/domain/formula-dimension
   changes call `sync_plane` with the previous grid.
@@ -1186,9 +1217,10 @@ decisions that do not need a window.
   Tracing is RK4 with step `0.5 * spacing`, budget 120, both directions.
 - Click bursts: 5 seeds, 8 % of the smallest positive extent, deterministic from
   the clicked bits; 2D pins z, 3D jitters depth.
-- `particle_target()` is `Some` only when `particles && field.dimension == 3`,
-  independent of the view mode, so a two-component formula gets no cloud in 3D
-  while a three-component field gets one in the 2D plane slice.
+- `particle_target()` is `Some` only when `particles && active_dimension() == 3`
+  in Formula mode (never in Sources), independent of the view mode, so a
+  two-component formula gets no cloud in 3D while a three-component field gets
+  one in the 2D plane slice.
 - `drag_channel`: middle always pans; secondary orbits in 3D unless Shift, pans
   in 2D; primary orbits in 3D and pans in 2D.
 - `apply_camera_input`: 3D orbit/pan/zoom uses orbit distance and FOV; 2D pans
@@ -1199,7 +1231,7 @@ decisions that do not need a window.
   matching last seed, and only truncates particles when the current count is at
   least the pre-click count.
 
-**Pinned by.** `tests/viewmodel_test.rs` (66 tests) is the main contract:
+**Pinned by.** `tests/viewmodel_test.rs` (76 tests) is the main contract:
 `snapshot_rebuilds_only_when_dirty`, `garbage_formula_keeps_field_and_reports_error`,
 `invalid_edit_reports_error_without_losing_the_field`,
 `unchanged_setters_report_false_and_stay_clean`, `density_clamped_per_mode`,

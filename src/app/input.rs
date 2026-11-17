@@ -414,6 +414,11 @@ impl VfApp {
             self.last_click_seed = None;
             return;
         }
+        if self.state.field_mode == FieldMode::Sources {
+            // Source mode is static: no streamline seeds and no particle bursts.
+            self.last_click_seed = None;
+            return;
+        }
         match view_command::click_action_plan(
             action,
             self.state.streamlines,
