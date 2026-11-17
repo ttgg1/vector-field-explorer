@@ -273,7 +273,7 @@ impl SourceKindTag {
         }
     }
 
-    fn of(kind: &SourceKind) -> Self {
+    pub fn of(kind: &SourceKind) -> Self {
         match kind {
             SourceKind::PointCharge { .. } => Self::PointCharge,
             SourceKind::FiniteLineCharge { .. } => Self::FiniteLineCharge,
@@ -492,6 +492,76 @@ fn map_input_error(error: InputError) -> SourceSceneError {
     }
 }
 
+/// Validate one source through the public [`SourceSet`] seam, regardless of
+/// whether the scene currently enables it. A rejected disabled entry would
+/// otherwise survive until the user tries to enable it.
+pub fn validate_source(source: &Source) -> Result<(), SourceSceneError> {
+    SourceSet::new(
+        std::slice::from_ref(source),
+        &WorkLimits::default(),
+        &|| false,
+    )
+    .map_err(map_input_error)
+    .map(|_| ())
+}
+
+/// The 0-based displayed row for an enabled-only validation index. Validation
+/// walks `enabled_sources`, so its indices skip disabled entries; this maps
+/// back to the list position the panel renders (1-based when shown to users).
+pub fn enabled_row(scene: &SourceScene, index: usize) -> Option<usize> {
+    scene
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.enabled)
+        .nth(index)
+        .map(|(row, _)| row)
+}
+
+/// A readable message for a scene error, without a scene context. Panel-local
+/// errors already know the displayed row and prefix it themselves.
+pub fn error_message(error: &SourceSceneError) -> String {
+    match error {
+        SourceSceneError::Limit { max } => {
+            format!("At most {max} sources are supported.")
+        }
+        SourceSceneError::InvalidSource { parameter, .. } => parameter_help(parameter).to_owned(),
+        SourceSceneError::SofteningOutOfRange => {
+            format!("Softening must be between {MIN_SOFTENING} and {MAX_SOFTENING}.")
+        }
+        SourceSceneError::InvalidLimits => "The source work limits are invalid.".to_owned(),
+        SourceSceneError::Cancelled => "Source preparation was cancelled.".to_owned(),
+        SourceSceneError::AllocationFailed => {
+            "Not enough memory to prepare the sources.".to_owned()
+        }
+    }
+}
+
+/// A readable message for a scene error, mapping an enabled-only validation
+/// index to the row the user sees.
+pub fn scene_error_message(error: &SourceSceneError, scene: &SourceScene) -> String {
+    match error {
+        SourceSceneError::InvalidSource { index, .. } => {
+            let row = enabled_row(scene, *index).unwrap_or(*index);
+            format!("Source {}: {}", row + 1, error_message(error))
+        }
+        _ => error_message(error),
+    }
+}
+
+fn parameter_help(parameter: &str) -> &'static str {
+    match parameter {
+        "center" => "center coordinates must be finite",
+        "axis" => "axis must be a finite, non-zero direction",
+        "charge" => "charge must be a finite number",
+        "current" => "current must be a finite number",
+        "radius" => "radius must be a positive number",
+        "length" => "length must be a positive number",
+        "turns" => "turns must be at least 1",
+        _ => "a source parameter is invalid",
+    }
+}
+
 fn parameter_name(parameter: SourceParameter) -> &'static str {
     match parameter {
         SourceParameter::Center => "center",
@@ -585,7 +655,7 @@ pub fn sample_source_scene(
     };
 
     if let Err(error) = scene.validate() {
-        return invalid(scene_error_message(&error));
+        return invalid(scene_error_message(&error, scene));
     }
     let sources: Vec<Source> = scene.enabled_sources().copied().collect();
     let set = match SourceSet::new(&sources, &WorkLimits::default(), &|| false) {
@@ -771,8 +841,4 @@ fn finite_vec(value: DVec3) -> Option<Vec3> {
     }
     let vector = Vec3::new(value.x as f32, value.y as f32, value.z as f32);
     vector.is_finite().then_some(vector)
-}
-
-fn scene_error_message(error: &SourceSceneError) -> String {
-    format!("{error:?}")
 }

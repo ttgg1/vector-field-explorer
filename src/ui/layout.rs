@@ -57,6 +57,9 @@ pub const DEFAULT_CAS_WIDTH: f32 = 260.0;
 /// Default expanded width of the right Presets panel, points.
 pub const DEFAULT_PRESETS_WIDTH: f32 = 240.0;
 
+/// Default expanded width of the left Sources panel, points.
+pub const DEFAULT_SOURCES_WIDTH: f32 = 280.0;
+
 /// Narrowest an expanded panel may be dragged to.
 pub const MIN_PANEL_WIDTH: f32 = 180.0;
 
@@ -165,6 +168,8 @@ pub enum SheetState {
     Cas,
     /// The right Presets panel, as a bottom sheet.
     Presets,
+    /// The left Sources panel, as a bottom sheet.
+    Sources,
 }
 
 impl SheetState {
@@ -420,11 +425,15 @@ pub struct LayoutState {
     pub controls_expanded: bool,
     /// Presets panel (right) expanded rather than collapsed to its rail.
     pub presets_expanded: bool,
+    /// Sources panel (left) expanded rather than collapsed to its rail.
+    pub sources_expanded: bool,
     /// Expanded width of the Controls panel, points; kept while collapsed so
     /// re-expanding restores the user's width.
     pub controls_width: f32,
     /// Expanded width of the Presets panel, points.
     pub presets_width: f32,
+    /// Expanded width of the Sources panel, points.
+    pub sources_width: f32,
     /// Whether the viewport's help overlay is visible.
     pub help_visible: bool,
     /// Native symbolic tools are independently visible, initially closed.
@@ -440,8 +449,10 @@ impl Default for LayoutState {
         Self {
             controls_expanded: true,
             presets_expanded: true,
+            sources_expanded: false,
             controls_width: DEFAULT_CONTROLS_WIDTH,
             presets_width: DEFAULT_PRESETS_WIDTH,
+            sources_width: DEFAULT_SOURCES_WIDTH,
             help_visible: true,
             #[cfg(not(target_arch = "wasm32"))]
             cas_expanded: false,
@@ -458,6 +469,7 @@ impl LayoutState {
     pub fn sanitized(mut self) -> Self {
         self.controls_width = clamp_width(self.controls_width, DEFAULT_CONTROLS_WIDTH);
         self.presets_width = clamp_width(self.presets_width, DEFAULT_PRESETS_WIDTH);
+        self.sources_width = clamp_width(self.sources_width, DEFAULT_SOURCES_WIDTH);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.cas_width = clamp_width(self.cas_width, DEFAULT_CAS_WIDTH);
@@ -479,6 +491,11 @@ impl LayoutState {
     /// Show the Presets panel (or its rail).
     pub fn toggle_presets(&mut self) {
         self.presets_expanded = !self.presets_expanded;
+    }
+
+    /// Show the Sources panel (or its rail).
+    pub fn toggle_sources(&mut self) {
+        self.sources_expanded = !self.sources_expanded;
     }
 
     /// Toggle only the native CAS panel, preserving all requested widths.
@@ -588,10 +605,22 @@ pub fn rail_panel(
 /// Use ordinary font-derived button padding: egui's `small_button` removes
 /// vertical padding entirely, including at the largest supported font size.
 pub fn collapse_button(ui: &mut egui::Ui, side: RailSide, shortcut: &str) -> bool {
-    let tooltip = match side {
-        RailSide::Left => format!("Collapse Controls ({shortcut})"),
-        RailSide::Right => format!("Collapse Presets ({shortcut})"),
+    let label = match side {
+        RailSide::Left => "Controls",
+        RailSide::Right => "Presets",
     };
+    collapse_button_named(ui, side, label, shortcut)
+}
+
+/// As [`collapse_button`], for a panel whose rail label is not the default
+/// Controls/Presets name (the Sources rail).
+pub fn collapse_button_named(
+    ui: &mut egui::Ui,
+    side: RailSide,
+    label: &str,
+    shortcut: &str,
+) -> bool {
+    let tooltip = format!("Collapse {} ({shortcut})", label);
     let mut clicked = false;
     ui.horizontal(|ui| {
         clicked = ui

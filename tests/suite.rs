@@ -98,6 +98,7 @@ mod sources_evaluate_test;
 mod sources_magnetic_test;
 mod sources_model_test;
 mod sources_numeric_test;
+mod sources_panel_test;
 mod status_bar_test;
 mod streamline_count_test;
 mod streamlines_test;

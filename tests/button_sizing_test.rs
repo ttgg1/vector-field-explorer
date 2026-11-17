@@ -3,7 +3,9 @@ use eframe::egui;
 use vector_field_explorer::{
     screenshot::Screenshot,
     sim_clock::SimClock,
-    ui::{formula_bar, help_overlay, layout, style_panel, top_bar, transport},
+    source_scene::{FieldMode, SourceKindTag},
+    ui::sources_panel::SourcesPanelState,
+    ui::{formula_bar, help_overlay, layout, sources_panel, style_panel, top_bar, transport},
     viewmodel::State,
 };
 
@@ -499,6 +501,26 @@ fn settled_app_frame(
         app_frame(app, ctx, width, vec![]);
     }
     app_frame(app, ctx, width, vec![])
+}
+
+#[test]
+fn compact_sources_panel_buttons_keep_touch_targets() {
+    let ctx = context(13.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .sources
+        .add(SourceKindTag::PointCharge.default_source())
+        .unwrap();
+    let mut panel = SourcesPanelState::default();
+    let out = frame_at(&ctx, 390.0, 900.0, vec![], |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            sources_panel::show(ui, &mut state, &mut panel, true);
+        });
+    });
+    for label in ["Add", "Remove source", "Reset scene", "Reset this source"] {
+        assert_text_fits(&out, label, true);
+    }
 }
 
 #[test]

@@ -32,6 +32,7 @@ use crate::ui::presets::PresetPanel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::presets::default_preset_dir;
 use crate::ui::sidebar::Controls;
+use crate::ui::sources_panel::SourcesPanelState;
 use crate::ui::status_bar::{FpsMeter, advance_hint, restart_hint};
 use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
@@ -118,6 +119,9 @@ pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
     pub controls: Controls,
+    /// Panel-local drafts for the Sources rail/sheet; invalid text survives
+    /// frames without touching the committed scene.
+    pub sources: SourcesPanelState,
     /// Effective width for the later Presets phase; never persisted.
     wide_presets_width: f32,
     #[cfg(not(target_arch = "wasm32"))]
@@ -299,6 +303,7 @@ impl VfApp {
             state,
             bar: FormulaBarState::new(),
             controls,
+            sources: SourcesPanelState::default(),
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),

@@ -803,11 +803,14 @@ fn show_inner(
         }
     });
 
-    section(ui, Section::Features, controls, None, |ui, controls| {
-        if !vector_mode {
-            ui.label("Streamlines and particles are vector-only; their values are retained.");
-        }
-        ui.add_enabled_ui(vector_mode, |ui| {
+    if state.field_mode == crate::source_scene::FieldMode::Sources {
+        ui.label("Streamlines and particles use the formula field; switch to Formula to use them.");
+    } else {
+        section(ui, Section::Features, controls, None, |ui, controls| {
+            if !vector_mode {
+                ui.label("Streamlines and particles are vector-only; their values are retained.");
+            }
+            ui.add_enabled_ui(vector_mode, |ui| {
         ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
             "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
         );
@@ -1011,7 +1014,8 @@ fn show_inner(
                 .on_disabled_hover_text("Turn Particles on to change their appearance");
             });
         });
-    });
+        });
+    }
 
     section(ui, Section::Coloring, controls, None, |ui, controls| {
         if !vector_mode {

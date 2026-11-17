@@ -427,6 +427,8 @@ fn sample_settings() -> AppSettings {
             presets_expanded: true,
             controls_width: 300.0,
             presets_width: 210.0,
+            sources_expanded: false,
+            sources_width: 280.0,
             help_visible: false,
             #[cfg(not(target_arch = "wasm32"))]
             cas_expanded: true,

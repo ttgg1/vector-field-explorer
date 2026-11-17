@@ -496,7 +496,10 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 **Invariants.**
 - Wide layout shows both side panels (or rails) and no compact chrome; Compact
   uses `layout::compact_plan` to hide both panels, swap the top bar, and show
-  one bottom sheet.
+  one bottom sheet. The left rail strip orders Controls, native CAS and Sources.
+- The Sources rail/body and the compact Sources tab draw
+  `sources_panel::show`; the formula bar's one-shot `open_sources` request
+  expands the wide rail or opens the compact sheet, then clears.
 - The Controls panel is drawn before the dirty rebuild, so a control edit lands
   in this frame's snapshot and counts.
 - `recentre_domain` follows a domain change: 3D to the new centre, 2D in x/y
@@ -509,7 +512,10 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   `layout::sheet_height`; a swipe down past 24 pt or a tap on the handle closes
   it.
 - Overlays paint last. The help overlay is suppressed in Compact below 520 pt of
-  viewport width; the full Help window remains reachable from the menu.
+  viewport width; the full Help window remains reachable from the menu. In
+  Sources mode a small viewport line shows `sources_panel::status_text`.
+- The Features section is hidden in Sources mode; the exact formula-field note
+  is the one-line replacement, and the Sources panel repeats it.
 
 **Pinned by.** `tests/layout_test.rs`, `tests/responsive_test.rs`,
 `tests/persistence_test.rs` (restored domain framing),
@@ -628,10 +634,14 @@ arrows through the real evaluator.
 `to_source`), and `MIN_SOFTENING = 1e-6` / `MAX_SOFTENING = 1.0`.
 `SourceScene` exposes `add`, `remove`, `set_enabled`, `replace`, `reset_entry`,
 `reset`, `set_softening`, `set_display`, `set_allow_inaccurate`,
-`enabled_sources`, `validate`, `to_records` and `from_records`. Sampling adds `SourceSampling`,
+`enabled_sources`, `validate`, `to_records` and `from_records`. `SourceKindTag`
+also exposes `of(&SourceKind)`. Sampling adds `SourceSampling`,
 `SourceFamilyStatus`, `FamilyDisposition`, `classify_family_result`,
 `sample_source_scene`, and the fixed `ELECTRIC_COLOR = [255, 176, 64]` /
-`MAGNETIC_COLOR = [64, 196, 255]` used by `Both`.
+`MAGNETIC_COLOR = [64, 196, 255]` used by `Both`. Readable-error helpers
+`validate_source`, `enabled_row`, `error_message` and
+`scene_error_message` keep raw enum debug out of the panel and map an
+enabled-only validation index to the 1-based row the user sees.
 
 **Invariants.** Defaults are Formula, Both, softening `0.1`, opt-in off and no
 entries. The catalogue defaults are center zero and axis +Z, charge/current
@@ -673,8 +683,9 @@ accuracy-not-met total/drawn and unavailable per family.
 `disabled_entries_are_not_part_of_the_validated_scene`; source-mode behaviour is
 in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 
-**Limitations.** Sampling is CPU and static. Persistence now stores the scene,
-but the editable panel and its preset interaction are separate tasks.
+**Limitations.** Sampling is CPU and static. Persistence stores the scene; the
+editable panel lives in `src/ui/sources_panel.rs` and preset/CAS integration is
+a later task.
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -1282,7 +1293,7 @@ storage key, with migration and corruption tolerance.
 | Record | Fields | Compatibility |
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
-| `LayoutState` | `controls_expanded`, `presets_expanded`, `controls_width`, `presets_width`, `help_visible` | `#[serde(default)]`; widths sanitized |
+| `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
 | `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
@@ -2015,7 +2026,7 @@ thread.
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
 `layout`, `menu`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
-`status_bar`, `style_panel`, `top_bar`, `transport`.
+`sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -2076,14 +2087,50 @@ plot-section reset.
 
 **Pinned by.** `tests/plot_ui_test.rs`.
 
+#### `src/ui/sources_panel.rs` — editable source scene
+
+**Purpose.** The dedicated Sources rail/sheet: display selector (Electric /
+Magnetic / Both with the E amber / B cyan legend), Add combo and button,
+per-entry enable, kind, center/axis and kind parameters, Remove, Reset this
+source, a collapsible Advanced area with softening, the model note, the exact
+accuracy opt-in and the sampling status, plus the formula-field help line.
+
+**Public API.** `SourceDraft`, `SourcesPanelState` (`add_kind`, `drafts`) with
+`sync`, `mark_edited`, `set_radius`, `set_strength`, `set_length`, `set_turns`,
+`set_center`, `set_axis`, `commit`, `set_softening`, `set_allow_inaccurate`;
+`show(ui, state, panel, compact)`; `status_text(&SourceSampling)`.
+
+**Invariants.**
+- A draft keeps invalid text across frames; `sync` only rebuilds new/removed
+  entries or non-dirty drafts.
+- Invalid edits set `draft.error` and never call `set_source_scene`; valid edits
+  replace only that entry. `Add` is disabled at `MAX_SOURCES = 64`.
+- Softening uses the scene range `1e-6..=1.0`; the opt-in and display go through
+  the committed scene setters. Any valid source edit clears `source_notice`.
+- `status_text` reports hidden versus shown accuracy and unavailable counts per
+  family without inventing counters; a scene validation error is shown readably.
+- The Sources help line explains that streamlines/particles remain formula
+  features. `Advanced` starts open so the opt-in and status are discoverable.
+
+**Pinned by.** `tests/sources_panel_test.rs`
+(`sources_panel_adds_removes_and_resets_through_real_widgets`,
+`invalid_draft_does_not_replace_the_committed_source`,
+`source_notice_is_rendered_and_survives_until_dismissed`,
+`scene_error_text_names_the_displayed_row_and_parameter`,
+`add_is_disabled_at_the_source_limit`), and
+`tests/button_sizing_test.rs::compact_sources_panel_buttons_keep_touch_targets`.
+
 #### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text }`, `FormulaBarState::new`, `show(ui,
-state, bar, compact)`.
+**Public API.** `FormulaBarState { text, open_sources }`, `FormulaBarState::new`,
+`show(ui, state, bar, compact)`.
 
 **Invariants.**
+- In vector mode a Formula/Sources selector calls `State::set_field_mode`;
+  Sources hides the text editor and shows a source summary plus `Open Sources`,
+  which raises `bar.open_sources` for the app to consume.
 - The bar's text mirror is refreshed from `state.active_source()` when they
   differ, so presets, restores and kind changes update the field without
   overwriting a preserved scalar draft.
@@ -2093,14 +2140,17 @@ state, bar, compact)`.
   vector mode keeps comma-separated component syntax.
 - Clicking 3D/2D calls `state.set_mode` (which selects the saved Curve/Surface
   in plot mode).
-- Compact sets a 44 pt interaction height and uses
-  `layout::formula_field_width` (≥ 40 % of the bar); wide lets the field fill
-  the remainder.
+- Compact sets a 44 pt interaction height, wraps rather than overflowing the
+  panel, and uses `layout::formula_field_width` (≥ 40 % of the bar); wide lets
+  the field fill the remainder.
 
-**Pinned by.** There is no dedicated `formula_bar_test.rs`; the setter contract
-is in `tests/viewmodel_test.rs` (`valid_formula_replaces_field_and_clears_error`,
-`garbage_formula_keeps_field_and_reports_error`) and the width rule is in
-`tests/responsive_test.rs::the_formula_field_keeps_at_least_forty_percent_of_the_bar`.
+**Pinned by.** `tests/sources_panel_test.rs::formula_bar_switches_mode_and_hides_the_editor`;
+the setter contract is in `tests/viewmodel_test.rs`
+(`valid_formula_replaces_field_and_clears_error`,
+`garbage_formula_keeps_field_and_reports_error`), the width rule in
+`tests/responsive_test.rs::the_formula_field_keeps_at_least_forty_percent_of_the_bar`,
+and the real hitboxes in
+`tests/button_sizing_test.rs::real_formula_transport_and_help_buttons_fit_and_grow`.
 
 **Limitations.** No syntax highlighting, autocomplete, or history.
 
@@ -2144,7 +2194,8 @@ tab-bar/sheet plan.
 **Public API.** `RAIL_WIDTH = 32`, `RAIL_FRAME_MARGIN = 4`,
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
-`MIN_PANEL_WIDTH = 180`, `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
+`DEFAULT_SOURCES_WIDTH = 280`, `MIN_PANEL_WIDTH = 180`,
+`MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
 `FORMULA_MIN_FRACTION = 0.40`; `LayoutMode`, `SheetState`, `layout_mode`,
@@ -2152,19 +2203,23 @@ tab-bar/sheet plan.
 `RailSide`, `rail_text_angle`, `rail_chevron`, `collapse_chevron`,
 `rail_label_band`, `rail_chevron_pos`, `rail_tooltip`, `RailLabel`,
 `LayoutState`, `clamp_width`, `rail`, `RailPanel`, `rail_panel`,
-`collapse_button`.
+`collapse_button`, `collapse_button_named`.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores five desktop fields plus native-only
+- Compact is transient: `LayoutState` stores seven desktop fields (Controls,
+  Presets and Sources visibility/width plus help) and native-only
   `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
+- `SheetState::Sources` shares the one compact sheet.
+- Sources defaults to collapsed at 280 pt and sanitizes to 180..=460.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
   outward on a rail and inward on a collapse button; the rail is the only
   restore affordance; the real content band is narrower than the outer width.
 - `LayoutState::sanitized` clamps widths; `reset` restores first-launch layout
-  (Controls/Presets expanded, native CAS closed, help visible).
+  (Controls/Presets expanded, Sources collapsed, native CAS closed, help
+  visible).
 - `formula_field_width` never goes below 40 % of the bar and never returns a
   negative width.
 - Compact buttons have a 40-point floor; the tab bar grows beyond its 48-point
