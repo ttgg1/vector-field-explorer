@@ -72,7 +72,7 @@ impl Default for OdeScene {
         Self {
             source: OdeSource::Equations,
             dimension: 2,
-            equations: ["-y".into(), "x".into(), "0".into()],
+            equations: ["y".into(), "-x".into(), "0".into()],
             seeds: vec![OdeSeed {
                 position: [1.0, 0.0, 0.0],
             }],
@@ -563,9 +563,11 @@ fn compute_bounds(trajectories: &[OdeTrajectory]) -> Option<OdeBounds> {
         return None;
     }
     let mut bounds = OdeBounds { min, max };
+    let largest_extent = (0..3)
+        .map(|axis| bounds.max[axis] - bounds.min[axis])
+        .fold(0.0_f64, f64::max);
+    let pad = (0.05 * largest_extent).max(1e-3);
     for (lo, hi) in bounds.min.iter_mut().zip(bounds.max.iter_mut()) {
-        let extent = *hi - *lo;
-        let pad = (0.05 * extent).max(1e-3);
         *lo -= pad;
         *hi += pad;
     }

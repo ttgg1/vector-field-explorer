@@ -192,7 +192,7 @@ fn markers_clamp_and_interpolate_between_samples() {
 fn time_series_defaults_and_chart_variants_are_total() {
     assert_eq!(OdeChart::default(), OdeChart::Phase);
     assert_eq!(OdeScene::default().seeds, vec![OdeSeed { position: [1.0, 0.0, 0.0] }]);
-    assert_eq!(OdeScene::default().equations[0], "-y");
+    assert_eq!(OdeScene::default().equations[0], "y");
     assert_eq!(ODE_COLORS.len(), 8);
 }
 ```
@@ -211,7 +211,7 @@ Implement exactly the public items in the design. Additional deterministic rules
   - `Equations`: take the first `dimension` entries, append `"0"` for unused components, then `FieldExpr::parse` the resulting three-component source; entries outside `dimension` are ignored. Require the parsed result to have dimension 3.
   - `CurrentField`: use `state.field.clone()` and `state.domain`; require `state.field.dimension == scene.dimension` (the UI keeps these in sync) and copy `state.parse_error` into `OdeError::UnsupportedField` when non-empty.
 - `integrate_ode_with_step` samples `t = 0, h, 2h, ...` while `t <= duration + 1e-12`; stop at `max_steps`; each seed independently stops on nonfinite sample or RHS. Set `stopped` to the number of non-`Complete` trajectories.
-- Bounds use only finite points, pad 5% of each non-zero extent with a `1e-3` minimum. Reject with `InvalidScene` if no finite points exist. `view_domain` gives a symmetric `z` half-extent of `max(1e-3, 0.05 * max(x,y) extent)` when z is flat.
+- Bounds use only finite points, pad every axis by 5% of the largest overall extent (`max(max.x-min.x, max.y-min.y, max.z-min.z)`) with a `1e-3` minimum. Reject with `InvalidScene` if no finite points exist. `view_domain` gives a symmetric `z` half-extent of `max(1e-3, 0.05 * max(x,y) extent)` when z is flat.
 - `OdeSolution::sample_at` uses linear interpolation between bracketing samples and clamps to `[0,duration]`; `markers_at` returns one interpolated point per trajectory.
 - `FieldExpr::eval3_at_f64(DVec3, f64) -> Option<Vec3>` evaluates in f64 and casts the final components after finite checking; `eval3_at(Vec3,f32)` delegates.
 - Export `ode_trajectory_lines(solution)` and `ode_axes(view_domain)` as pure helpers in this task (used by Task 2): one `LineInstanceGPU`-shaped tuple helper is acceptable, but keep `src/ode.rs` independent of `src/renderer.rs` by returning `(start:[f32;3], end:[f32;3], color:[f32;4], seed_index)`-style data; Task 2 converts to renderer instances.

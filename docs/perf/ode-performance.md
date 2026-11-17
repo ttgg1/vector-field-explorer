@@ -11,7 +11,7 @@ Through `scripts/bench-ode.sh` it solves two scenes with the production path
 (`ODE_STEP = 0.005`, `ODE_MAX_SAMPLES = 4096`):
 
 - **default:** eight seeds at `x = 1.0 + 0.1*i`, `OdeScene::default()`
-  equations (`dx/dt = -y`, `dy/dt = x`), duration `20`;
+  equations (`dx/dt = y`, `dy/dt = -x`), duration `20`;
 - **cap:** the same eight seeds and equations at duration `25`, which exhausts
   the 4096 stored-sample cap and ends every trajectory with `StepLimit`.
 

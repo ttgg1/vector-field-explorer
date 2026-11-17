@@ -1,9 +1,10 @@
 //! Pure ODE scene, RK4 integration, bounds and marker coverage.
 
+use glam::Vec3;
 use vector_field_explorer::ode::{
     ODE_COLORS, ODE_MAX_DURATION, ODE_MAX_SAMPLES, OdeChart, OdeError, OdeScene, OdeSeed,
-    OdeSolution, OdeSource, OdeStop, integrate_ode_with_step, ode_axes, ode_trajectory_lines,
-    prepare_ode, solve_ode,
+    OdeSolution, OdeSource, OdeStop, integrate_ode, integrate_ode_with_step, ode_axes,
+    ode_trajectory_lines, prepare_ode, solve_ode,
 };
 use vector_field_explorer::reference::{AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR};
 use vector_field_explorer::viewmodel::State;
@@ -192,6 +193,61 @@ fn time_series_defaults_and_chart_variants_are_total() {
             position: [1.0, 0.0, 0.0]
         }]
     );
-    assert_eq!(OdeScene::default().equations[0], "-y");
+    assert_eq!(
+        OdeScene::default().equations,
+        ["y".to_owned(), "-x".to_owned(), "0".to_owned()]
+    );
     assert_eq!(ODE_COLORS.len(), 8);
+}
+
+#[test]
+fn bounds_pad_every_axis_by_the_largest_extent() {
+    let state = State::new(true);
+    let mut scene = typed(["50", "0.5", "0"], 2);
+    scene.seeds = vec![OdeSeed {
+        position: [0.0, 0.0, 0.0],
+    }];
+    let solution = solve_ode(&state, &scene).expect("valid linear scene");
+    let bounds = solution.bounds;
+    // x spans 0..100 and y spans 0..1. Both receive 5% of the largest
+    // extent (100), so every axis is padded by 5.0, not 5.0 vs 0.05.
+    assert!((bounds.min[0] + 5.0).abs() <= 1e-6, "{bounds:?}");
+    assert!((bounds.min[1] + 5.0).abs() <= 1e-6, "{bounds:?}");
+    assert!((bounds.max[0] - bounds.min[0] - 110.0).abs() <= 1e-6);
+    assert!((bounds.max[1] - bounds.min[1] - 11.0).abs() <= 1e-6);
+
+    let mut flat = typed(["0", "0", "0"], 2);
+    flat.seeds = vec![OdeSeed {
+        position: [1.0, 0.0, 0.0],
+    }];
+    let flat = solve_ode(&state, &flat).expect("flat scene");
+    for axis in 0..3 {
+        assert!((flat.bounds.max[axis] - flat.bounds.min[axis] - 2e-3).abs() <= 1e-12);
+    }
+}
+
+#[test]
+fn current_field_uses_the_durable_domain_not_the_view_box() {
+    let mut state = state_with_formula("y, -x, 0", 3);
+    assert!(state.set_domain(Vec3::new(-10.0, -10.0, -10.0), Vec3::new(10.0, 10.0, 10.0)));
+    let mut scene = typed(["y", "-x", "0"], 3);
+    scene.source = OdeSource::CurrentField;
+    scene.seeds = vec![OdeSeed {
+        position: [1.0, 0.0, 0.0],
+    }];
+    let prepared = prepare_ode(&state, &scene).expect("prepared current field");
+    let durable = state.domain;
+    assert_eq!(prepared.domain(), durable);
+
+    // Integration consumes only the prepared snapshot: later durable-domain
+    // edits cannot change what was integrated.
+    assert!(state.set_domain(Vec3::new(-50.0, -50.0, -50.0), Vec3::new(50.0, 50.0, 50.0)));
+    let solution = integrate_ode(&prepared);
+    assert_eq!(prepared.domain(), durable);
+
+    // The camera box is the padded trajectory box, observably different from
+    // the durable domain that governed integration.
+    let view = solution.view_domain();
+    assert_ne!(view, durable);
+    assert!(view.domain_size().x <= 2.5, "{view:?}");
 }

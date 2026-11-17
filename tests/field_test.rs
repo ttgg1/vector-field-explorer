@@ -4,7 +4,7 @@
 //! test or an assertion: every case here already exercised the public
 //! `FieldExpr` API.
 
-use glam::{Vec2, Vec3};
+use glam::{DVec3, Vec2, Vec3};
 use vector_field_explorer::field::{FieldError, FieldExpr};
 
 #[test]
@@ -67,6 +67,31 @@ fn eval3_at_differs_from_eval3_for_a_t_formula() {
     let at_one = f.eval3_at(Vec3::new(0.0, 0.0, 0.0), 1.0).expect("eval3_at");
     assert!((at_zero.x - at_one.x).abs() > 1e-6 || (at_zero.y - at_one.y).abs() > 1e-6);
     assert!(f.is_time_dependent());
+}
+
+#[test]
+fn eval3_at_f64_matches_the_f32_boundary_and_rejects_nonfinite() {
+    let f = FieldExpr::parse("(t + x, sin(t) * y, z - t)").expect("time-dependent field");
+    assert!(f.is_time_dependent());
+    let point = Vec3::new(0.25, -1.5, 2.0);
+    let time = 0.5f32;
+    let f32_value = f.eval3_at(point, time).expect("f32 boundary");
+    let f64_value = f
+        .eval3_at_f64(
+            DVec3::new(point.x as f64, point.y as f64, point.z as f64),
+            time as f64,
+        )
+        .expect("f64 boundary");
+    let close = |a: f32, b: f32| (a - b).abs() <= 8.0 * f32::EPSILON * a.abs().max(1.0);
+    assert!(close(f32_value.x, f64_value.x));
+    assert!(close(f32_value.y, f64_value.y));
+    assert!(close(f32_value.z, f64_value.z));
+
+    let singular = FieldExpr::parse("(1 / (t - 1), 0, 0)").expect("singular field");
+    assert!(
+        singular.eval3_at_f64(DVec3::ZERO, 1.0).is_none(),
+        "non-finite components must be rejected"
+    );
 }
 
 #[test]
