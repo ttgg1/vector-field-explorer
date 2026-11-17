@@ -32,6 +32,7 @@ pub mod scalar;
 pub mod screenshot;
 pub mod sim_clock;
 pub mod source_glyph;
+pub mod source_presets;
 pub mod source_scene;
 pub mod sources;
 pub mod streamlines;

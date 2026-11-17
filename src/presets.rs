@@ -268,3 +268,17 @@ pub fn presets_in(category: PresetCategory) -> impl Iterator<Item = &'static Pre
         .iter()
         .filter(move |preset| preset.category == category)
 }
+
+/// The honest label for a legacy 2D formula preset, or `None` when the preset
+/// is not one of the approximate 2D physics formulas.
+///
+/// These entries stay Formula-mode formulas and are never converted into
+/// source scenes; the label only says that the displayed slice approximates a
+/// 3D physical field.
+pub fn preset_approximation_label(name: &str) -> Option<&'static str> {
+    match name {
+        "Dipole" | "Source and sink" | "Point charge" | "Like charges" | "Quadrupole"
+        | "Straight wire" => Some("2D approximation"),
+        _ => None,
+    }
+}

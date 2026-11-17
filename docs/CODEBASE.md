@@ -695,6 +695,43 @@ editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
 to Formula without clearing the scene, and native CAS refuses Sources mode. The
 user guide is [docs/sources-panel.md](../docs/sources-panel.md).
 
+#### `src/source_presets.rs` — built-in source-scene presets
+
+**Purpose.** The ten illustrative source scenes offered above the saved camera
+views in the Presets panel. Each is built from
+[`SourceKindTag::default_source`](../src/source_scene.rs) with unit
+charge/current, so the catalogue adds no new physics and no formula conversion.
+
+**Public API.** `SourcePreset { name, summary, build }`; `source_presets()`;
+`source_preset(name)`; `source_strength(&Source) -> f64`;
+`load_source_preset(&SourcePreset, &mut State) -> bool`.
+
+**Invariants.**
+- The catalogue order is `Coulomb point`, `Electric dipole`, `Charged line`,
+  `Uniform ring`, `Thin disc`, `Charged sphere`, `Infinite wire`,
+  `Current loop`, `Finite solenoid`, `Source gallery`; names are unique and the
+  gallery contains one entry of each of the eight kinds.
+- Strengths are finite and illustrative: unit magnitude everywhere, with the
+  dipole's charges at `+1`/`-1`. Every scene keeps the default `0.1` softening,
+  `Both` display and `allow_inaccurate = false`.
+- `load_source_preset` validates the built scene first, then uses the ordinary
+  setters to select `PlotKind::VectorField`, `FieldMode::Sources`, a 3D view,
+  the canonical `[-2, 2]^3` domain and the new scene. It returns false without
+  touching the state when validation fails.
+- Formula presets remain formulas; loading a source preset touches no saved
+  formula or camera-preset storage.
+
+**Pinned by.** [tests/source_presets_test.rs](../tests/source_presets_test.rs):
+`source_presets_have_unique_names_and_cover_all_eight_kinds`,
+`loading_a_source_preset_uses_real_setters_and_a_visible_domain`,
+`every_preset_strength_is_the_illustrative_unit_and_finite`,
+`legacy_formula_presets_keep_their_mode_and_label`, and
+`panel_source_preset_loads_the_scene_and_tracks_the_active_source`.
+
+**Limitations.** Presets are presentation examples, not calibrated physical
+sources. They do not persist, and the gallery's ring/disc/sphere overlap in the
+canonical domain.
+
 #### `src/source_glyph.rs` — pure source-marker glyphs and line geometry
 
 **Purpose.** Turns an enabled, visible [`SourceScene`](../src/source_scene.rs)
@@ -1129,7 +1166,8 @@ data.
 
 **Public API.** `PresetCategory { Classic, Electrostatics, Magnetostatics,
 Electrodynamics }` with `ALL`, `title`, `description`; `Preset { name, formula,
-dimension, category }`; `presets()`; `presets_in(category)`.
+dimension, category }`; `presets()`; `presets_in(category)`;
+`preset_approximation_label(name)`.
 
 **Invariants.**
 - Every formula parses and declares the right dimension.
@@ -1138,6 +1176,9 @@ dimension, category }`; `presets()`; `presets_in(category)`.
 - Names are unique; categories are ordered by `PresetCategory::ALL` and
   declaration order within a category.
 - `presets_in` is the single grouping seam used by the panel and tests.
+- `preset_approximation_label` returns `Some("2D approximation")` for exactly
+  `Dipole`, `Source and sink`, `Point charge`, `Like charges`, `Quadrupole` and
+  `Straight wire`; it is a display label only and never converts a formula.
 
 **Pinned by.** `tests/presets_test.rs`: `every_preset_parses_with_declared_dimension`,
 `every_preset_stays_finite_on_the_default_domain`, `preset_names_are_unique`,
@@ -2347,19 +2388,25 @@ and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
 #### `src/ui/presets.rs` — field presets and saved camera views
 
 **Purpose.** The right Presets panel: built-in field presets grouped by
-category, camera Reset/Fit buttons, and saved view management.
+category, a `Source presets` section, camera Reset/Fit buttons, and saved view
+management.
 
 **Public API.** `default_preset_dir` (native); `CAMERA_BUTTONS`; `PresetPanel`
 with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
-`active_field_name`, `pending_delete`, `take_applied`, `clear_active`,
-`save_current`, `load`, `request_delete`, `cancel_delete`, `delete`,
-`load_field`, `show`.
+`active_field_name`, `active_source_name`, `pending_delete`, `take_applied`,
+`clear_active`, `save_current`, `load`, `request_delete`, `cancel_delete`,
+`delete`, `load_field`, `load_source_field`, `show`.
 
 **Invariants.**
 - Built-in field presets return to Formula first, then load formula and
   dimension through the viewmodel setters; the saved source scene is preserved
   and the highlight only appears when the clicked name matches the current
   formula and mode (duplicate formulas highlight one row).
+- Legacy 2D formula rows append ` (2D approximation)` from
+  `preset_approximation_label`; 3D rows keep their ` (3D)` suffix.
+- Clicking a source preset calls `load_source_field`, which validates and loads
+  the scene through `load_source_preset`, clears the formula highlight,
+  highlights the source row and asks the panel's caller for `ViewCommand::Fit`.
 - Saving with an existing name replaces it; the new row becomes active.
 - Delete asks for confirmation; delete removes from list and disk (or
   localStorage) and clears the highlight/request.
