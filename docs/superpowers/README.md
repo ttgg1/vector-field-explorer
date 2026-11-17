@@ -39,3 +39,4 @@ CAS implementation evidence: [73 review record](../reviews/73-native-cas.md),
 Older source drafts in isolated worktrees are background, not implementation
 authority; use the approved accuracy-first records above and reconcile current
 workflow/ledger status before any dispatch.
+| [Animation export plan](plans/2026-11-17-animation-export.md) | Five bounded TDD/review units for GitHub #71: deterministic GIF/ffmpeg encoders, detached frame snapshots, GUI job/dialog, CLI animation and final gates; awaiting owner plan approval. |

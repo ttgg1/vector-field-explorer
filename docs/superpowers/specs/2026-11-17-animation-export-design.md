@@ -66,6 +66,8 @@ pub struct AnimationSpec {
 }
 ```
 
+`AnimationFormat`, `AnimationSpec`, and `AnimationError` derive `Debug, Clone, Copy, PartialEq` where meaningful. `AnimationSpec::default()` is start 0, duration 4 s, fps 12, 1280×720, GIF loop on; the GUI still uses the current viewport size and captured start time.
+
 Constants:
 
 ```rust
@@ -142,7 +144,8 @@ A new `AnimationSource`/`AnimationFrame` seam in `src/animation_scene.rs` (name 
 pub struct AnimationSnapshot {
     pub state: State,              // clone; durable scenes/caches cloned
     pub particles: Particles,
-    pub camera: ViewCamera,
+    pub orbit: OrbitCamera,
+    pub fly: Option<FlyCamera>,
     pub clear: [f64; 4],
 }
 
