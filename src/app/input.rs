@@ -136,6 +136,9 @@ impl VfApp {
                 &self.state.sources,
                 self.state.source_sampling(),
             ),
+            // Materials export provenance is owned by the persistence/export
+            // task; this mode currently contributes no adapter provenance.
+            FieldMode::Materials => None,
             FieldMode::Induction => {
                 let softening = self.state.sources.softening;
                 // A cached pass built at an older softening cannot be
@@ -483,9 +486,9 @@ impl VfApp {
         }
         if matches!(
             self.state.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Ode
+            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
         ) {
-            // Source/Induction are static and Ode owns precomputed
+            // Source/Induction/Materials are static and Ode owns precomputed
             // trajectories: no streamline seeds and no particle bursts.
             self.last_click_seed = None;
             return;

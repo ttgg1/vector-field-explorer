@@ -563,6 +563,17 @@ impl VfApp {
                     })
                     .unwrap_or_default(),
                 FieldMode::Ode => self.state.ode_error.clone().unwrap_or_default(),
+                FieldMode::Materials => self
+                    .state
+                    .material_error
+                    .clone()
+                    .or_else(|| {
+                        self.state
+                            .material_sampling
+                            .as_ref()
+                            .and_then(|sampling| sampling.warning.clone())
+                    })
+                    .unwrap_or_default(),
                 _ => self.state.parse_error.clone(),
             };
             self.status.arrow_count = scene.arrows.len();

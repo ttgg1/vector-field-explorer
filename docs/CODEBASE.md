@@ -423,7 +423,10 @@ and remembered vector pose, installs the isolated `PlotDrawState` callback,
 routes plot navigation, and guards scalar SVG / dispatches scalar PNG capture.
 
 **Public API.** `VfApp::fit_plot`, the doc-hidden `VfApp::test_harness`
-integration seam, and `SvgExportRoute` for the final SVG execution guard.
+integration seam (including `material_arrow_count`, `material_line_count`,
+`material_sampling_error`, `material_scene` and
+`test_assemble_viewport_scene`), and `SvgExportRoute` for the final SVG
+execution guard.
 
 **Invariants.** Scalar mode pauses rather than deletes vector particle/trail/
 time state; the live and captured plot share one `PlotScene` Arc and the source
@@ -552,6 +555,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   epoch or dirty flag changes, auto-fits the first solution after mode entry,
   resets the clock time on a new epoch, and never samples the field, retraces
   clicks, spawns particles or appends source/induction glyphs.
+- Materials branches before the formula/scalar path: it runs
+  `sync_scene_frame` and the dirty rebuild, then returns. It never samples the
+  formula, advects particles, retraces clicks, appends glyphs or refreshes the
+  scalar plot; the pure snapshot already carries material arrows and outline.
 - Otherwise `advance_simulation` runs `sync_scene_frame` first (see
   `src/app/plane.rs`), then the dirty rebuild, then particle advection.
 - Ode's `advance_clock` clamps the shared clock to the solution duration and
@@ -578,8 +585,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   consumer exists and the clock is playing.
 
 **Pinned by.** `tests/viewmodel_test.rs` (dirty/rebuild, trails-empty snapshot),
-`tests/particles_test.rs` (retarget/advect/colour/trail), and
-`tests/particle_playback_test.rs` (clock/repaint).
+`tests/particles_test.rs` (retarget/advect/colour/trail),
+`tests/particle_playback_test.rs` (clock/repaint), and
+`tests/material_app_test.rs` (Materials arrows/outline-only branch, caps, plane
+slice reuse, error retention and mode isolation).
 
 **Limitations.** Grid and click streamlines are retraced on any rebuild; this is
 deliberate but can be expensive at high density. Particle state is CPU-side and
@@ -712,7 +721,8 @@ untouched.
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula,
-Sources, Induction or Ode; `SourceDisplay` selects Electric, Magnetic or Both;
+Sources, Induction, Materials or Ode; `SourceDisplay` selects Electric,
+Magnetic or Both;
 `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
 softening and accuracy opt-in. The same module turns a scene into drawable
@@ -921,12 +931,15 @@ warning. Every returned coordinate is finite.
 `scripts/bench-materials.sh`; results are recorded in
 [docs/perf/materials-performance.md](perf/materials-performance.md).
 
+**App integration.** `FieldMode::Materials` and its State adapter live in
+[src/viewmodel.rs](../src/viewmodel.rs); the arrows-only scene branch and
+outline reach the viewport through `VfApp::advance_simulation`. The Materials
+panel, persistence and export provenance belong to later planned tasks.
+
 **Limitations.** Exact catalog only: no general material solver, overlapping
 inclusions, anisotropic/nonlinear/dispersive media, conductors, free surface
 charge, hysteresis or eddy currents. 2D is a slice of the same 3D case. The
 benchmark measures analytic sampling, not frame time or browser performance.
-The Materials panel, state/app integration, persistence and export provenance
-belong to later planned tasks and are not part of this module yet.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
@@ -1481,6 +1494,7 @@ decisions that do not need a window.
 **Public API (major).**
 - Density/grid/plane constants: `DEFAULT_DENSITY_2D = 24`,
   `DEFAULT_DENSITY_3D = 16`, `MAX_DENSITY_2D = 200`, `MAX_DENSITY_3D = 40`,
+  `MATERIAL_MAX_DENSITY_3D = 40`, `MATERIAL_MAX_DENSITY_2D = 200`,
   `MIN_DENSITY = 4`; particle size/count and arrow/opacity/magnitude/domain
   bounds; `PLANE_MARGIN = 1.35`; `STREAMLINE_WIDTH = 0.012`,
   `STREAMLINE_MAX_LEN = 120`, `STREAMLINE_JITTER = 0.45`.
@@ -1507,6 +1521,9 @@ decisions that do not need a window.
 - Induction mode fields: `induction`, `induction_prepared`,
   `induction_sampling` and `induction_error`; `set_induction_scene`,
   `refresh_induction` and `reset_induction`.
+- Materials mode fields: `material` (durable `MaterialScene`),
+  `material_sampling` (`Option<MaterialSampling>`) and `material_error`;
+  `set_material_scene`, `refresh_material_sampling` and `reset_material`.
 - Ode mode fields: `ode`, `ode_solution` (`Arc<OdeSolution>`), `ode_error`,
   `ode_epoch`, `ode_chart`, `ode_variables` and private `ode_dirty`;
   `set_ode_scene` (validate/solve atomically), `refresh_ode_if_dirty`,
@@ -1524,12 +1541,12 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `active_dimension()` is 3 in Sources and Induction, the solved scene's
-  dimension in Ode (the selected scene before the first lazy solve), and the
-  formula's component count otherwise; `is_3d()` means `mode_3d &&
+- `active_dimension()` is 3 in Sources, Induction and Materials, the solved
+  scene's dimension in Ode (the selected scene before the first lazy solve),
+  and the formula's component count otherwise; `is_3d()` means `mode_3d &&
   active_dimension() == 3`. This gates the cube grid, density cap, plane
-  frame/slice and streamline depth, so source/induction mode uses the existing
-  2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
+  frame/slice and streamline depth, so source/induction/materials mode uses the
+  existing 2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
 - `set_field_mode` preserves the formula, source scene, induction scene and the
   current 2D/3D projection, clears the cached sampling/notice and marks dirty.
   Entering Induction never rewrites the stored density or the projection;
@@ -1566,6 +1583,15 @@ decisions that do not need a window.
 - Induction is a clock consumer exactly while `induction.is_animated()`; its
   `set_time` only dirties an animated waveform, so pause/resume and the scalar
   plot pause hold the sampled field at the shared time.
+- Materials is static: `has_time_dependent_consumer` is false, `set_time` is a
+  no-op and `particle_target` is `None` (clicks and streamlines are refused).
+  `set_material_scene` validates first; a rejection records `material_error` and
+  retains the last valid scene and sampling, while a valid change clears the
+  error/sampling and marks dirty. `refresh_material_sampling` samples the
+  capped 40³ cube or the existing `PlaneFrame` slice (200²), stores warnings in
+  `MaterialSampling::warning`, and never samples the formula. `snapshot` emits
+  cached arrows plus `material_outline` lines only; outlines are not reference
+  lines. `reset_material` restores the default scene and clears the cache.
 - `set_formula` keeps the last good `FieldExpr` on a parse error and still marks
   dirty so the status bar updates; `set_mode`/density/domain/formula-dimension
   changes call `sync_plane` with the previous grid.

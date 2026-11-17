@@ -174,7 +174,9 @@ impl CasPanelState {
 /// no formula editor but its field is always three-dimensional.
 fn cas_dimension(state: &State) -> usize {
     match state.field_mode {
-        FieldMode::Sources | FieldMode::Induction | FieldMode::Ode => state.active_dimension(),
+        FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode => {
+            state.active_dimension()
+        }
         FieldMode::Formula => {
             if state.mode_3d {
                 3

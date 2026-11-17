@@ -43,6 +43,13 @@ impl VfApp {
             self.advance_ode();
             return;
         }
+        if self.state.field_mode == FieldMode::Materials {
+            // Static analytic arrows plus the case outline: no formula
+            // sampling, particles, streamlines, clicks, glyphs or scalar plot.
+            self.sync_scene_frame();
+            self.rebuild_scene();
+            return;
+        }
         if !self.state.is_vector_mode() {
             // Pause, never delete: cloud/trail/click/time state is untouched.
             self.refresh_plot_scene();
@@ -127,13 +134,21 @@ impl VfApp {
             let arrow_style_2d = fresh.arrow_style_2d;
             let arrow_params = fresh.arrow_params;
             let mode_3d = fresh.mode_3d;
-            // Induction is arrows-only: its arrows carry their own colours and
-            // there is no particle cloud to share a range with. Avoid sampling
-            // the formula field, which is not on screen.
+            // Induction and Materials are arrows-only: their arrows carry
+            // their own colours and there is no particle cloud to share a
+            // range with. Avoid sampling the formula field, which is not on
+            // screen.
             if self.state.field_mode == crate::source_scene::FieldMode::Induction {
                 self.dots_range = self
                     .state
                     .induction_sampling
+                    .as_ref()
+                    .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
+                    .unwrap_or((0.0, 1.0));
+            } else if self.state.field_mode == crate::source_scene::FieldMode::Materials {
+                self.dots_range = self
+                    .state
+                    .material_sampling
                     .as_ref()
                     .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
                     .unwrap_or((0.0, 1.0));
@@ -183,9 +198,9 @@ impl VfApp {
                     );
                     crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
                 }
-                crate::source_scene::FieldMode::Formula | crate::source_scene::FieldMode::Ode => {
-                    Vec::new()
-                }
+                crate::source_scene::FieldMode::Formula
+                | crate::source_scene::FieldMode::Materials
+                | crate::source_scene::FieldMode::Ode => Vec::new(),
             };
             self.source_glyph_line_count = glyph_lines.len();
             lines.extend(glyph_lines);

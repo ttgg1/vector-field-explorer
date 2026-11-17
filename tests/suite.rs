@@ -54,6 +54,7 @@ mod induction_test;
 mod layout_test;
 mod left_click_action_test;
 mod line_alpha_test;
+mod material_app_test;
 mod material_bench_test;
 mod material_test;
 mod menu_test;
