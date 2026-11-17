@@ -2187,11 +2187,12 @@ window.
   strong colour, the overlay heading is fixed light grey.
 - The formula hint is not an input row.
 
-**Pinned by.** `tests/help_overlay_test.rs` (15 tests):
+**Pinned by.** `tests/help_overlay_test.rs` (16 tests):
 `the_overlay_and_window_share_one_table`,
 `the_overlay_shows_only_the_active_view_and_global`,
 `every_binding_is_listed_exactly_once_in_its_group`,
 `help_explains_source_mode_and_accuracy_opt_in`,
+`the_help_window_renders_the_sources_section`,
 `the_stale_right_drag_pans_copy_is_gone`,
 `two_d_help_never_mentions_orbiting`,
 `help_typography_ranks_the_window_title_above_section_headings_and_rows`.

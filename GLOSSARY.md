@@ -99,6 +99,38 @@ _Avoid_: theme preset
 The vector function sampled over the domain, defined by a typed formula.
 _Avoid_: vector field function, field expression
 
+**Field source**:
+A placed charge or current distribution (point, line, ring, disc, sphere, wire,
+loop, or solenoid) that contributes to the field.
+_Avoid_: emitter, object
+
+**Superposition**:
+The field at a point is the vector sum of the contributions of every visible
+source. Electric and magnetic families are summed independently.
+_Avoid_: blending, additive mode
+
+**Softening**:
+The scene-wide length scale that keeps analytic source fields finite at their
+singularities; display-only, not a physical regularization or wire radius.
+_Avoid_: epsilon, clamp
+
+**2D slice**:
+The plane of a three-component field rendered in 2D, selected by axis and grid
+index (x, y, or z). Existing two-component fields keep their ordinary flat X/Y
+view and have no slice selection.
+_Avoid_: plane-by-plane mode
+
+**2D approximation**:
+A field preset whose 2D form is a simplified formula rather than the z slice of
+a 3D source model; labelled in the preset UI.
+_Avoid_: 2D slice
+
+**CAS**:
+The optional symbolic tool that differentiates formulas and derives gradient,
+divergence, and curl without solving equations. It edits the formula field only,
+never a source scene.
+_Avoid_: solver, evaluator
+
 **Source scene**:
 The durable, persisted list of placed electric and magnetic sources plus its
 display choice, scene-wide softening and accuracy opt-in. It is sampled only in
@@ -217,59 +249,20 @@ What a single left click in the viewport does: seed a streamline or add a
 particle burst. The two are exclusive.
 _Avoid_: click mode, click behavior
 
-## Physics (planned, post-v1)
+## Physics (future scope)
 
-None of the following concepts is implemented in v0.1.0; they are
-reserved for the post-v1 physics work (ADR 0003).
-
-**Formula mode**:
-The field is defined by a formula typed in the formula bar and evaluated per
-sample. Exclusive with source mode.
-_Avoid_: expression mode
-
-**Source mode**:
-The field is defined by placed sources and their superposition. Exclusive with
-formula mode.
-_Avoid_: object mode
-
-**Field source**:
-A placed charge or current distribution (point, line, ring, disc, sphere, wire,
-loop, or solenoid) that contributes to the field.
-_Avoid_: emitter, object
+The following concepts are not implemented in v0.1.0; they are reserved for
+the post-v1 physics work (ADR 0003). Implemented source-scene terms — field
+mode, field source, superposition, 2D slice, 2D approximation, softening and
+CAS — are defined under Field and motion.
 
 **Source configuration**:
 A named, persisted set of field sources that can be loaded into source mode.
 _Avoid_: source preset, scene
 
-**Superposition**:
-The field at a point is the vector sum of the contributions of every visible
-source.
-_Avoid_: blending, additive mode
-
 **Source glyph**:
 The marker drawn at a source's position and orientation in the viewport.
 _Avoid_: icon, marker
-
-**2D slice**:
-The plane of a three-component field rendered in 2D, selected by axis and grid
-index (x, y, or z). Existing two-component fields keep their ordinary flat X/Y
-view and have no slice selection.
-_Avoid_: plane-by-plane mode
-
-**2D approximation**:
-A field preset whose 2D form is a simplified formula rather than the z slice of
-a 3D source model; labelled in the preset UI.
-_Avoid_: 2D slice
-
-**Softening**:
-The global length scale that keeps analytic source fields finite at their
-singularities; display-only, not a physical regularization.
-_Avoid_: epsilon, clamp
-
-**CAS**:
-The optional symbolic tool that differentiates formulas and derives gradient,
-divergence, and curl without solving equations.
-_Avoid_: solver, evaluator
 
 **Material region**:
 A region with relative permittivity and permeability that modifies the field.

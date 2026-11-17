@@ -3,11 +3,12 @@
 // only menu entry). These tests pin every binding exactly once in its group
 // and reject the stale "right-drag pans" copy.
 
+use eframe::egui;
 use vector_field_explorer::ui::help_overlay::{
     FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTION_TITLE_SIZE, HELP_SECTIONS, HELP_WINDOW_TITLE_SIZE,
     HelpRow, LEFT_CLICK_HELP_ACTION, LEFT_CLICK_HELP_INPUT, LEFT_CLICK_HELP_TOOLTIP,
     OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT, SEED_HELP_TOOLTIP,
-    SOURCES_HELP_SECTION, all_rows, rows_for, section_heading_style, sections_for,
+    SOURCES_HELP_SECTION, all_rows, help_window, rows_for, section_heading_style, sections_for,
     sources_help_rows, window_heading_color,
 };
 
@@ -473,5 +474,56 @@ fn help_explains_source_mode_and_accuracy_opt_in() {
                 && row.action.contains("formula")
         }),
         "source help says streamlines, particles and click seeding stay formula features: {text}"
+    );
+}
+
+#[test]
+fn the_help_window_renders_the_sources_section() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut open = true;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 6000.0),
+            )),
+            ..Default::default()
+        },
+        |ui| help_window(ui.ctx(), &mut open),
+    );
+    output.textures_delta.clear();
+    for _ in 0..3 {
+        let mut next = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 6000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| help_window(ui.ctx(), &mut open),
+        );
+        next.textures_delta.clear();
+        output = next;
+    }
+    let labels: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        labels.iter().any(|label| label == "Sources"),
+        "the Help window must render the Sources heading: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| {
+            label == "build a mixed electric/current scene; all eight source kinds have editors"
+        }),
+        "the Help window must render the Sources rows: {labels:?}"
     );
 }
