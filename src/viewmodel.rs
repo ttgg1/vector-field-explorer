@@ -332,19 +332,28 @@ pub struct State {
 impl State {
     /// Flag the state as needing a fresh scene, and report that it did.
     ///
-    /// In Ode, a `CurrentField` solution depends on the durable formula and
-    /// domain, so any edit that reaches this seam queues a lazy re-solve.
-    /// Typed-equation scenes are independent of field/colour edits and are not
-    /// invalidated. [`State::set_ode_scene`] clears the pending flag after its
-    /// own synchronous solve.
+    /// Presentation-only edits (style, colours, grid, particles, streamlines)
+    /// reach this seam but must not invalidate an Ode `CurrentField` solution:
+    /// only RHS changes (formula and domain) call
+    /// [`State::mark_ode_current_field_dirty`]. Typed-equation scenes are
+    /// independent of field edits and are never invalidated here.
+    /// [`State::set_ode_scene`] clears the pending flag after its own
+    /// synchronous solve.
     pub fn mark_dirty(self: &mut State) -> bool {
         self.dirty = true;
+        true
+    }
+
+    /// Queue a lazy re-solve only when the active Ode RHS actually changes.
+    /// Formula and domain edits call this; presentation edits never do, so
+    /// playback is not restarted for a style change. Invalid formula edits
+    /// still queue so the error is surfaced while the retained solution stays.
+    fn mark_ode_current_field_dirty(self: &mut State) {
         if self.field_mode == FieldMode::Ode
             && self.ode.source == crate::ode::OdeSource::CurrentField
         {
             self.ode_dirty = true;
         }
-        true
     }
 
     /// Mirror the clock's time into the state. Returns whether `t` changed.
@@ -493,6 +502,7 @@ impl State {
                 self.field = field;
                 self.parse_error = String::new();
                 self.sync_plane(previous_grid);
+                self.mark_ode_current_field_dirty();
                 self.mark_dirty()
             }
             Err(error) => {
@@ -500,6 +510,7 @@ impl State {
                 // still shows the message; this is the stderr/console trail.
                 log::debug!("field parse failed: {error}");
                 self.parse_error = error.to_string();
+                self.mark_ode_current_field_dirty();
                 self.mark_dirty()
             }
         }
@@ -558,8 +569,9 @@ impl State {
             // Ode has no Induction notices and never solves synchronously. A
             // preserved solution re-enters without a new epoch (playback time
             // stays); a fresh/current-field scene queues the first lazy solve.
+            // The last Ode error stays until a successful solve or scene
+            // commit clears it, so re-entry cannot hide an actionable failure.
             self.induction_error = None;
-            self.ode_error = None;
             self.ode_dirty = self.ode_solution.is_none()
                 || self.ode.source == crate::ode::OdeSource::CurrentField;
         }
@@ -863,6 +875,7 @@ impl State {
         self.plot.generation += 1;
         self.domain = domain;
         self.sync_plane(previous_grid);
+        self.mark_ode_current_field_dirty();
         self.mark_dirty()
     }
 

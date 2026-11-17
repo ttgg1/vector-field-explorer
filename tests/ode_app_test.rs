@@ -229,6 +229,57 @@ fn first_solution_after_entry_fits_once_and_later_epochs_preserve_the_camera() {
 }
 
 #[test]
+fn unrelated_style_edit_does_not_restart_current_field_playback() {
+    let mut app = VfApp::new();
+    app.state.set_formula("y, -x".into());
+    app.state.ode.source = OdeSource::CurrentField;
+    app.state.set_field_mode(FieldMode::Ode);
+    app.test_harness().advance_simulation();
+    assert!(app.state.ode_solution.is_some());
+
+    app.clock.seek(0.5);
+    app.state.set_time(app.clock.time);
+    let epoch = app.state.ode_epoch;
+    let time = app.clock.time;
+
+    app.state.set_show_grid(!app.state.show_grid);
+    app.test_harness().advance_simulation();
+
+    assert_eq!(
+        app.state.ode_epoch, epoch,
+        "a style edit keeps the CurrentField solution"
+    );
+    assert_eq!(
+        app.clock.time, time,
+        "a style edit does not restart playback"
+    );
+    assert!(close(app.clock.time, 0.5));
+}
+
+#[test]
+fn reentering_ode_keeps_the_recorded_error() {
+    let mut app = VfApp::new();
+    app.state.set_formula("y, -x +".into());
+    app.state.ode.source = OdeSource::CurrentField;
+    app.state.set_field_mode(FieldMode::Ode);
+    app.test_harness().advance_simulation();
+    let error = app
+        .state
+        .ode_error
+        .clone()
+        .expect("the invalid entry records an error");
+    assert!(app.state.ode_solution.is_none());
+
+    app.state.set_field_mode(FieldMode::Formula);
+    app.state.set_field_mode(FieldMode::Ode);
+    assert_eq!(
+        app.state.ode_error.as_deref(),
+        Some(error.as_str()),
+        "mode re-entry keeps the actionable error until a solve clears it"
+    );
+}
+
+#[test]
 fn first_valid_solution_after_invalid_entry_autofits() {
     let mut app = VfApp::new();
     app.state.set_formula("y, -x +".into());
