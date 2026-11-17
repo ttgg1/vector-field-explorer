@@ -118,24 +118,33 @@ impl VfApp {
         });
     }
 
-    /// Apply the formula bar's one-shot "Open Sources" request to the active
-    /// layout: expand the wide rail or open the compact Sources sheet.
+    /// Apply the formula bar's one-shot "Open Sources"/"Open induction"
+    /// requests to the active layout: expand the wide rail or open the compact
+    /// sheet.
     fn apply_pending_panel_request(&mut self) {
-        if !self.bar.open_sources {
-            return;
+        if self.bar.open_sources {
+            self.bar.open_sources = false;
+            if self.layout_mode == LayoutMode::Compact {
+                self.sheet.open(SheetState::Sources);
+                self.sheet_expanded = SheetSize::Default;
+            } else {
+                self.layout.sources_expanded = true;
+            }
         }
-        self.bar.open_sources = false;
-        if self.layout_mode == LayoutMode::Compact {
-            self.sheet.open(SheetState::Sources);
-            self.sheet_expanded = SheetSize::Default;
-        } else {
-            self.layout.sources_expanded = true;
+        if self.bar.open_induction {
+            self.bar.open_induction = false;
+            if self.layout_mode == LayoutMode::Compact {
+                self.sheet.open(SheetState::Induction);
+                self.sheet_expanded = SheetSize::Default;
+            } else {
+                self.layout.induction_expanded = true;
+            }
         }
     }
 
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
-        let mut entries = [
+        let mut entries = vec![
             RailEntry {
                 id: "controls",
                 label: "Controls",
@@ -156,6 +165,14 @@ impl VfApp {
                 expanded: &mut self.layout.sources_expanded,
             },
         ];
+        if self.state.field_mode == FieldMode::Induction {
+            entries.push(RailEntry {
+                id: "induction",
+                label: "Induction",
+                shortcut: None,
+                expanded: &mut self.layout.induction_expanded,
+            });
+        }
         show_rail_strip(
             ui,
             ("left_panel_rails", self.panel_generation),
@@ -175,6 +192,9 @@ impl VfApp {
         }
         if self.layout.sources_expanded {
             requests.push(self.layout.sources_width);
+        }
+        if self.state.field_mode == FieldMode::Induction && self.layout.induction_expanded {
+            requests.push(self.layout.induction_width);
         }
         if self.layout.presets_expanded {
             requests.push(self.layout.presets_width);
@@ -273,6 +293,40 @@ impl VfApp {
                 self.layout.sources_expanded = false;
             }
         }
+        if self.state.field_mode == FieldMode::Induction && self.layout.induction_expanded {
+            let width = widths.next().unwrap();
+            let mut collapse = false;
+            let mut induction_action = None;
+            let response = egui::Panel::left(("induction_panel", self.panel_generation))
+                .exact_size(width)
+                .show(ui, |ui| {
+                    collapse = layout::collapse_button_named(
+                        ui,
+                        layout::RailSide::Left,
+                        "Induction",
+                        "Induction",
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("induction_body")
+                        .show(ui, |ui| {
+                            induction_action = crate::ui::induction_panel::show(
+                                ui,
+                                &mut self.induction,
+                                &mut self.state,
+                                false,
+                            );
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.induction_width = width;
+            }
+            if collapse {
+                self.layout.induction_expanded = false;
+            }
+            if let Some(action) = induction_action {
+                self.apply_induction_panel_action(action);
+            }
+        }
         if self.layout.presets_expanded {
             self.wide_presets_width = widths.next().unwrap();
         }
@@ -319,6 +373,22 @@ impl VfApp {
     fn sync_presets_camera(&mut self) {
         self.camera.position = [self.orbit.target.x, self.orbit.target.y];
         self.camera.scale = self.orbit.ortho_zoom;
+    }
+
+    /// Apply the Induction panel's one-shot request through the existing seams.
+    fn apply_induction_panel_action(
+        &mut self,
+        action: crate::ui::induction_panel::InductionPanelAction,
+    ) {
+        match action {
+            crate::ui::induction_panel::InductionPanelAction::Fit => {
+                self.apply_view_command(ViewCommand::Fit);
+            }
+            crate::ui::induction_panel::InductionPanelAction::Reset => {
+                self.state
+                    .set_induction_scene(crate::induction::InductionScene::default());
+            }
+        }
     }
 
     /// Apply what the Presets body reported this frame: a camera button picked
@@ -396,7 +466,20 @@ impl VfApp {
         // segment count: `scene.lines` also holds the decorative backdrop.
         // Scalar mode reports its own status, never stale vector parse/counts.
         if let Some(scene) = self.scene.as_vector() {
-            self.status.parse_message = self.state.parse_error.clone();
+            self.status.parse_message = if self.state.field_mode == FieldMode::Induction {
+                self.state
+                    .induction_error
+                    .clone()
+                    .or_else(|| {
+                        self.state
+                            .induction_sampling
+                            .as_ref()
+                            .and_then(|sampling| sampling.validation_error.clone())
+                    })
+                    .unwrap_or_default()
+            } else {
+                self.state.parse_error.clone()
+            };
             self.status.arrow_count = scene.arrows.len();
             self.status.streamline_count = self.streamline_count;
             self.status.particle_count = scene.dots.len();
@@ -472,13 +555,16 @@ impl VfApp {
                     } else {
                         0.0
                     };
-                    let tabs = [
+                    let mut tabs = vec![
                         (SheetState::Controls, "Controls"),
                         #[cfg(not(target_arch = "wasm32"))]
                         (SheetState::Cas, "CAS"),
                         (SheetState::Presets, "Presets"),
                         (SheetState::Sources, "Sources"),
                     ];
+                    if self.state.field_mode == FieldMode::Induction {
+                        tabs.push((SheetState::Induction, "Induction"));
+                    }
                     let available = (ui.available_width() - close_width).max(0.0);
                     egui::ScrollArea::horizontal()
                         .id_salt("compact_tabs")
@@ -535,6 +621,15 @@ impl VfApp {
         if !sheet.is_open() {
             return;
         }
+        // The Induction surface exists only while its adapter is active; an
+        // open sheet must not outlive a mode switch (the wide rail is gated the
+        // same way in `show_left_panels`).
+        if sheet == SheetState::Induction && self.state.field_mode != FieldMode::Induction {
+            self.sheet.close();
+            self.sheet_expanded = SheetSize::Default;
+            ui.ctx().request_repaint();
+            return;
+        }
         let window_height = ui.ctx().content_rect().height();
         let available_height = ui.available_height();
         let height = layout::sheet_height(window_height, available_height, self.sheet_expanded);
@@ -549,6 +644,7 @@ impl VfApp {
         let mut close = false;
         let mut camera_request = None;
         let mut plot_action = None;
+        let mut induction_action = None;
         let controls_shown = sheet == SheetState::Controls;
         egui::Panel::bottom("compact_sheet")
             .exact_size(height)
@@ -560,6 +656,7 @@ impl VfApp {
                     SheetState::Cas => "CAS",
                     SheetState::Presets => "Presets",
                     SheetState::Sources => "Sources",
+                    SheetState::Induction => "Induction",
                     SheetState::None => "",
                 };
                 ui.horizontal(|ui| {
@@ -630,6 +727,14 @@ impl VfApp {
                             true,
                         );
                     }
+                    SheetState::Induction => {
+                        induction_action = crate::ui::induction_panel::show(
+                            ui,
+                            &mut self.induction,
+                            &mut self.state,
+                            true,
+                        );
+                    }
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => self.show_cas_body(ui),
                     SheetState::None => {}
@@ -644,6 +749,9 @@ impl VfApp {
         }
         if let Some(action) = plot_action {
             self.apply_plot_panel_action(action);
+        }
+        if let Some(action) = induction_action {
+            self.apply_induction_panel_action(action);
         }
         self.finish_presets(camera_request);
         if controls_shown && layout::fly_allowed(self.layout_mode) {

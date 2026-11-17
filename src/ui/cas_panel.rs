@@ -134,9 +134,9 @@ impl CasPanelState {
         })
     }
     pub fn apply(&mut self, state: &mut State, dimension: usize) -> bool {
-        // CAS edits the formula editor only. Sources mode has no formula
-        // editor, so refuse before any dimension/vector validation.
-        if state.field_mode == FieldMode::Sources {
+        // CAS edits the formula editor only. Sources and Induction have no
+        // formula editor, so refuse before any dimension/vector validation.
+        if state.field_mode != FieldMode::Formula {
             return false;
         }
         // CAS mutates the vector editor only. A direct call in scalar mode is
@@ -174,7 +174,7 @@ impl CasPanelState {
 /// no formula editor but its field is always three-dimensional.
 fn cas_dimension(state: &State) -> usize {
     match state.field_mode {
-        FieldMode::Sources => state.active_dimension(),
+        FieldMode::Sources | FieldMode::Induction => state.active_dimension(),
         FieldMode::Formula => {
             if state.mode_3d {
                 3
@@ -304,6 +304,14 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
+    let induction_mode = state.field_mode == FieldMode::Induction;
+    if induction_mode {
+        ui.label("CAS edits the formula field; switch to Formula.");
+    }
+    ui.add_enabled_ui(!induction_mode, |ui| show_enabled(ui, state, panel));
+}
+
+fn show_enabled(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
     let sources_mode = state.field_mode == FieldMode::Sources;
     let dimension = cas_dimension(state);
     panel.refresh(dimension);

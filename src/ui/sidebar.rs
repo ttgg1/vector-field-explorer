@@ -821,212 +821,220 @@ fn show_inner(
     if state.field_mode == crate::source_scene::FieldMode::Sources {
         ui.label("Streamlines and particles use the formula field; switch to Formula to use them.");
     } else {
-        section(ui, Section::Features, controls, None, |ui, controls| {
-            if !vector_mode {
-                ui.label("Streamlines and particles are vector-only; their values are retained.");
-            }
-            ui.add_enabled_ui(vector_mode, |ui| {
-        ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
-            "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
-        );
-        ui.add_enabled_ui(seed_mode_enabled(controls.streamlines), |ui| {
+        let induction_mode = state.field_mode == crate::source_scene::FieldMode::Induction;
+        if induction_mode {
+            ui.label(
+                "Arrows only: streamlines, particles and click seeding stay off in Induction.",
+            );
+        }
+        ui.add_enabled_ui(!induction_mode, |ui| {
+            section(ui, Section::Features, controls, None, |ui, controls| {
+                if !vector_mode {
+                    ui.label("Streamlines and particles are vector-only; their values are retained.");
+                }
+                ui.add_enabled_ui(vector_mode, |ui| {
+            ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
+                "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
+            );
+            ui.add_enabled_ui(seed_mode_enabled(controls.streamlines), |ui| {
+                button_row(ui, |ui| {
+                    ui.label("Seed");
+                    for mode in StreamlineSeedMode::ALL {
+                        ui.selectable_value(&mut controls.seed_mode, mode, mode.label())
+                            .on_hover_text(mode.tooltip());
+                    }
+                });
+            })
+            .response
+            .on_disabled_hover_text("Turn Streamlines on to choose Auto or Click seeding");
+            // The explicit count only replaces Auto's density-derived lattice:
+            // Click-only seeding paints click bursts instead, so the control is
+            // disabled there rather than silently ignored.
+            ui.add_enabled_ui(
+                streamline_count_enabled(controls.streamlines, controls.seed_mode),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Streamline count");
+                        ui.add(
+                            egui::DragValue::new(&mut controls.streamline_count)
+                                .range(0..=MAX_STREAMLINES)
+                                .speed(1.0)
+                                .custom_formatter(|value, _| {
+                                    streamline_count_label(value.max(0.0).round() as u32)
+                                }),
+                        )
+                        .on_hover_text(
+                            "0 = Auto (density-derived); a value seeds exactly that many lines.",
+                        );
+                    });
+                },
+            )
+            .response
+            .on_disabled_hover_text(
+                "Click-only seeding uses click bursts; turn Streamlines on and choose Auto to set a count",
+            );
+            // Ticket 60: the left click action stays visible even while its feature
+            // is off; the click is then a hinted no-op rather than a dead control.
             button_row(ui, |ui| {
-                ui.label("Seed");
-                for mode in StreamlineSeedMode::ALL {
-                    ui.selectable_value(&mut controls.seed_mode, mode, mode.label())
-                        .on_hover_text(mode.tooltip());
+                ui.label("Left click");
+                for action in LeftClickAction::ALL {
+                    let hover = match click_action_plan(
+                        action,
+                        controls.streamlines,
+                        controls.particles && state.field.dimension == 3,
+                        view_3d,
+                    ) {
+                        ClickActionPlan::Ignore(reason) => {
+                            format!("{} — {reason}", action.tooltip())
+                        }
+                        _ => action.tooltip().to_owned(),
+                    };
+                    ui.selectable_value(&mut controls.left_click_action, action, action.label())
+                        .on_hover_text(hover);
                 }
             });
-        })
-        .response
-        .on_disabled_hover_text("Turn Streamlines on to choose Auto or Click seeding");
-        // The explicit count only replaces Auto's density-derived lattice:
-        // Click-only seeding paints click bursts instead, so the control is
-        // disabled there rather than silently ignored.
-        ui.add_enabled_ui(
-            streamline_count_enabled(controls.streamlines, controls.seed_mode),
-            |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Streamline count");
-                    ui.add(
-                        egui::DragValue::new(&mut controls.streamline_count)
-                            .range(0..=MAX_STREAMLINES)
-                            .speed(1.0)
-                            .custom_formatter(|value, _| {
-                                streamline_count_label(value.max(0.0).round() as u32)
-                            }),
-                    )
-                    .on_hover_text(
-                        "0 = Auto (density-derived); a value seeds exactly that many lines.",
-                    );
-                });
-            },
-        )
-        .response
-        .on_disabled_hover_text(
-            "Click-only seeding uses click bursts; turn Streamlines on and choose Auto to set a count",
-        );
-        // Ticket 60: the left click action stays visible even while its feature
-        // is off; the click is then a hinted no-op rather than a dead control.
-        button_row(ui, |ui| {
-            ui.label("Left click");
-            for action in LeftClickAction::ALL {
-                let hover = match click_action_plan(
-                    action,
-                    controls.streamlines,
-                    controls.particles && state.field.dimension == 3,
-                    view_3d,
-                ) {
-                    ClickActionPlan::Ignore(reason) => {
-                        format!("{} — {reason}", action.tooltip())
-                    }
-                    _ => action.tooltip().to_owned(),
-                };
-                ui.selectable_value(&mut controls.left_click_action, action, action.label())
-                    .on_hover_text(hover);
-            }
-        });
-        ui.checkbox(&mut controls.particles, "Particles")
-            .on_hover_text(
-                "Animate dots carried by the field; 2D needs a three-component field and \
-                 shows the selected slice",
-            );
-        ui.horizontal(|ui| {
-            ui.label("Particle count");
-            ui.add(
-                egui::DragValue::new(&mut controls.particle_count)
-                    .range(0..=MAX_PARTICLES as u32)
-                    .speed(1.0)
-                    .custom_formatter(|value, _| {
-                        particle_count_label(value.max(0.0).round() as u32)
-                    }),
-            )
-            .on_hover_text("0 = Auto (density × 16); a value overrides it.");
-        });
-        // Ticket 48: appearance lives in its own nested subsection so the
-        // Features body stays a pair of feature toggles. Size (ticket 30) moves
-        // in here rather than staying as a second, duplicate control.
-        egui::CollapsingHeader::new("Particle appearance")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(controls.particles, |ui| {
-                    let appearance = &mut controls.particle_appearance;
-                    ui.add_enabled_ui(particle_size_enabled(controls.particles), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Size");
-                            ui.add(
-                                egui::Slider::new(
-                                    &mut controls.particle_size,
-                                    MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE,
-                                )
-                                .fixed_decimals(2),
-                            )
-                            .on_hover_text(
-                                "Dot radius relative to the grid spacing (0.25–3.0, default 1.0)",
-                            );
-                        });
-                    });
-                    ui.add(
-                        egui::Slider::new(
-                            &mut appearance.opacity,
-                            MIN_PARTICLE_OPACITY..=MAX_PARTICLE_OPACITY,
-                        )
-                        .text("Opacity"),
-                    )
-                    .on_hover_text("Dot and trail alpha (0.05–1.0, default 1.0)");
-                    button_row(ui, |ui| {
-                        ui.label("Colour");
-                        for mode in ParticleColorMode::ALL {
-                            ui.selectable_value(
-                                &mut appearance.color_mode,
-                                mode,
-                                mode.label(),
-                            )
-                            .on_hover_text(mode.tooltip());
-                        }
-                    });
-                    let mut fixed = fixed_color_rgb(appearance.fixed_color);
-                    let picker = ui.add_enabled_ui(
-                        particle_fixed_color_enabled(appearance.color_mode),
-                        |ui| {
+            ui.checkbox(&mut controls.particles, "Particles")
+                .on_hover_text(
+                    "Animate dots carried by the field; 2D needs a three-component field and \
+                     shows the selected slice",
+                );
+            ui.horizontal(|ui| {
+                ui.label("Particle count");
+                ui.add(
+                    egui::DragValue::new(&mut controls.particle_count)
+                        .range(0..=MAX_PARTICLES as u32)
+                        .speed(1.0)
+                        .custom_formatter(|value, _| {
+                            particle_count_label(value.max(0.0).round() as u32)
+                        }),
+                )
+                .on_hover_text("0 = Auto (density × 16); a value overrides it.");
+            });
+            // Ticket 48: appearance lives in its own nested subsection so the
+            // Features body stays a pair of feature toggles. Size (ticket 30) moves
+            // in here rather than staying as a second, duplicate control.
+            egui::CollapsingHeader::new("Particle appearance")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(controls.particles, |ui| {
+                        let appearance = &mut controls.particle_appearance;
+                        ui.add_enabled_ui(particle_size_enabled(controls.particles), |ui| {
                             ui.horizontal(|ui| {
-                                ui.label("Fixed colour");
-                                super::style_panel::color_button(ui, |ui| ui.color_edit_button_srgb(&mut fixed))
-                            })
-                            .inner
-                        },
-                    );
-                    if picker.inner.changed() {
-                        appearance.fixed_color = fixed_color_opaque(fixed);
-                    }
-                    picker.response.on_hover_text(
-                        "Colour used by the Fixed mode (default teal)",
-                    ).on_disabled_hover_text(
-                        "Choose Fixed mode to pick a colour",
-                    );
-                    ui.add(
-                        egui::Slider::new(
-                            &mut appearance.trail_len,
-                            0..=MAX_TRAIL_LEN,
-                        )
-                        .integer()
-                        .text("Trail length"),
-                    )
-                    .on_hover_text("Stored trail points per particle; 0 = off (0–32)");
-                    ui.add_enabled(
-                        trail_fade_enabled(appearance.trail_len),
-                        egui::Slider::new(
-                            &mut appearance.trail_fade,
-                            MIN_TRAIL_FADE..=MAX_TRAIL_FADE,
-                        )
-                        .text("Trail fade"),
-                    )
-                    .on_hover_text(
-                        "Alpha multiplier toward the tail (0–1, default 0.65); 1 = no fade",
-                    )
-                    .on_disabled_hover_text("Turn trails on (length 2 or more) to set the fade");
-                    ui.add_enabled(
-                        trail_width_enabled(appearance.trail_len),
-                        egui::Slider::new(
-                            &mut appearance.trail_width,
-                            MIN_TRAIL_WIDTH..=MAX_TRAIL_WIDTH,
-                        )
-                        .text("Trail width"),
-                    )
-                    .on_hover_text(
-                        "Trail width relative to the dot spacing (0.05–2.0, default 1.0)",
-                    )
-                    .on_disabled_hover_text("Turn trails on (length 2 or more) to set the width");
-                    egui::CollapsingHeader::new("Advanced")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            ui.checkbox(
-                                &mut appearance.loop_on_stagnation,
-                                "Loop when stuck",
-                            )
-                            .on_hover_text(
-                                "Re-spawn a particle that stops moving (default on)",
-                            );
-                            ui.add_enabled(
-                                stagnation_seconds_enabled(
-                                    appearance.loop_on_stagnation,
-                                ),
-                                egui::Slider::new(
-                                    &mut appearance.stagnation_seconds,
-                                    MIN_STAGNATION_SECONDS..=MAX_STAGNATION_SECONDS,
+                                ui.label("Size");
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut controls.particle_size,
+                                        MIN_PARTICLE_SIZE..=MAX_PARTICLE_SIZE,
+                                    )
+                                    .fixed_decimals(2),
                                 )
-                                .text("Stuck time (s)"),
-                            )
-                            .on_hover_text(
-                                "How long a particle may sit still before it loops (0.1–5.0 s, default 0.5)",
-                            )
-                            .on_disabled_hover_text(
-                                "Turn Loop when stuck on to set the stuck time",
-                            );
+                                .on_hover_text(
+                                    "Dot radius relative to the grid spacing (0.25–3.0, default 1.0)",
+                                );
+                            });
                         });
-                })
-                .response
-                .on_disabled_hover_text("Turn Particles on to change their appearance");
+                        ui.add(
+                            egui::Slider::new(
+                                &mut appearance.opacity,
+                                MIN_PARTICLE_OPACITY..=MAX_PARTICLE_OPACITY,
+                            )
+                            .text("Opacity"),
+                        )
+                        .on_hover_text("Dot and trail alpha (0.05–1.0, default 1.0)");
+                        button_row(ui, |ui| {
+                            ui.label("Colour");
+                            for mode in ParticleColorMode::ALL {
+                                ui.selectable_value(
+                                    &mut appearance.color_mode,
+                                    mode,
+                                    mode.label(),
+                                )
+                                .on_hover_text(mode.tooltip());
+                            }
+                        });
+                        let mut fixed = fixed_color_rgb(appearance.fixed_color);
+                        let picker = ui.add_enabled_ui(
+                            particle_fixed_color_enabled(appearance.color_mode),
+                            |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Fixed colour");
+                                    super::style_panel::color_button(ui, |ui| ui.color_edit_button_srgb(&mut fixed))
+                                })
+                                .inner
+                            },
+                        );
+                        if picker.inner.changed() {
+                            appearance.fixed_color = fixed_color_opaque(fixed);
+                        }
+                        picker.response.on_hover_text(
+                            "Colour used by the Fixed mode (default teal)",
+                        ).on_disabled_hover_text(
+                            "Choose Fixed mode to pick a colour",
+                        );
+                        ui.add(
+                            egui::Slider::new(
+                                &mut appearance.trail_len,
+                                0..=MAX_TRAIL_LEN,
+                            )
+                            .integer()
+                            .text("Trail length"),
+                        )
+                        .on_hover_text("Stored trail points per particle; 0 = off (0–32)");
+                        ui.add_enabled(
+                            trail_fade_enabled(appearance.trail_len),
+                            egui::Slider::new(
+                                &mut appearance.trail_fade,
+                                MIN_TRAIL_FADE..=MAX_TRAIL_FADE,
+                            )
+                            .text("Trail fade"),
+                        )
+                        .on_hover_text(
+                            "Alpha multiplier toward the tail (0–1, default 0.65); 1 = no fade",
+                        )
+                        .on_disabled_hover_text("Turn trails on (length 2 or more) to set the fade");
+                        ui.add_enabled(
+                            trail_width_enabled(appearance.trail_len),
+                            egui::Slider::new(
+                                &mut appearance.trail_width,
+                                MIN_TRAIL_WIDTH..=MAX_TRAIL_WIDTH,
+                            )
+                            .text("Trail width"),
+                        )
+                        .on_hover_text(
+                            "Trail width relative to the dot spacing (0.05–2.0, default 1.0)",
+                        )
+                        .on_disabled_hover_text("Turn trails on (length 2 or more) to set the width");
+                        egui::CollapsingHeader::new("Advanced")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.checkbox(
+                                    &mut appearance.loop_on_stagnation,
+                                    "Loop when stuck",
+                                )
+                                .on_hover_text(
+                                    "Re-spawn a particle that stops moving (default on)",
+                                );
+                                ui.add_enabled(
+                                    stagnation_seconds_enabled(
+                                        appearance.loop_on_stagnation,
+                                    ),
+                                    egui::Slider::new(
+                                        &mut appearance.stagnation_seconds,
+                                        MIN_STAGNATION_SECONDS..=MAX_STAGNATION_SECONDS,
+                                    )
+                                    .text("Stuck time (s)"),
+                                )
+                                .on_hover_text(
+                                    "How long a particle may sit still before it loops (0.1–5.0 s, default 0.5)",
+                                )
+                                .on_disabled_hover_text(
+                                    "Turn Loop when stuck on to set the stuck time",
+                                );
+                            });
+                    })
+                    .response
+                    .on_disabled_hover_text("Turn Particles on to change their appearance");
+                });
             });
         });
         });

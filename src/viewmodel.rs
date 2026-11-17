@@ -19,6 +19,10 @@ use super::streamlines::{
     CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
 };
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
+use crate::induction::{
+    InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
+    induction_key, prepare_induction, sample_induction,
+};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
 };
@@ -294,6 +298,14 @@ pub struct State {
     pub sources: SourceScene,
     /// The last source sampling pass for the active adapter.
     pub source_sampling: Option<SourceSampling>,
+    /// The durable induction conductor, preserved across mode switches.
+    pub induction: crate::induction::InductionScene,
+    /// Unit-current geometry cache for the induction sampler.
+    pub induction_prepared: Option<Arc<InductionPrepared>>,
+    /// The last induction sampling pass at the mirrored clock time.
+    pub induction_sampling: Option<InductionSampling>,
+    /// The last rejected induction edit, shown by the induction panel/status.
+    pub induction_error: Option<String>,
     /// One-line source status/hint owned by the panel and status bar.
     pub source_notice: Option<String>,
     pub dirty: bool,
@@ -320,8 +332,18 @@ impl State {
         }
         self.time = t;
         if self.is_vector_mode() {
-            if self.field.is_time_dependent() {
-                self.mark_dirty();
+            match self.field_mode {
+                FieldMode::Induction => {
+                    if self.induction.is_animated() {
+                        self.mark_dirty();
+                    }
+                }
+                FieldMode::Formula => {
+                    if self.field.is_time_dependent() {
+                        self.mark_dirty();
+                    }
+                }
+                FieldMode::Sources => {}
             }
         } else {
             self.scalar_time_changed();
@@ -334,10 +356,13 @@ impl State {
     /// active accepted time-dependent scalar expression.
     pub fn has_time_dependent_consumer(self: &State) -> bool {
         if self.is_vector_mode() {
-            if self.field_mode == FieldMode::Sources {
-                return false;
+            match self.field_mode {
+                FieldMode::Sources => false,
+                FieldMode::Induction => self.induction.is_animated(),
+                FieldMode::Formula => {
+                    self.particle_target().is_some() || self.field.is_time_dependent()
+                }
             }
-            self.particle_target().is_some() || self.field.is_time_dependent()
         } else {
             self.active_scalar_is_time_dependent()
         }
@@ -402,6 +427,10 @@ impl State {
             field_mode: FieldMode::Formula,
             sources: SourceScene::default(),
             source_sampling: None,
+            induction: crate::induction::InductionScene::default(),
+            induction_prepared: None,
+            induction_sampling: None,
+            induction_error: None,
             source_notice: None,
             dirty: true,
             time: 0.0,
@@ -440,23 +469,35 @@ impl State {
     /// dimensional; the formula reports its own component count.
     pub fn active_dimension(self: &State) -> usize {
         match self.field_mode {
-            FieldMode::Sources => 3,
+            FieldMode::Sources | FieldMode::Induction => 3,
             FieldMode::Formula => self.field.dimension,
         }
     }
 
-    /// Switch between the formula and source adapters. Formula, parsed field,
-    /// source scene and the 2D/3D projection are all preserved; only the
-    /// cached sampling and the source notice are cleared.
+    /// Switch between the formula, source and induction adapters. The formula,
+    /// parsed field, source scene, induction scene and the current 2D/3D
+    /// projection are preserved; only each adapter's cached sampling and
+    /// notice are cleared. The stored density itself is never destroyed, only
+    /// sampled under the active cap.
     pub fn set_field_mode(self: &mut State, mode: FieldMode) -> bool {
         if self.field_mode == mode {
             return false;
         }
         let previous_grid = self.plane_grid();
+        let previous_dimension = self.active_dimension();
+        let previous_mode_3d = self.mode_3d;
         self.field_mode = mode;
         self.source_sampling = None;
         self.source_notice = None;
-        if self.clamp_source_density() {
+        self.induction_sampling = None;
+        if mode != FieldMode::Induction {
+            // Leaving Induction drops the prepared geometry cache; the durable
+            // scene stays so returning re-prepares at the current clock time.
+            self.induction_prepared = None;
+        }
+        let dimension_changed = previous_dimension != self.active_dimension();
+        let clamped = self.clamp_source_density();
+        if clamped || self.mode_3d != previous_mode_3d || dimension_changed {
             self.sync_plane(previous_grid);
         }
         self.mark_dirty()
@@ -465,7 +506,8 @@ impl State {
     /// Re-clamp the stored density when Sources makes the active sampling
     /// cubic. This is the one path that can turn a legal 200² 2D density into
     /// 3D sampling, so the 40³ cap must apply here even though `set_density`
-    /// already clamps at edit time.
+    /// already clamps at edit time. Induction is capped at sampling time
+    /// instead, so its stored density survives a mode visit untouched.
     fn clamp_source_density(self: &mut State) -> bool {
         if self.field_mode == FieldMode::Sources && self.is_3d() && self.density > MAX_DENSITY_3D {
             self.density = MAX_DENSITY_3D;
@@ -473,6 +515,91 @@ impl State {
         } else {
             false
         }
+    }
+
+    /// Replace the durable induction scene. An invalid edit is rejected before
+    /// it can replace anything: the previous valid scene, prepared cache and
+    /// arrows all stay, and the actionable error is recorded. A valid edit
+    /// clears that error and invalidates the sampled frame.
+    pub fn set_induction_scene(self: &mut State, scene: crate::induction::InductionScene) -> bool {
+        if let Err(error) = scene.validate() {
+            self.induction_error = Some(error);
+            return false;
+        }
+        self.induction_error = None;
+        self.induction = scene;
+        self.induction_sampling = None;
+        self.mark_dirty();
+        true
+    }
+
+    /// Global reset's induction half: drop the cache and restore the default
+    /// valid scene. Formula/Sources durable state and the shared clock are
+    /// untouched; the caller selects Formula mode.
+    pub fn reset_induction(self: &mut State) -> bool {
+        self.induction = crate::induction::InductionScene::default();
+        self.induction_prepared = None;
+        self.induction_sampling = None;
+        self.induction_error = None;
+        self.mark_dirty()
+    }
+
+    /// Rebuild the induction cache. A changed geometry/domain/grid/plane key
+    /// re-prepares the unit-current cache; a time-only change rescales it. The
+    /// prepared `Arc` identity is deliberately preserved on time-only frames.
+    pub fn refresh_induction(self: &mut State) {
+        if self.field_mode != FieldMode::Induction {
+            self.induction_sampling = None;
+            return;
+        }
+        if let Err(error) = self.induction.validate() {
+            self.induction_error = Some(error);
+            self.induction_sampling = None;
+            return;
+        }
+        let plane = self.plane_frame();
+        let key = induction_key(
+            &self.induction,
+            &self.domain,
+            self.grid(),
+            plane.as_ref(),
+            self.sources.softening,
+            Default::default(),
+        );
+        let stale = self
+            .induction_prepared
+            .as_ref()
+            .is_none_or(|prepared| prepared.key != key);
+        if stale {
+            match prepare_induction(
+                &self.induction,
+                &self.domain,
+                self.grid(),
+                plane.as_ref(),
+                self.sources.softening,
+                Default::default(),
+            ) {
+                Ok(prepared) => {
+                    self.induction_prepared = Some(Arc::new(prepared));
+                    self.induction_error = None;
+                }
+                Err(error) => {
+                    self.induction_prepared = None;
+                    self.induction_sampling = None;
+                    self.induction_error = Some(error);
+                    return;
+                }
+            }
+        }
+        let Some(prepared) = self.induction_prepared.as_ref() else {
+            return;
+        };
+        self.induction_sampling = Some(sample_induction(
+            prepared,
+            &self.induction,
+            self.time,
+            &self.view_options(),
+        ));
     }
 
     /// Replace the durable source scene and invalidate its cached sampling.
@@ -490,7 +617,7 @@ impl State {
     /// sampling; source mode samples the scene at the current domain, grid and
     /// plane frame.
     pub fn refresh_source_sampling(self: &mut State) {
-        if self.field_mode == FieldMode::Formula {
+        if self.field_mode != FieldMode::Sources {
             self.source_sampling = None;
             return;
         }
@@ -542,10 +669,11 @@ impl State {
 
     /// Samples per axis, clamped to what this mode can afford.
     pub fn set_density(self: &mut State, density: u32) -> bool {
-        let max = if self.is_3d() {
-            MAX_DENSITY_3D
-        } else {
-            MAX_DENSITY_2D
+        let max = match self.field_mode {
+            FieldMode::Induction if self.is_3d() => MAX_INDUCTION_DENSITY_3D,
+            FieldMode::Induction => MAX_INDUCTION_DENSITY_2D,
+            _ if self.is_3d() => MAX_DENSITY_3D,
+            _ => MAX_DENSITY_2D,
         };
         let density = density.clamp(MIN_DENSITY, max);
         if self.density == density {
@@ -870,7 +998,7 @@ impl State {
     /// `None` otherwise. Ordinary two-component fields have no depth or slice
     /// flow for a dot to ride, so the off state still spawns nothing.
     pub fn particle_target(self: &State) -> Option<usize> {
-        if self.field_mode == FieldMode::Sources {
+        if matches!(self.field_mode, FieldMode::Sources | FieldMode::Induction) {
             return None;
         }
         (self.particles && self.active_dimension() == 3)
@@ -1025,10 +1153,17 @@ impl State {
     /// field write so sampling can never exceed 40³ in Source mode.
     fn capped_density(self: &State) -> u32 {
         let n = self.density.max(MIN_DENSITY);
-        if self.field_mode == FieldMode::Sources && self.is_3d() {
-            n.min(MAX_DENSITY_3D)
-        } else {
-            n
+        match self.field_mode {
+            FieldMode::Sources if self.is_3d() => n.min(MAX_DENSITY_3D),
+            FieldMode::Induction => {
+                let cap = if self.is_3d() {
+                    MAX_INDUCTION_DENSITY_3D
+                } else {
+                    MAX_INDUCTION_DENSITY_2D
+                };
+                n.min(cap)
+            }
+            _ => n,
         }
     }
 
@@ -1193,8 +1328,8 @@ impl State {
     /// so its lines run with the depth they cross. [`streamlines::ray_seed`]
     /// turns a click into a seed inside the domain for the orbit view's click-to-seed.
     pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
-        // Source mode samples static arrows only; formula transients never leak.
-        if self.field_mode == FieldMode::Sources {
+        // Source and induction modes draw arrows only; formula streamlines never leak.
+        if matches!(self.field_mode, FieldMode::Sources | FieldMode::Induction) {
             return Vec::new();
         }
         // Off hides both seed sources; Click hides only the automatic grid.
@@ -1282,7 +1417,8 @@ impl State {
         color_range: (f32, f32),
         clicks: &[Vec3],
     ) -> Vec<LineInstanceGPU> {
-        if self.field_mode == FieldMode::Sources || !self.streamlines {
+        if matches!(self.field_mode, FieldMode::Sources | FieldMode::Induction) || !self.streamlines
+        {
             return Vec::new();
         }
         let opts = self.streamline_opts();
@@ -1301,6 +1437,28 @@ impl State {
     /// the UI layer just stores the result; the field is sampled once and
     /// reused for the arrows and the streamline colour range.
     pub fn snapshot(self: &State) -> SceneGPU {
+        if self.field_mode == FieldMode::Induction {
+            // Arrows-only demo: no streamlines, click lines, trails or dots.
+            let arrows = if self.arrows {
+                self.induction_sampling
+                    .as_ref()
+                    .map(|sampling| self.arrow_instances(&sampling.arrows))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            return SceneGPU {
+                arrows: Arc::new(arrows),
+                lines: Arc::new(Vec::new()),
+                trails: Arc::new(Vec::new()),
+                dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
+                arrow_style: self.arrow_style,
+                arrow_style_2d: self.arrow_style_2d,
+                arrow_params: self.arrow_params,
+                mode_3d: self.mode_3d,
+            };
+        }
         if self.field_mode == FieldMode::Sources {
             let arrows = if self.arrows {
                 match &self.source_sampling {
@@ -1353,7 +1511,11 @@ impl State {
         if !self.dirty {
             return None;
         }
-        self.refresh_source_sampling();
+        if self.field_mode == FieldMode::Induction {
+            self.refresh_induction();
+        } else {
+            self.refresh_source_sampling();
+        }
         self.dirty = false;
         Some(self.snapshot())
     }

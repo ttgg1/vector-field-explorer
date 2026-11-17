@@ -144,9 +144,11 @@ Why the seam matters:
   a 2D slice never gets world-cube references; the snapshot's `lines` holds
   grid-seeded streamlines only. In `FieldMode::Sources` the app also appends the
   active scene's `source_glyph_lines` after the reference/flow/click lines, so
-  markers follow the same selected `plane_frame` as the samples; Formula mode
-  preserves the durable scene but appends none. The resulting `SceneGPU.lines`
-  is shared by both viewport modes, CLI export and screenshot capture.
+  markers follow the same selected `plane_frame` as the samples. In
+  `FieldMode::Induction` it appends exactly the selected conductor's glyph and
+  no streamline/click geometry; Formula mode preserves the durable scene but
+  appends none. The resulting `SceneGPU.lines` is shared by both viewport modes,
+  CLI export and screenshot capture.
 
 ### 2.2 Frame order
 
@@ -614,7 +616,8 @@ them at a point.
 - Outer parentheses are optional list delimiters; commas split only at top level
   (nested parentheses are respected).
 - Exactly 2 or 3 components are accepted; anything else is `Parse`.
-- Evaluation binds `x`, `y`, `z`; unknown variables produce `None`.
+- Evaluation binds `x`, `y`, `z`, and the shared simulated time `t`; unknown
+  variables produce `None`.
 - A 2D field evaluated at 3D `p` ignores `p.z` and returns `(u, v, 0)`.
 - Any NaN/infinite component makes the whole evaluation `None`.
 
@@ -623,14 +626,17 @@ them at a point.
 `eval_nan_becomes_none`, `unknown_variable_not_evaluated`,
 `three_component_evaluated_in_two_d`.
 
-**Limitations.** No time variable (v0.1.0 is static), no implicit
-multiplication (`2x` is invalid), and no symbolic differentiation.
+**Limitations.** No implicit multiplication (`2x` is invalid), and no symbolic
+differentiation in the formula parser; differentiation is the separate native
+CAS panel. A formula that references `t` is time-dependent and animates from
+the shared clock.
 
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
-without duplicating source math or validation. `FieldMode` selects Formula or
-Sources; `SourceDisplay` selects Electric, Magnetic or Both; `SourceEntry` pairs
+without duplicating source math or validation. `FieldMode` selects Formula,
+Sources or Induction; `SourceDisplay` selects Electric, Magnetic or Both;
+`SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
 softening and accuracy opt-in. The same module turns a scene into drawable
 arrows through the real evaluator.
@@ -694,6 +700,84 @@ in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
 to Formula without clearing the scene, and native CAS refuses Sources mode. The
 user guide is [docs/sources-panel.md](../docs/sources-panel.md).
+
+#### `src/induction.rs` — induction scene, vector-potential E and unit-current cache
+
+**Purpose.** Pure Task 1 seam for the Faraday teaching demo. One axisymmetric
+current loop or finite continuous solenoid carries
+`I(t) = amplitude*cos(2*pi*frequency*t)`. `B` is the existing softened source
+evaluator at unit current, scaled by `I(t)`; `E` is reconstructed from the
+softened azimuthal vector potential as `-dI/dt * A_phi(unit current) * phi_hat`
+and is never a finite time difference or an inverse-Faraday solve. The two
+families remain separate.
+
+**Public API.** `InductionCase`, `InductionScene` (`Debug`, `Clone`,
+`PartialEq`, `Default`), `InductionKey`, `InductionPrepared`,
+`InductionSampling`, `InductionFamilyResult`, `InductionEstimate`,
+`InductionFamilyStatus`, `InductionPointSample`, `induction_key`,
+`prepare_induction`, `sample_induction`, `evaluate_induction_point`, and the
+frozen caps `MAX_INDUCTION_DENSITY_3D = 20` / `MAX_INDUCTION_DENSITY_2D = 80`.
+`InductionScene` exposes `current`, `current_derivative`, `is_animated`,
+`validate`, `unit_source` and `unit_vector_potential`.
+
+**Invariants.** The waveform derivative is analytic; `is_animated()` is exactly
+`amplitude != 0.0 && frequency > 0.0`. Softening is one positive finite shared
+value. The loop potential uses `D_loop^2 = r^2 + R^2 - 2rR cos(phi) + z^2 + a^2`;
+the solenoid's analytic axial integral uses
+`D_solenoid^2 = r^2 + R^2 - 2rR cos(phi) + a^2` (no `z^2`). Both integrate the
+symmetric `[0, pi]` half-range with eight panels of 32-point Gauss-Legendre
+nodes and double it; a four-panel pass supplies
+`max(|fine-coarse|, 32*EPSILON*|fine|)`. On-axis `E` is exactly zero. The
+prepared cache is keyed by case/geometry/domain/grid/plane/softening/accuracy
+and stores positions, unit-current E with uncertainty, and compact B
+value/uncertainty/stop reason. `sample_induction` only rescales and
+reclassifies: E by `dI/dt`, B by `I(t)`. Non-finite or over-target results are
+`Unavailable`/`AccuracyNotMet`, never drawable confident arrows; accuracy-not-met
+is hidden unless the opt-in is set. `Both` emits E amber `[255,176,64]` then B
+cyan `[64,196,255]`; a single family uses the normal colormap magnitude range.
+Native-only sampling may report the CAS waveform derivative string as
+diagnostics; the induced field itself never depends on CAS.
+
+**Pinned by.** [tests/induction_test.rs](../tests/induction_test.rs):
+`waveform_and_static_predicate_are_exact`,
+`loop_vector_potential_matches_independent_fixtures`,
+`solenoid_vector_potential_matches_independent_fixtures_and_curl_matches_b`,
+`faraday_contour_matches_flux_rate_for_both_cases`,
+`static_current_has_exactly_zero_induced_field`,
+`nonfinite_scene_is_rejected`, `validation_rejects_bad_geometry`, and the
+native-only `cas_derivative_matches_the_analytic_waveform`. Fixtures and their
+independent mpmath generator live in `tests/support/induction/`.
+
+**App integration (Task 2).** `State::induction` is the durable scene;
+`induction_prepared` caches the unit-current geometry and `induction_sampling`
+the current frame. `set_induction_scene` validates before replacing: an invalid
+edit records `induction_error`, returns false and leaves the previous scene,
+prepared `Arc` and arrows untouched; a valid edit clears the error.
+`refresh_induction` compares the `InductionKey`, re-prepares only on a geometry/
+domain/grid/plane/softening change, and otherwise rescales the same `Arc`.
+Entering Induction preserves the current 2D/3D projection; the stored density is
+never destroyed, only sampled against the 20³ (3D) or 80² (2D slice) cap. Induction is a clock
+consumer only while `is_animated()`; the app starts no second clock, draws no
+particles/streamlines/clicks, and pauses with the existing scalar-plot rule.
+`snapshot` returns arrows and empty line/trail/dot geometry; `rebuild_scene`
+composes the backdrop, one conductor glyph and those arrows. `ViewRecord`
+persists the case token, center, axis, radius/length/turns, amplitude/frequency,
+display and opt-in; restore revalidates the scene and reports failures through
+`induction_error`. Exports capture `induction_export_provenance` at request
+time, covering the model line, accuracy/unavailable counts and missing or
+invalid sampling.
+
+**Pinned by.** [tests/induction_app_test.rs](../tests/induction_app_test.rs):
+caps and mode preservation, clock consumption and pause, time-only `Arc`
+identity, geometry re-prepare, fixed E/B colours, local plane positions, the
+invalid-edit retain-last-valid rule, arrows-only snapshots and glyph
+composition, density restore on leaving, and mirrored clock time. The model
+itself is pinned by `tests/induction_test.rs` as above.
+
+**Limitations.** CPU-only, quasistatic and softened: no displacement current,
+retardation or physical singular limit. The cap benchmark measures unit-current
+cache preparation, not frame time; it is recorded in
+[docs/perf/induction-performance.md](../docs/perf/induction-performance.md).
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
@@ -1186,8 +1270,8 @@ dimension, category }`; `presets()`; `presets_in(category)`;
 and the category/limit tests.
 
 **Limitations.** Formulas are illustrative, not physical (Coulomb numerators are
-not normalised); there is no time dependence, and ElectroDynamics presets are
-static spatial snapshots.
+not normalised). The preset formulas themselves are static spatial snapshots;
+formulas may still reference `t` when the user edits them.
 
 #### `src/colormap.rs` — scalar-to-RGB ramps
 
@@ -1271,6 +1355,9 @@ decisions that do not need a window.
 - Source mode fields: `field_mode`, `sources`, `source_sampling` and
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
   `source_sampling` and `reset_sources`.
+- Induction mode fields: `induction`, `induction_prepared`,
+  `induction_sampling` and `induction_error`; `set_induction_scene`,
+  `refresh_induction` and `reset_induction`.
 - Queries/builders: `is_3d`, `grid`, `spacing`, `plane_size`,
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
@@ -1283,21 +1370,33 @@ decisions that do not need a window.
   `LastClickSeed`, `ClickSeedUndo`, `undo_click_seed`.
 
 **Invariants.**
-- `active_dimension()` is 3 in Sources mode and the formula's component count
-  otherwise; `is_3d()` means `mode_3d && active_dimension() == 3`. This gates
-  the cube grid, density cap, plane frame/slice and streamline depth, so source
-  mode uses the existing 2D plane path in 2D and the world cube in 3D.
-- `set_field_mode` preserves formula, source scene and the 2D/3D projection,
-  clears the cached sampling/notice and marks dirty; `set_source_scene` replaces
-  the durable scene and clears the cache. Formula edits never invalidate source
-  state, and source edits never invalidate formula state. Entering Sources or
-  toggling its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
+- `active_dimension()` is 3 in Sources and Induction mode and the formula's
+  component count otherwise; `is_3d()` means `mode_3d && active_dimension() ==
+  3`. This gates the cube grid, density cap, plane frame/slice and streamline
+  depth, so source/induction mode uses the existing 2D plane path in 2D and the
+  world cube in 3D.
+- `set_field_mode` preserves the formula, source scene, induction scene and the
+  current 2D/3D projection, clears the cached sampling/notice and marks dirty.
+  Entering Induction never rewrites the stored density or the projection;
+  sampling caps density at `MAX_INDUCTION_DENSITY_3D` in 3D and
+  `MAX_INDUCTION_DENSITY_2D` on a 2D slice, so leaving restores the untouched
+  formula density. A changed active dimension syncs the plane index.
+  `set_source_scene` replaces the durable scene and clears the cache. Formula
+  edits never invalidate source or induction state. Entering Sources or toggling
+  its 3D view re-clamps a legal 200² 2D density to `MAX_DENSITY_3D`, and
   `grid`/`plane_grid` defensively cap source-mode cubic sampling, so the 40³ cap
-  has no transition bypass.
+  has no transition bypass. Global reset calls `reset_sources` and
+  `reset_induction` before selecting Formula; each restores its default scene
+  and clears its caches/error without touching the other adapter or the clock.
 - `snapshot_if_dirty` refreshes the active adapter first: formula mode holds no
-  source cache, source mode stores a fresh `SourceSampling`. `snapshot` in
-  Sources mode returns cached arrows only (empty if unsampled) and never samples
-  the formula.
+  source/induction cache, source mode stores a fresh `SourceSampling`, induction
+  mode re-prepares only on a changed `InductionKey` and otherwise rescales the
+  same prepared `Arc`. `snapshot` in Sources/Induction mode returns cached arrows
+  only (empty if unsampled) and never samples the formula; Induction also emits
+  no lines, trails, dots or combined stream.
+- Induction is a clock consumer exactly while `induction.is_animated()`; its
+  `set_time` only dirties an animated waveform, so pause/resume and the scalar
+  plot pause hold the sampled field at the shared time.
 - `set_formula` keeps the last good `FieldExpr` on a parse error and still marks
   dirty so the status bar updates; `set_mode`/density/domain/formula-dimension
   changes call `sync_plane` with the previous grid.
@@ -1376,7 +1475,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1401,8 +1500,16 @@ storage key, with migration and corruption tolerance.
    the accuracy opt-in is true only for an exact stored `true`, and Sources mode
    falls back to Formula when no valid entry remains. `formula` and the source
    scene never overwrite each other.
+10. Induction restores after the mode: the case token, center, axis and
+    parameters are revalidated through `InductionScene::validate`. Invalid
+    fields (unknown case, non-finite values, negative radius/frequency,
+    non-unit axis, or an invalid solenoid) restore the valid default scene,
+    clear the prepared/sampling caches and set `induction_error`; Induction
+    mode then falls back to Formula. An absent legacy induction payload is the
+    valid default scene and sets no error. The shared `source_softening` field
+    remains the one softening value.
 
-**Tested by.** `tests/persistence_test.rs` (51 tests):
+**Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -1420,7 +1527,10 @@ storage key, with migration and corruption tolerance.
 `malformed_source_records_are_skipped_without_losing_other_settings`,
 `a_record_without_valid_sources_forces_formula_mode`,
 `source_records_keep_order_and_skip_invalid_numbers`,
-`global_reset_clears_source_scene_and_sampling_cache`, and the
+`global_reset_clears_source_scene_and_sampling_cache`,
+`induction_scene_round_trips_and_legacy_defaults_to_formula`,
+`malformed_induction_fields_fall_back_and_report_the_error`,
+`global_reset_clears_induction_cache_and_restores_defaults`, and the
 restore/sanitize tests.
 
 **Limitations.** There is no explicit schema version number; compatibility is a
@@ -1591,8 +1701,9 @@ accelerating.
 
 #### `src/sim_clock.rs` — the single simulation clock
 
-**Purpose.** The only time source for animated features (particles today; future
-time-dependent fields and plots).
+**Purpose.** The only time source for animated features: particles,
+time-dependent formula fields, active time-dependent scalar plots, and an
+animated induction scene.
 
 **Public API.** `MAX_STEP = 1/20`, `MIN_SPEED = 0.1`, `MAX_SPEED = 3.0`,
 `DEFAULT_SPEED = 1.0`; `SimClock { time, playing, speed, .. }` with `advance`,
@@ -2022,25 +2133,41 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source export warning and metadata contract
+#### `src/export_provenance.rs` — source and induction export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
-derived from the validated `SourceScene` plus the cached `SourceSampling`; it
-never samples the field or creates vector data.
+derived from the validated `SourceScene` plus cached `SourceSampling`, or from
+the durable `InductionScene` plus shared softening and cached
+`InductionSampling`; it never samples the field or creates vector data.
 
-**Public API.** `ExportProvenance { warning_lines, metadata, source_mode }`,
-`source_export_provenance(mode, scene, sampling)`, `provenance_lines`,
-`provenance_metadata`, and the exact ASCII copy constants `MODEL_LINE`,
-`ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`, `NO_SAMPLING_LINE`.
+**Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
+induction_mode }`, `source_export_provenance(mode, scene, sampling)`,
+`induction_export_provenance(mode, scene, softening, sampling)`,
+`provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
+`MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
+`NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
+`INDUCTION_INVALID_LINE`.
 
 **Invariants.**
-- Formula mode returns `None`; Sources mode always returns `Some`.
+- Formula mode returns `None` from both helpers; Sources/Induction always return
+  `Some` for their own mode (`source_mode` / `induction_mode` respectively).
 - The softened-model line is always first. Missing sampling adds
-  `Source sampling unavailable`; a validation error adds the invalid line;
-  accuracy/unavailable lines appear only when their counts are nonzero.
-- `allow_inaccurate` changes the drawn count only; it never removes a warning.
-- Metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
+  `Source sampling unavailable` or `Induction sampling unavailable`; a
+  validation error adds the matching invalid line; accuracy/unavailable lines
+  appear only when their counts are nonzero.
+- Induction's model line is
+  `Induction - quasistatic axisymmetric softened model - a = {softening}` and
+  its metadata is exactly `vfe.model = quasistatic-axisymmetric-faraday`,
+  `vfe.induction_case`, `vfe.waveform`, `vfe.waveform_derivative`,
+  `vfe.amplitude`, `vfe.frequency`, `vfe.softening`, `vfe.display`, the three
+  count keys and `vfe.validation_error` only when present. Native CAS
+  derivative text is never exported.
+- A cached induction pass built at a different softening is treated as
+  unavailable, so counts never pair with a different model `a`.
+- `allow_inaccurate` changes the drawn count only; it never removes a warning
+  or relaxes a cap. Non-finite sampled values never enter warnings/metadata.
+- Source metadata keys are `vfe.source_model`, `vfe.softening`, `vfe.display`,
   `vfe.accuracy_not_met_total`, `vfe.accuracy_not_met_drawn`,
   `vfe.unavailable`, and `vfe.validation_error` when present.
 
@@ -2048,7 +2175,10 @@ never samples the field or creates vector data.
 (`formula_exports_have_no_source_provenance`,
 `source_warning_lines_and_metadata_are_exact_and_separate`,
 `opt_in_adds_visible_data_but_never_removes_the_warning`,
-`missing_or_invalid_sampling_keeps_the_warning`).
+`missing_or_invalid_sampling_keeps_the_warning`) and
+`tests/induction_export_test.rs` (exact induction lines/metadata, missing and
+invalid sampling, opt-in/caps, decoded PNG banner/tEXt bytes and visible SVG
+text/metadata).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 
@@ -2106,10 +2236,10 @@ download paths.
 `png_request_pending`, `pending_png_provenance`, `pending_svg_provenance`,
 `sender`, `tick`, `fail`, `toast_text`, `toast`).
 `VfApp::request_png_export`/`request_svg_export` capture
-`source_export_provenance()` at request time; the viewport consumes it through
-the `take_*_with_provenance` variants. A Source-mode request made without
-provenance derives the fallback instead of exporting silently. Scalar plot
-captures always pass `None`.
+`field_export_provenance()` at request time; the viewport consumes it through
+the `take_*_with_provenance` variants. A Source- or Induction-mode request made
+without provenance derives the fallback instead of exporting silently. Scalar
+plot captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)
@@ -2169,8 +2299,8 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`layout`, `menu`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
-`sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+`induction_panel`, `layout`, `menu`, `panel_rails`, `plot_panel`, `presets`,
+`sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -2269,17 +2399,52 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
 `add_is_disabled_at_the_source_limit`), and
 `tests/button_sizing_test.rs::compact_sources_panel_buttons_keep_touch_targets`.
 
+#### `src/ui/induction_panel.rs` — the dedicated induction editor
+
+**Purpose.** The wide left rail/compact sheet body for the `FieldMode::Induction`
+teaching demo.
+
+**Public API.** `InductionPanelState { scene, error, advanced }`,
+`InductionPanelState::default`, `commit(&mut State) -> bool`,
+`show(ui, &mut panel, &mut State, compact) -> Option<InductionPanelAction>`,
+`InductionPanelAction::{Fit, Reset}`, and `status_text`.
+
+**Invariants.**
+- `commit` calls `State::set_induction_scene`; an invalid draft never replaces
+  the committed scene, and the error names the failing field.
+- A clean draft mirrors `State::induction`; a draft that failed to commit keeps
+  its error and text until it is corrected or the section is reset.
+- Case, geometry, amplitude, frequency, display and the default-off accuracy
+  opt-in all commit through the same draft; `Fit` and `Reset induction section`
+  are one-shot actions the app applies through the view-command and default-
+  scene seams.
+- Advanced contains the shared source-scene softening editor (clearing both
+  adapter caches), E/B status counters, the assumptions note, and the native CAS
+  derivative provenance when available.
+- Induction is arrows-only; the panel states that streamlines, particles and
+  click seeding stay off.
+
+**Pinned by.** `tests/induction_panel_test.rs`
+(`induction_panel_wide_and_compact_expose_all_controls`,
+`edits_validate_and_keep_the_last_valid_scene`,
+`induction_rail_expands_a_real_app_frame`) and
+`tests/layout_test.rs` for the persisted layout fields.
+
 #### `src/ui/formula_bar.rs` — formula text and 2D/3D toggle
 
 **Purpose.** The top formula row.
 
-**Public API.** `FormulaBarState { text, open_sources }`, `FormulaBarState::new`,
-`show(ui, state, bar, compact)`.
+**Public API.** `FormulaBarState { text, open_sources, open_induction }`,
+`FormulaBarState::new`, `show(ui, state, bar, compact)`.
 
 **Invariants.**
-- In vector mode a Formula/Sources selector calls `State::set_field_mode`;
-  Sources hides the text editor and shows a source summary plus `Open Sources`,
-  which raises `bar.open_sources` for the app to consume.
+- In vector mode a Formula/Sources/Induction selector calls
+  `State::set_field_mode`; Sources and Induction hide the text editor and show
+  their own summary plus `Open Sources`/`Open induction`, which raise the
+  matching one-shot request for the app to consume.
+- Compact keeps the projection and adapter selectors on one horizontally
+  scrollable row and puts the editor/summary beneath it, so a large font cannot
+  squeeze the compact sheet out of existence.
 - The bar's text mirror is refreshed from `state.active_source()` when they
   differ, so presets, restores and kind changes update the field without
   overwriting a preserved scalar draft.
@@ -2294,6 +2459,7 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
   the field fill the remainder.
 
 **Pinned by.** `tests/sources_panel_test.rs::formula_bar_switches_mode_and_hides_the_editor`;
+`tests/induction_panel_test.rs::formula_bar_selects_induction_and_hides_the_formula_editor`;
 the setter contract is in `tests/viewmodel_test.rs`
 (`valid_formula_replaces_field_and_clears_error`,
 `garbage_formula_keeps_field_and_reports_error`), the width rule in
@@ -2312,18 +2478,22 @@ window.
 `section_heading_style`, `OVERLAY_HEADING_COLOR`, `window_heading_color`,
 `HelpRow`, `HelpSection`, `FLY_HELP_*`, `SEED_HELP_*`, `LEFT_CLICK_HELP_*`,
 `HELP_SECTIONS`, `SCALAR_HELP_SECTION`, `SOURCES_HELP_SECTION`,
-`scalar_help_rows`, `sources_help_rows`, `all_rows`, `sections_for`,
+`INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `scalar_help_rows`,
+`sources_help_rows`, `induction_help_rows`, `all_rows`, `sections_for`,
 `rows_for`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
 - `HELP_SECTIONS` is the single source of strings; the overlay shows the active
-  view + Global, the window shows all three groups plus the Scalar plots and
-  Sources sections. A static, not a const, so both surfaces can be proven to
-  share the allocation.
+  view + Global, the window shows all three groups plus the Scalar plots,
+  Sources and Induction sections. A static, not a const, so both surfaces can be
+  proven to share the allocation.
 - The Sources section covers formula/source separation, all eight editors,
   E/B/Both without summation, scene-wide softening, the default-off accuracy
   opt-in, hidden non-finite/unavailable results, and that streamlines,
   particles and click seeding remain formula features.
+- The Induction section covers the quasistatic softened model, vector-potential
+  reconstruction (arbitrary B alone cannot determine E), the shared clock,
+  static-field zero induced E, arrows-only scope and the shared softening.
 - `?`/F1 toggle the overlay; Esc and the × dismiss it; the window has its own
   open flag.
 - Headings and rows use pinned sizes/colours; the window heading is the theme's
@@ -2351,7 +2521,8 @@ tab-bar/sheet plan.
 **Public API.** `RAIL_WIDTH = 32`, `RAIL_FRAME_MARGIN = 4`,
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
-`DEFAULT_SOURCES_WIDTH = 280`, `MIN_PANEL_WIDTH = 180`,
+`DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
+`MIN_PANEL_WIDTH = 180`,
 `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
@@ -2364,11 +2535,12 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores seven desktop fields (Controls,
-  Presets and Sources visibility/width plus help) and native-only
+- Compact is transient: `LayoutState` stores nine desktop fields (Controls,
+  Presets, Sources and Induction visibility/width plus help) and native-only
   `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Sources` shares the one compact sheet.
-- Sources defaults to collapsed at 280 pt and sanitizes to 180..=460.
+- `SheetState::Sources` and `SheetState::Induction` share the one compact sheet.
+- Sources and Induction default to collapsed at 280 pt and sanitize to
+  180..=460; the Induction record is consulted only in Induction mode.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
@@ -3128,12 +3300,13 @@ The remaining files (`camera_zoom_pan_test.rs`, `click_seed_zoom_test.rs`,
 
 ## 10. Known limitations, gathered
 
-- **Static fields only.** `meval` expressions have no time variable; Electrodynamics
-  presets are spatial snapshots. Time animation is post-v1 (ADR 0003).
-- **Formula-only field definition.** Sources and superposition exist only as a
-  glossary/ADR plan, not code.
-- **No solver.** No differentiation, divergence, curl, gradient, ODE, or Maxwell
-  solver is implemented.
+- **Fields may be time-dependent.** `meval` expressions bind `x`, `y`, `z`, and
+  the shared time `t`; the Electrodynamics presets themselves are static
+  spatial snapshots. Induction supplies the dedicated dynamic-field demo.
+- **Three separate adapters.** Formula, Sources, and Induction are exclusive
+  modes with durable state; there is no formula-to-source conversion.
+- **No general solver.** The native CAS differentiates formulas and derives
+  gradient, divergence, and curl; no ODE, PDE, or Maxwell solver is implemented.
 - **No depth/MSAA.** 3D ordering is CPU painter sort; no shadows, anti-aliasing
   beyond dot rims, or transparency sorting per triangle.
 - **One 3D draw budget.** Every instance pays for a 16-side cone even when the

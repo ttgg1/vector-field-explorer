@@ -26,6 +26,7 @@ pub enum FieldMode {
     #[default]
     Formula,
     Sources,
+    Induction,
 }
 
 /// Which field families the source scene displays.

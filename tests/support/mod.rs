@@ -6,6 +6,7 @@
 //! assert real text use this helper, which installs the shipped faces through
 //! the same production seam the app uses.
 
+pub mod induction;
 pub mod menu_fixture;
 pub mod sources;
 pub mod storage;

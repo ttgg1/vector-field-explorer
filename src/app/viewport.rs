@@ -320,9 +320,10 @@ impl VfApp {
             // surface textures, and the readback is RGBA by contract.
             if let Some(provenance) = self.screenshot.take_request_with_provenance() {
                 // A request made without capture-time provenance still carries
-                // the Sources warning: derive it from the current state rather
-                // than exporting a source frame silently.
-                let provenance = provenance.or_else(|| self.source_export_provenance());
+                // the active adapter's warning: derive it from the current
+                // state rather than exporting a Source/Induction frame
+                // silently.
+                let provenance = provenance.or_else(|| self.field_export_provenance());
                 // `rect` is in logical points; a capture must have the viewport's
                 // *physical* pixels, so scale by the display's pixels-per-point
                 // before rounding (HiDPI fix round 1). The cap applies after that.

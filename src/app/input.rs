@@ -114,21 +114,42 @@ impl VfApp {
         domain_before
     }
 
-    /// Capture the source export context now. Formula mode has none; Sources
-    /// always produces a warning-bearing provenance, even before sampling.
-    pub(super) fn source_export_provenance(
+    /// Capture the export context for the active adapter now. Formula mode has
+    /// none; Sources and Induction always produce a warning-bearing provenance,
+    /// even before sampling. Induction uses the shared scene softening.
+    pub(super) fn field_export_provenance(
         &self,
     ) -> Option<crate::export_provenance::ExportProvenance> {
-        crate::export_provenance::source_export_provenance(
-            self.state.field_mode,
-            &self.state.sources,
-            self.state.source_sampling(),
-        )
+        match self.state.field_mode {
+            FieldMode::Formula => None,
+            FieldMode::Sources => crate::export_provenance::source_export_provenance(
+                self.state.field_mode,
+                &self.state.sources,
+                self.state.source_sampling(),
+            ),
+            FieldMode::Induction => {
+                let softening = self.state.sources.softening;
+                // A cached pass built at an older softening cannot be
+                // presented as the current model. Treat it as unavailable
+                // rather than pairing stale counts with the new `a` value.
+                let sampling = self
+                    .state
+                    .induction_sampling
+                    .as_ref()
+                    .filter(|sampling| sampling.softening == softening);
+                crate::export_provenance::induction_export_provenance(
+                    self.state.field_mode,
+                    &self.state.induction,
+                    softening,
+                    sampling,
+                )
+            }
+        }
     }
 
     /// Queue a PNG request with the provenance captured at request time.
     pub(super) fn request_png_export(&mut self) {
-        let provenance = self.source_export_provenance();
+        let provenance = self.field_export_provenance();
         self.screenshot.request_with_provenance(provenance);
     }
 
@@ -139,7 +160,7 @@ impl VfApp {
             self.screenshot.notify(reason, true);
             return;
         }
-        let provenance = self.source_export_provenance();
+        let provenance = self.field_export_provenance();
         self.screenshot.request_svg_with_provenance(provenance);
     }
 
@@ -224,8 +245,11 @@ impl VfApp {
             self.reset_plot_state();
             // Sources are a separate durable scene: global reset empties it,
             // drops the cached sampling and returns to the formula adapter.
-            // Plot-section reset deliberately leaves them alone.
+            // Plot-section reset deliberately leaves them alone. Induction
+            // likewise restores its default scene and drops its cache; neither
+            // touch the formula or the shared clock.
             self.state.reset_sources();
+            self.state.reset_induction();
             self.state.set_field_mode(FieldMode::Formula);
         }
     }
@@ -442,8 +466,12 @@ impl VfApp {
             self.last_click_seed = None;
             return;
         }
-        if self.state.field_mode == FieldMode::Sources {
-            // Source mode is static: no streamline seeds and no particle bursts.
+        if matches!(
+            self.state.field_mode,
+            FieldMode::Sources | FieldMode::Induction
+        ) {
+            // Source mode is static and Induction is arrows-only: no streamline
+            // seeds and no particle bursts.
             self.last_click_seed = None;
             return;
         }

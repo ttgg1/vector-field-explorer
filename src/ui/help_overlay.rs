@@ -365,6 +365,49 @@ pub fn sources_help_rows() -> &'static [HelpRow] {
     SOURCES_HELP_ROWS
 }
 
+/// Induction-mode notes. A separate section keeps the binding, scalar and
+/// source tables exactly as reviewed; the Help window appends it last.
+pub static INDUCTION_HELP_SECTION: HelpSection = HelpSection {
+    title: "Induction",
+    rows: INDUCTION_HELP_ROWS,
+};
+
+pub static INDUCTION_HELP_ROWS: &[HelpRow] = &[
+    HelpRow {
+        input: "Model",
+        action: "quasistatic axisymmetric softened teaching model, not a physical solver",
+    },
+    HelpRow {
+        input: "E",
+        action: "reconstructed from the softened vector potential (E = -dA/dt); arbitrary B alone cannot determine E",
+    },
+    HelpRow {
+        input: "Current",
+        action: "I(t) = amplitude * cos(2*pi*frequency*t), driven by the shared clock",
+    },
+    HelpRow {
+        input: "Static field",
+        action: "zero frequency or zero amplitude gives dI/dt = 0 and therefore zero induced E",
+    },
+    HelpRow {
+        input: "Scope",
+        action: "arrows only: streamlines, particles and click seeding stay off in Induction",
+    },
+    HelpRow {
+        input: "CAS",
+        action: "native CAS supplies the diagnostic derivative string; the web build uses the same analytic waveform",
+    },
+    HelpRow {
+        input: "Softening",
+        action: "one shared scene-wide value; editing it affects Sources and Induction",
+    },
+];
+
+/// The induction help rows, exposed for the Help window and tests.
+pub fn induction_help_rows() -> &'static [HelpRow] {
+    INDUCTION_HELP_ROWS
+}
+
 /// The three groups, in window order. Both help surfaces read this table, so a
 /// binding is spelled exactly once. A `static` (not a `const`) so the overlay
 /// and the window can be proven to hand back the very same allocation.
@@ -532,6 +575,7 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
             let mut all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
             all.push(&SCALAR_HELP_SECTION);
             all.push(&SOURCES_HELP_SECTION);
+            all.push(&INDUCTION_HELP_SECTION);
             table(ui, &all, heading_color);
         });
 }
