@@ -1166,6 +1166,15 @@ fn resize_panel(ui: &mut egui::Ui, panel: &egui::Response, side: layout::RailSid
     }
 }
 
+/// The validated, captured inputs one Start attempt hands to the sink/path
+/// phase. Kept separate so a retry clears the previous error before any new
+/// work and so tests can exercise validation without the native file dialog.
+struct PreparedAnimation {
+    spec: crate::animation::AnimationSpec,
+    snapshot: crate::animation_scene::AnimationSnapshot,
+    provenance: Option<crate::export_provenance::ExportProvenance>,
+}
+
 impl VfApp {
     /// Open the animation export dialog with its size defaulted to the current
     /// viewport, clamped to the animation pixel budget.
@@ -1190,34 +1199,20 @@ impl VfApp {
     }
 
     /// Validate the dialog, capture the detached snapshot and provenance, pick
-    /// the native sink, pause playback and start the job.
+    /// the native sink, pause playback and start the job. A retry clears the
+    /// previous runtime/start error first; invalid fields still block.
     pub(super) fn start_animation_export(&mut self, ctx: &egui::Context) {
         if self.animation_job.is_some() {
             return;
         }
-        let eligibility = AnimationEligibility::from_state(&self.state);
-        if !eligibility.allowed {
-            self.animation.error = eligibility.reason.map(str::to_owned);
+        let Some(PreparedAnimation {
+            spec,
+            snapshot,
+            provenance,
+        }) = self.prepare_animation_start()
+        else {
             return;
-        }
-        if self.screenshot.is_busy() {
-            self.animation.error = Some(animation_dialog::SCREENSHOT_BUSY_REASON.into());
-            return;
-        }
-        let start_time = self.state.time;
-        if let Some(error) = self.animation.validation_error(start_time) {
-            self.animation.error = Some(error);
-            return;
-        }
-        let spec = self.animation.spec(start_time);
-        let snapshot = match self.animation_snapshot() {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                self.animation.error = Some(error.to_string());
-                return;
-            }
         };
-        let provenance = self.field_export_provenance();
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1271,6 +1266,41 @@ impl VfApp {
         }
     }
 
+    /// Clear the previous Start failure, validate the current dialog and
+    /// capture the detached inputs. Invalid fields still return `None` and keep
+    /// Start blocked; a sink-open/snapshot failure no longer blocks a retry.
+    fn prepare_animation_start(&mut self) -> Option<PreparedAnimation> {
+        self.animation.error = None;
+        let eligibility = AnimationEligibility::from_state(&self.state);
+        if !eligibility.allowed {
+            self.animation.error = eligibility.reason.map(str::to_owned);
+            return None;
+        }
+        if self.screenshot.is_busy() {
+            self.animation.error = Some(animation_dialog::SCREENSHOT_BUSY_REASON.into());
+            return None;
+        }
+        let start_time = self.state.time;
+        if let Some(error) = self.animation.validation_error(start_time) {
+            self.animation.error = Some(error);
+            return None;
+        }
+        let spec = self.animation.spec(start_time);
+        let snapshot = match self.animation_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.animation.error = Some(error.to_string());
+                return None;
+            }
+        };
+        let provenance = self.field_export_provenance();
+        Some(PreparedAnimation {
+            spec,
+            snapshot,
+            provenance,
+        })
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn choose_animation_path(
         &self,
@@ -1294,12 +1324,13 @@ impl VfApp {
     }
 
     fn begin_animation_job(&mut self, job: AnimationJob, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        self.clear_animation_readback();
         self.animation_restore_playing = Some(self.clock.playing);
         self.clock.set_playing(false);
         self.animation.running = true;
         self.animation.progress = Some((0, job.frames_total()));
         self.animation.error = None;
-        self.animation.status = None;
         self.animation.status = Some("Exporting animation…".into());
         self.animation_job = Some(job);
         ctx.request_repaint();
@@ -1342,6 +1373,8 @@ impl VfApp {
         }
 
         self.animation_job = None;
+        #[cfg(target_arch = "wasm32")]
+        self.clear_animation_readback();
         self.animation.running = false;
         self.animation.progress = None;
         self.status.animation_status = None;
@@ -1396,5 +1429,35 @@ impl VfApp {
     /// Test seam: run the terminal-state reconciliation once.
     pub fn test_sync_animation_job(&mut self) {
         self.sync_animation_job_status();
+    }
+
+    /// Test seam: clear/validate/capture exactly as Start does, without the
+    /// native file dialog.
+    pub fn test_prepare_animation_start(&mut self) -> bool {
+        self.prepare_animation_start().is_some()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl VfApp {
+    /// Drop a stale browser readback. A terminal job must never let its old
+    /// callback complete against a newer job, and a new job starts with no
+    /// receiver in flight.
+    fn clear_animation_readback(&mut self) {
+        self.animation_wasm_rx = None;
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_readback_tests {
+    #[test]
+    fn clearing_a_stale_readback_disconnects_its_receiver() {
+        let mut app = crate::app::VfApp::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.animation_wasm_rx = Some(rx);
+        app.clear_animation_readback();
+        assert!(app.animation_wasm_rx.is_none());
+        // The old callback's send now fails instead of reaching a new job.
+        assert!(tx.send(Ok(Vec::new())).is_err());
     }
 }

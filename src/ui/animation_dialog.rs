@@ -316,10 +316,7 @@ pub fn show(
                     action = AnimationDialogAction::Cancel;
                 }
             } else {
-                let can_start = eligibility.allowed
-                    && validation.is_none()
-                    && !screenshot_busy
-                    && dialog.error.is_none();
+                let can_start = eligibility.allowed && validation.is_none() && !screenshot_busy;
                 if ui
                     .add_enabled(can_start, egui::Button::new("Start"))
                     .clicked()

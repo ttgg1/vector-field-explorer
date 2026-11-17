@@ -286,3 +286,25 @@ fn real_snapshot_and_gif_sink_finish_through_the_job() {
         "the streaming sink left no temporary file"
     );
 }
+
+#[test]
+fn a_completion_without_an_outstanding_request_is_rejected() {
+    let mut job = AnimationJob::fake(spec(), 2);
+    let error = job
+        .finish_rendered_frame(Ok(vec![0; 32 * 24 * 4]))
+        .expect_err("a stale readback must not push a frame");
+    assert!(matches!(error, AnimationError::InvalidSpec(_)), "{error:?}");
+    assert_eq!(job.frames_done(), 0);
+}
+
+#[test]
+fn the_animation_byte_cap_reports_its_limit() {
+    use vector_field_explorer::animation_job::check_animation_byte_cap;
+
+    check_animation_byte_cap(16, 16).expect("the boundary is allowed");
+    let error = check_animation_byte_cap(17, 16).expect_err("over the synthetic cap");
+    assert_eq!(
+        error,
+        AnimationError::Encoder("animation output exceeds the 16-byte limit".into())
+    );
+}

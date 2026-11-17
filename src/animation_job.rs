@@ -471,6 +471,19 @@ impl AnimationJob {
     }
 }
 
+/// Shared streaming-output budget check. The native `CountingWriter` enforces
+/// the same wording; the browser's in-memory GIF sink calls this after each
+/// frame so its `Vec` cannot grow unbounded.
+#[doc(hidden)]
+pub fn check_animation_byte_cap(bytes: u64, limit: u64) -> Result<(), AnimationError> {
+    if bytes > limit {
+        return Err(AnimationError::Encoder(format!(
+            "animation output exceeds the {limit}-byte limit"
+        )));
+    }
+    Ok(())
+}
+
 fn error_message(error: &AnimationError) -> String {
     match error {
         AnimationError::InvalidSpec(message)
@@ -642,7 +655,10 @@ impl FrameSink for MemoryGifSink {
             .write_frame(&frame)
             .map_err(|error| AnimationError::Encoder(format!("GIF frame failed: {error}")))?;
         self.frames += 1;
-        Ok(())
+        check_animation_byte_cap(
+            encoder.get_ref().len() as u64,
+            crate::animation::ANIMATION_MAX_BYTES,
+        )
     }
 
     fn bytes_written(&self) -> u64 {

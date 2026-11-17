@@ -347,7 +347,8 @@ is GUI-only by design; CLI animation covers Formula and particles.
 `AnimationJob` (`new`, `fake*` test constructors, `pump`, `cancel`,
 `take_next_frame`/`finish_rendered_frame` for the browser's async readback,
 `state`, `frames_done/total`, `error`). The browser-only `memory_gif_sink`
-encodes to memory and downloads the GIF on finish.
+encodes to memory and downloads the GIF on finish; `check_animation_byte_cap`
+enforces the same 512 MiB output budget on its accumulated `Vec`.
 
 **Invariants.** Eligibility is derived only from the live `State`: Formula needs
 a time-dependent field or an enabled particle target; Induction needs
@@ -357,7 +358,9 @@ never mutates `VfApp` or advances the shared clock; the explicit `1/fps` step an
 captured snapshot are the only animation state. Every frame passes
 `apply_export_banner` with the provenance captured at Start before the sink sees
 it. A job that fails, is cancelled, or is dropped abandons its sink, so the
-streaming encoder deletes its temporary file and never finishes the output.
+streaming encoder deletes its temporary file and never finishes the output. On
+the browser, a terminal job and every new job clear the pending readback
+receiver, so a stale callback can never complete against the next job.
 `AnimationJob::new` validates the spec and computes the frame count once.
 
 **Pinned by.** [tests/animation_job_test.rs](../tests/animation_job_test.rs):
@@ -380,7 +383,9 @@ frame count and disabled reason are visible before Start. Explicit oversized
 values are validation errors, not clamps. The browser build is GIF-only and
 rejects an explicit edge above `ANIMATION_WASM_MAX_EDGE` (2048) instead of
 silently shrinking it. Start is disabled while a screenshot capture is pending or
-a job is running.
+a job is running. A failed sink-open/snapshot attempt leaves Start available for
+a retry; the next attempt clears the old error, while invalid-field validation
+still keeps the button disabled.
 
 **Pinned by.** [tests/animation_dialog_test.rs](../tests/animation_dialog_test.rs)
 at 1200 and 390 px: menu/dialog rendering, frame-count text, exact disabled

@@ -329,3 +329,42 @@ fn a_terminal_job_restores_the_previous_play_state() {
     );
     assert!(app.animation_job.is_none());
 }
+
+#[test]
+fn a_failed_start_is_retryable_but_invalid_fields_still_block() {
+    let mut h = Harness::new(1200.0);
+    h.app.animation.open_for_viewport((1200, 800));
+    h.app.animation.error = Some("ffmpeg video export could not start".into());
+    let out = h.idle();
+    assert!(
+        !button_disabled(&out, "Start"),
+        "a previous sink/open failure must not permanently disable Start"
+    );
+
+    assert!(
+        h.app.test_prepare_animation_start(),
+        "a valid retry clears the failure and captures"
+    );
+    assert!(h.app.animation.error.is_none());
+
+    h.app.animation.width = 10_000;
+    h.app.animation.height = 10_000;
+    let out = h.idle();
+    assert!(
+        button_disabled(&out, "Start"),
+        "an invalid field keeps Start blocked"
+    );
+    assert!(
+        !h.app.test_prepare_animation_start(),
+        "invalid fields fail the same prepare step"
+    );
+    assert!(
+        h.app
+            .animation
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("budget")),
+        "the validation error is still shown: {:?}",
+        h.app.animation.error
+    );
+}
