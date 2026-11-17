@@ -322,6 +322,13 @@ impl VfApp {
         let last_plot_was_vector = state.is_vector_mode();
         let last_field_mode = state.field_mode;
         let last_ode_epoch = Some(state.ode_epoch);
+        // A restored Materials record must seed the panel draft from the
+        // committed scene, exactly like entering the mode; otherwise the panel
+        // would show a stale default on the first frame.
+        let mut material = MaterialPanelState::default();
+        if state.field_mode == FieldMode::Materials {
+            material.sync_from(&state);
+        }
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
@@ -334,7 +341,7 @@ impl VfApp {
             sources: SourcesPanelState::default(),
             induction: InductionPanelState::default(),
             ode: OdePanelState::default(),
-            material: MaterialPanelState::default(),
+            material,
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),

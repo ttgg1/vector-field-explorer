@@ -56,7 +56,9 @@ mod left_click_action_test;
 mod line_alpha_test;
 mod material_app_test;
 mod material_bench_test;
+mod material_export_test;
 mod material_panel_test;
+mod material_persistence_test;
 mod material_test;
 mod menu_test;
 // POSIX shell scripts: `scripts/nightly-version.sh` and

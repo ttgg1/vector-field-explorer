@@ -1662,8 +1662,8 @@ accepted expressions and delegates scene construction to `plot_scene`.
 storage key, with migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view }`, `AppSettings::sanitized`;
-`ViewRecord` (all fields, `capture`, `restore`, `Default`); `finite_or`;
-`load`, `save`; private serde helpers.
+`ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
+`Default`); `finite_or`; `load`, `save`; private serde helpers.
 
 **Schema (all under `eframe::APP_KEY`).**
 
@@ -1671,7 +1671,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1715,6 +1715,15 @@ storage key, with migration and corruption tolerance.
     Formula selected and set no ODE error. Global reset restores the default
     scene, chart `phase` and variables `[true,true,false]` and clears any shared
     Ode loop period.
+12. Materials restores through `restore_material_fields`: case/view/axis tokens
+    and every number are revalidated by `validate_material`; the durable scene
+    is stored without sampling. A malformed payload restores the valid default
+    dielectric sphere and sets `material_error` only when the stored mode is
+    explicitly Materials, so an old or damaged record never promotes the mode.
+    Global reset clears the Material scene, sampling cache and error before
+    returning to Formula; the Materials section Reset restores only the default
+    scene. `VfApp::new_with_storage` refreshes the panel draft through
+    `MaterialPanelState::sync_from` after a restored Materials record.
 
 **Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -2351,30 +2360,49 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source, induction and ODE export warning contract
+#### `src/export_provenance.rs` — source, induction, ODE and Materials export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
 derived from the validated `SourceScene` plus cached `SourceSampling`, from the
 durable `InductionScene` plus shared softening and cached
-`InductionSampling`, or from the durable `OdeScene` plus the already-computed
-`OdeSolution` and shared clock; it never samples the field, re-integrates the
-ODE scene or creates vector data.
+`InductionSampling`, from the durable `OdeScene` plus the already-computed
+`OdeSolution` and shared clock, or from the durable `MaterialScene` plus cached
+`MaterialSampling`; it never samples the field, re-integrates the ODE scene,
+solves a material boundary-value problem or creates vector data.
 
 **Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
-induction_mode, ode_mode }`, `source_export_provenance(mode, scene, sampling)`,
+induction_mode, ode_mode, material_mode }`,
+`source_export_provenance(mode, scene, sampling)`,
 `induction_export_provenance(mode, scene, softening, sampling)`,
 `ode_export_provenance(mode, scene, solution, error, timeline)`,
+`material_export_provenance(mode, scene, sampling)`,
 `provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
 `MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
 `NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
 `INDUCTION_INVALID_LINE`, `ODE_MODEL_LINE`, `ODE_BOUNDED_LINE`,
-`ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`.
+`ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`,
+`MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`.
 
 **Invariants.**
 - Formula mode returns `None` from all helpers; Sources/Induction/Ode always
   return `Some` for their own mode (`source_mode` / `induction_mode` /
-  `ode_mode` respectively).
+  `ode_mode` respectively). `material_export_provenance` returns an empty
+  provenance with `material_mode = false` for every other mode; the app router
+  only calls it in Materials mode, so non-Materials exports gain no material
+  metadata and no banner.
+- Materials lines are exactly the bounded-model line, background constants,
+  material constants, `Applied/response: {Total|Applied|Response}`, the applied
+  field with `E ... V/m` or `B ... T`, the case assumptions, then the current
+  sampling warning. Missing sampling adds `Materials sampling unavailable`; an
+  invalid scene adds `Materials scene invalid: {error}`. None is suppressible.
+- Materials metadata is exactly `vfe.model = materials-bounded-analytic`,
+  `vfe.material_case`, `vfe.material_family`, `vfe.background_eps_r`,
+  `vfe.background_mu_r`, `vfe.material_eps_r`, `vfe.material_mu_r`,
+  `vfe.material_view`, `vfe.material_units`, `vfe.material_interface_axis`,
+  `vfe.material_interface_offset`, `vfe.material_applied`, and
+  `vfe.material_warning` only when a warning is present. No field is evaluated
+  and no non-finite arrow is exported.
 - The softened-model line is always first. Missing sampling adds
   `Source sampling unavailable` or `Induction sampling unavailable`; a
   validation error adds the matching invalid line; accuracy/unavailable lines
@@ -2411,9 +2439,12 @@ induction_mode, ode_mode }`, `source_export_provenance(mode, scene, sampling)`,
 `missing_or_invalid_sampling_keeps_the_warning`) and
 `tests/induction_export_test.rs` (exact induction lines/metadata, missing and
 invalid sampling, opt-in/caps, decoded PNG banner/tEXt bytes and visible SVG
-text/metadata) and `tests/ode_export_test.rs` (request-time Ode provenance,
+text/metadata), `tests/ode_export_test.rs` (request-time Ode provenance,
 decoded PNG banner/tEXt, visible SVG text/metadata, unavailable-solution
-warning with no fabricated geometry, and the 2D-only SVG rejection).
+warning with no fabricated geometry, and the 2D-only SVG rejection) and
+`tests/material_export_test.rs` (exact Materials lines/metadata, decoded PNG
+banner/tEXt, visible SVG text/metadata, 2D-only rule, non-Materials isolation,
+unsuppressed response/interface warnings and finite geometry).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 

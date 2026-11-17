@@ -136,9 +136,13 @@ impl VfApp {
                 &self.state.sources,
                 self.state.source_sampling(),
             ),
-            // Materials export provenance is owned by the persistence/export
-            // task; this mode currently contributes no adapter provenance.
-            FieldMode::Materials => None,
+            // Materials export provenance is request-time and pure: it reads
+            // the durable scene and cached sampling, never re-samples.
+            FieldMode::Materials => Some(crate::export_provenance::material_export_provenance(
+                self.state.field_mode,
+                &self.state.material,
+                self.state.material_sampling.as_ref(),
+            )),
             FieldMode::Induction => {
                 let softening = self.state.sources.softening;
                 // A cached pass built at an older softening cannot be
@@ -265,6 +269,9 @@ impl VfApp {
             // Global reset restores the default ODE scene and solution before
             // returning to Formula; a later ODE section reset is separate.
             self.state.reset_ode();
+            // Materials is durable too: global reset clears its scene, cache
+            // and edit error before returning to Formula.
+            self.state.reset_material();
             // Ode never loops: clear any shared period left over so reset
             // cannot leave a lingering Ode cadence behind.
             self.clock.loop_period = None;
