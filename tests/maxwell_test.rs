@@ -7,8 +7,9 @@
 use glam::{UVec3, Vec3};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::maxwell::{
-    ConductorOutline, MAXWELL_MAX_RELATIVE, MaxwellCase, MaxwellError, MaxwellScene, MaxwellStop,
-    maxwell_field, maxwell_outline, sample_maxwell, validate_maxwell,
+    ConductorOutline, MAXWELL_GROUND_SLICE_WARNING, MAXWELL_MAX_RELATIVE, MaxwellCase,
+    MaxwellError, MaxwellScene, MaxwellStop, maxwell_field, maxwell_outline, sample_maxwell,
+    validate_maxwell,
 };
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 
@@ -186,6 +187,92 @@ fn coincident_ground_slice_warns_and_shows_no_field() {
             .unwrap()
             .contains("Ground-plane slice is empty")
     );
+}
+
+#[test]
+fn coincident_slice_tolerance_includes_the_case_extent() {
+    // The in-plane domain extent is only 2, but the case extent (charge
+    // height) is 1e6. The design tolerance is
+    // 1e-6 * max(domain extent, case extent, 1) = 1, so a 0.5 gap is a
+    // coincident ground slice; the old domain-only form (2e-6) misses it.
+    let mut scene = scene(MaxwellCase::ImagePlane);
+    scene.charge_height = 1.0e6;
+    let domain = Domain::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 2.0));
+    let grid = UVec3::new(9, 9, 21);
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            enabled: true,
+            axis: PlaneAxis::Z,
+            index: 10,
+        },
+        grid,
+    );
+    assert_eq!(frame.origin.z, 0.5);
+    let sample = sample_maxwell(&scene, &domain, grid, Some(&frame));
+    assert!(sample.arrows.is_empty());
+    assert_eq!(
+        sample.warning.as_deref(),
+        Some(MAXWELL_GROUND_SLICE_WARNING)
+    );
+}
+
+#[test]
+fn zero_amplitude_and_no_contrast_cases_stay_finite_and_draw_nothing() {
+    let domain = Domain::new(Vec3::splat(-2.0), Vec3::splat(2.0));
+    let grid = UVec3::new(9, 9, 9);
+
+    // Zero electric amplitude: every analytic electric case returns exactly
+    // zero at a representative interior point and draws no arrows.
+    for (case, point) in [
+        (MaxwellCase::ParallelPlates, Vec3::new(0.0, 0.0, 0.25)),
+        (MaxwellCase::CoaxialElectric, Vec3::new(1.5, 0.0, 0.0)),
+        (MaxwellCase::HollowSphere, Vec3::new(2.0, 0.0, 0.0)),
+        (MaxwellCase::ImageSphere, Vec3::new(2.0, 0.0, 0.0)),
+    ] {
+        let mut scene = scene(case);
+        scene.e0 = 0.0;
+        assert_eq!(maxwell_field(&scene, point).unwrap(), Vec3::ZERO);
+        let sample = sample_maxwell(&scene, &domain, grid, None);
+        assert!(sample.arrows.is_empty(), "{case:?} drew a zero-field arrow");
+        assert!(sample.omitted > 0, "{case:?} should omit zero vectors");
+        // Zero is an exact analytic field, not a false convergence claim.
+        assert_eq!(sample.accuracy, MaxwellStop::TargetMet);
+    }
+
+    // Zero magnetic amplitude.
+    for (case, point) in [
+        (MaxwellCase::CoaxialMagnetic, Vec3::new(1.5, 0.0, 0.0)),
+        (MaxwellCase::InfiniteWire, Vec3::new(2.0, 0.0, 0.0)),
+        (MaxwellCase::Solenoid, Vec3::new(0.0, 0.0, 0.5)),
+    ] {
+        let mut scene = scene(case);
+        scene.b0 = 0.0;
+        assert_eq!(maxwell_field(&scene, point).unwrap(), Vec3::ZERO);
+        let sample = sample_maxwell(&scene, &domain, grid, None);
+        assert!(sample.arrows.is_empty(), "{case:?} drew a zero-field arrow");
+        assert!(sample.omitted > 0, "{case:?} should omit zero vectors");
+        assert_eq!(sample.accuracy, MaxwellStop::TargetMet);
+    }
+
+    // Zero image-plane charge: finite zero above the ground, no arrows.
+    let mut image = scene(MaxwellCase::ImagePlane);
+    image.charge = 0.0;
+    assert_eq!(
+        maxwell_field(&image, Vec3::new(0.4, 0.0, 0.5)).unwrap(),
+        Vec3::ZERO
+    );
+    let sample = sample_maxwell(&image, &domain, grid, None);
+    assert!(sample.arrows.is_empty());
+    assert!(sample.omitted > 0);
+    assert_eq!(sample.accuracy, MaxwellStop::TargetMet);
+
+    // Zero amplitude must not make the pending conductor solve look successful.
+    let mut conductor = scene(MaxwellCase::Conductor2D);
+    conductor.e0 = 0.0;
+    let sample = sample_maxwell(&conductor, &domain, grid, None);
+    assert_eq!(sample.accuracy, MaxwellStop::Unavailable);
+    assert!(sample.arrows.is_empty());
 }
 
 #[test]

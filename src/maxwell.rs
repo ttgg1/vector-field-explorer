@@ -7,6 +7,9 @@
 //! engine, no general solver, and no renderer, clock, source or persistence
 //! dependency. The 2D boundary-element conductor solve is added in Task 2;
 //! until then [`MaxwellCase::Conductor2D`] samples as unavailable.
+//!
+//! 2D outlines are slice intersections only, so a slice that is tilted with
+//! respect to an ideal infinite cylinder can produce no 2D outline by design.
 
 use glam::{DVec3, UVec3, Vec3};
 
@@ -600,7 +603,9 @@ pub fn sample_maxwell(
         MAXWELL_INTERFACE_TOLERANCE_FACTOR * domain_extent.max(case_extent(scene)).max(1.0);
 
     if scene.case == MaxwellCase::ImagePlane
-        && plane.is_some_and(|frame| coincident_ground_slice(frame, domain_extent, tolerance))
+        && plane.is_some_and(|frame| {
+            coincident_ground_slice(frame, domain_extent.max(case_extent(scene)).max(1.0))
+        })
     {
         sampling.warning = Some(MAXWELL_GROUND_SLICE_WARNING.to_string());
         return sampling;
@@ -762,12 +767,12 @@ fn near_point_singularity(scene: &MaxwellScene, point: Vec3, tolerance: f64) -> 
     (p - source).length() <= tolerance.max(case_tolerance(scene.charge_height))
 }
 
-fn coincident_ground_slice(frame: &PlaneFrame, domain_extent: f64, tolerance: f64) -> bool {
+fn coincident_ground_slice(frame: &PlaneFrame, scale: f64) -> bool {
     if (frame.normal.dot(Vec3::Z).abs() - 1.0).abs() > 1e-6 {
         return false;
     }
     let gap = f64::from(frame.origin.z.abs());
-    gap <= 1e-6 * domain_extent.max(1.0) || gap <= tolerance
+    gap <= 1e-6 * scale
 }
 
 fn family_line_color(family: MaxwellFamily) -> [f32; 4] {
