@@ -44,7 +44,9 @@ The field is formula-driven:
   source geometries: point charges, finite charged lines, charged rings, charged
   thin discs, uniform solid spheres, infinite straight wires, current loops and
   finite continuous solenoids. The ODE workbench precomputes bounded fixed-step
-  RK4 teaching trajectories. Maxwell work beyond that is described in
+  RK4 teaching trajectories. The Maxwell teaching catalogue lives in
+  `src/maxwell.rs` and remains a bounded ideal-case model, not a general solver;
+  Maxwell work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
 ### Source control and licence
@@ -1157,6 +1159,78 @@ charge, hysteresis or eddy currents. 2D is a slice of the same 3D case. The
 benchmark measures analytic sampling, not frame time or browser performance.
 Browser/WebAssembly runtime and manual visual checks were owner-waived for this
 delivery and are not claimed as passed.
+
+#### `src/maxwell.rs` — bounded Maxwell teaching catalog
+
+**Purpose.** Pure seam for the Maxwell teaching mode. Nine named ideal cases
+cover parallel plates, coaxial electric and magnetic cylinders, a hollow charged
+sphere, an infinite surface-current wire, an ideal solenoid, a conducting sphere
+in a uniform applied field, an image plane with one point charge, and a 2D
+grounded conductor cross-section. Electric and magnetic families are selected by
+case and never summed. Amplitudes are normalized display values only: there is
+no SI constant engine. The module is CPU only with no renderer, clock, source or
+persistence dependency.
+
+**Public API.** `MaxwellCase` (plus `MaxwellCase::ALL`), `MaxwellFamily`,
+`MaxwellView::{Field}`, `ConductorOutline`, `MaxwellScene` (`Debug`, `Clone`,
+`PartialEq`, `Default`, serde), `MaxwellError`, `MaxwellSampling`,
+`MaxwellLine`, `BemConvergence`, `MaxwellStop`, `maxwell_family`,
+`maxwell_assumptions`, `maxwell_warning`, `validate_maxwell`, `maxwell_field`,
+`maxwell_outline`, and `sample_maxwell`. Constants are
+`MAXWELL_MAX_DENSITY_3D`, `MAXWELL_MAX_DENSITY_2D`, `MAXWELL_MAX_BEM_ELEMENTS`,
+`MAXWELL_BEM_MIN_ELEMENTS`, `MAXWELL_BEM_TARGET`,
+`MAXWELL_INTERFACE_TOLERANCE_FACTOR`, `MAXWELL_MAX_RELATIVE`,
+`MAXWELL_MAX_AMPLITUDE`, and the exported exact warning strings.
+
+**Invariants.** Amplitudes are finite and within `±1e3`; geometry is finite and
+strictly positive; `outer_radius > radius`; `elements` is even and within
+`32..=256`; a BEM applied field is finite and nonzero. Analytic formulas use
+`f64` internals and cast once to `f32`; no evaluation returns NaN/Inf. Points
+exactly on a discontinuity return `MaxwellError::Unsupported`. The image plane
+returns zero for `z <= 0` (the unsupported half-space is not an error) and
+rejects only the real charge point; a point just above the plane keeps its
+O(`z/h`) tangential component, so boundary tests use a relative tolerance.
+`Conductor2D` is `Unavailable` in 3D with the exact "switch to 2D" message; until
+Task 2 lands its 2D solve also reports `Unavailable`, never fabricated arrows.
+
+**Sampling.** The 3D grid is sampled in world space; a 2D slice samples the
+frame's local grid, evaluates the same world field and projects the selected
+vector. Exact interfaces, point singularities, non-finite values and vectors
+below `1e-6` are omitted and counted. A finite arrow above
+`MAXWELL_MAX_RELATIVE * max(|E0|, |B0|, 1e-9)` is omitted and counted, never
+clamped. Warnings are joined in a fixed order: invalid/unavailable, interface
+omission, extreme omission, projection suppression, coincident ground slice.
+Empty/impossible domains warn explicitly. A coincident `ImagePlane` `z=0` slice
+draws no field and warns that the ground slice is empty. Sampling never
+densifies the input grid.
+
+**2D and outline.** `maxwell_outline` draws world geometry in 3D (plates, coaxial
+circles, sphere great circles, wire axis and ticks, solenoid rings, image-plane
+ground square and charge marker, applied arrow) and only slice intersections in
+2D. Circle/square cross-sections and clipped plane intersections use finite
+endpoints; coincident interface lines may be drawn even though field sampling
+still warns and omits exactly-on-interface samples.
+
+**Pinned by.** [tests/maxwell_test.rs](../tests/maxwell_test.rs):
+`plates_match_the_ideal_uniform_field_and_interface_guard`,
+`coaxial_electric_and_magnetic_are_azimuthal_and_zero_outside`,
+`hollow_sphere_and_solenoid_have_expected_limits`,
+`infinite_wire_is_a_surface_shell_with_zero_interior`,
+`image_sphere_satisfies_the_conducting_boundary_and_far_field`,
+`image_plane_is_zero_on_the_ground_and_has_no_tangential_field_above_it`,
+`conductor_case_is_2d_only_and_unavailable_in_3d_sampling`,
+`extreme_arrows_are_omitted_and_counted`,
+`empty_domain_is_explicitly_invalid_sampling`,
+`azimuthal_2d_slice_warns_about_the_suppressed_component`,
+`coincident_ground_slice_warns_and_shows_no_field`,
+`exact_interface_slice_warns_and_omits_every_sample`, and
+`outline_and_validation_cover_supported_geometry`.
+
+**Limitations.** Closed-form ideal cases only: no 3D BEM/FEM, arbitrary CSG,
+full-wave/FDTD, displacement current, radiation, retardation, nonlinear or
+anisotropic media. The infinite wire is a thin surface-current shell and the
+image cases assume infinite ideal boundaries. The 2D BEM conductor, mode UI,
+persistence, export and benchmark land in later tasks.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 

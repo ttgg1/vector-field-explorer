@@ -69,6 +69,7 @@ mod material_export_test;
 mod material_panel_test;
 mod material_persistence_test;
 mod material_test;
+mod maxwell_test;
 mod menu_test;
 // POSIX shell scripts: `scripts/nightly-version.sh` and
 // `scripts/generate-notices.sh` do not run on the Windows runner.
