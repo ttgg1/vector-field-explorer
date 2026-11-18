@@ -634,8 +634,8 @@ impl VfApp {
     }
 
     /// Apply the Maxwell panel's one-shot request. Reset restores the default
-    /// scene and syncs the draft; SwitchTo2d only changes the projection and
-    /// re-samples the same case, preserving the camera and mode.
+    /// scene and camera and syncs the draft; SwitchTo2d only changes the
+    /// projection and re-samples the same case, preserving the camera and mode.
     fn apply_maxwell_panel_action(&mut self, action: crate::ui::maxwell_panel::MaxwellPanelAction) {
         match action {
             crate::ui::maxwell_panel::MaxwellPanelAction::Fit => {
@@ -644,6 +644,7 @@ impl VfApp {
             crate::ui::maxwell_panel::MaxwellPanelAction::Reset => {
                 self.state.reset_maxwell();
                 self.maxwell.sync_from(&self.state);
+                self.apply_view_command(ViewCommand::Reset);
             }
             crate::ui::maxwell_panel::MaxwellPanelAction::SwitchTo2d => {
                 self.state.set_mode(false);

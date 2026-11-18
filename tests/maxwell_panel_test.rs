@@ -470,6 +470,55 @@ fn switch_to_2d_action_sets_2d_and_preserves_mode() {
 }
 
 #[test]
+fn maxwell_reset_restores_the_scene_and_camera() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state.set_field_mode(FieldMode::Maxwell);
+    app.layout.maxwell_expanded = true;
+    assert!(app.state.set_maxwell_scene(MaxwellScene {
+        e0: 4.0,
+        radius: 0.5,
+        ..MaxwellScene::default()
+    }));
+    app.orbit.target = glam::Vec3::new(7.0, 8.0, 9.0);
+    app.orbit.yaw = 2.0;
+    app.orbit.pitch = 0.4;
+    app.orbit.distance = 6.0;
+    app.orbit.ortho_zoom = 4.0;
+
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut render = |app: &mut VfApp, events: Vec<egui::Event>| {
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(app, ui, &mut frame),
+        );
+        out.textures_delta.clear();
+        out
+    };
+    let out = render(&mut app, Vec::new());
+    let reset = find(&nodes(&out), "Reset Maxwell section")
+        .expect("Reset Maxwell section")
+        .rect;
+    render(&mut app, pointer(reset.center(), true));
+    render(&mut app, pointer(reset.center(), false));
+
+    assert_eq!(app.state.maxwell, MaxwellScene::default());
+    assert_eq!(app.state.field_mode, FieldMode::Maxwell);
+    assert_eq!(app.orbit.target, glam::Vec3::ZERO, "Reset refits the view");
+    assert_eq!((app.orbit.yaw, app.orbit.pitch), (0.8, 0.9));
+    assert_eq!(app.orbit.distance, 3.2);
+    assert_eq!(app.orbit.ortho_zoom, 1.0);
+}
+
+#[test]
 fn maxwell_advanced_warning_is_only_current_scene() {
     let ctx = context();
     let mut state = conductor_state(true);

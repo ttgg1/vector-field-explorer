@@ -720,7 +720,8 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 - The Maxwell rail/body and compact Maxwell tab draw `maxwell_panel::show`; the
   formula bar's one-shot `open_maxwell` request expands the wide rail or opens
   the compact sheet. Fit uses the shared Fit command; Reset calls
-  `State::reset_maxwell` and re-syncs the draft; `Switch to 2D` only calls
+  `State::reset_maxwell`, re-syncs the draft and applies the default camera
+  command; `Switch to 2D` only calls
   `set_mode(false)` and re-samples the same case, recording the new scene frame
   first so the entry refit cannot move the camera. Entering Maxwell syncs the
   panel draft only on entry, restore or reset.
