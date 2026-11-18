@@ -125,6 +125,11 @@ impl VfApp {
     ) -> Option<crate::export_provenance::ExportProvenance> {
         match self.state.field_mode {
             FieldMode::Formula => None,
+            FieldMode::Maxwell => crate::export_provenance::maxwell_export_provenance(
+                self.state.field_mode,
+                &self.state.maxwell,
+                self.state.maxwell_sampling.as_ref(),
+            ),
             FieldMode::Ode => crate::export_provenance::ode_export_provenance(
                 self.state.field_mode,
                 &self.state.ode,
@@ -284,6 +289,9 @@ impl VfApp {
             // Materials is durable too: global reset clears its scene, cache
             // and edit error before returning to Formula.
             self.state.reset_material();
+            // Maxwell is durable too; drop its scene, sampling, BEM cache and
+            // error before returning to Formula.
+            self.state.reset_maxwell();
             // Ode never loops: clear any shared period left over so reset
             // cannot leave a lingering Ode cadence behind.
             self.clock.loop_period = None;
@@ -505,10 +513,14 @@ impl VfApp {
         }
         if matches!(
             self.state.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
+            FieldMode::Sources
+                | FieldMode::Induction
+                | FieldMode::Materials
+                | FieldMode::Ode
+                | FieldMode::Maxwell
         ) {
-            // Source/Induction/Materials are static and Ode owns precomputed
-            // trajectories: no streamline seeds and no particle bursts.
+            // These modes are static and Ode owns precomputed trajectories:
+            // no streamline seeds and no particle bursts.
             self.last_click_seed = None;
             return;
         }

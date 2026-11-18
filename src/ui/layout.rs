@@ -69,6 +69,9 @@ pub const DEFAULT_ODE_WIDTH: f32 = 300.0;
 /// Default expanded width of the left Materials panel, points.
 pub const DEFAULT_MATERIALS_WIDTH: f32 = 300.0;
 
+/// Default expanded width of the left Maxwell panel, points.
+pub const DEFAULT_MAXWELL_WIDTH: f32 = 300.0;
+
 /// Narrowest an expanded panel may be dragged to.
 pub const MIN_PANEL_WIDTH: f32 = 180.0;
 
@@ -185,6 +188,8 @@ pub enum SheetState {
     Ode,
     /// The left Materials panel, as a bottom sheet.
     Materials,
+    /// The left Maxwell panel, as a bottom sheet.
+    Maxwell,
 }
 
 impl SheetState {
@@ -451,6 +456,9 @@ pub struct LayoutState {
     /// Materials panel (left) expanded rather than collapsed to its rail.
     /// Shown only while the field adapter is `FieldMode::Materials`.
     pub materials_expanded: bool,
+    /// Maxwell panel (left) expanded rather than collapsed to its rail.
+    /// Shown only while the field adapter is `FieldMode::Maxwell`.
+    pub maxwell_expanded: bool,
     /// Expanded width of the Controls panel, points; kept while collapsed so
     /// re-expanding restores the user's width.
     pub controls_width: f32,
@@ -464,6 +472,8 @@ pub struct LayoutState {
     pub ode_width: f32,
     /// Expanded width of the Materials panel, points.
     pub materials_width: f32,
+    /// Expanded width of the Maxwell panel, points.
+    pub maxwell_width: f32,
     /// Whether the viewport's help overlay is visible.
     pub help_visible: bool,
     /// Native symbolic tools are independently visible, initially closed.
@@ -483,12 +493,14 @@ impl Default for LayoutState {
             induction_expanded: false,
             ode_expanded: false,
             materials_expanded: false,
+            maxwell_expanded: false,
             controls_width: DEFAULT_CONTROLS_WIDTH,
             presets_width: DEFAULT_PRESETS_WIDTH,
             sources_width: DEFAULT_SOURCES_WIDTH,
             induction_width: DEFAULT_INDUCTION_WIDTH,
             ode_width: DEFAULT_ODE_WIDTH,
             materials_width: DEFAULT_MATERIALS_WIDTH,
+            maxwell_width: DEFAULT_MAXWELL_WIDTH,
             help_visible: true,
             #[cfg(not(target_arch = "wasm32"))]
             cas_expanded: false,
@@ -509,6 +521,7 @@ impl LayoutState {
         self.induction_width = clamp_width(self.induction_width, DEFAULT_INDUCTION_WIDTH);
         self.ode_width = clamp_width(self.ode_width, DEFAULT_ODE_WIDTH);
         self.materials_width = clamp_width(self.materials_width, DEFAULT_MATERIALS_WIDTH);
+        self.maxwell_width = clamp_width(self.maxwell_width, DEFAULT_MAXWELL_WIDTH);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.cas_width = clamp_width(self.cas_width, DEFAULT_CAS_WIDTH);
@@ -550,6 +563,11 @@ impl LayoutState {
     /// Show the Materials panel (or its rail).
     pub fn toggle_materials(&mut self) {
         self.materials_expanded = !self.materials_expanded;
+    }
+
+    /// Show the Maxwell panel (or its rail).
+    pub fn toggle_maxwell(&mut self) {
+        self.maxwell_expanded = !self.maxwell_expanded;
     }
 
     /// Toggle only the native CAS panel, preserving all requested widths.

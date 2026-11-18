@@ -16,6 +16,7 @@ impl VfApp {
         self.show_formula_bar(ui);
         self.apply_pending_panel_request();
         self.sync_materials_draft_on_entry();
+        self.sync_maxwell_draft_on_entry();
 
         // Free flight is 3D-only: the formula bar's 2D/3D toggle (or a formula
         // that loses its third component) drops the fly camera before any
@@ -166,6 +167,15 @@ impl VfApp {
                 self.layout.materials_expanded = true;
             }
         }
+        if self.bar.open_maxwell {
+            self.bar.open_maxwell = false;
+            if self.layout_mode == LayoutMode::Compact {
+                self.sheet.open(SheetState::Maxwell);
+                self.sheet_expanded = SheetSize::Default;
+            } else {
+                self.layout.maxwell_expanded = true;
+            }
+        }
     }
 
     /// Materials owns a draft separate from the committed scene. Entering the
@@ -179,9 +189,20 @@ impl VfApp {
         }
     }
 
+    /// Maxwell owns a draft separate from the committed scene. Entering the
+    /// mode (or Reset, routed below) refreshes it once; a dirty draft survives
+    /// every ordinary frame.
+    fn sync_maxwell_draft_on_entry(&mut self) {
+        if self.state.field_mode == FieldMode::Maxwell && self.last_field_mode != FieldMode::Maxwell
+        {
+            self.maxwell.sync_from(&self.state);
+        }
+    }
+
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
         self.sync_materials_draft_on_entry();
+        self.sync_maxwell_draft_on_entry();
         let mut entries = vec![
             RailEntry {
                 id: "controls",
@@ -227,6 +248,14 @@ impl VfApp {
                 expanded: &mut self.layout.materials_expanded,
             });
         }
+        if self.state.field_mode == FieldMode::Maxwell {
+            entries.push(RailEntry {
+                id: "maxwell",
+                label: "Maxwell",
+                shortcut: None,
+                expanded: &mut self.layout.maxwell_expanded,
+            });
+        }
         show_rail_strip(
             ui,
             ("left_panel_rails", self.panel_generation),
@@ -255,6 +284,9 @@ impl VfApp {
         }
         if self.state.field_mode == FieldMode::Materials && self.layout.materials_expanded {
             requests.push(self.layout.materials_width);
+        }
+        if self.state.field_mode == FieldMode::Maxwell && self.layout.maxwell_expanded {
+            requests.push(self.layout.maxwell_width);
         }
         if self.layout.presets_expanded {
             requests.push(self.layout.presets_width);
@@ -454,6 +486,40 @@ impl VfApp {
                 self.apply_material_panel_action(action);
             }
         }
+        if self.state.field_mode == FieldMode::Maxwell && self.layout.maxwell_expanded {
+            let width = widths.next().unwrap();
+            let mut collapse = false;
+            let mut maxwell_action = None;
+            let response = egui::Panel::left(("maxwell_panel", self.panel_generation))
+                .exact_size(width)
+                .show(ui, |ui| {
+                    collapse = layout::collapse_button_named(
+                        ui,
+                        layout::RailSide::Left,
+                        "Maxwell",
+                        "Maxwell",
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("maxwell_body")
+                        .show(ui, |ui| {
+                            maxwell_action = crate::ui::maxwell_panel::show(
+                                ui,
+                                &mut self.maxwell,
+                                &mut self.state,
+                                false,
+                            );
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
+                self.layout.maxwell_width = width;
+            }
+            if collapse {
+                self.layout.maxwell_expanded = false;
+            }
+            if let Some(action) = maxwell_action {
+                self.apply_maxwell_panel_action(action);
+            }
+        }
         if self.layout.presets_expanded {
             self.wide_presets_width = widths.next().unwrap();
         }
@@ -567,6 +633,29 @@ impl VfApp {
         }
     }
 
+    /// Apply the Maxwell panel's one-shot request. Reset restores the default
+    /// scene and camera and syncs the draft; SwitchTo2d only changes the
+    /// projection and re-samples the same case, preserving the camera and mode.
+    fn apply_maxwell_panel_action(&mut self, action: crate::ui::maxwell_panel::MaxwellPanelAction) {
+        match action {
+            crate::ui::maxwell_panel::MaxwellPanelAction::Fit => {
+                self.apply_view_command(ViewCommand::Fit);
+            }
+            crate::ui::maxwell_panel::MaxwellPanelAction::Reset => {
+                self.state.reset_maxwell();
+                self.maxwell.sync_from(&self.state);
+                self.apply_view_command(ViewCommand::Reset);
+            }
+            crate::ui::maxwell_panel::MaxwellPanelAction::SwitchTo2d => {
+                self.state.set_mode(false);
+                // The explicit action keeps the user's framing: record the new
+                // frame before simulation so the plane-entry refit never runs.
+                self.scene_frame = SceneFrameKey::of(&self.state);
+                self.state.refresh_maxwell_sampling();
+            }
+        }
+    }
+
     /// Apply what the Presets body reported this frame: a camera button picked
     /// inside the panel/sheet, then any applied preset record.
     fn finish_presets(&mut self, camera_request: Option<ViewCommand>) {
@@ -666,6 +755,17 @@ impl VfApp {
                             .and_then(|sampling| sampling.warning.clone())
                     })
                     .unwrap_or_default(),
+                FieldMode::Maxwell => self
+                    .state
+                    .maxwell_error
+                    .clone()
+                    .or_else(|| {
+                        self.state
+                            .maxwell_sampling
+                            .as_ref()
+                            .and_then(|sampling| sampling.warning.clone())
+                    })
+                    .unwrap_or_default(),
                 _ => self.state.parse_error.clone(),
             };
             self.status.arrow_count = scene.arrows.len();
@@ -759,6 +859,9 @@ impl VfApp {
                     if self.state.field_mode == FieldMode::Materials {
                         tabs.push((SheetState::Materials, "Materials"));
                     }
+                    if self.state.field_mode == FieldMode::Maxwell {
+                        tabs.push((SheetState::Maxwell, "Maxwell"));
+                    }
                     let available = (ui.available_width() - close_width).max(0.0);
                     egui::ScrollArea::horizontal()
                         .id_salt("compact_tabs")
@@ -837,6 +940,12 @@ impl VfApp {
             ui.ctx().request_repaint();
             return;
         }
+        if sheet == SheetState::Maxwell && self.state.field_mode != FieldMode::Maxwell {
+            self.sheet.close();
+            self.sheet_expanded = SheetSize::Default;
+            ui.ctx().request_repaint();
+            return;
+        }
         let window_height = ui.ctx().content_rect().height();
         let available_height = ui.available_height();
         let height = layout::sheet_height(window_height, available_height, self.sheet_expanded);
@@ -854,6 +963,7 @@ impl VfApp {
         let mut induction_action = None;
         let mut ode_action = None;
         let mut material_action = None;
+        let mut maxwell_action = None;
         let controls_shown = sheet == SheetState::Controls;
         egui::Panel::bottom("compact_sheet")
             .exact_size(height)
@@ -868,6 +978,7 @@ impl VfApp {
                     SheetState::Induction => "Induction",
                     SheetState::Ode => "ODE",
                     SheetState::Materials => "Materials",
+                    SheetState::Maxwell => "Maxwell",
                     SheetState::None => "",
                 };
                 ui.horizontal(|ui| {
@@ -961,6 +1072,14 @@ impl VfApp {
                             true,
                         );
                     }
+                    SheetState::Maxwell => {
+                        maxwell_action = crate::ui::maxwell_panel::show(
+                            ui,
+                            &mut self.maxwell,
+                            &mut self.state,
+                            true,
+                        );
+                    }
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => self.show_cas_body(ui),
                     SheetState::None => {}
@@ -984,6 +1103,9 @@ impl VfApp {
         }
         if let Some(action) = material_action {
             self.apply_material_panel_action(action);
+        }
+        if let Some(action) = maxwell_action {
+            self.apply_maxwell_panel_action(action);
         }
         self.finish_presets(camera_request);
         if controls_shown && layout::fly_allowed(self.layout_mode) {

@@ -78,7 +78,7 @@ impl AnimationSnapshot {
         }
         match self.state.field_mode {
             FieldMode::Formula | FieldMode::Induction => {}
-            FieldMode::Sources | FieldMode::Materials | FieldMode::Ode => {
+            FieldMode::Sources | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
                 return Err(AnimationError::InvalidSpec(
                     "animation supports Formula and Induction scenes".into(),
                 ));

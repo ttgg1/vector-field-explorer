@@ -817,6 +817,63 @@ impl PlotAppHarness<'_> {
         Some(&self.app.state.material)
     }
 
+    /// The durable Maxwell scene.
+    pub fn maxwell_scene(&self) -> &crate::maxwell::MaxwellScene {
+        self.app.state.maxwell_scene()
+    }
+
+    /// Maxwell arrows in the last sampled frame.
+    pub fn maxwell_arrow_count(&self) -> usize {
+        self.app
+            .state
+            .maxwell_sampling
+            .as_ref()
+            .map(|sampling| sampling.arrows.len())
+            .unwrap_or(0)
+    }
+
+    /// Maxwell outline segments only; reference/backdrop lines excluded.
+    pub fn maxwell_line_count(&self) -> usize {
+        let plane = self.app.state.plane_frame();
+        crate::maxwell::maxwell_outline(
+            &self.app.state.maxwell,
+            &self.app.state.scene_domain(),
+            plane.as_ref(),
+        )
+        .len()
+    }
+
+    /// The active Maxwell error or sampling warning, if any.
+    pub fn maxwell_sampling_error(&self) -> Option<&str> {
+        self.app.state.maxwell_error.as_deref().or_else(|| {
+            self.app
+                .state
+                .maxwell_sampling
+                .as_ref()
+                .and_then(|sampling| sampling.warning.as_deref())
+        })
+    }
+
+    /// The last Maxwell sampling pass, cloned for assertions.
+    pub fn maxwell_sampling(&self) -> Option<crate::maxwell::MaxwellSampling> {
+        self.app.state.maxwell_sampling.clone()
+    }
+
+    /// The active Maxwell error or sampling warning (alias).
+    pub fn maxwell_error(&self) -> Option<&str> {
+        self.maxwell_sampling_error()
+    }
+
+    /// How many 2D conductor BEM solves the state has attempted.
+    pub fn maxwell_bem_solves(&self) -> u64 {
+        self.app.state.maxwell_bem_solves
+    }
+
+    /// Alias used by the plan's harness contract.
+    pub fn maxwell_bem_solve_count(&self) -> u64 {
+        self.maxwell_bem_solves()
+    }
+
     /// Assemble the viewport scene exactly as the frame does (test seam).
     pub fn test_assemble_viewport_scene(&mut self) -> SceneGPU {
         self.app.test_assemble_viewport_scene()

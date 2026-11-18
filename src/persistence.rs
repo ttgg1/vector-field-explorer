@@ -20,6 +20,9 @@ use crate::induction::{InductionCase, InductionScene};
 use crate::material::{
     MaterialCase, MaterialError, MaterialScene, MaterialView, validate_material,
 };
+use crate::maxwell::{
+    ConductorOutline, MaxwellCase, MaxwellError, MaxwellScene, MaxwellView, validate_maxwell,
+};
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
@@ -274,6 +277,35 @@ pub struct ViewRecord {
     /// `total`, `applied` or `response`.
     #[serde(default = "default_material_view")]
     pub material_view: String,
+    /// Durable Maxwell teaching-case token. Missing on a legacy record; the
+    /// default is the valid parallel-plate scene.
+    #[serde(default = "default_maxwell_case")]
+    pub maxwell_case: String,
+    #[serde(default = "default_maxwell_e0")]
+    pub maxwell_e0: f64,
+    #[serde(default = "default_maxwell_b0")]
+    pub maxwell_b0: f64,
+    #[serde(default = "default_maxwell_separation")]
+    pub maxwell_separation: f64,
+    #[serde(default = "default_maxwell_radius")]
+    pub maxwell_radius: f64,
+    #[serde(default = "default_maxwell_outer_radius")]
+    pub maxwell_outer_radius: f64,
+    #[serde(default = "default_maxwell_charge")]
+    pub maxwell_charge: f64,
+    #[serde(default = "default_maxwell_charge_height")]
+    pub maxwell_charge_height: f64,
+    /// Conductor cross-section as `circle:<radius>` or `square:<half-extent>`.
+    /// One field keeps the schema flat while preserving every outline value.
+    #[serde(default = "default_maxwell_outline")]
+    pub maxwell_outline: String,
+    /// Applied 2D field as plain `[x, y]` display amplitudes.
+    #[serde(default = "default_maxwell_applied")]
+    pub maxwell_applied: [f64; 2],
+    #[serde(default = "default_maxwell_elements")]
+    pub maxwell_elements: u32,
+    #[serde(default, deserialize_with = "deserialize_bool_or_false")]
+    pub maxwell_allow_inaccurate: bool,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -375,6 +407,18 @@ impl ViewRecord {
             material_interface_offset: state.material.interface_offset,
             material_applied: state.material.applied,
             material_view: material_view_label(state.material.view).to_string(),
+            maxwell_case: maxwell_case_label(state.maxwell.case).to_string(),
+            maxwell_e0: state.maxwell.e0,
+            maxwell_b0: state.maxwell.b0,
+            maxwell_separation: state.maxwell.separation,
+            maxwell_radius: state.maxwell.radius,
+            maxwell_outer_radius: state.maxwell.outer_radius,
+            maxwell_charge: state.maxwell.charge,
+            maxwell_charge_height: state.maxwell.charge_height,
+            maxwell_outline: maxwell_outline_label(state.maxwell.outline),
+            maxwell_applied: state.maxwell.applied,
+            maxwell_elements: state.maxwell.elements,
+            maxwell_allow_inaccurate: state.maxwell.allow_inaccurate,
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -477,6 +521,7 @@ impl ViewRecord {
         let requested_induction = self.field_mode == FieldMode::Induction;
         let requested_ode = self.field_mode == FieldMode::Ode;
         let requested_materials = self.field_mode == FieldMode::Materials;
+        let requested_maxwell = self.field_mode == FieldMode::Maxwell;
         let material_valid = self.restored_material_scene().is_ok();
         let restored_induction = self.restored_induction_scene();
         let induction_valid = restored_induction.is_ok();
@@ -507,6 +552,12 @@ impl ViewRecord {
         // Materials is selected only from an explicitly stored mode and a
         // valid record, so a malformed payload can never promote the mode.
         self.restore_material_fields(state);
+        // Maxwell restores lazily too: validate and store the durable scene,
+        // drop any sampling/BEM cache and mark the first frame pending. A
+        // malformed payload always falls back to the default scene and only
+        // reports the error for an explicitly stored Maxwell mode, so it can
+        // never promote the mode.
+        let maxwell_valid = self.restore_maxwell_fields(state).is_none();
         state.set_field_mode(if requested_sources && valid_entries > 0 {
             FieldMode::Sources
         } else if requested_induction && induction_valid {
@@ -515,6 +566,8 @@ impl ViewRecord {
             FieldMode::Ode
         } else if requested_materials && material_valid {
             FieldMode::Materials
+        } else if requested_maxwell && maxwell_valid {
+            FieldMode::Maxwell
         } else {
             FieldMode::Formula
         });
@@ -606,6 +659,68 @@ impl ViewRecord {
         };
         validate_material(&scene)
             .map_err(|error| format!("material scene: {}", material_validation_text(&error)))?;
+        Ok(scene)
+    }
+
+    /// Rebuild the persisted Maxwell scene and hand it to the lazy restore
+    /// seam. Validation is the same [`validate_maxwell`] gate the editor uses;
+    /// a malformed payload always falls back to the valid default scene, and
+    /// only a stored Maxwell mode surfaces the error. The returned `Some` is
+    /// that stored error for tests and the caller.
+    pub fn restore_maxwell_fields(&self, state: &mut State) -> Option<String> {
+        let requested_maxwell = self.field_mode == FieldMode::Maxwell;
+        match self.restored_maxwell_scene() {
+            Ok(scene) => {
+                state.restore_maxwell_scene(scene);
+                None
+            }
+            Err(error) => {
+                state.restore_maxwell_scene(MaxwellScene::default());
+                if requested_maxwell {
+                    state.maxwell_error = Some(error.clone());
+                    Some(error)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Rebuild the persisted Maxwell scene. Every field is serde-defaulted, so
+    /// an old payload yields the valid default scene. Unknown case/outline
+    /// tokens and invalid numbers are reported instead of silently poisoning
+    /// the sampler.
+    fn restored_maxwell_scene(&self) -> Result<MaxwellScene, String> {
+        let case = match self.maxwell_case.as_str() {
+            "parallel_plates" => MaxwellCase::ParallelPlates,
+            "coaxial_electric" => MaxwellCase::CoaxialElectric,
+            "coaxial_magnetic" => MaxwellCase::CoaxialMagnetic,
+            "hollow_sphere" => MaxwellCase::HollowSphere,
+            "infinite_wire" => MaxwellCase::InfiniteWire,
+            "solenoid" => MaxwellCase::Solenoid,
+            "image_sphere" => MaxwellCase::ImageSphere,
+            "image_plane" => MaxwellCase::ImagePlane,
+            "conductor_2d" => MaxwellCase::Conductor2D,
+            other => return Err(format!("Maxwell case is not recognized: {other}")),
+        };
+        let outline = restored_maxwell_outline(&self.maxwell_outline)?;
+        let scene = MaxwellScene {
+            case,
+            e0: self.maxwell_e0,
+            b0: self.maxwell_b0,
+            separation: self.maxwell_separation,
+            radius: self.maxwell_radius,
+            outer_radius: self.maxwell_outer_radius,
+            charge: self.maxwell_charge,
+            charge_height: self.maxwell_charge_height,
+            outline,
+            applied: self.maxwell_applied,
+            elements: self.maxwell_elements,
+            allow_inaccurate: self.maxwell_allow_inaccurate,
+            view: MaxwellView::Field,
+        };
+        validate_maxwell(&scene)
+            .map_err(|error| format!("Maxwell scene: {}", maxwell_validation_text(&error)))?;
         Ok(scene)
     }
 
@@ -716,6 +831,51 @@ fn material_validation_text(error: &MaterialError) -> String {
     }
 }
 
+fn maxwell_case_label(case: MaxwellCase) -> &'static str {
+    match case {
+        MaxwellCase::ParallelPlates => "parallel_plates",
+        MaxwellCase::CoaxialElectric => "coaxial_electric",
+        MaxwellCase::CoaxialMagnetic => "coaxial_magnetic",
+        MaxwellCase::HollowSphere => "hollow_sphere",
+        MaxwellCase::InfiniteWire => "infinite_wire",
+        MaxwellCase::Solenoid => "solenoid",
+        MaxwellCase::ImageSphere => "image_sphere",
+        MaxwellCase::ImagePlane => "image_plane",
+        MaxwellCase::Conductor2D => "conductor_2d",
+    }
+}
+
+/// Serialize both outline kinds through one flat token, including their size,
+/// so `maxwell_outline` remains the single design field for the cross-section.
+fn maxwell_outline_label(outline: ConductorOutline) -> String {
+    match outline {
+        ConductorOutline::Circle { radius } => format!("circle:{radius}"),
+        ConductorOutline::Square { half_extent } => format!("square:{half_extent}"),
+    }
+}
+
+fn restored_maxwell_outline(token: &str) -> Result<ConductorOutline, String> {
+    let (kind, size) = token
+        .split_once(':')
+        .ok_or_else(|| format!("Maxwell outline is not recognized: {token}"))?;
+    let size = size
+        .parse::<f64>()
+        .map_err(|_| format!("Maxwell outline size is not a number: {token}"))?;
+    match kind {
+        "circle" => Ok(ConductorOutline::Circle { radius: size }),
+        "square" => Ok(ConductorOutline::Square { half_extent: size }),
+        other => Err(format!("Maxwell outline is not recognized: {other}")),
+    }
+}
+
+fn maxwell_validation_text(error: &MaxwellError) -> String {
+    match error {
+        MaxwellError::InvalidScene(message)
+        | MaxwellError::Unsupported(message)
+        | MaxwellError::Unavailable(message) => message.clone(),
+    }
+}
+
 fn default_material_case() -> String {
     material_case_label(MaterialScene::default().case).to_string()
 }
@@ -750,6 +910,50 @@ fn default_material_applied() -> [f64; 3] {
 
 fn default_material_view() -> String {
     material_view_label(MaterialScene::default().view).to_string()
+}
+
+fn default_maxwell_case() -> String {
+    maxwell_case_label(MaxwellScene::default().case).to_string()
+}
+
+fn default_maxwell_e0() -> f64 {
+    MaxwellScene::default().e0
+}
+
+fn default_maxwell_b0() -> f64 {
+    MaxwellScene::default().b0
+}
+
+fn default_maxwell_separation() -> f64 {
+    MaxwellScene::default().separation
+}
+
+fn default_maxwell_radius() -> f64 {
+    MaxwellScene::default().radius
+}
+
+fn default_maxwell_outer_radius() -> f64 {
+    MaxwellScene::default().outer_radius
+}
+
+fn default_maxwell_charge() -> f64 {
+    MaxwellScene::default().charge
+}
+
+fn default_maxwell_charge_height() -> f64 {
+    MaxwellScene::default().charge_height
+}
+
+fn default_maxwell_outline() -> String {
+    maxwell_outline_label(MaxwellScene::default().outline)
+}
+
+fn default_maxwell_applied() -> [f64; 2] {
+    MaxwellScene::default().applied
+}
+
+fn default_maxwell_elements() -> u32 {
+    MaxwellScene::default().elements
 }
 
 fn default_ode_source() -> String {

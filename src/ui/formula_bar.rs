@@ -19,6 +19,7 @@ pub struct FormulaBarState {
     pub open_induction: bool,
     pub open_ode: bool,
     pub open_materials: bool,
+    pub open_maxwell: bool,
 }
 
 impl FormulaBarState {
@@ -128,6 +129,15 @@ fn adapter_selectors(ui: &mut egui::Ui, state: &mut State) {
     {
         state.set_field_mode(FieldMode::Materials);
     }
+    if ui
+        .selectable_label(state.field_mode == FieldMode::Maxwell, "Maxwell")
+        .on_hover_text(
+            "Bounded ideal teaching cases: canonical field geometries and one 2D conductor BEM",
+        )
+        .clicked()
+    {
+        state.set_field_mode(FieldMode::Maxwell);
+    }
 }
 
 fn show_active_source(
@@ -191,6 +201,18 @@ fn show_active_source_with_width(
             .clicked()
         {
             bar.open_materials = true;
+        }
+        return;
+    }
+    if state.is_vector_mode() && state.field_mode == FieldMode::Maxwell {
+        ui.label("Maxwell scene summary");
+        ui.label(crate::ui::maxwell_panel::summary(state));
+        if ui
+            .button("Open Maxwell")
+            .on_hover_text("Expand or focus the Maxwell panel")
+            .clicked()
+        {
+            bar.open_maxwell = true;
         }
         return;
     }

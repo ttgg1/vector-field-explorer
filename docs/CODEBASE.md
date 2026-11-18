@@ -44,7 +44,9 @@ The field is formula-driven:
   source geometries: point charges, finite charged lines, charged rings, charged
   thin discs, uniform solid spheres, infinite straight wires, current loops and
   finite continuous solenoids. The ODE workbench precomputes bounded fixed-step
-  RK4 teaching trajectories. Maxwell work beyond that is described in
+  RK4 teaching trajectories. The Maxwell teaching catalogue lives in
+  `src/maxwell.rs` and remains a bounded ideal-case model, not a general solver;
+  Maxwell work beyond that is described in
   [ADR 0003](adr/0003-physics-foundations.md).
 
 ### Source control and licence
@@ -541,7 +543,8 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `material` (`MaterialPanelState`), `clock`, `screenshot`, `animation`
+  `material` (`MaterialPanelState`), `maxwell` (`MaxwellPanelState`), `clock`,
+  `screenshot`, `animation`
   (`AnimationDialogState`), `animation_job`, and private
   scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
@@ -714,11 +717,21 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   command; Reset calls `State::reset_material`, re-syncs the panel draft and
   applies the default camera command. Entering Materials syncs the panel draft
   from the committed scene only on entry, restore or reset, never every frame.
+- The Maxwell rail/body and compact Maxwell tab draw `maxwell_panel::show`; the
+  formula bar's one-shot `open_maxwell` request expands the wide rail or opens
+  the compact sheet. Fit uses the shared Fit command; Reset calls
+  `State::reset_maxwell`, re-syncs the draft and applies the default camera
+  command; `Switch to 2D` only calls
+  `set_mode(false)` and re-samples the same case, recording the new scene frame
+  first so the entry refit cannot move the camera. Entering Maxwell syncs the
+  panel draft only on entry, restore or reset.
 - ODE mode status reports `State::ode_error`; the Features controls are
   disabled with the ODE note and the Coloring section is not drawn. Materials
   status reports `State::material_error` or the current sampling warning; its
   Features controls are disabled with the arrows-only note and its Coloring
-  section is hidden.
+  section is hidden. Maxwell reports `State::maxwell_error` or the current
+  sampling warning with the same Features/Coloring gates. CAS is disabled
+  outside Formula, including Maxwell.
 - The viewport paints `Materials - {case} - {Total|Applied|Response}` in
   Materials mode and shows `Response is identically zero for this view.` when
   the sampling is response-empty. Leaving Materials closes its compact sheet.
@@ -926,7 +939,7 @@ untouched.
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula,
-Sources, Induction, Materials or Ode; `SourceDisplay` selects Electric,
+Sources, Induction, Materials, Ode or Maxwell; `SourceDisplay` selects Electric,
 Magnetic or Both;
 `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
@@ -1157,6 +1170,152 @@ charge, hysteresis or eddy currents. 2D is a slice of the same 3D case. The
 benchmark measures analytic sampling, not frame time or browser performance.
 Browser/WebAssembly runtime and manual visual checks were owner-waived for this
 delivery and are not claimed as passed.
+
+#### `src/maxwell.rs` — bounded Maxwell teaching catalog
+
+**Purpose.** Pure seam for the Maxwell teaching mode. Nine named ideal cases
+cover parallel plates, coaxial electric and magnetic cylinders, a hollow charged
+sphere, an infinite surface-current wire, an ideal solenoid, a conducting sphere
+in a uniform applied field, an image plane with one point charge, and a 2D
+grounded conductor cross-section. Electric and magnetic families are selected by
+case and never summed. Amplitudes are normalized display values only: there is
+no SI constant engine. The module is CPU only with no renderer, clock, source or
+persistence dependency.
+
+**Public API.** `MaxwellCase` (plus `MaxwellCase::ALL`), `MaxwellFamily`,
+`MaxwellView::{Field}`, `ConductorOutline`, `MaxwellScene` (`Debug`, `Clone`,
+`PartialEq`, `Default`, serde), `MaxwellError`, `MaxwellSampling`,
+`MaxwellLine`, `BemConvergence`, `BemSolution`, `MaxwellStop`, `maxwell_family`,
+`maxwell_assumptions`, `maxwell_warning`, `validate_maxwell`, `maxwell_field`,
+`maxwell_field_with_bem`, `maxwell_outline`, `solve_bem`, `sample_maxwell`, and
+`sample_maxwell_with_bem`. `BemSolution` exposes `field_at`, `check_net_charge`,
+`convergence`, `matches_scene` and the doc-hidden net-charge test seam. Constants
+are `MAXWELL_MAX_DENSITY_3D`, `MAXWELL_MAX_DENSITY_2D`,
+`MAXWELL_MAX_BEM_ELEMENTS`, `MAXWELL_BEM_MIN_ELEMENTS`, `MAXWELL_BEM_TARGET`,
+`MAXWELL_INTERFACE_TOLERANCE_FACTOR`, `MAXWELL_MAX_RELATIVE`,
+`MAXWELL_MAX_AMPLITUDE`, `MAXWELL_DENSITY_CAP_WARNING`, and the exported exact
+warning strings.
+
+**Invariants.** Amplitudes are finite and within `±1e3`; geometry is finite and
+strictly positive; `outer_radius > radius`; `elements` is even and within
+`32..=256`; a BEM applied field is finite and nonzero. Analytic formulas use
+`f64` internals and cast once to `f32`; no evaluation returns NaN/Inf. Points
+exactly on a discontinuity return `MaxwellError::Unsupported`. The image plane
+returns zero for `z <= 0` (the unsupported half-space is not an error) and
+rejects only the real charge point; a point just above the plane keeps its
+O(`z/h`) tangential component, so boundary tests use a relative tolerance.
+`Conductor2D` is `Unavailable` in 3D with the exact "switch to 2D" message. Its
+2D solve is a bounded constant-panel collocation BEM supplied by the caller;
+`sample_maxwell` never solves, and missing/stale solutions report `Unavailable`
+rather than fabricated arrows. `BemSolution::field_at` is exterior-only:
+interior and boundary points are rejected with an explicit error, never
+extrapolated. A 2D view without a supplied solution uses the exact
+`Conductor2D needs a completed 2D boundary solve; no field is drawn yet.`
+message.
+
+**2D BEM conductor.** `solve_bem` accepts only `Conductor2D`; `scene.elements` is
+the fine panel count (even, `32..=256`) and the coarse diagnostic run is exactly
+`elements / 2`. Panels are constant-density with midpoint collocation on the
+circle or square outline; the 2D Laplace Green's function `-ln(r)/(2π)` gives a
+dense `N²` matrix and Gaussian elimination with partial pivoting (pivot threshold
+`1e-12 * row scale`) uses `N³` work. Non-finite or singular systems return
+`Unavailable`; solved panels are checked for the grounded isolated-neutral net
+charge `|Q| <= 1e-6 * max(|E0| * extent, 1)`. Convergence compares the fields at
+a fixed 8-point ring at `4 * max(outline_extent, 1e-6)` with one global
+normalization `max_probe(max(|E_fine|, |E0|, 1e-9))`; missing the target is an
+explicit `AccuracyNotMet` and draws only with the scene's opt-in. The 2D sampler
+omits the conductor interior, boundary singularities, degenerate and extreme
+arrows, and joins the BEM approximation, `accuracy not met` and projection
+warnings deterministically.
+
+**Sampling.** The 3D grid is sampled in world space; a 2D slice samples the
+frame's local grid, evaluates the same world field and projects the selected
+vector. Exact interfaces, point singularities, non-finite values and vectors
+below `1e-6` are omitted and counted. A finite arrow above
+`MAXWELL_MAX_RELATIVE * max(|E0|, |B0|, 1e-9)` is omitted and counted, never
+clamped. Warnings are joined in a fixed order: invalid/unavailable, interface
+omission, extreme omission, projection suppression, coincident ground slice.
+Empty/impossible domains warn explicitly. A coincident `ImagePlane` `z=0` slice
+draws no field and warns that the ground slice is empty. Sampling never
+densifies the input grid.
+
+**State and app integration.** `FieldMode::Maxwell` samples the durable
+`State::maxwell: MaxwellScene` through `refresh_maxwell_sampling`; the app keeps
+`maxwell_sampling: Option<MaxwellSampling>`, `maxwell_error: Option<String>` and
+a private BEM cache. `set_maxwell_scene` validates before replacing anything, so
+an invalid edit keeps the last valid scene and sampling; a valid edit clears the
+cache, sampling and error. `refresh_maxwell_sampling` is the only path that may
+call `solve_bem`, at most once for a matching scene cache; plane, camera and
+sampling refreshes reuse it, and a failed solve is not retried until a scene
+edit/reset. The 3D grid is capped at `40^3` and the 2D plane at `200^2`, with the
+visible `MAXWELL_DENSITY_CAP_WARNING` when a request is reduced. Two-dimensional
+sampling uses the selected `PlaneFrame`; three-dimensional sampling uses the
+durable domain. Maxwell is arrows plus the case outline only: no formula
+streamlines, particles, trails, dots, click seeds, source/induction glyphs or
+clock consumer, and entering the mode preserves the camera and every durable
+scene. The app branch in `src/app/simulation.rs` composes the outline at
+`0.004 * scene extent` width before the formula path; status/sampling errors flow
+to the existing status slot. Test seams are `maxwell_arrow_count`,
+`maxwell_line_count`, `maxwell_scene`, `maxwell_sampling`, `maxwell_sampling_error`,
+`maxwell_bem_solves`, its `maxwell_bem_solve_count` alias, and
+`test_assemble_viewport_scene`. `ViewRecord` persists the durable scene only
+(no sampling). `restore_maxwell_fields` validates it, then
+`State::restore_maxwell_scene` clears sampling/BEM/error and marks the first
+frame dirty without sampling or solving; a malformed payload falls back to the
+default scene and reports only for a stored Maxwell mode. Global Reset calls
+`reset_maxwell` and returns to Formula. PNG/SVG requests derive
+`maxwell_export_provenance` from the scene and cached sampling at request time.
+
+**2D and outline.** `maxwell_outline` draws world geometry in 3D (plates, coaxial
+circles, sphere great circles, wire axis and ticks, solenoid rings, image-plane
+ground square and charge marker, applied arrow) and only slice intersections in
+2D. Circle/square cross-sections and clipped plane intersections use finite
+endpoints; coincident interface lines may be drawn even though field sampling
+still warns and omits exactly-on-interface samples.
+
+**Pinned by.** [tests/maxwell_test.rs](../tests/maxwell_test.rs):
+`plates_match_the_ideal_uniform_field_and_interface_guard`,
+`coaxial_electric_and_magnetic_are_azimuthal_and_zero_outside`,
+`hollow_sphere_and_solenoid_have_expected_limits`,
+`infinite_wire_is_a_surface_shell_with_zero_interior`,
+`image_sphere_satisfies_the_conducting_boundary_and_far_field`,
+`image_plane_is_zero_on_the_ground_and_has_no_tangential_field_above_it`,
+`conductor_case_is_2d_only_and_unavailable_in_3d_sampling`,
+`extreme_arrows_are_omitted_and_counted`,
+`empty_domain_is_explicitly_invalid_sampling`,
+`azimuthal_2d_slice_warns_about_the_suppressed_component`,
+`coincident_ground_slice_warns_and_shows_no_field`,
+`exact_interface_slice_warns_and_omits_every_sample`, and
+`outline_and_validation_cover_supported_geometry`. The BEM path is pinned by
+[tests/maxwell_bem_test.rs](../tests/maxwell_bem_test.rs):
+`grounded_circle_solve_matches_the_dipole_far_field`,
+`square_refines_globally_and_never_reports_identical_coarse_fine`,
+`max_elements_still_uses_a_distinct_coarse_run`,
+`net_charge_residual_is_explicit`,
+`slice_2d_sampling_uses_the_solved_field_and_projection_warning`,
+`slice_2d_sampling_without_a_solution_is_explicitly_unavailable`,
+`conductor_3d_sampling_is_unavailable_with_the_design_message`, and
+`stale_solution_and_non_conductor_scenes_are_explicit` (outline, elements and
+applied-field mismatches plus interior rejection). The app/mode path is pinned by
+[tests/maxwell_app_test.rs](../tests/maxwell_app_test.rs):
+`maxwell_mode_isolated_from_formula_and_durable_scenes`,
+`maxwell_sampling_is_arrow_and_outline_only`,
+`maxwell_2d_uses_the_selected_plane`,
+`conductor_2d_solves_once_and_reuses_the_cache`,
+`conductor_2d_3d_is_unavailable_without_solving`,
+`invalid_maxwell_edit_retains_the_last_valid_scene_and_cache`,
+`maxwell_caps_apply_per_view`,
+`maxwell_mode_does_not_consume_the_clock_or_spawn_particles`,
+`maxwell_bem_failure_is_reported_and_not_retried_per_sample`, and
+`maxwell_round_trip_preserves_projection_and_camera`.
+
+**Limitations.** Closed-form ideal cases only: no 3D BEM/FEM, arbitrary CSG,
+full-wave/FDTD, displacement current, radiation, retardation, nonlinear or
+anisotropic media. The infinite wire is a thin surface-current shell and the
+image cases assume infinite ideal boundaries. The 2D BEM conductor is a bounded
+constant-panel infinite-cylinder approximation, not a 3D finite conductor. The
+responsive panel/selector/help, persistence, export and the benchmark land in
+later tasks.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
@@ -1880,15 +2039,16 @@ storage key, with migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
-`Default`); `finite_or`; `load`, `save`; private serde helpers.
+`restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
+helpers.
 
 **Schema (all under `eframe::APP_KEY`).**
 
 | Record | Fields | Compatibility |
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
-| `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); `normalize` and `speed` are read-only legacy |
+| `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -1941,6 +2101,17 @@ storage key, with migration and corruption tolerance.
     returning to Formula; the Materials section Reset restores only the default
     scene. `VfApp::new_with_storage` refreshes the panel draft through
     `MaterialPanelState::sync_from` after a restored Materials record.
+13. Maxwell restores through `restore_maxwell_fields`: the case and flat
+    `circle:<radius>`/`square:<half-extent>` outline tokens plus every number
+    are revalidated by `validate_maxwell`; `State::restore_maxwell_scene` stores
+    the durable scene, drops sampling and the private BEM cache, clears the
+    error, marks the first frame dirty and never samples or solves. A malformed
+    payload restores the valid default parallel-plate scene and sets
+    `maxwell_error` only when the stored mode is explicitly Maxwell, so an old
+    or damaged record never promotes the mode. Global reset clears the Maxwell
+    scene, sampling, BEM cache and error before returning to Formula; the
+    Maxwell section Reset restores only the default scene. `tests/maxwell_persistence_test.rs`
+    pins this record.
 
 **Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -2581,29 +2752,33 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source, induction, ODE and Materials export warning contract
+#### `src/export_provenance.rs` — source, induction, ODE, Materials and Maxwell export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
 derived from the validated `SourceScene` plus cached `SourceSampling`, from the
 durable `InductionScene` plus shared softening and cached
 `InductionSampling`, from the durable `OdeScene` plus the already-computed
-`OdeSolution` and shared clock, or from the durable `MaterialScene` plus cached
-`MaterialSampling`; it never samples the field, re-integrates the ODE scene,
-solves a material boundary-value problem or creates vector data.
+`OdeSolution` and shared clock, from the durable `MaterialScene` plus cached
+`MaterialSampling`, or from the durable `MaxwellScene` plus cached
+`MaxwellSampling`; it never samples the field, re-integrates the ODE scene,
+solves a material or Maxwell boundary-value problem, or creates vector data.
 
 **Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
-induction_mode, ode_mode, material_mode }`,
+induction_mode, ode_mode, material_mode, maxwell_mode }`,
 `source_export_provenance(mode, scene, sampling)`,
 `induction_export_provenance(mode, scene, softening, sampling)`,
 `ode_export_provenance(mode, scene, solution, error, timeline)`,
 `material_export_provenance(mode, scene, sampling)`,
+`maxwell_export_provenance(mode, scene, sampling)`,
 `provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
 `MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
 `NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
 `INDUCTION_INVALID_LINE`, `ODE_MODEL_LINE`, `ODE_BOUNDED_LINE`,
 `ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`,
-`MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`.
+`MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`,
+`MAXWELL_MODEL_LINE`, `MAXWELL_NO_SAMPLING_LINE`, `MAXWELL_DISPLAY_UNITS_LINE`,
+`MAXWELL_INVALID_LINE`.
 
 **Invariants.**
 - Formula mode returns `None` from all helpers; Sources/Induction/Ode always
@@ -2617,6 +2792,22 @@ induction_mode, ode_mode, material_mode }`,
   field with `E ... V/m` or `B ... T`, the case assumptions, then the current
   sampling warning. Missing sampling adds `Materials sampling unavailable`; an
   invalid scene adds `Materials scene invalid: {error}`. None is suppressible.
+- Maxwell mode returns `Some` with `maxwell_mode = true`; every other mode
+  returns `None`. The first line is exactly
+  `Maxwell - ideal canonical teaching cases - no general solver`, followed by
+  `Conductor2D - infinite-cylinder BEM approximation` for that case. A missing
+  sampling pass adds `Maxwell sampling unavailable`; an invalid scene adds
+  `Maxwell scene invalid: {error}` and `vfe.validation_error`; `accuracy not met`
+  is visible whenever the BEM pass misses the target; the retained
+  unavailable/projection/interface warning is appended without splitting its
+  internal punctuation; the last line is always
+  `Normalized display amplitudes; no SI constant engine.`.
+- Maxwell metadata is `vfe.model = maxwell-bounded-teaching`,
+  `vfe.maxwell_case`, `vfe.maxwell_family`, `vfe.maxwell_units = display-only`,
+  `vfe.maxwell_assumptions`, `vfe.maxwell_accuracy`, the omitted counts, the
+  three BEM coarse/fine/relative-difference keys only when convergence exists,
+  and `vfe.validation_error` only when present. Requesting an export never
+  samples the grid and never runs `solve_bem`.
 - Materials metadata is exactly `vfe.model = materials-bounded-analytic`,
   `vfe.material_case`, `vfe.material_family`, `vfe.background_eps_r`,
   `vfe.background_mu_r`, `vfe.material_eps_r`, `vfe.material_mu_r`,
@@ -2665,7 +2856,11 @@ decoded PNG banner/tEXt, visible SVG text/metadata, unavailable-solution
 warning with no fabricated geometry, and the 2D-only SVG rejection) and
 `tests/material_export_test.rs` (exact Materials lines/metadata, decoded PNG
 banner/tEXt, visible SVG text/metadata, 2D-only rule, non-Materials isolation,
-unsuppressed response/interface warnings and finite geometry).
+unsuppressed response/interface warnings and finite geometry), and
+`tests/maxwell_export_test.rs` (exact Maxwell/BEM lines and metadata, decoded
+PNG banner/tEXt, visible SVG text/metadata, 2D-only rule, unavailable/invalid
+warnings with no arrows, non-Maxwell isolation, and request-time routing that
+never solves again).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 
@@ -2724,9 +2919,9 @@ download paths.
 `sender`, `tick`, `fail`, `toast_text`, `toast`).
 `VfApp::request_png_export`/`request_svg_export` capture
 `field_export_provenance()` at request time; the viewport consumes it through
-the `take_*_with_provenance` variants. A Source-, Induction- or Ode-mode
-request made without provenance derives the fallback instead of exporting
-silently. Scalar plot captures always pass `None`.
+the `take_*_with_provenance` variants. A Source-, Induction-, Ode-, Materials-
+or Maxwell-mode request made without provenance derives the fallback instead of
+exporting silently. Scalar plot captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)
@@ -2789,7 +2984,8 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`induction_panel`, `layout`, `menu`, `ode_panel`, `panel_rails`, `plot_panel`,
+`induction_panel`, `layout`, `material_panel`, `maxwell_panel`, `menu`,
+`ode_panel`, `panel_rails`, `plot_panel`,
 `presets`, `sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`,
 `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
@@ -2959,6 +3155,48 @@ and rejection, view/Reset, exact units, disabled Features/CAS, help rows,
 viewport label, current-only warning, rail/sheet requests) and
 `tests/layout_test.rs` for `materials_expanded`/`materials_width`.
 
+#### `src/ui/maxwell_panel.rs` — the responsive Maxwell panel
+
+**Purpose.** The wide left rail/compact sheet body for `FieldMode::Maxwell`,
+plus case names, the formula-bar summary and the help rows.
+
+**Public API.** `MaxwellPanelState { draft, error, advanced }`,
+`MaxwellPanelState::default`, `commit(&mut State) -> bool`, `sync_from(&State)`,
+`show(ui, &mut panel, &mut State, compact) -> Option<MaxwellPanelAction>`,
+`MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`, `case_label`, `summary`,
+`MAXWELL_HELP_ROWS`, `maxwell_help_rows`, `MAXWELL_ONLY_NOTE`,
+`MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`.
+
+**Invariants.**
+- `commit` calls `State::set_maxwell_scene`; an invalid draft keeps the last
+  valid scene/sampling and records an actionable error naming the field.
+  `sync_from` runs on mode entry and Reset, never every frame.
+- Case, geometry, display amplitudes, outline, elements and applied x/y commit
+  through the draft on click or release; a frame never commits merely because a
+  value exists.
+- Only case-relevant geometry is shown: Conductor2D alone adds the outline
+  (circle/square), elements and applied x/y. The exact note
+  `Conductor2D is an infinite-cylinder cross-section, not a 3D finite object.`
+  is always visible for that case; in 3D it is followed by `Switch to 2D`.
+- `Switch to 2D` calls `State::set_mode(false)`, never changes the case or mode,
+  and the app records the new scene frame before the simulation pass so the
+  camera is preserved.
+- Advanced is closed by default and shows the case assumptions, the current
+  sampling status/warning only, omitted/large counts, BEM coarse/fine/relative
+  difference/target, and the accuracy opt-in. The opt-in is enabled only for a
+  finite `MaxwellStop::AccuracyNotMet`; `Unavailable` can never be shown.
+- Warnings come only from the sampling that belongs to the committed scene, so
+  a valid scene edit cannot present a prior scene's warning as current.
+- Maxwell is arrows-only, with the exact note
+  `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
+  Coloring is hidden and CAS is disabled with
+  `CAS edits the formula field; switch to Formula.`
+
+**Pinned by.** `tests/maxwell_panel_test.rs` (wide/compact reflow, case-specific
+controls, rejection, current-only warning, accuracy opt-in, Switch to 2D
+camera/mode preservation, disabled Features/CAS, help rows, rail/sheet
+requests) and `tests/layout_test.rs` for `maxwell_expanded`/`maxwell_width`.
+
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 
 **Purpose.** The wide left rail/compact sheet body for `FieldMode::Ode`: source
@@ -3099,7 +3337,8 @@ tab-bar/sheet plan.
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
 `DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
-`DEFAULT_ODE_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
+`DEFAULT_ODE_WIDTH = 300`, `DEFAULT_MATERIALS_WIDTH = 300`,
+`DEFAULT_MAXWELL_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
 `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
@@ -3112,13 +3351,15 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores eleven desktop fields (Controls,
-  Presets, Sources, Induction and ODE visibility/width plus help) and
-  native-only `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Sources`, `SheetState::Induction` and `SheetState::Ode` share the
-  one compact sheet.
-- Sources and Induction default to collapsed at 280 pt, ODE at 300 pt, and all
-  sanitize to 180..=460; each record is consulted only in its own field mode.
+- Compact is transient: `LayoutState` stores the desktop panel
+  visibility/width fields (Controls, Presets, Sources, Induction, ODE, Materials
+  and Maxwell) plus help, and native-only `cas_expanded`/`cas_width`; the sheet
+  and mode are never persisted.
+- `SheetState::Sources`, `SheetState::Induction`, `SheetState::Ode`,
+  `SheetState::Materials` and `SheetState::Maxwell` share the one compact sheet.
+- Sources and Induction default to collapsed at 280 pt, ODE, Materials and
+  Maxwell at 300 pt, and all sanitize to 180..=460; each record is consulted
+  only in its own field mode.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point

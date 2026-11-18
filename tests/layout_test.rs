@@ -124,6 +124,7 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
         presets_width: 5000.0,
         sources_width: 10.0,
         induction_width: f32::NAN,
+        maxwell_width: f32::NAN,
         ..Default::default()
     }
     .sanitized();
@@ -131,6 +132,10 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
     assert_eq!(corrupt.presets_width, MAX_PANEL_WIDTH);
     assert_eq!(corrupt.sources_width, MIN_PANEL_WIDTH);
     assert_eq!(corrupt.induction_width, DEFAULT_INDUCTION_WIDTH);
+    assert_eq!(
+        corrupt.maxwell_width,
+        vector_field_explorer::ui::layout::DEFAULT_MAXWELL_WIDTH
+    );
     assert!(
         corrupt.controls_expanded && corrupt.presets_expanded,
         "visibility survives"
@@ -194,6 +199,8 @@ fn layout_state_serializes_exactly_its_platform_persisted_fields() {
         "ode_width",
         "materials_expanded",
         "materials_width",
+        "maxwell_expanded",
+        "maxwell_width",
         "help_visible",
         #[cfg(not(target_arch = "wasm32"))]
         "cas_expanded",
@@ -223,6 +230,11 @@ fn old_layout_defaults_only_new_fields_and_round_trips() {
     assert_eq!(
         layout.materials_width,
         vector_field_explorer::ui::layout::DEFAULT_MATERIALS_WIDTH
+    );
+    assert!(!layout.maxwell_expanded);
+    assert_eq!(
+        layout.maxwell_width,
+        vector_field_explorer::ui::layout::DEFAULT_MAXWELL_WIDTH
     );
     #[cfg(not(target_arch = "wasm32"))]
     {

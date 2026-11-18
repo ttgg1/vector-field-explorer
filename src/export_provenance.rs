@@ -18,6 +18,10 @@ use crate::material::{
     MaterialCase, MaterialFamily, MaterialSampling, MaterialScene, MaterialView, material_family,
     validate_material,
 };
+use crate::maxwell::{
+    MAXWELL_BEM_NOTE, MaxwellCase, MaxwellFamily, MaxwellSampling, MaxwellScene, MaxwellStop,
+    maxwell_assumptions, maxwell_family, validate_maxwell,
+};
 use crate::ode::{ODE_STEP, OdeScene, OdeSolution, OdeSource};
 use crate::sim_clock::SimClock;
 use crate::source_scene::{
@@ -63,6 +67,18 @@ pub const MATERIAL_NO_SAMPLING_LINE: &str = "Materials sampling unavailable";
 /// Validation-failure line for the durable material scene.
 pub const MATERIAL_INVALID_LINE: &str = "Materials scene invalid: {error}";
 
+/// The always-present Maxwell teaching-model line. The catalogue is bounded and
+/// ideal; this line is never suppressible for a Maxwell export.
+pub const MAXWELL_MODEL_LINE: &str = "Maxwell - ideal canonical teaching cases - no general solver";
+/// The display-amplitude contract. Maxwell fields are normalized display
+/// values, not SI quantities and not a constant engine.
+pub const MAXWELL_DISPLAY_UNITS_LINE: &str =
+    "Normalized display amplitudes; no SI constant engine.";
+/// Warning when an export starts before the first Maxwell sampling pass.
+pub const MAXWELL_NO_SAMPLING_LINE: &str = "Maxwell sampling unavailable";
+/// Validation-failure line for the durable Maxwell scene.
+pub const MAXWELL_INVALID_LINE: &str = "Maxwell scene invalid: {error}";
+
 /// Capture-time export context shared by the PNG and SVG paths.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExportProvenance {
@@ -79,6 +95,8 @@ pub struct ExportProvenance {
     pub ode_mode: bool,
     /// True when this provenance came from Materials mode.
     pub material_mode: bool,
+    /// True when this provenance came from Maxwell mode.
+    pub maxwell_mode: bool,
 }
 
 /// Derive export provenance for the current field mode.
@@ -154,6 +172,7 @@ pub fn source_export_provenance(
         induction_mode: false,
         ode_mode: false,
         material_mode: false,
+        maxwell_mode: false,
     })
 }
 
@@ -262,6 +281,7 @@ pub fn induction_export_provenance(
         induction_mode: true,
         ode_mode: false,
         material_mode: false,
+        maxwell_mode: false,
     })
 }
 
@@ -324,6 +344,7 @@ pub fn ode_export_provenance(
         induction_mode: false,
         ode_mode: true,
         material_mode: false,
+        maxwell_mode: false,
     })
 }
 
@@ -444,7 +465,127 @@ pub fn material_export_provenance(
         induction_mode: false,
         ode_mode: false,
         material_mode: true,
+        maxwell_mode: false,
     }
+}
+
+/// Derive export provenance for the bounded Maxwell teaching catalogue.
+///
+/// Pure and request-time: it reads only the durable scene and the already
+/// cached sampling pass. It never samples the grid and never runs the 2D BEM
+/// solve; a missing pass is reported instead. Non-Maxwell modes return `None`,
+/// so another adapter cannot gain Maxwell metadata. The model line, the
+/// display-unit contract and — for `Conductor2D` — the infinite-cylinder BEM
+/// line are always present. Validation and unavailable/sampling warnings are
+/// appended only when present.
+pub fn maxwell_export_provenance(
+    mode: FieldMode,
+    scene: &MaxwellScene,
+    sampling: Option<&MaxwellSampling>,
+) -> Option<ExportProvenance> {
+    if mode != FieldMode::Maxwell {
+        return None;
+    }
+
+    let family = maxwell_family(scene.case);
+    let mut warning_lines = vec![MAXWELL_MODEL_LINE.to_string()];
+    if scene.case == MaxwellCase::Conductor2D {
+        warning_lines.push(MAXWELL_BEM_NOTE.to_string());
+    }
+    let mut metadata = vec![
+        (
+            "vfe.model".to_string(),
+            "maxwell-bounded-teaching".to_string(),
+        ),
+        (
+            "vfe.maxwell_case".to_string(),
+            maxwell_case_label(scene.case).to_string(),
+        ),
+        (
+            "vfe.maxwell_family".to_string(),
+            maxwell_family_label(family).to_string(),
+        ),
+        ("vfe.maxwell_units".to_string(), "display-only".to_string()),
+        (
+            "vfe.maxwell_assumptions".to_string(),
+            maxwell_assumptions(scene).to_string(),
+        ),
+    ];
+
+    let validation_error = validate_maxwell(scene)
+        .err()
+        .map(|error| maxwell_error_text(&error));
+    if let Some(error) = &validation_error {
+        warning_lines.push(MAXWELL_INVALID_LINE.replace("{error}", error));
+        metadata.push(("vfe.validation_error".to_string(), error.clone()));
+    }
+
+    match sampling {
+        None => warning_lines.push(MAXWELL_NO_SAMPLING_LINE.to_string()),
+        Some(sampling) => {
+            metadata.push((
+                "vfe.maxwell_accuracy".to_string(),
+                maxwell_stop_label(sampling.accuracy).to_string(),
+            ));
+            metadata.push((
+                "vfe.maxwell_omitted".to_string(),
+                sampling.omitted.to_string(),
+            ));
+            metadata.push((
+                "vfe.maxwell_omitted_large".to_string(),
+                sampling.omitted_large.to_string(),
+            ));
+            if sampling.accuracy == MaxwellStop::AccuracyNotMet {
+                warning_lines.push(crate::maxwell::MAXWELL_ACCURACY_NOT_MET_WARNING.to_string());
+            }
+            if let Some(convergence) = sampling.convergence {
+                metadata.push((
+                    "vfe.maxwell_bem_coarse".to_string(),
+                    convergence.coarse_elements.to_string(),
+                ));
+                metadata.push((
+                    "vfe.maxwell_bem_fine".to_string(),
+                    convergence.fine_elements.to_string(),
+                ));
+                metadata.push((
+                    "vfe.maxwell_bem_relative_difference".to_string(),
+                    convergence.relative_difference.to_string(),
+                ));
+            }
+            if validation_error.is_none()
+                && let Some(warning) = &sampling.warning
+            {
+                // A sampling pass joins independent warnings with `; `, but a
+                // single warning can itself contain a semicolon. Strip the two
+                // lines this function already emits instead of splitting the
+                // text, so the exact unavailable message survives.
+                let mut warning = warning.as_str();
+                if let Some(rest) = warning.strip_prefix(MAXWELL_BEM_NOTE) {
+                    warning = rest.strip_prefix("; ").unwrap_or(rest);
+                }
+                if let Some(rest) =
+                    warning.strip_prefix(crate::maxwell::MAXWELL_ACCURACY_NOT_MET_WARNING)
+                {
+                    warning = rest.strip_prefix("; ").unwrap_or(rest);
+                }
+                let warning = warning.trim();
+                if !warning.is_empty() && !warning_lines.iter().any(|line| line == warning) {
+                    warning_lines.push(warning.to_string());
+                }
+            }
+        }
+    }
+    warning_lines.push(MAXWELL_DISPLAY_UNITS_LINE.to_string());
+
+    Some(ExportProvenance {
+        warning_lines,
+        metadata,
+        source_mode: false,
+        induction_mode: false,
+        ode_mode: false,
+        material_mode: false,
+        maxwell_mode: true,
+    })
 }
 
 /// The visible warning/context lines, in paint order.
@@ -504,6 +645,43 @@ fn material_error_text(error: &crate::material::MaterialError) -> String {
     match error {
         crate::material::MaterialError::InvalidScene(message)
         | crate::material::MaterialError::Unsupported(message) => message.clone(),
+    }
+}
+
+fn maxwell_case_label(case: MaxwellCase) -> &'static str {
+    match case {
+        MaxwellCase::ParallelPlates => "parallel_plates",
+        MaxwellCase::CoaxialElectric => "coaxial_electric",
+        MaxwellCase::CoaxialMagnetic => "coaxial_magnetic",
+        MaxwellCase::HollowSphere => "hollow_sphere",
+        MaxwellCase::InfiniteWire => "infinite_wire",
+        MaxwellCase::Solenoid => "solenoid",
+        MaxwellCase::ImageSphere => "image_sphere",
+        MaxwellCase::ImagePlane => "image_plane",
+        MaxwellCase::Conductor2D => "conductor_2d",
+    }
+}
+
+fn maxwell_family_label(family: MaxwellFamily) -> &'static str {
+    match family {
+        MaxwellFamily::Electric => "electric",
+        MaxwellFamily::Magnetic => "magnetic",
+    }
+}
+
+fn maxwell_stop_label(stop: MaxwellStop) -> &'static str {
+    match stop {
+        MaxwellStop::TargetMet => "target_met",
+        MaxwellStop::AccuracyNotMet => "accuracy_not_met",
+        MaxwellStop::Unavailable => "unavailable",
+    }
+}
+
+fn maxwell_error_text(error: &crate::maxwell::MaxwellError) -> String {
+    match error {
+        crate::maxwell::MaxwellError::InvalidScene(message)
+        | crate::maxwell::MaxwellError::Unsupported(message)
+        | crate::maxwell::MaxwellError::Unavailable(message) => message.clone(),
     }
 }
 

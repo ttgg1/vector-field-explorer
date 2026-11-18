@@ -174,9 +174,11 @@ impl CasPanelState {
 /// no formula editor but its field is always three-dimensional.
 fn cas_dimension(state: &State) -> usize {
     match state.field_mode {
-        FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode => {
-            state.active_dimension()
-        }
+        FieldMode::Sources
+        | FieldMode::Induction
+        | FieldMode::Materials
+        | FieldMode::Ode
+        | FieldMode::Maxwell => state.active_dimension(),
         FieldMode::Formula => {
             if state.mode_3d {
                 3
@@ -308,7 +310,7 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
     let disabled_mode = matches!(
         state.field_mode,
-        FieldMode::Induction | FieldMode::Ode | FieldMode::Materials
+        FieldMode::Induction | FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
     );
     if disabled_mode {
         ui.label("CAS edits the formula field; switch to Formula.");
