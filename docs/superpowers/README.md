@@ -7,6 +7,9 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 
 | Record | Purpose/evidence |
 | --- | --- |
+| [Customization and physics design](specs/2026-11-18-customization-physics-design.md) | Draft scope for #80/#81 and onboarding child #99; awaiting written approval, no product implementation authorized. |
+| [Visualization customization plan](plans/2026-11-18-visualization-customization.md) | Draft task/dependency plan for #82–#88; planning only, not executable authorization. |
+| [Physics exploration plan](plans/2026-11-18-physics-exploration.md) | Draft task/dependency plan for #89–#99; numerical/UX design gates remain open, planning only. |
 | [Post-v0.1.0 plan](plans/2026-11-05-vector-field-explorer.md) | Historical task scopes; helper entrypoint for the old SDD workspace. [Roadmap history](../wiki/roadmap/post-v1-frontier.md). |
 | [Native CAS plan](plans/2026-11-10-native-cas.md) | Adapter/panel task contracts; helper entrypoint for `.superpowers/sdd/2026-11-10-native-cas/`. |
 | [Native CAS spec](specs/2026-11-10-native-cas-design.md) | Accepted symbolic grammar, semantics, compatibility and UI boundaries. |
