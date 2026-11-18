@@ -338,7 +338,7 @@ fn svg_with_line(line: LineInstanceGPU) -> String {
             induction_mode: false,
             ode_mode: false,
             material_mode: false,
-        maxwell_mode: false,
+            maxwell_mode: false,
         }),
     )
 }
