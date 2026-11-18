@@ -5,13 +5,14 @@
 //! CPU data: closed-form normalized "display" amplitudes, renderer-independent
 //! outlines and deterministic sampling diagnostics. There is no SI constant
 //! engine, no general solver, and no renderer, clock, source or persistence
-//! dependency. The 2D boundary-element conductor solve is added in Task 2;
-//! until then [`MaxwellCase::Conductor2D`] samples as unavailable.
+//! dependency. The 2D conductor case uses a bounded constant-panel
+//! boundary-element solve; callers supply a cached [`BemSolution`] to sample it,
+//! and the 3D path never fabricates a finite 3D conductor.
 //!
 //! 2D outlines are slice intersections only, so a slice that is tilted with
 //! respect to an ideal infinite cylinder can produce no 2D outline by design.
 
-use glam::{DVec3, UVec3, Vec3};
+use glam::{DVec2, DVec3, UVec3, Vec3};
 
 use crate::domain::Domain;
 use crate::plane::PlaneFrame;
@@ -52,6 +53,21 @@ pub const MAXWELL_SWITCH_2D_WARNING: &str =
 /// Exact 2D Conductor2D pending-solver text.
 pub const MAXWELL_BEM_PENDING_WARNING: &str =
     "Conductor2D 2D boundary solve is pending; no field is drawn yet.";
+/// 2D BEM provenance line.
+pub const MAXWELL_BEM_NOTE: &str = "Conductor2D - infinite-cylinder BEM approximation";
+/// Stale cached-solution text.
+pub const MAXWELL_BEM_STALE_WARNING: &str =
+    "The cached Conductor2D boundary solve does not match the scene; no field is drawn.";
+/// Net-charge residual rejection text.
+pub const MAXWELL_BEM_NET_CHARGE_WARNING: &str = "Conductor2D BEM solution has a net-charge residual; the grounded isolated-neutral model does not apply.";
+/// Singular or ill-conditioned system text.
+pub const MAXWELL_BEM_ILL_CONDITIONED_WARNING: &str =
+    "Conductor2D BEM system is singular or ill-conditioned; no field is drawn.";
+/// Singular query-point text.
+pub const MAXWELL_BEM_SINGULAR_FIELD_WARNING: &str =
+    "Conductor2D BEM field is singular at the query point.";
+/// Exact accuracy label used when convergence misses the target.
+pub const MAXWELL_ACCURACY_NOT_MET_WARNING: &str = "accuracy not met";
 
 /// Fixed electric-family arrow colour (amber).
 const ELECTRIC_COLOR: [u8; 3] = [255, 176, 64];
@@ -375,6 +391,466 @@ fn finite(value: DVec3) -> Result<Vec3, MaxwellError> {
     Ok(Vec3::new(value.x as f32, value.y as f32, value.z as f32))
 }
 
+/// One constant-density boundary panel: midpoint on the conductor boundary and
+/// its (arc or segment) length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BemPanel {
+    midpoint: [f64; 2],
+    length: f64,
+    charge: f64,
+}
+
+/// Solved grounded isolated-neutral 2D conductor cross-section.
+///
+/// The solution is pure data: constant panel charges on a circle or square
+/// outline plus the coarse/fine probe-ring convergence evidence. It is intended
+/// to be cached by the caller (Task 3) and passed to
+/// [`sample_maxwell_with_bem`]; it never runs an iterative solver and never
+/// stores more than the fine `N²` dense system's solution and panels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BemSolution {
+    /// Net charge `Q = Σ σ_j l_j`; grounded isolated-neutral requires `|Q|` at
+    /// the roundoff scale.
+    pub net_charge: f64,
+    /// Dense elimination work for the fine run: `N³`.
+    pub work_units: u64,
+    /// Radius of the fixed 8-point probe ring used for convergence.
+    pub probe_radius: f64,
+    outline: ConductorOutline,
+    applied: [f64; 2],
+    elements: u32,
+    extent: f64,
+    panels: Vec<BemPanel>,
+    convergence: BemConvergence,
+}
+
+impl BemSolution {
+    /// Total electric field at `point`, in normalized display units.
+    ///
+    /// The 2D conductor is an infinite cylinder, so only the in-plane
+    /// coordinates matter. A non-finite point, a net-charge residual or a
+    /// singular distance returns an explicit error; never NaN/Inf.
+    pub fn field_at(&self, point: Vec3) -> Result<Vec3, MaxwellError> {
+        if !point.is_finite() {
+            return Err(MaxwellError::Unsupported(
+                "sample point must be finite".into(),
+            ));
+        }
+        self.check_net_charge()?;
+        let field = field_from_panels(
+            self.applied,
+            &self.panels,
+            [f64::from(point.x), f64::from(point.y)],
+            self.extent,
+        )?;
+        finite(DVec3::new(field.x, field.y, 0.0))
+    }
+
+    /// Reject a grounded isolated-neutral solve whose net charge is not at the
+    /// documented roundoff scale.
+    pub fn check_net_charge(&self) -> Result<(), MaxwellError> {
+        let applied =
+            (self.applied[0] * self.applied[0] + self.applied[1] * self.applied[1]).sqrt();
+        let limit = 1e-6 * (applied * self.extent).max(1.0);
+        if !self.net_charge.is_finite() || self.net_charge.abs() > limit {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_NET_CHARGE_WARNING.into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Coarse/fine convergence evidence for this solve.
+    pub fn convergence(&self) -> BemConvergence {
+        self.convergence
+    }
+
+    /// Test-only seam for the net-charge rejection path. Production callers
+    /// never mutate a solved solution.
+    #[doc(hidden)]
+    pub fn force_net_charge_for_test(&mut self, net_charge: f64) {
+        self.net_charge = net_charge;
+    }
+
+    fn matches_scene(&self, scene: &MaxwellScene) -> bool {
+        scene.case == MaxwellCase::Conductor2D
+            && self.elements == scene.elements
+            && self.outline == scene.outline
+            && self.applied == scene.applied
+    }
+}
+
+struct PanelRun {
+    panels: Vec<BemPanel>,
+    net_charge: f64,
+    work_units: u64,
+}
+
+/// Solve the bounded grounded 2D conductor for `scene`.
+///
+/// `scene.elements` is the fine panel count and the coarse diagnostic run is
+/// exactly `elements / 2`. Only [`ConductorOutline::Circle`] and
+/// [`ConductorOutline::Square`] are supported; every singular, non-finite or
+/// net-charged path returns [`MaxwellError::Unavailable`].
+pub fn solve_bem(scene: &MaxwellScene) -> Result<BemSolution, MaxwellError> {
+    if scene.case != MaxwellCase::Conductor2D {
+        return Err(MaxwellError::Unsupported(
+            "solve_bem only supports the 2D conductor cross-section".into(),
+        ));
+    }
+    validate_maxwell(scene)?;
+    let fine_elements = scene.elements;
+    let coarse_elements = fine_elements / 2;
+    if coarse_elements == fine_elements {
+        return Err(MaxwellError::Unavailable(
+            "Conductor2D coarse and fine panel counts must differ".into(),
+        ));
+    }
+    let fine = solve_panels(scene, fine_elements)?;
+    let coarse = solve_panels(scene, coarse_elements)?;
+    let extent = outline_extent(scene.outline);
+    let convergence = converge(
+        scene.applied,
+        &fine.panels,
+        &coarse.panels,
+        extent,
+        coarse_elements,
+        fine_elements,
+    )?;
+    let solution = BemSolution {
+        net_charge: fine.net_charge,
+        work_units: fine.work_units,
+        probe_radius: probe_radius(extent),
+        outline: scene.outline,
+        applied: scene.applied,
+        elements: fine_elements,
+        extent,
+        panels: fine.panels,
+        convergence,
+    };
+    solution.check_net_charge()?;
+    Ok(solution)
+}
+
+fn outline_extent(outline: ConductorOutline) -> f64 {
+    match outline {
+        ConductorOutline::Circle { radius } => radius,
+        ConductorOutline::Square { half_extent } => half_extent,
+    }
+}
+
+fn probe_radius(extent: f64) -> f64 {
+    4.0 * extent.max(1e-6)
+}
+
+fn converge(
+    applied: [f64; 2],
+    fine: &[BemPanel],
+    coarse: &[BemPanel],
+    extent: f64,
+    coarse_elements: u32,
+    fine_elements: u32,
+) -> Result<BemConvergence, MaxwellError> {
+    let radius = probe_radius(extent);
+    let applied_magnitude = (applied[0] * applied[0] + applied[1] * applied[1]).sqrt();
+    let mut max_difference: f64 = 0.0;
+    let mut max_normalizer: f64 = 0.0;
+    for index in 0..8 {
+        let angle = std::f64::consts::TAU * index as f64 / 8.0;
+        let point = [radius * angle.cos(), radius * angle.sin()];
+        let fine_field = field_from_panels(applied, fine, point, extent)?;
+        let coarse_field = field_from_panels(applied, coarse, point, extent)?;
+        let difference = (fine_field - coarse_field).length();
+        let normalizer = fine_field.length().max(applied_magnitude).max(1e-9);
+        if !difference.is_finite() || !normalizer.is_finite() {
+            return Err(MaxwellError::Unavailable(
+                "Conductor2D BEM convergence produced a non-finite field".into(),
+            ));
+        }
+        max_difference = max_difference.max(difference);
+        max_normalizer = max_normalizer.max(normalizer);
+    }
+    let relative_difference = max_difference / max_normalizer;
+    if !relative_difference.is_finite() {
+        return Err(MaxwellError::Unavailable(
+            "Conductor2D BEM convergence is non-finite".into(),
+        ));
+    }
+    Ok(BemConvergence {
+        coarse_elements,
+        fine_elements,
+        relative_difference,
+        target: MAXWELL_BEM_TARGET,
+    })
+}
+
+fn solve_panels(scene: &MaxwellScene, count: u32) -> Result<PanelRun, MaxwellError> {
+    let panels = build_panels(scene.outline, count)?;
+    let n = panels.len();
+    if n == 0 {
+        return Err(MaxwellError::Unavailable(
+            MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+        ));
+    }
+    let mut matrix = vec![0.0_f64; n * n];
+    let mut rhs = vec![0.0_f64; n];
+    for i in 0..n {
+        let xi = panels[i].midpoint;
+        for j in 0..n {
+            let value = if i == j {
+                let length = panels[j].length;
+                length / std::f64::consts::TAU * (1.0 - (0.5 * length).ln())
+            } else {
+                let xj = panels[j].midpoint;
+                let dx = xi[0] - xj[0];
+                let dy = xi[1] - xj[1];
+                let squared = dx * dx + dy * dy;
+                if !squared.is_finite() || squared <= 0.0 {
+                    return Err(MaxwellError::Unavailable(
+                        MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+                    ));
+                }
+                -0.5 / std::f64::consts::PI * 0.5 * squared.ln() * panels[j].length
+            };
+            if !value.is_finite() {
+                return Err(MaxwellError::Unavailable(
+                    MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+                ));
+            }
+            matrix[i * n + j] = value;
+        }
+        rhs[i] = scene.applied[0] * xi[0] + scene.applied[1] * xi[1];
+        if !rhs[i].is_finite() {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+            ));
+        }
+    }
+    let charges = gaussian_solve(matrix, rhs, n)?;
+    let mut net_charge = 0.0;
+    let mut solved = panels;
+    for (panel, charge) in solved.iter_mut().zip(charges) {
+        if !charge.is_finite() {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+            ));
+        }
+        panel.charge = charge;
+        net_charge += charge * panel.length;
+    }
+    if !net_charge.is_finite() {
+        return Err(MaxwellError::Unavailable(
+            MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+        ));
+    }
+    Ok(PanelRun {
+        panels: solved,
+        net_charge,
+        work_units: (n as u64).pow(3),
+    })
+}
+
+fn build_panels(outline: ConductorOutline, count: u32) -> Result<Vec<BemPanel>, MaxwellError> {
+    let n = count as usize;
+    if n < 2 {
+        return Err(MaxwellError::Unavailable(
+            MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+        ));
+    }
+    let extent = outline_extent(outline);
+    if !extent.is_finite() || extent <= 0.0 {
+        return Err(MaxwellError::InvalidScene(
+            "conductor outline must be finite and greater than zero".into(),
+        ));
+    }
+    let mut panels = Vec::with_capacity(n);
+    match outline {
+        ConductorOutline::Circle { radius } => {
+            let length = std::f64::consts::TAU * radius / n as f64;
+            for index in 0..n {
+                let angle = std::f64::consts::TAU * (index as f64 + 0.5) / n as f64;
+                panels.push(BemPanel {
+                    midpoint: [radius * angle.cos(), radius * angle.sin()],
+                    length,
+                    charge: 0.0,
+                });
+            }
+        }
+        ConductorOutline::Square { half_extent } => {
+            let perimeter = 8.0 * half_extent;
+            let length = perimeter / n as f64;
+            for index in 0..n {
+                let along = (index as f64 + 0.5) * length;
+                panels.push(BemPanel {
+                    midpoint: square_point(along, half_extent),
+                    length,
+                    charge: 0.0,
+                });
+            }
+        }
+    }
+    Ok(panels)
+}
+
+fn square_point(along: f64, half_extent: f64) -> [f64; 2] {
+    let side = 2.0 * half_extent;
+    let perimeter = 4.0 * side;
+    let s = along.rem_euclid(perimeter);
+    if s < side {
+        [-half_extent + s, -half_extent]
+    } else if s < 2.0 * side {
+        [half_extent, -half_extent + (s - side)]
+    } else if s < 3.0 * side {
+        [half_extent - (s - 2.0 * side), half_extent]
+    } else {
+        [-half_extent, half_extent - (s - 3.0 * side)]
+    }
+}
+
+fn gaussian_solve(
+    mut matrix: Vec<f64>,
+    mut rhs: Vec<f64>,
+    n: usize,
+) -> Result<Vec<f64>, MaxwellError> {
+    let mut scale = vec![0.0_f64; n];
+    for row in 0..n {
+        let mut largest = 0.0_f64;
+        for column in 0..n {
+            let value = matrix[row * n + column].abs();
+            if !value.is_finite() {
+                return Err(MaxwellError::Unavailable(
+                    MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+                ));
+            }
+            largest = largest.max(value);
+        }
+        if largest == 0.0 {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+            ));
+        }
+        scale[row] = largest;
+    }
+    for column in 0..n {
+        let mut pivot = column;
+        let mut best = matrix[column * n + column].abs();
+        for row in (column + 1)..n {
+            let value = matrix[row * n + column].abs();
+            if value > best {
+                best = value;
+                pivot = row;
+            }
+        }
+        if !best.is_finite() || best <= 1e-12 * scale[pivot] {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+            ));
+        }
+        if pivot != column {
+            for c in 0..n {
+                matrix.swap(column * n + c, pivot * n + c);
+            }
+            rhs.swap(column, pivot);
+            scale.swap(column, pivot);
+        }
+        let pivot_value = matrix[column * n + column];
+        for row in (column + 1)..n {
+            let factor = matrix[row * n + column] / pivot_value;
+            if !factor.is_finite() {
+                return Err(MaxwellError::Unavailable(
+                    MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+                ));
+            }
+            matrix[row * n + column] = 0.0;
+            if factor != 0.0 {
+                for c in (column + 1)..n {
+                    matrix[row * n + c] -= factor * matrix[column * n + c];
+                }
+                rhs[row] -= factor * rhs[column];
+                if !rhs[row].is_finite() {
+                    return Err(MaxwellError::Unavailable(
+                        MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+                    ));
+                }
+            }
+        }
+    }
+    let mut solution = vec![0.0_f64; n];
+    for row in (0..n).rev() {
+        let mut value = rhs[row];
+        for column in (row + 1)..n {
+            value -= matrix[row * n + column] * solution[column];
+        }
+        let diagonal = matrix[row * n + row];
+        if !diagonal.is_finite() || diagonal == 0.0 {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+            ));
+        }
+        solution[row] = value / diagonal;
+        if !solution[row].is_finite() {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_ILL_CONDITIONED_WARNING.into(),
+            ));
+        }
+    }
+    Ok(solution)
+}
+
+fn field_from_panels(
+    applied: [f64; 2],
+    panels: &[BemPanel],
+    point: [f64; 2],
+    extent: f64,
+) -> Result<DVec2, MaxwellError> {
+    let mut field = DVec2::new(applied[0], applied[1]);
+    let minimum_squared = (1e-12 * extent.max(1e-6)).powi(2);
+    for panel in panels {
+        let dx = point[0] - panel.midpoint[0];
+        let dy = point[1] - panel.midpoint[1];
+        let squared = dx * dx + dy * dy;
+        if !squared.is_finite() || squared <= minimum_squared {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_SINGULAR_FIELD_WARNING.into(),
+            ));
+        }
+        let weight = panel.charge * panel.length / (std::f64::consts::TAU * squared);
+        field.x += weight * dx;
+        field.y += weight * dy;
+    }
+    if !field.is_finite() {
+        return Err(MaxwellError::Unavailable(
+            "Conductor2D BEM field is non-finite".into(),
+        ));
+    }
+    Ok(field)
+}
+
+/// Evaluate a Maxwell case with an optional cached 2D BEM conductor solution.
+///
+/// Non-conductor cases ignore `bem`. `Conductor2D` requires a matching cached
+/// [`BemSolution`]; without one it returns [`MaxwellError::Unavailable`] rather
+/// than solving per point.
+pub fn maxwell_field_with_bem(
+    scene: &MaxwellScene,
+    point: Vec3,
+    bem: Option<&BemSolution>,
+) -> Result<Vec3, MaxwellError> {
+    if scene.case != MaxwellCase::Conductor2D {
+        return maxwell_field(scene, point);
+    }
+    validate_maxwell(scene)?;
+    let Some(solution) = bem else {
+        return Err(MaxwellError::Unavailable(
+            MAXWELL_BEM_PENDING_WARNING.into(),
+        ));
+    };
+    if !solution.matches_scene(scene) {
+        return Err(MaxwellError::Unavailable(MAXWELL_BEM_STALE_WARNING.into()));
+    }
+    solution.field_at(point)
+}
+
 fn case_tolerance(scale: f64) -> f64 {
     MAXWELL_INTERFACE_TOLERANCE_FACTOR * scale.max(1.0)
 }
@@ -542,18 +1018,44 @@ pub fn maxwell_outline(
     }
 }
 
-/// Sample the selected analytic case over the 3D grid or one 2D slice.
+/// Sample the selected case over the 3D grid or one 2D slice.
 ///
 /// Sampling never densifies the input grid and never clamps a finite value:
 /// exact interfaces, singularities, degenerate vectors and extreme finite
-/// magnitudes are omitted and counted.
+/// magnitudes are omitted and counted. `Conductor2D` never solves here; its 3D
+/// form is unavailable and its 2D form needs a cached [`BemSolution`] via
+/// [`sample_maxwell_with_bem`].
 pub fn sample_maxwell(
     scene: &MaxwellScene,
     domain: &Domain,
     grid: UVec3,
     plane: Option<&PlaneFrame>,
 ) -> MaxwellSampling {
-    let mut sampling = MaxwellSampling {
+    sample_maxwell_with_bem(scene, domain, grid, plane, None)
+}
+
+/// Sample the selected case with an optional cached 2D BEM conductor solution.
+///
+/// Only `Conductor2D` reads `bem`. With no plane it returns the exact 3D
+/// applicability message; with a plane but no matching solution it returns
+/// `Unavailable` and draws nothing. Every other case delegates to the analytic
+/// sampler and ignores `bem`.
+pub fn sample_maxwell_with_bem(
+    scene: &MaxwellScene,
+    domain: &Domain,
+    grid: UVec3,
+    plane: Option<&PlaneFrame>,
+    bem: Option<&BemSolution>,
+) -> MaxwellSampling {
+    if scene.case == MaxwellCase::Conductor2D {
+        sample_conductor_2d(scene, domain, grid, plane, bem)
+    } else {
+        sample_analytic(scene, domain, grid, plane)
+    }
+}
+
+fn empty_sampling(scene: &MaxwellScene) -> MaxwellSampling {
+    MaxwellSampling {
         arrows: Vec::new(),
         family: maxwell_family(scene.case),
         case: scene.case,
@@ -566,7 +1068,142 @@ pub fn sample_maxwell(
         out_of_plane_suppressed: false,
         accuracy: MaxwellStop::TargetMet,
         convergence: None,
+    }
+}
+
+fn sample_conductor_2d(
+    scene: &MaxwellScene,
+    _domain: &Domain,
+    grid: UVec3,
+    plane: Option<&PlaneFrame>,
+    bem: Option<&BemSolution>,
+) -> MaxwellSampling {
+    let mut sampling = empty_sampling(scene);
+    if let Err(error) = validate_maxwell(scene) {
+        sampling.accuracy = MaxwellStop::Unavailable;
+        sampling.warning = Some(error_text(&error));
+        return sampling;
+    }
+    let Some(frame) = plane else {
+        sampling.accuracy = MaxwellStop::Unavailable;
+        sampling.warning = Some(MAXWELL_SWITCH_2D_WARNING.to_string());
+        return sampling;
     };
+    let Some(solution) = bem else {
+        sampling.accuracy = MaxwellStop::Unavailable;
+        sampling.warning = Some(MAXWELL_BEM_PENDING_WARNING.to_string());
+        return sampling;
+    };
+    if !solution.matches_scene(scene) {
+        sampling.accuracy = MaxwellStop::Unavailable;
+        sampling.warning = Some(MAXWELL_BEM_STALE_WARNING.to_string());
+        return sampling;
+    }
+    if let Err(error) = solution.check_net_charge() {
+        sampling.accuracy = MaxwellStop::Unavailable;
+        sampling.warning = Some(error_text(&error));
+        return sampling;
+    }
+
+    let effective_domain = frame.local_domain();
+    let effective_grid = UVec3::new(grid.x, grid.y, 1);
+    if !sampling_domain_is_valid(&effective_domain, effective_grid, true) {
+        sampling.accuracy = MaxwellStop::Unavailable;
+        sampling.warning = Some(MAXWELL_EMPTY_DOMAIN_WARNING.to_string());
+        return sampling;
+    }
+
+    let convergence = solution.convergence();
+    sampling.convergence = Some(convergence);
+    let accurate = convergence.relative_difference.is_finite()
+        && convergence.relative_difference <= MAXWELL_BEM_TARGET;
+    sampling.accuracy = if accurate {
+        MaxwellStop::TargetMet
+    } else {
+        MaxwellStop::AccuracyNotMet
+    };
+    let mut warnings = vec![MAXWELL_BEM_NOTE];
+    if !accurate {
+        warnings.push(MAXWELL_ACCURACY_NOT_MET_WARNING);
+        if !scene.allow_inaccurate {
+            sampling.warning = Some(warnings.join("; "));
+            return sampling;
+        }
+    }
+
+    let applied_magnitude =
+        (scene.applied[0] * scene.applied[0] + scene.applied[1] * scene.applied[1]).sqrt();
+    let magnitude_limit = MAXWELL_MAX_RELATIVE * applied_magnitude.max(1e-9);
+    let extent = outline_extent(scene.outline);
+    let interior_tolerance = 1e-6 * extent.max(1.0);
+    let color = ELECTRIC_COLOR;
+
+    for raw_local in effective_domain.grid_points(effective_grid) {
+        let world = frame.to_world(raw_local);
+        if !raw_local.is_finite() || !world.is_finite() {
+            sampling.omitted += 1;
+            continue;
+        }
+        let planar = [f64::from(world.x), f64::from(world.y)];
+        // The BEM field is the exterior solution; the conductor interior is
+        // not a field region and is never drawn as a continuation.
+        if conductor_contains(scene.outline, planar, interior_tolerance) {
+            sampling.omitted += 1;
+            continue;
+        }
+        let full = match solution.field_at(world) {
+            Ok(value) if value.is_finite() => value,
+            _ => {
+                sampling.omitted += 1;
+                continue;
+            }
+        };
+        let full_length = f64::from(full.length());
+        if !full_length.is_finite() || full_length < DEGENERATE_MAGNITUDE {
+            sampling.omitted += 1;
+            continue;
+        }
+        if full_length > magnitude_limit {
+            sampling.omitted_large += 1;
+            sampling.omitted += 1;
+            continue;
+        }
+        let selected = frame.project(full);
+        let projected_length = f64::from(selected.length());
+        if full_length >= DEGENERATE_MAGNITUDE && projected_length < 0.1 * full_length {
+            sampling.out_of_plane_suppressed = true;
+        }
+        if !selected.is_finite() || projected_length < DEGENERATE_MAGNITUDE {
+            sampling.omitted += 1;
+            continue;
+        }
+        let dir = selected / projected_length as f32;
+        if !dir.is_finite() {
+            sampling.omitted += 1;
+            continue;
+        }
+        sampling.arrows.push(ArrowData {
+            position: raw_local,
+            dir,
+            mag: projected_length as f32,
+            color,
+        });
+    }
+
+    if sampling.out_of_plane_suppressed {
+        warnings.push(MAXWELL_PROJECTION_WARNING);
+    }
+    sampling.warning = Some(warnings.join("; "));
+    sampling
+}
+
+fn sample_analytic(
+    scene: &MaxwellScene,
+    domain: &Domain,
+    grid: UVec3,
+    plane: Option<&PlaneFrame>,
+) -> MaxwellSampling {
+    let mut sampling = empty_sampling(scene);
 
     if let Err(error) = validate_maxwell(scene) {
         sampling.accuracy = MaxwellStop::Unavailable;
@@ -755,6 +1392,17 @@ fn on_interface(scene: &MaxwellScene, point: Vec3, tolerance: f64) -> bool {
         }
         MaxwellCase::ImagePlane => p.z.abs() <= tolerance,
         MaxwellCase::Conductor2D => false,
+    }
+}
+
+fn conductor_contains(outline: ConductorOutline, point: [f64; 2], tolerance: f64) -> bool {
+    match outline {
+        ConductorOutline::Circle { radius } => {
+            (point[0] * point[0] + point[1] * point[1]).sqrt() <= radius + tolerance
+        }
+        ConductorOutline::Square { half_extent } => {
+            point[0].abs() <= half_extent + tolerance && point[1].abs() <= half_extent + tolerance
+        }
     }
 }
 

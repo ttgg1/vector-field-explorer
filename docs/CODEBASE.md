@@ -1174,10 +1174,11 @@ persistence dependency.
 **Public API.** `MaxwellCase` (plus `MaxwellCase::ALL`), `MaxwellFamily`,
 `MaxwellView::{Field}`, `ConductorOutline`, `MaxwellScene` (`Debug`, `Clone`,
 `PartialEq`, `Default`, serde), `MaxwellError`, `MaxwellSampling`,
-`MaxwellLine`, `BemConvergence`, `MaxwellStop`, `maxwell_family`,
+`MaxwellLine`, `BemConvergence`, `BemSolution`, `MaxwellStop`, `maxwell_family`,
 `maxwell_assumptions`, `maxwell_warning`, `validate_maxwell`, `maxwell_field`,
-`maxwell_outline`, and `sample_maxwell`. Constants are
-`MAXWELL_MAX_DENSITY_3D`, `MAXWELL_MAX_DENSITY_2D`, `MAXWELL_MAX_BEM_ELEMENTS`,
+`maxwell_field_with_bem`, `maxwell_outline`, `solve_bem`, `sample_maxwell`, and
+`sample_maxwell_with_bem`. Constants are `MAXWELL_MAX_DENSITY_3D`,
+`MAXWELL_MAX_DENSITY_2D`, `MAXWELL_MAX_BEM_ELEMENTS`,
 `MAXWELL_BEM_MIN_ELEMENTS`, `MAXWELL_BEM_TARGET`,
 `MAXWELL_INTERFACE_TOLERANCE_FACTOR`, `MAXWELL_MAX_RELATIVE`,
 `MAXWELL_MAX_AMPLITUDE`, and the exported exact warning strings.
@@ -1190,8 +1191,25 @@ exactly on a discontinuity return `MaxwellError::Unsupported`. The image plane
 returns zero for `z <= 0` (the unsupported half-space is not an error) and
 rejects only the real charge point; a point just above the plane keeps its
 O(`z/h`) tangential component, so boundary tests use a relative tolerance.
-`Conductor2D` is `Unavailable` in 3D with the exact "switch to 2D" message; until
-Task 2 lands its 2D solve also reports `Unavailable`, never fabricated arrows.
+`Conductor2D` is `Unavailable` in 3D with the exact "switch to 2D" message. Its
+2D solve is a bounded constant-panel collocation BEM supplied by the caller;
+`sample_maxwell` never solves, and missing/stale solutions report `Unavailable`
+rather than fabricated arrows.
+
+**2D BEM conductor.** `solve_bem` accepts only `Conductor2D`; `scene.elements` is
+the fine panel count (even, `32..=256`) and the coarse diagnostic run is exactly
+`elements / 2`. Panels are constant-density with midpoint collocation on the
+circle or square outline; the 2D Laplace Green's function `-ln(r)/(2π)` gives a
+dense `N²` matrix and Gaussian elimination with partial pivoting (pivot threshold
+`1e-12 * row scale`) uses `N³` work. Non-finite or singular systems return
+`Unavailable`; solved panels are checked for the grounded isolated-neutral net
+charge `|Q| <= 1e-6 * max(|E0| * extent, 1)`. Convergence compares the fields at
+a fixed 8-point ring at `4 * max(outline_extent, 1e-6)` with one global
+normalization `max_probe(max(|E_fine|, |E0|, 1e-9))`; missing the target is an
+explicit `AccuracyNotMet` and draws only with the scene's opt-in. The 2D sampler
+omits the conductor interior, boundary singularities, degenerate and extreme
+arrows, and joins the BEM approximation, `accuracy not met` and projection
+warnings deterministically.
 
 **Sampling.** The 3D grid is sampled in world space; a 2D slice samples the
 frame's local grid, evaluates the same world field and projects the selected
@@ -1224,13 +1242,23 @@ still warns and omits exactly-on-interface samples.
 `azimuthal_2d_slice_warns_about_the_suppressed_component`,
 `coincident_ground_slice_warns_and_shows_no_field`,
 `exact_interface_slice_warns_and_omits_every_sample`, and
-`outline_and_validation_cover_supported_geometry`.
+`outline_and_validation_cover_supported_geometry`. The BEM path is pinned by
+[tests/maxwell_bem_test.rs](../tests/maxwell_bem_test.rs):
+`grounded_circle_solve_matches_the_dipole_far_field`,
+`square_refines_globally_and_never_reports_identical_coarse_fine`,
+`max_elements_still_uses_a_distinct_coarse_run`,
+`net_charge_residual_is_explicit`,
+`slice_2d_sampling_uses_the_solved_field_and_projection_warning`,
+`slice_2d_sampling_without_a_solution_is_explicitly_unavailable`,
+`conductor_3d_sampling_is_unavailable_with_the_design_message`, and
+`stale_solution_and_non_conductor_scenes_are_explicit`.
 
 **Limitations.** Closed-form ideal cases only: no 3D BEM/FEM, arbitrary CSG,
 full-wave/FDTD, displacement current, radiation, retardation, nonlinear or
 anisotropic media. The infinite wire is a thin surface-current shell and the
-image cases assume infinite ideal boundaries. The 2D BEM conductor, mode UI,
-persistence, export and benchmark land in later tasks.
+image cases assume infinite ideal boundaries. The 2D BEM conductor is a bounded
+constant-panel infinite-cylinder approximation, not a 3D finite conductor. Mode
+UI, persistence, export and the benchmark land in later tasks.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
