@@ -355,6 +355,33 @@ What a single left click in the viewport does: seed a streamline or add a
 particle burst. The two are exclusive.
 _Avoid_: click mode, click behavior
 
+## Export
+
+**Animation export**:
+A deterministic render of a time-dependent Formula field, animated Induction
+scene, or particle playback to an animated GIF, or on native to MP4/WebM
+through an external ffmpeg. It steps a detached snapshot by an explicit frame
+interval and never advances live playback or starts a second clock.
+_Avoid_: video capture, screen recording, playback recording
+
+**Frame schedule**:
+The list of `ceil(duration * fps)` presentation times `start + i / fps` for an
+animation, with frame 0 at the captured start time and no duplicated endpoint.
+_Avoid_: timeline, keyframes, frame rate
+
+**GIF delay**:
+The per-frame GIF delay in centiseconds, `round(100 / fps).max(1)`. It can make
+the played duration differ slightly from the requested duration; it is not a
+second simulation clock.
+_Avoid_: frame time, fps
+
+**ffmpeg-backed video**:
+Native-only MP4 or WebM output produced by piping raw frames to a user-installed
+`ffmpeg` (or the executable named by `VFE_FFMPEG`). It is not bundled, not
+available in the browser, and a missing executable is an error rather than a GIF
+fallback.
+_Avoid_: built-in codec, browser video, GIF fallback
+
 ## Physics (future scope)
 
 The following concepts are not implemented in v0.1.0; they are reserved for

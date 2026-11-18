@@ -37,7 +37,8 @@ The field is formula-driven:
   `x`, `y`, `z`.
 - Sampling, arrows, streamlines, particles, colormaps, plane inspection, two
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
-  screenshots, and persistence are all in this tree.
+  screenshots, deterministic GIF/ffmpeg animation export, and persistence are
+  all in this tree.
 - The app is a teaching-grade explorer, not a general numerical solver. The
   pure source-evaluator slice in `src/sources` evaluates all eight softened
   source geometries: point charges, finite charged lines, charged rings, charged
@@ -202,6 +203,44 @@ the ordering of the Rust gate.
 `web/webgpu.js` are copied/served by Trunk ([Trunk.toml](../Trunk.toml)). The
 `vfe-canvas` id is the mount point.
 
+### 2.4 Animation export path
+
+`File > Export animation…` and the native CLI share one encoder contract but
+different render owners.
+
+1. `AnimationEligibility::from_state` accepts a time-dependent Formula/particle
+   scene or an animated Induction scene. Sources, Materials, Ode, scalar plots
+   and static scenes are rejected with the exact user-facing reason; the CLI
+   never constructs Induction and covers Formula/particles only.
+2. The GUI pauses playback and captures `AnimationSnapshot::capture`; the CLI
+   builds `prepare_animation_snapshot`, preadvancing particles from 0 to
+   `--start-time` with the still `--fixed-step`. The snapshot owns cloned `State`,
+   `Particles`, camera and clear colour; the live app and shared clock are not
+   stepped.
+3. `AnimationSpec::validate` enforces fps `1..=30`, duration `0.1..=60 s`, at
+   most 1800 frames, 8,388,608 pixels/frame and 512 MiB, plus even video
+   dimensions. `frame_count = ceil(duration * fps)` and frame `i` is at
+   `start + i / fps`, without a duplicated endpoint.
+4. Each frame calls `AnimationSnapshot::frame_at(time, 1/fps, aspect, first)`,
+   which rebuilds through the shared Formula/Induction scene assembly and
+   advances particles only on later frames through `advance_exact` (1/120 s
+   substeps plus remainder). No GUI `MAX_STEP` clamp or playback speed applies.
+5. `apply_export_banner` paints the capture-time provenance on every frame. The
+   GUI `AnimationJob::pump` renders at most one frame per app update and pushes
+   it to a `FrameSink`; the CLI loops the same `AnimationSnapshot` through one
+   `HeadlessRenderSession`. `gif_sink` streams a local-palette GIF; `video_sink`
+   pipes raw RGBA to ffmpeg and embeds a sanitized metadata comment. GIF has no
+   metadata contract.
+6. `FrameSink::finish` checks the byte budget and atomically replaces the
+   destination. Every error, cancel or dropped sink removes the sibling `.tmp`
+   file, so no final output is claimed from a partial encode. Screenshot and
+   animation capture are mutually exclusive.
+
+The browser uses `memory_gif_sink` and a GIF download, with a 2048-pixel edge
+validation limit; there is no wasm video path. GUI and CLI evidence, including a
+real ffmpeg attempt, is in
+[docs/perf/animation-performance.md](perf/animation-performance.md).
+
 ---
 
 ## 3. Module reference
@@ -303,7 +342,10 @@ fake-ffmpeg process tests are Unix-only.
 
 **Limitation.** GIF color quantization may band on large viridis/neodymium
 frames; dithering is intentionally off. Video is native-only and requires a
-user-installed ffmpeg.
+user-installed ffmpeg. The 2026-11-18 native evidence run recorded real
+MP4/WebM export failing because ffmpeg could not infer a muxer from the
+sibling `.<name>.mp4.tmp` output filename; GIF passed. See
+[docs/perf/animation-performance.md](perf/animation-performance.md).
 
 #### `src/animation_scene.rs` — detached animation frame source
 
