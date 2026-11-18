@@ -69,6 +69,7 @@ mod material_export_test;
 mod material_panel_test;
 mod material_persistence_test;
 mod material_test;
+mod maxwell_app_test;
 mod maxwell_bem_test;
 mod maxwell_test;
 mod menu_test;

@@ -3,8 +3,9 @@
 use glam::{UVec3, Vec3};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::maxwell::{
-    ConductorOutline, MAXWELL_BEM_TARGET, MAXWELL_MAX_BEM_ELEMENTS, MAXWELL_SWITCH_2D_WARNING,
-    MaxwellCase, MaxwellError, MaxwellScene, MaxwellStop, sample_maxwell_with_bem, solve_bem,
+    ConductorOutline, MAXWELL_BEM_PENDING_WARNING, MAXWELL_BEM_TARGET, MAXWELL_MAX_BEM_ELEMENTS,
+    MAXWELL_SWITCH_2D_WARNING, MaxwellCase, MaxwellError, MaxwellScene, MaxwellStop,
+    sample_maxwell_with_bem, solve_bem,
 };
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 
@@ -121,7 +122,7 @@ fn slice_2d_sampling_without_a_solution_is_explicitly_unavailable() {
     );
     assert_eq!(sample.accuracy, MaxwellStop::Unavailable);
     assert!(sample.arrows.is_empty());
-    assert!(sample.warning.is_some());
+    assert_eq!(sample.warning.as_deref(), Some(MAXWELL_BEM_PENDING_WARNING));
 }
 
 #[test]
@@ -154,9 +155,34 @@ fn stale_solution_and_non_conductor_scenes_are_explicit() {
     assert_eq!(sample.accuracy, MaxwellStop::Unavailable);
     assert!(sample.arrows.is_empty());
 
+    for stale in [
+        MaxwellScene {
+            elements: 64,
+            ..scene.clone()
+        },
+        MaxwellScene {
+            applied: [0.0, 1.0],
+            ..scene.clone()
+        },
+    ] {
+        let sample = sample_maxwell_with_bem(
+            &stale,
+            &domain,
+            UVec3::new(21, 21, 21),
+            Some(&z_slice(&domain, 10)),
+            Some(&solution),
+        );
+        assert_eq!(sample.accuracy, MaxwellStop::Unavailable);
+        assert!(sample.arrows.is_empty());
+    }
+
     assert!(matches!(
         solve_bem(&bem(MaxwellCase::ParallelPlates)),
         Err(MaxwellError::Unsupported(_))
     ));
     assert!(solution.field_at(Vec3::new(f32::NAN, 0.0, 0.0)).is_err());
+    // The solve is the exterior field; interior/boundary points are rejected
+    // instead of extrapolated.
+    assert!(solution.field_at(Vec3::ZERO).is_err());
+    assert!(solution.field_at(Vec3::new(1.0, 0.0, 0.0)).is_err());
 }

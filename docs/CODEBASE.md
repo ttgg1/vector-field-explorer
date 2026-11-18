@@ -928,7 +928,7 @@ untouched.
 
 **Purpose.** Owns the editable source list and its scene-wide display settings
 without duplicating source math or validation. `FieldMode` selects Formula,
-Sources, Induction, Materials or Ode; `SourceDisplay` selects Electric,
+Sources, Induction, Materials, Ode or Maxwell; `SourceDisplay` selects Electric,
 Magnetic or Both;
 `SourceEntry` pairs
 an enabled flag with a `Source`; `SourceScene` holds the entries, display,
@@ -1177,11 +1177,13 @@ persistence dependency.
 `MaxwellLine`, `BemConvergence`, `BemSolution`, `MaxwellStop`, `maxwell_family`,
 `maxwell_assumptions`, `maxwell_warning`, `validate_maxwell`, `maxwell_field`,
 `maxwell_field_with_bem`, `maxwell_outline`, `solve_bem`, `sample_maxwell`, and
-`sample_maxwell_with_bem`. Constants are `MAXWELL_MAX_DENSITY_3D`,
-`MAXWELL_MAX_DENSITY_2D`, `MAXWELL_MAX_BEM_ELEMENTS`,
-`MAXWELL_BEM_MIN_ELEMENTS`, `MAXWELL_BEM_TARGET`,
+`sample_maxwell_with_bem`. `BemSolution` exposes `field_at`, `check_net_charge`,
+`convergence`, `matches_scene` and the doc-hidden net-charge test seam. Constants
+are `MAXWELL_MAX_DENSITY_3D`, `MAXWELL_MAX_DENSITY_2D`,
+`MAXWELL_MAX_BEM_ELEMENTS`, `MAXWELL_BEM_MIN_ELEMENTS`, `MAXWELL_BEM_TARGET`,
 `MAXWELL_INTERFACE_TOLERANCE_FACTOR`, `MAXWELL_MAX_RELATIVE`,
-`MAXWELL_MAX_AMPLITUDE`, and the exported exact warning strings.
+`MAXWELL_MAX_AMPLITUDE`, `MAXWELL_DENSITY_CAP_WARNING`, and the exported exact
+warning strings.
 
 **Invariants.** Amplitudes are finite and within `±1e3`; geometry is finite and
 strictly positive; `outer_radius > radius`; `elements` is even and within
@@ -1194,7 +1196,11 @@ O(`z/h`) tangential component, so boundary tests use a relative tolerance.
 `Conductor2D` is `Unavailable` in 3D with the exact "switch to 2D" message. Its
 2D solve is a bounded constant-panel collocation BEM supplied by the caller;
 `sample_maxwell` never solves, and missing/stale solutions report `Unavailable`
-rather than fabricated arrows.
+rather than fabricated arrows. `BemSolution::field_at` is exterior-only:
+interior and boundary points are rejected with an explicit error, never
+extrapolated. A 2D view without a supplied solution uses the exact
+`Conductor2D needs a completed 2D boundary solve; no field is drawn yet.`
+message.
 
 **2D BEM conductor.** `solve_bem` accepts only `Conductor2D`; `scene.elements` is
 the fine panel count (even, `32..=256`) and the coarse diagnostic run is exactly
@@ -1221,6 +1227,27 @@ omission, extreme omission, projection suppression, coincident ground slice.
 Empty/impossible domains warn explicitly. A coincident `ImagePlane` `z=0` slice
 draws no field and warns that the ground slice is empty. Sampling never
 densifies the input grid.
+
+**State and app integration.** `FieldMode::Maxwell` samples the durable
+`State::maxwell: MaxwellScene` through `refresh_maxwell_sampling`; the app keeps
+`maxwell_sampling: Option<MaxwellSampling>`, `maxwell_error: Option<String>` and
+a private BEM cache. `set_maxwell_scene` validates before replacing anything, so
+an invalid edit keeps the last valid scene and sampling; a valid edit clears the
+cache, sampling and error. `refresh_maxwell_sampling` is the only path that may
+call `solve_bem`, at most once for a matching scene cache; plane, camera and
+sampling refreshes reuse it, and a failed solve is not retried until a scene
+edit/reset. The 3D grid is capped at `40^3` and the 2D plane at `200^2`, with the
+visible `MAXWELL_DENSITY_CAP_WARNING` when a request is reduced. Two-dimensional
+sampling uses the selected `PlaneFrame`; three-dimensional sampling uses the
+durable domain. Maxwell is arrows plus the case outline only: no formula
+streamlines, particles, trails, dots, click seeds, source/induction glyphs or
+clock consumer, and entering the mode preserves the camera and every durable
+scene. The app branch in `src/app/simulation.rs` composes the outline at
+`0.004 * scene extent` width before the formula path; status/sampling errors flow
+to the existing status slot. Test seams are `maxwell_arrow_count`,
+`maxwell_line_count`, `maxwell_scene`, `maxwell_sampling`, `maxwell_sampling_error`,
+`maxwell_bem_solves`, its `maxwell_bem_solve_count` alias, and
+`test_assemble_viewport_scene`.
 
 **2D and outline.** `maxwell_outline` draws world geometry in 3D (plates, coaxial
 circles, sphere great circles, wire axis and ticks, solenoid rings, image-plane
@@ -1251,14 +1278,27 @@ still warns and omits exactly-on-interface samples.
 `slice_2d_sampling_uses_the_solved_field_and_projection_warning`,
 `slice_2d_sampling_without_a_solution_is_explicitly_unavailable`,
 `conductor_3d_sampling_is_unavailable_with_the_design_message`, and
-`stale_solution_and_non_conductor_scenes_are_explicit`.
+`stale_solution_and_non_conductor_scenes_are_explicit` (outline, elements and
+applied-field mismatches plus interior rejection). The app/mode path is pinned by
+[tests/maxwell_app_test.rs](../tests/maxwell_app_test.rs):
+`maxwell_mode_isolated_from_formula_and_durable_scenes`,
+`maxwell_sampling_is_arrow_and_outline_only`,
+`maxwell_2d_uses_the_selected_plane`,
+`conductor_2d_solves_once_and_reuses_the_cache`,
+`conductor_2d_3d_is_unavailable_without_solving`,
+`invalid_maxwell_edit_retains_the_last_valid_scene_and_cache`,
+`maxwell_caps_apply_per_view`,
+`maxwell_mode_does_not_consume_the_clock_or_spawn_particles`,
+`maxwell_bem_failure_is_reported_and_not_retried_per_sample`, and
+`maxwell_round_trip_preserves_projection_and_camera`.
 
 **Limitations.** Closed-form ideal cases only: no 3D BEM/FEM, arbitrary CSG,
 full-wave/FDTD, displacement current, radiation, retardation, nonlinear or
 anisotropic media. The infinite wire is a thin surface-current shell and the
 image cases assume infinite ideal boundaries. The 2D BEM conductor is a bounded
-constant-panel infinite-cylinder approximation, not a 3D finite conductor. Mode
-UI, persistence, export and the benchmark land in later tasks.
+constant-panel infinite-cylinder approximation, not a 3D finite conductor. The
+responsive panel/selector/help, persistence, export and the benchmark land in
+later tasks.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 

@@ -21,8 +21,8 @@ pub const MIN_SOFTENING: f64 = 1e-6;
 pub const MAX_SOFTENING: f64 = 1.0;
 
 /// Which field source the viewport shows: a formula, the source scene, the
-/// induction demo, the ODE workbench (a vector-viewport concept mode), or the
-/// bounded analytic material cases.
+/// induction demo, the ODE workbench (a vector-viewport concept mode), the
+/// bounded analytic material cases, or the Maxwell teaching catalogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FieldMode {
     #[default]
@@ -31,6 +31,7 @@ pub enum FieldMode {
     Induction,
     Materials,
     Ode,
+    Maxwell,
 }
 
 /// Which field families the source scene displays.

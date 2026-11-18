@@ -564,7 +564,9 @@ pub(crate) fn compose_vector_lines(
             );
             crate::source_glyph::source_glyph_lines(&glyphs, &state.scene_domain())
         }
-        FieldMode::Formula | FieldMode::Materials | FieldMode::Ode => Vec::new(),
+        FieldMode::Formula | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
+            Vec::new()
+        }
     };
     let count = glyphs.len();
     lines.extend(glyphs);
@@ -583,6 +585,11 @@ pub(crate) fn scene_dots_range(state: &State) -> (f32, f32) {
             .unwrap_or((0.0, 1.0)),
         FieldMode::Materials => state
             .material_sampling
+            .as_ref()
+            .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
+            .unwrap_or((0.0, 1.0)),
+        FieldMode::Maxwell => state
+            .maxwell_sampling
             .as_ref()
             .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
             .unwrap_or((0.0, 1.0)),

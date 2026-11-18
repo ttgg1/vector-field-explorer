@@ -70,7 +70,7 @@ impl AnimationEligibility {
                     Self::disabled(INDUCTION_ANIMATION_REASON)
                 }
             }
-            FieldMode::Sources | FieldMode::Materials | FieldMode::Ode => {
+            FieldMode::Sources | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
                 Self::disabled(UNSUPPORTED_ANIMATION_REASON)
             }
         }

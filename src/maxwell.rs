@@ -50,9 +50,13 @@ pub const MAXWELL_EMPTY_DOMAIN_WARNING: &str = "The sampling domain or grid prod
 /// Exact 3D Conductor2D applicability text.
 pub const MAXWELL_SWITCH_2D_WARNING: &str =
     "Conductor2D is a 2D infinite-cylinder cross-section; switch to 2D.";
-/// Exact 2D Conductor2D pending-solver text.
+/// Exact 2D Conductor2D no-solution text.
 pub const MAXWELL_BEM_PENDING_WARNING: &str =
-    "Conductor2D 2D boundary solve is pending; no field is drawn yet.";
+    "Conductor2D needs a completed 2D boundary solve; no field is drawn yet.";
+/// Exact interior/boundary rejection text for the exterior-only BEM field.
+pub const MAXWELL_BEM_INTERIOR_WARNING: &str = "Conductor2D BEM field is defined only outside the conductor; interior and boundary points are not sampled.";
+/// Visible density-cap text; the app never truncates a requested grid silently.
+pub const MAXWELL_DENSITY_CAP_WARNING: &str = "Maxwell sampling density is capped at 40^3 in 3D and 200^2 in 2D; the requested density was reduced.";
 /// 2D BEM provenance line.
 pub const MAXWELL_BEM_NOTE: &str = "Conductor2D - infinite-cylinder BEM approximation";
 /// Stale cached-solution text.
@@ -425,15 +429,25 @@ pub struct BemSolution {
 }
 
 impl BemSolution {
-    /// Total electric field at `point`, in normalized display units.
+    /// Total electric field at an **exterior** point, in normalized display
+    /// units.
     ///
     /// The 2D conductor is an infinite cylinder, so only the in-plane
-    /// coordinates matter. A non-finite point, a net-charge residual or a
-    /// singular distance returns an explicit error; never NaN/Inf.
+    /// coordinates matter. The BEM solution is the exterior field: interior and
+    /// boundary points are rejected explicitly rather than extrapolated. A
+    /// non-finite point, a net-charge residual or a singular distance also
+    /// returns an explicit error; never NaN/Inf.
     pub fn field_at(&self, point: Vec3) -> Result<Vec3, MaxwellError> {
         if !point.is_finite() {
             return Err(MaxwellError::Unsupported(
                 "sample point must be finite".into(),
+            ));
+        }
+        let planar = [f64::from(point.x), f64::from(point.y)];
+        let tolerance = 1e-6 * self.extent.max(1.0);
+        if conductor_contains(self.outline, planar, tolerance) {
+            return Err(MaxwellError::Unavailable(
+                MAXWELL_BEM_INTERIOR_WARNING.into(),
             ));
         }
         self.check_net_charge()?;
@@ -472,7 +486,10 @@ impl BemSolution {
         self.net_charge = net_charge;
     }
 
-    fn matches_scene(&self, scene: &MaxwellScene) -> bool {
+    /// Whether this cached solve belongs to exactly this BEM scene (elements,
+    /// outline and applied field). Domain, plane and camera are deliberately
+    /// not part of the key: they never require another solve.
+    pub fn matches_scene(&self, scene: &MaxwellScene) -> bool {
         scene.case == MaxwellCase::Conductor2D
             && self.elements == scene.elements
             && self.outline == scene.outline

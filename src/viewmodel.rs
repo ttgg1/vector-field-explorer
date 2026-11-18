@@ -27,6 +27,11 @@ use crate::material::{
     MaterialError, MaterialSampling, MaterialScene, material_outline, sample_materials,
     validate_material,
 };
+use crate::maxwell::{
+    BemSolution, MAXWELL_DENSITY_CAP_WARNING, MAXWELL_MAX_DENSITY_2D, MAXWELL_MAX_DENSITY_3D,
+    MaxwellError, MaxwellSampling, MaxwellScene, maxwell_outline, sample_maxwell_with_bem,
+    solve_bem, validate_maxwell,
+};
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
@@ -325,6 +330,21 @@ pub struct State {
     /// The last rejected material edit or sampling problem, shown by the
     /// status bar. A failed edit never replaces the last valid scene/sampling.
     pub material_error: Option<String>,
+    /// Durable bounded Maxwell teaching scene, preserved across mode switches.
+    pub maxwell: MaxwellScene,
+    /// The last Maxwell sampling pass for the active 3D/2D view.
+    pub maxwell_sampling: Option<MaxwellSampling>,
+    /// The last rejected Maxwell edit or sampling/solve problem.
+    pub maxwell_error: Option<String>,
+    /// Last successful 2D conductor BEM solve, keyed by its BEM scene. Private:
+    /// only [`State::refresh_maxwell_sampling`] may populate it.
+    maxwell_bem: Option<Arc<BemSolution>>,
+    /// A failed BEM solve is not retried until a scene edit or reset.
+    maxwell_bem_failed: bool,
+    /// Count of BEM solve attempts, exposed to the app test harness.
+    pub(crate) maxwell_bem_solves: u64,
+    /// Whether the last density request was reduced by a Maxwell cap.
+    maxwell_density_capped: bool,
     /// Durable ODE workbench scene, preserved across mode switches.
     pub ode: OdeScene,
     /// Precomputed playback data; replaced only by a committed scene/edit.
@@ -398,9 +418,9 @@ impl State {
                 // Ode owns a precomputed solution; playback time is mirrored
                 // only and must never re-integrate or dirty the scene.
                 FieldMode::Ode => {}
-                // Materials and Sources are static: the clock never dirties
-                // their scenes.
-                FieldMode::Sources | FieldMode::Materials => {}
+                // Materials, Sources and Maxwell are static: the clock never
+                // dirties their scenes.
+                FieldMode::Sources | FieldMode::Materials | FieldMode::Maxwell => {}
             }
         } else {
             self.scalar_time_changed();
@@ -414,7 +434,7 @@ impl State {
     pub fn has_time_dependent_consumer(self: &State) -> bool {
         if self.is_vector_mode() {
             match self.field_mode {
-                FieldMode::Sources | FieldMode::Materials => false,
+                FieldMode::Sources | FieldMode::Materials | FieldMode::Maxwell => false,
                 FieldMode::Induction => self.induction.is_animated(),
                 // A stored solution plays on the shared clock; a pending lazy
                 // solve keeps the clock alive long enough to produce it.
@@ -495,6 +515,13 @@ impl State {
             material: MaterialScene::default(),
             material_sampling: None,
             material_error: None,
+            maxwell: MaxwellScene::default(),
+            maxwell_sampling: None,
+            maxwell_error: None,
+            maxwell_bem: None,
+            maxwell_bem_failed: false,
+            maxwell_bem_solves: 0,
+            maxwell_density_capped: false,
             ode: OdeScene::default(),
             ode_solution: None,
             ode_error: None,
@@ -541,7 +568,10 @@ impl State {
     /// dimensional; the formula reports its own component count.
     pub fn active_dimension(self: &State) -> usize {
         match self.field_mode {
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials => 3,
+            FieldMode::Sources
+            | FieldMode::Induction
+            | FieldMode::Materials
+            | FieldMode::Maxwell => 3,
             // The solved scene owns the dimension; before a lazy solve, the
             // selected scene does. Never hardcode the projection here.
             FieldMode::Ode => self
@@ -553,16 +583,20 @@ impl State {
         }
     }
 
-    /// Switch between the formula, source and induction adapters. The formula,
-    /// parsed field, source scene, induction scene and the current 2D/3D
-    /// projection are preserved; only each adapter's cached sampling and
-    /// notice are cleared. The stored density itself is never destroyed, only
-    /// sampled under the active cap.
+    /// Switch between the formula, source, induction, ODE, materials and
+    /// Maxwell adapters. The formula, parsed field, every durable scene and the
+    /// current 2D/3D projection are preserved; only each adapter's cached
+    /// sampling and notice are cleared. The stored density itself is never
+    /// destroyed, only sampled under the active cap.
     pub fn set_field_mode(self: &mut State, mode: FieldMode) -> bool {
         if self.field_mode == mode {
             return false;
         }
-        if matches!(mode, FieldMode::Ode | FieldMode::Materials) && !self.is_vector_mode() {
+        if matches!(
+            mode,
+            FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
+        ) && !self.is_vector_mode()
+        {
             // Ode and Materials are vector-viewport concepts: a scalar kind
             // would hide their scenes. Restoring the vector kind also restores
             // the projection the vector view last held.
@@ -578,6 +612,9 @@ impl State {
         // A mode switch always invalidates the sampled material frame; the
         // durable scene (and any edit error) stays.
         self.material_sampling = None;
+        // Maxwell samples transiently too; its durable scene and any matching
+        // BEM solve survive so re-entry does not solve again.
+        self.maxwell_sampling = None;
         if mode != FieldMode::Induction {
             // Leaving Induction drops the prepared geometry cache; the durable
             // scene stays so returning re-prepares at the current clock time.
@@ -613,11 +650,19 @@ impl State {
             FieldMode::Sources if self.is_3d() => Some(MAX_DENSITY_3D),
             FieldMode::Materials if self.is_3d() => Some(MATERIAL_MAX_DENSITY_3D),
             FieldMode::Materials => Some(MATERIAL_MAX_DENSITY_2D),
+            FieldMode::Maxwell if self.is_3d() => Some(MAXWELL_MAX_DENSITY_3D),
+            FieldMode::Maxwell => Some(MAXWELL_MAX_DENSITY_2D),
             _ => None,
         };
+        if self.field_mode == FieldMode::Maxwell {
+            self.maxwell_density_capped = false;
+        }
         match cap {
             Some(cap) if self.density > cap => {
                 self.density = cap;
+                if self.field_mode == FieldMode::Maxwell {
+                    self.maxwell_density_capped = true;
+                }
                 true
             }
             _ => false,
@@ -947,6 +992,130 @@ impl State {
         self.mark_dirty()
     }
 
+    /// Replace the durable Maxwell scene. Validation runs first; an invalid
+    /// edit leaves the previous scene, sampling and BEM cache untouched and
+    /// records the readable error. A valid changed scene invalidates the
+    /// sampling and BEM cache and marks the frame dirty.
+    pub fn set_maxwell_scene(self: &mut State, scene: MaxwellScene) -> bool {
+        if let Err(error) = validate_maxwell(&scene) {
+            self.maxwell_error = Some(maxwell_error_text(&error));
+            return false;
+        }
+        if scene == self.maxwell {
+            self.maxwell_error = None;
+            return false;
+        }
+        self.maxwell = scene;
+        self.maxwell_sampling = None;
+        self.maxwell_bem = None;
+        self.maxwell_bem_failed = false;
+        self.maxwell_error = None;
+        self.mark_dirty()
+    }
+
+    /// Rebuild the Maxwell frame at the current domain, capped density and
+    /// plane. Only this method may solve the 2D conductor BEM, and only when no
+    /// matching cached solution exists; plane, sampling and camera changes
+    /// reuse it. A failed solve is not retried until a scene edit/reset.
+    pub fn refresh_maxwell_sampling(self: &mut State) {
+        if self.field_mode != FieldMode::Maxwell {
+            self.maxwell_sampling = None;
+            return;
+        }
+        if let Err(error) = validate_maxwell(&self.maxwell) {
+            self.maxwell_error = Some(maxwell_error_text(&error));
+            self.maxwell_sampling = None;
+            return;
+        }
+        // Defensive cap for a direct field write as well as the setters: the
+        // stored grid never exceeds the Maxwell view limit, and the reduction
+        // is reported rather than silent.
+        let density_cap = if self.is_3d() {
+            MAXWELL_MAX_DENSITY_3D
+        } else {
+            MAXWELL_MAX_DENSITY_2D
+        };
+        if self.density > density_cap {
+            self.density = density_cap;
+            self.maxwell_density_capped = true;
+            self.plane = self.plane.clamped(self.plane_grid());
+        }
+        let plane = self.plane_frame();
+        let needs_bem =
+            self.maxwell.case == crate::maxwell::MaxwellCase::Conductor2D && plane.is_some();
+        if needs_bem {
+            let matching = self
+                .maxwell_bem
+                .as_ref()
+                .is_some_and(|solution| solution.matches_scene(&self.maxwell));
+            if !matching {
+                self.maxwell_bem = None;
+                if !self.maxwell_bem_failed {
+                    self.maxwell_bem_solves = self.maxwell_bem_solves.wrapping_add(1);
+                    match solve_bem(&self.maxwell) {
+                        Ok(solution) => {
+                            self.maxwell_bem = Some(Arc::new(solution));
+                            self.maxwell_bem_failed = false;
+                            self.maxwell_error = None;
+                        }
+                        Err(error) => {
+                            self.maxwell_bem = None;
+                            self.maxwell_bem_failed = true;
+                            self.maxwell_error = Some(maxwell_error_text(&error));
+                        }
+                    }
+                }
+            }
+        }
+        let bem = self.maxwell_bem.as_deref();
+        let mut sampling = sample_maxwell_with_bem(
+            &self.maxwell,
+            &self.domain,
+            self.grid(),
+            plane.as_ref(),
+            bem,
+        );
+        if needs_bem
+            && bem.is_none()
+            && let Some(error) = self.maxwell_error.as_ref()
+        {
+            // A failed solve is an unavailable field, not the generic
+            // missing-solution hint; surface the actionable solver error.
+            sampling.accuracy = crate::maxwell::MaxwellStop::Unavailable;
+            sampling.warning = Some(error.clone());
+        }
+        if self.maxwell_density_capped {
+            let warning = sampling.warning.take();
+            sampling.warning = Some(match warning {
+                Some(warning) => format!("{warning}; {MAXWELL_DENSITY_CAP_WARNING}"),
+                None => MAXWELL_DENSITY_CAP_WARNING.to_string(),
+            });
+        }
+        self.maxwell_sampling = Some(sampling);
+    }
+
+    /// Global reset's Maxwell half: restore the default scene and drop the
+    /// sampling, BEM cache and any error. The caller selects Formula.
+    pub fn reset_maxwell(self: &mut State) {
+        self.maxwell = MaxwellScene::default();
+        self.maxwell_sampling = None;
+        self.maxwell_bem = None;
+        self.maxwell_bem_failed = false;
+        self.maxwell_error = None;
+        self.maxwell_density_capped = false;
+        self.mark_dirty();
+    }
+
+    /// The durable Maxwell scene.
+    pub fn maxwell_scene(self: &State) -> &MaxwellScene {
+        &self.maxwell
+    }
+
+    /// The last Maxwell sampling pass, if the active view has sampled.
+    pub fn maxwell_sampling(self: &State) -> Option<&MaxwellSampling> {
+        self.maxwell_sampling.as_ref()
+    }
+
     /// The projection: an orthographic front view for 2D, the orbiting
     /// perspective camera for 3D.
     pub fn set_mode(self: &mut State, mode_3d: bool) -> bool {
@@ -975,9 +1144,14 @@ impl State {
             FieldMode::Induction => MAX_INDUCTION_DENSITY_2D,
             FieldMode::Materials if self.is_3d() => MATERIAL_MAX_DENSITY_3D,
             FieldMode::Materials => MATERIAL_MAX_DENSITY_2D,
+            FieldMode::Maxwell if self.is_3d() => MAXWELL_MAX_DENSITY_3D,
+            FieldMode::Maxwell => MAXWELL_MAX_DENSITY_2D,
             _ if self.is_3d() => MAX_DENSITY_3D,
             _ => MAX_DENSITY_2D,
         };
+        if self.field_mode == FieldMode::Maxwell {
+            self.maxwell_density_capped = density > max;
+        }
         let density = density.clamp(MIN_DENSITY, max);
         if self.density == density {
             return false;
@@ -1243,7 +1417,10 @@ impl State {
     /// that hides the click lines: off hides both and refuses new seeds, so
     /// re-enabling reproduces the previous clicks. Both modes accept clicks.
     pub fn accepts_click_seed(self: &State) -> bool {
-        !matches!(self.field_mode, FieldMode::Ode | FieldMode::Materials) && self.streamlines
+        !matches!(
+            self.field_mode,
+            FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
+        ) && self.streamlines
     }
 
     /// Particle tracing, not yet drawn.
@@ -1304,7 +1481,11 @@ impl State {
     pub fn particle_target(self: &State) -> Option<usize> {
         if matches!(
             self.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
+            FieldMode::Sources
+                | FieldMode::Induction
+                | FieldMode::Materials
+                | FieldMode::Ode
+                | FieldMode::Maxwell
         ) {
             return None;
         }
@@ -1491,6 +1672,14 @@ impl State {
                 };
                 n.min(cap)
             }
+            FieldMode::Maxwell => {
+                let cap = if self.is_3d() {
+                    MAXWELL_MAX_DENSITY_3D
+                } else {
+                    MAXWELL_MAX_DENSITY_2D
+                };
+                n.min(cap)
+            }
             _ => n,
         }
     }
@@ -1660,7 +1849,11 @@ impl State {
         // trajectories; formula streamlines never leak into any of them.
         if matches!(
             self.field_mode,
-            FieldMode::Sources | FieldMode::Induction | FieldMode::Materials | FieldMode::Ode
+            FieldMode::Sources
+                | FieldMode::Induction
+                | FieldMode::Materials
+                | FieldMode::Ode
+                | FieldMode::Maxwell
         ) {
             return Vec::new();
         }
@@ -1830,6 +2023,47 @@ impl State {
                 mode_3d: self.mode_3d,
             };
         }
+        if self.field_mode == FieldMode::Maxwell {
+            // Arrows plus the case outline only. No particles, streamlines,
+            // click seeds, source glyphs or formula sampling.
+            let arrows = if self.arrows {
+                self.maxwell_sampling
+                    .as_ref()
+                    .map(|sampling| self.arrow_instances(&sampling.arrows))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let plane = self.plane_frame();
+            let domain = self.scene_domain();
+            let size = domain.domain_size();
+            let extent = size.x.abs().max(size.y.abs()).max(size.z.abs());
+            let width = 0.004 * extent;
+            let width = if width.is_finite() && width > 0.0 {
+                width
+            } else {
+                crate::reference::EDGE_WIDTH
+            };
+            let lines = maxwell_outline(&self.maxwell, &domain, plane.as_ref())
+                .into_iter()
+                .map(|segment| LineInstanceGPU {
+                    a: [segment.a[0], segment.a[1], segment.a[2], 1.0],
+                    b: [segment.b[0], segment.b[1], segment.b[2], width],
+                    color: segment.color,
+                })
+                .collect::<Vec<_>>();
+            return SceneGPU {
+                arrows: Arc::new(arrows),
+                lines: Arc::new(lines),
+                trails: Arc::new(Vec::new()),
+                dots: Arc::new(Vec::new()),
+                combined: Arc::new(Vec::new()),
+                arrow_style: self.arrow_style,
+                arrow_style_2d: self.arrow_style_2d,
+                arrow_params: self.arrow_params,
+                mode_3d: self.mode_3d,
+            };
+        }
         if self.field_mode == FieldMode::Materials {
             // Arrows plus only the selected case's simple outline. No
             // particles, streamlines, click seeds, glyphs or scalar plot.
@@ -1901,6 +2135,7 @@ impl State {
         match self.field_mode {
             FieldMode::Induction => self.refresh_induction(),
             FieldMode::Materials => self.refresh_material_sampling(),
+            FieldMode::Maxwell => self.refresh_maxwell_sampling(),
             _ => self.refresh_source_sampling(),
         }
         self.dirty = false;
@@ -1914,6 +2149,15 @@ fn material_error_text(error: &MaterialError) -> String {
         MaterialError::InvalidScene(message) | MaterialError::Unsupported(message) => {
             message.clone()
         }
+    }
+}
+
+/// A readable message for a rejected Maxwell scene or sampling failure.
+fn maxwell_error_text(error: &MaxwellError) -> String {
+    match error {
+        MaxwellError::InvalidScene(message)
+        | MaxwellError::Unsupported(message)
+        | MaxwellError::Unavailable(message) => message.clone(),
     }
 }
 

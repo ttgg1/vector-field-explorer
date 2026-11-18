@@ -43,7 +43,10 @@ impl VfApp {
             self.advance_ode();
             return;
         }
-        if self.state.field_mode == FieldMode::Materials {
+        if matches!(
+            self.state.field_mode,
+            FieldMode::Materials | FieldMode::Maxwell
+        ) {
             // Static analytic arrows plus the case outline: no formula
             // sampling, particles, streamlines, clicks, glyphs or scalar plot.
             self.sync_scene_frame();
@@ -121,10 +124,46 @@ impl VfApp {
             self.ode_autofit_pending = true;
             self.ode.sync_from(&self.state);
         }
+        if mode == FieldMode::Maxwell {
+            // Maxwell 2D is a plane slice. Entering the mode is not a plane
+            // edit, so record the new frame now: the user's camera/projection
+            // must survive the round trip instead of a fresh plane fit.
+            self.scene_frame = SceneFrameKey::of(&self.state);
+        }
         self.state.mark_dirty();
     }
 
     fn rebuild_scene(&mut self) {
+        // Maxwell is a static arrows + outline branch before the formula path.
+        // It samples only when dirty, keeps click/streamline buffers empty and
+        // never traces or advects the formula field.
+        if self.state.field_mode == FieldMode::Maxwell {
+            if !self.state.dirty {
+                return;
+            }
+            self.state.refresh_maxwell_sampling();
+            let fresh = self.state.snapshot();
+            self.dots_range = scene_dots_range(&self.state);
+            self.flow_lines.clear();
+            self.click_lines.clear();
+            self.streamline_count = 0;
+            self.source_glyph_line_count = 0;
+            let (mut lines, _) = compose_vector_lines(&self.state, &[], &[]);
+            lines.extend(fresh.lines.iter().cloned());
+            if let Some(scene) = self.scene.as_vector_mut() {
+                scene.arrow_style = fresh.arrow_style;
+                scene.arrow_style_2d = fresh.arrow_style_2d;
+                scene.arrow_params = fresh.arrow_params;
+                scene.mode_3d = fresh.mode_3d;
+                scene.arrows = fresh.arrows;
+                scene.lines = Arc::new(lines);
+                scene.trails = Arc::new(Vec::new());
+                scene.dots = Arc::new(Vec::new());
+                scene.combined = Arc::new(Vec::new());
+            }
+            self.state.dirty = false;
+            return;
+        }
         // Rebuild the scene only when a setter marked the state dirty. The
         // app keeps owning the backdrop lines: fresh snapshots arrive on top
         // of a rebuilt grid + axes, and the streamline segments the viewmodel

@@ -666,6 +666,17 @@ impl VfApp {
                             .and_then(|sampling| sampling.warning.clone())
                     })
                     .unwrap_or_default(),
+                FieldMode::Maxwell => self
+                    .state
+                    .maxwell_error
+                    .clone()
+                    .or_else(|| {
+                        self.state
+                            .maxwell_sampling
+                            .as_ref()
+                            .and_then(|sampling| sampling.warning.clone())
+                    })
+                    .unwrap_or_default(),
                 _ => self.state.parse_error.clone(),
             };
             self.status.arrow_count = scene.arrows.len();
