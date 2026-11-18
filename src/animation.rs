@@ -213,15 +213,14 @@ fn temporary_path(path: &Path) -> Result<PathBuf, AnimationError> {
 /// completed output.
 pub fn atomic_replace(temporary: &Path, destination: &Path) -> Result<(), AnimationError> {
     #[cfg(windows)]
-    if destination.exists() {
-        if let Err(error) = fs::remove_file(destination) {
-            if error.kind() != io::ErrorKind::NotFound {
-                return Err(AnimationError::Io(format!(
-                    "could not remove {} before rename: {error}",
-                    destination.display()
-                )));
-            }
-        }
+    if destination.exists()
+        && let Err(error) = fs::remove_file(destination)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(AnimationError::Io(format!(
+            "could not remove {} before rename: {error}",
+            destination.display()
+        )));
     }
     fs::rename(temporary, destination).map_err(|error| {
         AnimationError::Io(format!(
