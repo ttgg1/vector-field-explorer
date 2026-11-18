@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use tempfile::tempdir;
+#[cfg(unix)]
+use vector_field_explorer::animation::frame_count;
 use vector_field_explorer::animation::{
-    AnimationError, AnimationFormat, AnimationSpec, ffmpeg_args, frame_count,
-    video_sink_with_program,
+    AnimationError, AnimationFormat, AnimationSpec, ffmpeg_args, video_sink_with_program,
 };
 use vector_field_explorer::export_provenance::ExportProvenance;
 
