@@ -138,23 +138,7 @@ impl VfApp {
             // their own colours and there is no particle cloud to share a
             // range with. Avoid sampling the formula field, which is not on
             // screen.
-            if self.state.field_mode == crate::source_scene::FieldMode::Induction {
-                self.dots_range = self
-                    .state
-                    .induction_sampling
-                    .as_ref()
-                    .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
-                    .unwrap_or((0.0, 1.0));
-            } else if self.state.field_mode == crate::source_scene::FieldMode::Materials {
-                self.dots_range = self
-                    .state
-                    .material_sampling
-                    .as_ref()
-                    .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
-                    .unwrap_or((0.0, 1.0));
-            } else {
-                self.dots_range = self.state.color_range(&self.state.sample());
-            }
+            self.dots_range = scene_dots_range(&self.state);
             self.flow_lines = Arc::unwrap_or_clone(fresh.lines);
             // Click bursts outlive the rebuild: they are anchored on the field,
             // not on the sampling grid, so retrace them against the new
@@ -163,47 +147,9 @@ impl VfApp {
                 .state
                 .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
             self.streamline_count = self.flow_lines.len() + self.click_lines.len();
-            let mut lines = compose_lines_with_frame(
-                &self.flow_lines,
-                &self.click_lines,
-                &self.state.scene_domain(),
-                self.state.is_3d(),
-                self.state.plane_frame(),
-                self.state.show_grid,
-                self.state.show_coordinate_system,
-            );
-            // Source markers are contextual overlays on the current sampling
-            // scene. Sources draws every enabled entry; Induction draws exactly
-            // the selected conductor. Formula preserves its durable scene but
-            // draws no marker.
-            let glyph_lines = match self.state.field_mode {
-                crate::source_scene::FieldMode::Sources => {
-                    let glyphs = crate::source_glyph::source_glyphs(
-                        &self.state.sources,
-                        &self.state.scene_domain(),
-                        self.state.plane_frame().as_ref(),
-                    );
-                    crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
-                }
-                crate::source_scene::FieldMode::Induction => {
-                    let mut scene = crate::source_scene::SourceScene::default();
-                    scene.entries.push(crate::source_scene::SourceEntry {
-                        enabled: true,
-                        source: self.state.induction.unit_source(),
-                    });
-                    let glyphs = crate::source_glyph::source_glyphs(
-                        &scene,
-                        &self.state.scene_domain(),
-                        self.state.plane_frame().as_ref(),
-                    );
-                    crate::source_glyph::source_glyph_lines(&glyphs, &self.state.scene_domain())
-                }
-                crate::source_scene::FieldMode::Formula
-                | crate::source_scene::FieldMode::Materials
-                | crate::source_scene::FieldMode::Ode => Vec::new(),
-            };
-            self.source_glyph_line_count = glyph_lines.len();
-            lines.extend(glyph_lines);
+            let (lines, glyph_count) =
+                compose_vector_lines(&self.state, &self.flow_lines, &self.click_lines);
+            self.source_glyph_line_count = glyph_count;
             let lines = Arc::new(lines);
             if let Some(scene) = self.scene.as_vector_mut() {
                 scene.arrow_style = arrow_style;
@@ -351,7 +297,6 @@ impl VfApp {
         );
         if target.is_some() {
             let appearance = self.state.particle_appearance.sanitized();
-            let spacing = self.state.spacing();
             let flow = self.state.scene_flow();
             advect(
                 &mut self.particles,
@@ -365,30 +310,8 @@ impl VfApp {
                     stagnation_seconds: appearance.stagnation_seconds,
                 },
             );
-            // The speed range is observed once per frame and shared by the dots
-            // and trails, so both colour modes agree on the same cloud.
-            let speeds = speed_range(&self.particles);
-            let dots = Arc::new(dot_instances_at(
-                &self.particles,
-                &flow,
-                &domain,
-                self.state.colormap,
-                self.dots_range,
-                &appearance,
-                speeds,
-                self.state.particle_radius(spacing),
-                self.state.time,
-            ));
-            let trails = Arc::new(trail_instances_at(
-                &self.particles,
-                &flow,
-                self.state.colormap,
-                self.dots_range,
-                &appearance,
-                speeds,
-                spacing,
-                self.state.time,
-            ));
+            let (dots, trails) =
+                particle_scene_instances(&self.state, &self.particles, self.dots_range);
             let count = particle_count(&self.particles);
             if let Some(scene) = self.scene.as_vector_mut() {
                 scene.dots = dots;

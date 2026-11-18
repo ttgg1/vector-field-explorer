@@ -86,11 +86,12 @@ impl VfApp {
         self.apply_seed_shortcuts(ctx);
 
         // One global clock advances once per frame from egui's stable frame
-        // time, but only while something consumes it. `advance_for` clamps to
-        // MAX_STEP, ignores non-finite frames, holds the held time while
-        // particles are off/in 2D or paused, and resumes from that time when a
-        // consumer returns. A long idle gap still cannot make the particle
-        // cloud jump.
+        // time, but only while something consumes it. An animation export owns
+        // the only animation clock that may run: force live playback paused
+        // before advancing so a transport click during export cannot resume it.
+        if self.animation_job.is_some() {
+            self.clock.playing = false;
+        }
         self.advance_clock(ctx.input(|input| input.stable_dt));
 
         // Camera keys (ticket 18): arrows, `+`/`-`, `R` and `F` feed the same
@@ -165,6 +166,11 @@ impl VfApp {
 
     /// Queue a PNG request with the provenance captured at request time.
     pub(super) fn request_png_export(&mut self) {
+        if self.animation_job.is_some() {
+            self.screenshot
+                .notify("Wait for the animation export to finish.".into(), true);
+            return;
+        }
         let provenance = self.field_export_provenance();
         self.screenshot.request_with_provenance(provenance);
     }
@@ -172,6 +178,11 @@ impl VfApp {
     /// Queue an SVG request behind the shared execution guard, with the
     /// provenance captured at request time.
     pub(super) fn request_svg_export(&mut self) {
+        if self.animation_job.is_some() {
+            self.screenshot
+                .notify("Wait for the animation export to finish.".into(), true);
+            return;
+        }
         if let Some(reason) = self.svg_block_reason() {
             self.screenshot.notify(reason, true);
             return;
@@ -240,6 +251,7 @@ impl VfApp {
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.request_png_export(),
             menu::SideEffect::ScreenshotSvg => self.request_svg_export(),
+            menu::SideEffect::Animation => self.open_animation_dialog(ctx),
             menu::SideEffect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             menu::SideEffect::CopyText(text) => ctx.copy_text(text),
             // Help > Download desktop app (ticket 16a): hand the static page to

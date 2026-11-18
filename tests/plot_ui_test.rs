@@ -536,6 +536,7 @@ fn vector_only_controls_and_svg_explain_disabled_state() {
             &mut open,
             false,
             PlotKind::Curve2D,
+            None,
         );
     });
     out.textures_delta.clear();

@@ -6,7 +6,9 @@ use serde::Deserialize;
 
 #[path = "cli_scene.rs"]
 mod scene;
-pub use scene::{OutputFrame, PreparedScene, output_frame, prepare_scene};
+pub use scene::{
+    OutputFrame, PreparedScene, output_frame, prepare_animation_snapshot, prepare_scene,
+};
 
 #[path = "cli_svg.rs"]
 mod svg;
@@ -14,17 +16,28 @@ pub use svg::scene_to_cli_svg;
 
 #[path = "cli_gpu.rs"]
 mod gpu;
-pub use gpu::{acquire_device_with, offscreen_error_to_cli, render_offscreen, validate_gpu_limits};
+pub use gpu::{
+    AnimationRenderSession, HeadlessRenderSession, acquire_device_with, offscreen_error_to_cli,
+    render_offscreen, validate_gpu_limits,
+};
 
 use crate::{
+    animation::{
+        ANIMATION_MAX_DURATION, ANIMATION_MAX_FPS, ANIMATION_MIN_DURATION, ANIMATION_MIN_FPS,
+        AnimationError, AnimationFormat, AnimationSpec, FrameSink, frame_count, gif_sink,
+        video_sink, video_sink_with_program,
+    },
+    animation_scene::AnimationSnapshot,
     arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D},
     camera::OrbitCamera,
     colormap::Colormap,
     domain::Domain,
+    export_provenance::ExportProvenance,
     field::FieldExpr,
     fly_camera::FlyCamera,
     particles::{ParticleAppearance, ParticleColorMode},
     plane::{PlaneAxis, PlaneView},
+    screenshot::apply_export_banner,
     viewmodel::{ArrowLengthMode, State, StreamlineSeedMode},
 };
 
@@ -39,6 +52,7 @@ pub enum CliError {
     Render(String),
     Readback(String),
     Write(String),
+    External(String),
 }
 
 impl std::fmt::Display for CliError {
@@ -52,7 +66,8 @@ impl std::fmt::Display for CliError {
             | Self::Device(s)
             | Self::Render(s)
             | Self::Readback(s)
-            | Self::Write(s) => f.write_str(s),
+            | Self::Write(s)
+            | Self::External(s) => f.write_str(s),
         }
     }
 }
@@ -227,6 +242,9 @@ pub struct CliConfig {
     pub start_time_seconds: Option<f64>,
     pub duration_seconds: Option<f64>,
     pub fixed_step_seconds: Option<f64>,
+    pub animation_format: Option<String>,
+    pub animation_fps: Option<u32>,
+    pub animation_loop: Option<bool>,
 }
 
 fn comma_array<T: std::str::FromStr, const N: usize>(s: &str) -> Result<[T; N], String> {
@@ -360,6 +378,12 @@ pub struct CliFlags {
     pub duration: Option<f64>,
     #[arg(long)]
     pub fixed_step: Option<f64>,
+    #[arg(long)]
+    pub animation_format: Option<String>,
+    #[arg(long)]
+    pub animation_fps: Option<u32>,
+    #[arg(long)]
+    pub animation_loop: bool,
 }
 
 pub fn parse_flags(args: impl IntoIterator<Item = OsString>) -> Result<CliFlags, CliError> {
@@ -399,6 +423,9 @@ pub fn run_from(args: impl IntoIterator<Item = OsString>) -> Result<(), CliError
 /// Prepare one final scene and save it to the explicit path, without GUI state.
 pub fn run_export(options: CliOptions) -> Result<(), CliError> {
     validate_effective(&options)?;
+    if options.animation_format.is_some() {
+        return run_animation_export(&options);
+    }
     let prepared = prepare_scene(&options, output_frame(&options)?)?;
     if output_extension(&options.output)?.eq_ignore_ascii_case("svg") {
         std::fs::write(&options.output, scene_to_cli_svg(&prepared)?)
@@ -415,6 +442,95 @@ pub fn run_export(options: CliOptions) -> Result<(), CliError> {
         )
         .map_err(|e| CliError::Write(format!("write PNG {}: {e}", options.output.display())))
     }
+}
+
+fn animation_sink(
+    spec: &AnimationSpec,
+    path: &std::path::Path,
+) -> Result<Box<dyn FrameSink>, CliError> {
+    let provenance = ExportProvenance::default();
+    match spec.format {
+        AnimationFormat::Gif => gif_sink(spec, path),
+        AnimationFormat::Mp4 | AnimationFormat::Webm => video_sink(spec, path, &provenance),
+    }
+    .map_err(animation_error)
+}
+
+/// Open the animation sink with an explicit ffmpeg program.
+///
+/// Hidden from docs because production resolves `VFE_FFMPEG`/PATH through
+/// [`animation_sink`]; tests inject a missing program to prove the actionable
+/// external-encoder error without depending on ffmpeg.
+#[doc(hidden)]
+pub fn animation_sink_with_program(
+    spec: &AnimationSpec,
+    path: &std::path::Path,
+    program: &std::path::Path,
+) -> Result<Box<dyn FrameSink>, CliError> {
+    match spec.format {
+        AnimationFormat::Gif => gif_sink(spec, path),
+        AnimationFormat::Mp4 | AnimationFormat::Webm => {
+            video_sink_with_program(spec, path, &ExportProvenance::default(), program)
+        }
+    }
+    .map_err(animation_error)
+}
+
+fn run_animation_export(options: &CliOptions) -> Result<(), CliError> {
+    run_animation_export_with(options, || {
+        Ok(Box::new(HeadlessRenderSession::new()?) as Box<dyn AnimationRenderSession>)
+    })
+}
+
+/// Render and encode one animation with a caller-supplied render-session
+/// factory. Production passes exactly one [`HeadlessRenderSession::new`]; the
+/// seam lets tests drive the loop and count that single session without a GPU.
+#[doc(hidden)]
+pub fn run_animation_export_with<F>(options: &CliOptions, open_session: F) -> Result<(), CliError>
+where
+    F: FnOnce() -> Result<Box<dyn AnimationRenderSession>, CliError>,
+{
+    validate_effective(options)?;
+    let spec = options
+        .animation_spec()?
+        .ok_or_else(|| CliError::Validation("animation_format is required".into()))?;
+    let sink = animation_sink(&spec, &options.output)?;
+    let mut snapshot = prepare_animation_snapshot(options)?;
+    let mut session = open_session()?;
+    render_animation_frames(
+        &spec,
+        &mut snapshot,
+        session.as_mut(),
+        sink,
+        &ExportProvenance::default(),
+    )
+}
+
+/// Stream one validated animation spec through a detached snapshot and sink.
+#[doc(hidden)]
+pub fn render_animation_frames(
+    spec: &AnimationSpec,
+    snapshot: &mut AnimationSnapshot,
+    session: &mut dyn AnimationRenderSession,
+    sink: Box<dyn FrameSink>,
+    provenance: &ExportProvenance,
+) -> Result<(), CliError> {
+    let mut sink = sink;
+    let aspect = spec.width as f32 / spec.height as f32;
+    let dt = 1.0 / spec.fps.max(1) as f32;
+    for index in 0..frame_count(spec).map_err(animation_error)? {
+        let time = spec.start_time + index as f32 / spec.fps as f32;
+        let frame = snapshot
+            .frame_at(time, dt, aspect, index == 0)
+            .map_err(animation_error)?;
+        let mut rgba =
+            session.render_animation_frame(&frame, spec.width, spec.height, snapshot.clear)?;
+        apply_export_banner(&mut rgba, spec.width, spec.height, provenance)
+            .map_err(|error| CliError::Render(format!("animation banner: {error}")))?;
+        sink.push_frame(&rgba, spec.width, spec.height)
+            .map_err(animation_error)?;
+    }
+    sink.finish().map_err(animation_error)
 }
 
 fn reject_nulls(value: &serde_json::Value, path: &str) -> Result<(), CliError> {
@@ -503,6 +619,9 @@ pub struct CliOptions {
     pub start_time_seconds: f64,
     pub duration_seconds: f64,
     pub fixed_step_seconds: f64,
+    pub animation_format: Option<AnimationFormat>,
+    pub animation_fps: u32,
+    pub animation_loop: bool,
 }
 
 macro_rules! overlay { ($base:expr, $other:expr, $($field:ident),+ $(,)?) => {
@@ -602,9 +721,52 @@ fn output_extension(path: &std::path::Path) -> Result<&str, CliError> {
     Ok(ext)
 }
 
+fn parse_animation_format(value: &str) -> Result<AnimationFormat, CliError> {
+    match value {
+        "gif" => Ok(AnimationFormat::Gif),
+        "mp4" => Ok(AnimationFormat::Mp4),
+        "webm" => Ok(AnimationFormat::Webm),
+        _ => Err(CliError::Validation(format!(
+            "animation_format must be one of gif, mp4, webm (got {value})"
+        ))),
+    }
+}
+
+fn animation_output_extension(
+    path: &std::path::Path,
+    format: AnimationFormat,
+) -> Result<(), CliError> {
+    if path.as_os_str().is_empty() || path.file_name().is_none() {
+        return Err(CliError::Validation("output needs a file path".into()));
+    }
+    let (expected, name) = match format {
+        AnimationFormat::Gif => ("gif", "GIF"),
+        AnimationFormat::Mp4 => ("mp4", "MP4"),
+        AnimationFormat::Webm => ("webm", "WebM"),
+    };
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if !ext.eq_ignore_ascii_case(expected) {
+        return Err(CliError::Validation(format!(
+            "{name} animation output extension mismatch: expected .{expected}, got {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_intrinsic_config(c: &CliConfig) -> Result<(), CliError> {
+    let animation_format = c
+        .animation_format
+        .as_deref()
+        .map(parse_animation_format)
+        .transpose()?;
     if let Some(output) = &c.output {
-        output_extension(output)?;
+        match animation_format {
+            Some(format) => animation_output_extension(output, format)?,
+            None => {
+                output_extension(output)?;
+            }
+        }
     }
     integer("width", c.width, 1, 4096)?;
     integer("height", c.height, 1, 4096)?;
@@ -619,6 +781,29 @@ pub fn validate_intrinsic_config(c: &CliConfig) -> Result<(), CliError> {
     time_number("start_time_seconds", c.start_time_seconds, 0.0, 3600.0)?;
     time_number("duration_seconds", c.duration_seconds, 0.0, 3600.0)?;
     time_number("fixed_step_seconds", c.fixed_step_seconds, 0.0001, 0.25)?;
+    integer(
+        "animation_fps",
+        c.animation_fps,
+        ANIMATION_MIN_FPS,
+        ANIMATION_MAX_FPS,
+    )?;
+    if let Some(format) = animation_format {
+        if c.animation_loop == Some(true) && format != AnimationFormat::Gif {
+            return Err(CliError::Validation(
+                "animation_loop is only supported for GIF animation".into(),
+            ));
+        }
+        if let Some(duration) = c.duration_seconds
+            && (!duration.is_finite()
+                || !(f64::from(ANIMATION_MIN_DURATION)..=f64::from(ANIMATION_MAX_DURATION))
+                    .contains(&duration))
+        {
+            return Err(CliError::Validation(format!(
+                "animation duration must be finite and in {}..={} seconds",
+                ANIMATION_MIN_DURATION, ANIMATION_MAX_DURATION
+            )));
+        }
+    }
     if let Some(d) = &c.domain {
         triple("domain.min", d.min, true)?;
         triple("domain.max", d.max, true)?;
@@ -747,6 +932,9 @@ impl From<CliFlags> for CliConfig {
             start_time_seconds: f.start_time,
             duration_seconds: f.duration,
             fixed_step_seconds: f.fixed_step,
+            animation_format: f.animation_format,
+            animation_fps: f.animation_fps,
+            animation_loop: f.animation_loop.then_some(true),
         }
     }
 }
@@ -780,7 +968,10 @@ fn merge(mut c: CliConfig, f: CliConfig) -> CliConfig {
         seed,
         start_time_seconds,
         duration_seconds,
-        fixed_step_seconds
+        fixed_step_seconds,
+        animation_format,
+        animation_fps,
+        animation_loop
     );
     if f.color_range != ColorRangePatch::Missing {
         c.color_range = f.color_range;
@@ -883,6 +1074,14 @@ pub fn resolve_config(config: Option<CliConfig>, flags: CliFlags) -> Result<CliO
     let flags = CliConfig::from(flags);
     validate_intrinsic_config(&flags)?;
     let c = merge(config, flags);
+    let animation_format = c
+        .animation_format
+        .as_deref()
+        .map(parse_animation_format)
+        .transpose()?;
+    let animation_duration =
+        c.duration_seconds
+            .unwrap_or(if animation_format.is_some() { 4.0 } else { 0.0 });
     let mode = c.mode.unwrap_or(Mode::TwoD);
     let mut state = State::new(mode == Mode::ThreeD);
     let formula = c.formula.unwrap_or_else(|| state.formula.clone());
@@ -1023,8 +1222,11 @@ pub fn resolve_config(config: Option<CliConfig>, flags: CliFlags) -> Result<CliO
         background: c.background.unwrap_or([27, 27, 27, 255]),
         seed: c.seed.unwrap_or(0x123456789ABCDEF0),
         start_time_seconds: c.start_time_seconds.unwrap_or(0.0),
-        duration_seconds: c.duration_seconds.unwrap_or(0.0),
+        duration_seconds: animation_duration,
         fixed_step_seconds: c.fixed_step_seconds.unwrap_or(1.0 / 60.0),
+        animation_format,
+        animation_fps: c.animation_fps.unwrap_or(12),
+        animation_loop: c.animation_loop.unwrap_or(false),
     };
     validate_effective(&o)?;
     Ok(o)
@@ -1032,6 +1234,42 @@ pub fn resolve_config(config: Option<CliConfig>, flags: CliFlags) -> Result<CliO
 
 fn formula_field(src: &str) -> Result<FieldExpr, CliError> {
     formula(src)
+}
+
+fn animation_error(error: AnimationError) -> CliError {
+    match error {
+        AnimationError::InvalidSpec(message) => CliError::Validation(message),
+        AnimationError::External(message) => CliError::External(message),
+        AnimationError::Encoder(message) => CliError::Write(message),
+        AnimationError::Io(message) => CliError::Write(message),
+        AnimationError::Cancelled => CliError::Write("animation cancelled".into()),
+    }
+}
+
+impl CliOptions {
+    /// The validated animation request, or `None` for a still export.
+    pub fn animation_spec(&self) -> Result<Option<AnimationSpec>, CliError> {
+        let Some(format) = self.animation_format else {
+            return Ok(None);
+        };
+        let start_time = self.start_time_seconds as f32;
+        if !start_time.is_finite() {
+            return Err(CliError::Validation(
+                "start_time_seconds must be finite".into(),
+            ));
+        }
+        let spec = AnimationSpec {
+            start_time,
+            duration: self.duration_seconds as f32,
+            fps: self.animation_fps,
+            width: self.width,
+            height: self.height,
+            loop_gif: self.animation_loop,
+            format,
+        };
+        spec.validate().map_err(animation_error)?;
+        Ok(Some(spec))
+    }
 }
 
 pub fn validate_effective(o: &CliOptions) -> Result<(), CliError> {
@@ -1042,7 +1280,19 @@ pub fn validate_effective(o: &CliOptions) -> Result<(), CliError> {
             "pixel count exceeds 16,777,216".into(),
         ));
     }
-    let ext = output_extension(&o.output)?;
+    let ext = match o.animation_format {
+        Some(format) => {
+            animation_output_extension(&o.output, format)?;
+            if o.animation_loop && format != AnimationFormat::Gif {
+                return Err(CliError::Validation(
+                    "animation_loop is only supported for GIF animation".into(),
+                ));
+            }
+            o.animation_spec()?.expect("animation format was present");
+            ""
+        }
+        None => output_extension(&o.output)?,
+    };
     let mut state = State::new(o.mode == Mode::ThreeD);
     formula_field(&o.formula)?;
     state.set_formula(o.formula.clone());

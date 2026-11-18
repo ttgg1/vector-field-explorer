@@ -44,7 +44,11 @@ instanced GPU scene:
 - adjustable domain, density, arrow lengths, opacity, colormaps, and
   plane-by-plane inspection, including 2D slices of three-component fields,
   with independent grid and coordinate guides;
-- native PNG screenshots and persisted view, layout, and appearance settings.
+- native PNG screenshots and persisted view, layout, and appearance settings;
+- deterministic animated GIF export for time-dependent formulas, animated
+  induction and particles on native and web, plus optional native MP4/WebM when
+  a user-installed `ffmpeg` is available; see
+  [animation export](#animation-export).
 
 Scalar **Curve** (`y = f(x)`) and **Surface** (`z = f(x, y)`) plots are
 available from the Plot panel, with signed-height colors, depth-correct
@@ -634,7 +638,7 @@ the requested count.
 
 The top menu bar contains:
 
-- **File**: Export screenshot…, Quit.
+- **File**: Export screenshot…, Export animation…, Quit.
 - **Edit**: Copy formula, Reset all controls.
 - **View**: Toggle Controls, Toggle Presets, Reset layout, Reset camera,
   Appearance….
@@ -659,6 +663,111 @@ egui's command modifier.
 The **Help → Keyboard & mouse** window shows the full binding table; the
 in-viewport overlay shows the active view's bindings plus the global ones.
 **Help → About** shows the build version and the project links.
+
+## Animation export
+
+**File → Export animation…** (native and web) exports a deterministic animation
+of the current scene. It is enabled only when the scene has time-driven content:
+
+- a Formula field that uses `t`, or enabled moving particles;
+- an animated Induction case (nonzero amplitude **and** frequency);
+- not Sources, Materials, ODE, scalar plots, or a static Formula/Induction
+  scene. Those entries show one of these exact reasons instead of starting:
+  - Formula without time or particles: `Animation needs a time-dependent formula or moving particles.`
+  - static Induction: `Set a nonzero amplitude and frequency to animate this induction case.`
+  - other modes: `Animation export supports time-dependent Formula fields, Induction and particles.`
+
+The dialog defaults to a 4 s export at 12 fps, a looping GIF, and the current
+viewport size reduced to the animation pixel budget. There is no start-time
+field: the export begins at the captured simulation time. **Start** validates
+the settings, pauses playback, captures a detached snapshot, and reports
+progress; finishing, cancelling, or failing restores the previous play state.
+Animation and screenshot capture are mutually exclusive.
+
+### Formats and ffmpeg
+
+GIF is built in on native and WebAssembly. MP4 and WebM are native-only and are
+written by an external `ffmpeg`; the app does not bundle a codec, link to
+ffmpeg, or fall back to GIF when video fails. `VFE_FFMPEG` selects an explicit
+ffmpeg executable for both normal use and tests; otherwise `ffmpeg` is found on
+`PATH`. A missing executable is an actionable error, never a GIF substitute.
+Video requires even width and height; the GUI hides the GIF loop control
+for video and notes that it is ignored, while the CLI rejects
+`--animation-loop` with MP4/WebM. The browser build is GIF-only, rejects an explicit edge above 2048
+pixels, and has no video path. Browser runtime and manual visual checks were
+owner-waived for this delivery and are not claimed as passed.
+
+Both native video formats are implemented and were validated with a real
+external-ffmpeg sink smoke: 64×64, 2 frames, 1.0 s, producing H.264 MP4
+(1,693 bytes) and VP9 WebM (633 bytes) with no temporary siblings. That smoke
+covers the encoder sink, not a full-app GUI export or a frame-time benchmark;
+full-app GUI MP4/WebM and browser runtime remain unverified and owner-waived.
+See [docs/perf/animation-performance.md](docs/perf/animation-performance.md).
+
+### CLI animation
+
+The native CLI exposes the same streaming encoders:
+
+```sh
+vector-field-explorer --output out.gif --formula "sin(t), cos(t), 0" \
+  --width 1280 --height 720 --animation-format gif \
+  --animation-fps 12 --duration 10
+```
+
+- `--animation-format gif|mp4|webm` selects animation. Without it, PNG/SVG
+  still export is unchanged.
+- `--animation-fps` is an integer from 1 to 30; the default is 12.
+- `--animation-loop` requests the GIF infinite repeat extension and is rejected
+  with MP4/WebM.
+- The output extension must match the selected format (`.gif`, `.mp4`, or
+  `.webm`).
+- `--start-time` is the first frame time. In animation mode particles are
+  deterministically preadvanced from zero to `--start-time` with
+  `--fixed-step`; `--duration` is the frame span and does not add particle time.
+  An omitted animation duration defaults to 4 s.
+- Still PNG/SVG semantics do not move: `--duration` remains the particle
+  preadvance span, and the still snapshot is taken at `--start-time` plus
+  `--duration`.
+- CLI animation covers Formula fields and particles only. Induction remains a
+  GUI scene; there are no CLI induction flags.
+
+### Frame schedule and limits
+
+A valid export has `ceil(duration × fps)` frames. Frame `i` is at
+`start_time + i / fps`, so a 2 s/10 fps export has 20 frames at 0.0–1.9 s and
+does not duplicate the endpoint. Frame 0 is the captured state; later particle
+frames advance by an exact `1/fps`, subdivided into at most `1/120 s` steps
+plus a remainder. Export never uses the GUI `MAX_STEP` clamp and ignores the
+captured playback speed.
+
+Limits are validated before the first frame:
+
+- fps 1–30, duration 0.1–60 s, at most 1800 frames;
+- at most 8,388,608 pixels per frame;
+- at most 512 MiB of progress/final output;
+- even width and height for MP4/WebM.
+
+GIF delay is `round(100 / fps).max(1)` centiseconds, so playback duration can
+quantize slightly (12 fps becomes 8 cs = 80 ms). GIF uses a per-frame local
+palette with dithering off; large viridis/neodymium frames can band. Looping
+GIFs carry the Netscape infinite-repeat extension; single-play GIFs omit the
+repeat extension entirely rather than encoding an ambiguous finite count.
+
+### Warnings, metadata and atomicity
+
+Every frame is painted with the export provenance captured at request time, so
+the model/accuracy/unavailable warning stays visible even when a viewer strips
+metadata. MP4/WebM also embed a sanitized one-line `comment` plus
+`title=Vector Field Explorer animation`. GIF metadata is not attempted: the
+visible banner is its only warning contract, and no GIF metadata claim is made.
+
+Encoders stream to a sibling temporary file and write one frame at a time.
+GIF checks the byte budget while writing; video checks the completed temporary
+file. Only a successful finish atomically replaces the destination. Cancellation,
+encoder failure, a missing ffmpeg, or an oversize output abandons the sink,
+deletes the temporary file, and leaves no final output. Screenshot readback and
+animation work are mutually exclusive; at most one animation frame is in flight
+per app update.
 
 ## Persistence
 
@@ -717,9 +826,15 @@ camera presets use `localStorage`.
   solver; arbitrary geometry, multiple or overlapping inclusions, anisotropy,
   conductors and free surface charge are unsupported. Its 2D view is a slice of
   the same 3D case, and its sampling timings are not frame-time claims.
-- **No data import or export.** The input is a formula, a built-in preset, or an
-  editable source, induction or materials scene. Screenshots are PNG, or 2D
-  SVG; there is no CSV, NumPy, or project-file import.
+- **No data import.** The input is a formula, a built-in preset, or an editable
+  source, induction or materials scene. Screenshots are PNG or 2D SVG; animation
+  export is GIF, or native MP4/WebM through a user-installed ffmpeg. There is no
+  CSV, NumPy, or project-file import, and GIF export carries no embedded
+  metadata.
+- **Video export depends on ffmpeg.** GIF works everywhere; MP4/WebM are
+  native-only and require an installed ffmpeg or `VFE_FFMPEG`. The app never
+  silently falls back to GIF; real encoder-sink smokes pass, while full-app GUI
+  video and browser runtime remain unverified/owner-waived.
 - **No general solver.** The native CAS differentiates formulas and derives
   gradient, divergence, and curl. The ODE workbench is a bounded fixed-step RK4
   trajectory viewer: it has no adaptive/stiff solver, symbolic integration,

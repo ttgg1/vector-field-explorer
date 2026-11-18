@@ -1,3 +1,6 @@
+pub mod animation;
+pub mod animation_job;
+pub mod animation_scene;
 pub mod app;
 pub mod arrow_geometry;
 pub mod arrow_style;

@@ -37,7 +37,8 @@ The field is formula-driven:
   `x`, `y`, `z`.
 - Sampling, arrows, streamlines, particles, colormaps, plane inspection, two
   cameras (2D front / 3D orbit, plus an optional fly camera), camera presets,
-  screenshots, and persistence are all in this tree.
+  screenshots, deterministic GIF/ffmpeg animation export, and persistence are
+  all in this tree.
 - The app is a teaching-grade explorer, not a general numerical solver. The
   pure source-evaluator slice in `src/sources` evaluates all eight softened
   source geometries: point charges, finite charged lines, charged rings, charged
@@ -202,6 +203,44 @@ the ordering of the Rust gate.
 `web/webgpu.js` are copied/served by Trunk ([Trunk.toml](../Trunk.toml)). The
 `vfe-canvas` id is the mount point.
 
+### 2.4 Animation export path
+
+`File > Export animation…` and the native CLI share one encoder contract but
+different render owners.
+
+1. `AnimationEligibility::from_state` accepts a time-dependent Formula/particle
+   scene or an animated Induction scene. Sources, Materials, Ode, scalar plots
+   and static scenes are rejected with the exact user-facing reason; the CLI
+   never constructs Induction and covers Formula/particles only.
+2. The GUI pauses playback and captures `AnimationSnapshot::capture`; the CLI
+   builds `prepare_animation_snapshot`, preadvancing particles from 0 to
+   `--start-time` with the still `--fixed-step`. The snapshot owns cloned `State`,
+   `Particles`, camera and clear colour; the live app and shared clock are not
+   stepped.
+3. `AnimationSpec::validate` enforces fps `1..=30`, duration `0.1..=60 s`, at
+   most 1800 frames, 8,388,608 pixels/frame and 512 MiB, plus even video
+   dimensions. `frame_count = ceil(duration * fps)` and frame `i` is at
+   `start + i / fps`, without a duplicated endpoint.
+4. Each frame calls `AnimationSnapshot::frame_at(time, 1/fps, aspect, first)`,
+   which rebuilds through the shared Formula/Induction scene assembly and
+   advances particles only on later frames through `advance_exact` (1/120 s
+   substeps plus remainder). No GUI `MAX_STEP` clamp or playback speed applies.
+5. `apply_export_banner` paints the capture-time provenance on every frame. The
+   GUI `AnimationJob::pump` renders at most one frame per app update and pushes
+   it to a `FrameSink`; the CLI loops the same `AnimationSnapshot` through one
+   `HeadlessRenderSession`. `gif_sink` streams a local-palette GIF; `video_sink`
+   pipes raw RGBA to ffmpeg and embeds a sanitized metadata comment. GIF has no
+   metadata contract.
+6. `FrameSink::finish` checks the byte budget and atomically replaces the
+   destination. Every error, cancel or dropped sink removes the sibling `.tmp`
+   file, so no final output is claimed from a partial encode. Screenshot and
+   animation capture are mutually exclusive.
+
+The browser uses `memory_gif_sink` and a GIF download, with a 2048-pixel edge
+validation limit; there is no wasm video path. GUI and CLI evidence, including a
+real ffmpeg attempt, is in
+[docs/perf/animation-performance.md](perf/animation-performance.md).
+
 ---
 
 ## 3. Module reference
@@ -270,6 +309,132 @@ including the pre-start WebGPU gate and the static fallback UI.
 `navigator.gpu` and an adapter exist, not that every WebGPU feature the app uses
 is available.
 
+#### `src/animation.rs` — bounded animation spec and streaming encoders
+
+**Purpose / API.** Pure animation contract with no app, GPU or clock
+dependency. Exports `AnimationFormat`, `AnimationSpec`, `AnimationError`,
+`FrameSink`, `frame_count`, `frame_times`, `gif_delay_centiseconds`, `gif_sink`,
+`encode_gif_to_path`, `video_sink`, doc-hidden `video_sink_with_program`,
+`ffmpeg_available`, `ffmpeg_args` and `atomic_replace`, plus the
+`ANIMATION_*` limits. `AnimationSpec::default` is 0 s, 4 s, 12 fps, 1280×720,
+looping GIF.
+
+**Invariants.** `frame_count = ceil(duration * fps)` clamped to
+`1..=1800`; frame `i` is at `start + i / fps` with no duplicated endpoint.
+Validation rejects nonfinite times, fps outside `1..=30`, duration outside
+`0.1..=60`, zero dimensions, more than `8_388_608` pixels/frame, frame-budget
+overflow and odd MP4/WebM dimensions. `FrameSink` requires exactly
+`width*height*4` tightly packed RGBA bytes for the spec dimensions. GIF uses
+the direct `gif = "0.14"` encoder with per-frame local palettes, no dithering,
+and `Repeat::Infinite` only when `loop_gif` is true; single-play output omits
+the repeat extension. The counting writer aborts mid-stream at 512 MiB. Video
+args pipe raw RGBA to ffmpeg (`libx264`/`yuv420p`/`+faststart` for MP4,
+`libvpx-vp9` for WebM), capture stderr, and never fall back to GIF when ffmpeg
+is missing. `VFE_FFMPEG` overrides PATH detection. Every encoder writes a
+sibling `.tmp` file, checks the byte budget, and uses `atomic_replace`;
+failures and dropped sinks delete the temporary file. ffmpeg is invoked with
+`Command` arguments directly, never through a shell.
+
+**Pinned by.** [tests/animation_test.rs](../tests/animation_test.rs),
+[tests/animation_gif_test.rs](../tests/animation_gif_test.rs), and native
+[tests/animation_ffmpeg_test.rs](../tests/animation_ffmpeg_test.rs). The
+fake-ffmpeg process tests are Unix-only.
+
+**Limitation.** GIF color quantization may band on large viridis/neodymium
+frames; dithering is intentionally off. Video is native-only and requires a
+user-installed ffmpeg. The sibling temporary filename has no container
+extension, so `ffmpeg_args` selects the muxer explicitly with `-f mp4`/`-f
+webm`; a real 2-frame 64×64 sink smoke passed for both formats. Full-app GUI
+video and browser runtime remain unverified. See
+[docs/perf/animation-performance.md](perf/animation-performance.md).
+
+#### `src/animation_scene.rs` — detached animation frame source
+
+**Purpose / API.** Owns the detached copy an animation export renders from:
+`AnimationSnapshot { state, particles, orbit, fly, clear }`,
+`AnimationFrame { scene, view_proj, eye }`,
+`AnimationSnapshot::{from_parts, capture, frame_at}`, and
+`VfApp::animation_snapshot`. `State: Clone` and `Particles: Clone` make the copy;
+`State` holds no GPU handles.
+
+**Invariants.** `capture` clones the live app state, cloud, orbit/fly pose and
+theme background without mutating playback. `frame_at(time, dt, aspect, first)`
+validates finite inputs and a finite positive aspect, mirrors `time` into the
+detached state, marks it dirty, rebuilds through the live `snapshot_if_dirty`
+seam, and composes lines, glyphs and particles with the same shared app
+functions as the live viewport.
+Formula and Induction are supported; Sources, Materials and Ode are rejected as
+non-animatable. `first` skips `advance_exact` and renders the captured particle
+cloud as-is, including its trails; later frames advance by exactly `dt` through
+`particles::advance_exact` (1/120 substeps plus a remainder), never the GUI
+`MAX_STEP` clamp. Only Formula/Induction scenes with an enabled particle target
+supply a cloud. Scene ordering (3D combined sort, 2D arrows-then-dots, trails
+behind) is the shared live assembly and is independent of aspect; `view_proj`
+uses the caller's aspect for the snapshot camera.
+
+**Pinned by.** [tests/animation_scene_test.rs](../tests/animation_scene_test.rs):
+time-dependent Formula sampling changes the frame, a 0.5 s particle frame moves
+by 0.5 world units (not one GUI-clamped step), direct 60-substep advection
+matches each exact substep time, and the first frame renders the captured cloud's
+dots, trails and combined stream.
+
+**Limitations.** The snapshot does not capture transient click seeds or the live
+viewport aspect; the caller passes the export aspect to `frame_at`. Induction
+is GUI-only by design; CLI animation covers Formula and particles.
+
+#### `src/animation_job.rs` — GUI animation job
+
+**Purpose / API.** Owns one GUI animation export: `AnimationEligibility
+{ allowed, reason, animated }` with the three exact disabled reasons,
+`AnimationJobState`, the `AnimationRenderer` trait (fakeable in tests), and
+`AnimationJob` (`new`, `fake*` test constructors, `pump`, `cancel`,
+`take_next_frame`/`finish_rendered_frame` for the browser's async readback,
+`state`, `frames_done/total`, `error`). The browser-only `memory_gif_sink`
+encodes to memory and downloads the GIF on finish; `check_animation_byte_cap`
+enforces the same 512 MiB output budget on its accumulated `Vec`.
+
+**Invariants.** Eligibility is derived only from the live `State`: Formula needs
+a time-dependent field or an enabled particle target; Induction needs
+`is_animated()`; Sources, Materials, Ode and scalar plots take the shared
+unsupported reason. `pump` renders at most one detached frame per app update and
+never mutates `VfApp` or advances the shared clock; the explicit `1/fps` step and
+captured snapshot are the only animation state. Every frame passes
+`apply_export_banner` with the provenance captured at Start before the sink sees
+it. A job that fails, is cancelled, or is dropped abandons its sink, so the
+streaming encoder deletes its temporary file and never finishes the output. On
+the browser, a terminal job and every new job clear the pending readback
+receiver, so a stale callback can never complete against the next job.
+`AnimationJob::new` validates the spec and computes the frame count once.
+
+**Pinned by.** [tests/animation_job_test.rs](../tests/animation_job_test.rs):
+one-frame-at-a-time progress, renderer and sink failures, cancellation before and
+during encoding, banner application on every fake frame, temp-cleanup probes,
+exact eligibility reasons, and a real `AnimationSnapshot` + `gif_sink` export
+decoded back to its frame count.
+
+#### `src/ui/animation_dialog.rs` — animation export dialog
+
+**Purpose / API.** `AnimationDialogState` (format, duration, fps, GIF loop,
+width/height, error, progress, status), `AnimationDialogAction`, the window
+`show`, size/budget helpers and filename helpers. The dialog captures no app
+state: the app applies Start/Cancel after the widget pass.
+
+**Invariants.** The default size is the current viewport in physical pixels,
+scaled down into `ANIMATION_MAX_PIXELS` while preserving aspect. There is no
+start-time field; the spec starts at the captured live `State::time`. The exact
+frame count and disabled reason are visible before Start. Explicit oversized
+values are validation errors, not clamps. The browser build is GIF-only and
+rejects an explicit edge above `ANIMATION_WASM_MAX_EDGE` (2048) instead of
+silently shrinking it. Start is disabled while a screenshot capture is pending or
+a job is running. A failed sink-open/snapshot attempt leaves Start available for
+a retry; the next attempt clears the old error, while invalid-field validation
+still keeps the button disabled.
+
+**Pinned by.** [tests/animation_dialog_test.rs](../tests/animation_dialog_test.rs)
+at 1200 and 390 px: menu/dialog rendering, frame-count text, exact disabled
+reasons for static Formula/Induction and unsupported modes, menu disabled state,
+screenshot mutual exclusion and the paused/restored transport state.
+
 #### `src/cli.rs` — native plot export configuration and dispatch
 
 **Purpose.** Parse one-shot export flags and strict JSON, overlay config with
@@ -285,17 +450,31 @@ only `color_range` accepts null. Supplied values are intrinsically validated
 before flags can override them. Final mode and formula determine density and
 grid bounds; `CliOptions` carries resolved settings and explicit camera-member
 markers for mode applicability. Clap and pollster are native-only dependencies.
+`animation_format` is a lowercase `gif|mp4|webm` string at the clap/JSON edge;
+`CliOptions` carries the resolved `AnimationFormat`. Animation mode requires the
+output extension to match the format, defaults an omitted duration to 4 s, and
+leaves the still-image duration default at 0. `animation_fps` defaults to 12 and
+`animation_loop` to false; loop with MP4/WebM and odd video dimensions are
+validation errors. Frame, pixel, byte and nonfinite-time limits come from
+`AnimationSpec`; animation validation runs before any output file is created.
+Still PNG/SVG bytes and `--duration` preadvance semantics are unchanged when
+`animation_format` is absent.
 
-**Pinned by.** `tests/cli_test.rs`, registered in the native suite.
+**Pinned by.** `tests/cli_test.rs` and `tests/cli_animation_test.rs`, registered
+in the native suite.
 
 **Dispatch.** `run_from` handles clap help/version, reads an optional strict JSON
-config, resolves flags and calls `run_export`. The latter validates and prepares
-one scene, selects CPU SVG or offscreen RGBA8 + PNG encoding by output extension,
-and writes the explicit path with contextual errors. Neither constructs `VfApp`,
-uses storage, nor opens dialogs. No-argument GUI and wasm startup are unchanged.
-`tests/cli_test.rs` exercises the actual executable with child-only environments;
-`scripts/test-cli-dispatch.sh` separately runs real displayless 2D/3D PNG decoding,
-non-background field checks and persistence sentinels through the wired binary.
+config, resolves flags and calls `run_export`. The latter validates and branches
+only when `animation_format` is present: animation captures a detached
+Formula/particle snapshot, opens one headless session and streams every frame
+through `apply_export_banner` and a `FrameSink` (`gif_sink` or `video_sink`).
+Otherwise it prepares one scene, selects CPU SVG or offscreen RGBA8 + PNG
+encoding by output extension, and writes the explicit path with contextual
+errors. Neither constructs `VfApp`, uses storage, nor opens dialogs. No-argument
+GUI and wasm startup are unchanged. `tests/cli_test.rs` exercises the actual
+executable with child-only environments; `scripts/test-cli-dispatch.sh`
+separately runs real displayless 2D/3D PNG decoding, non-background field checks
+and persistence sentinels through the wired binary.
 
 #### `src/cli_svg.rs` — native CPU vector export
 
@@ -318,25 +497,35 @@ portrait/landscape fit, deterministic bytes, no raster image, and 3D rejection.
 #### `src/cli_gpu.rs` — native surface-free GPU export
 
 **Purpose / API.** `cli::render_offscreen(&PreparedScene)` requests a headless
-wgpu adapter/device and returns packed RGBA8. It does not create a surface,
-window, app or persistence state. PNG encoding/writing belongs to CLI dispatch.
+wgpu adapter/device and returns packed RGBA8. `HeadlessRenderSession::new`
+initializes one adapter/device/`DrawState` and `render_frame` can paint many
+scenes; `render_offscreen` remains the one-shot still-PNG wrapper. It does not
+create a surface, window, app or persistence state. PNG encoding/writing belongs
+to CLI dispatch. `AnimationRenderSession` is the doc-hidden frame seam used by
+CLI animation; `HeadlessRenderSession` implements it.
 
 **Invariants.** Dimensions, packed/padded pixel bytes, storage sizes, vertex
-counts and adapter/device limits are checked before resource allocation. No
-optional device features are requested. The target must support rendering,
-blending and copying `Rgba8UnormSrgb`; no format or CPU/noop fallback is allowed.
-The existing `DrawState` paints the prepared frame with its linear clear color;
-readback is display-encoded sRGB. GPU validation/internal/OOM scopes, uncaptured
-errors and device loss become actionable CLI errors. The doc-hidden production
-`offscreen_error_to_cli` preserves render versus typed readback classification.
-Two further doc-hidden production seams support GPU-free failure checks:
-`validate_gpu_limits` delegates to the same private resource-size validator used
-for rendering, and `acquire_device_with` invokes the actual device request once
-and preserves its original cause in a contextual `CliError::Device`.
+counts and adapter/device limits are checked for every frame before resource
+allocation. A streaming session requests the adapter's storage/buffer maxima so
+later frames are not limited by the first frame, then checks each frame against
+the device's limits; the one-shot still wrapper keeps its original minimal
+request and bytes. No optional device features are requested. The target must
+support rendering, blending and copying `Rgba8UnormSrgb`; no format or CPU/noop
+fallback is allowed. The existing `DrawState` paints the prepared frame with its
+linear clear color; readback is display-encoded sRGB. GPU validation/internal/OOM
+scopes, uncaptured errors and device loss become actionable CLI errors. The
+doc-hidden production `offscreen_error_to_cli` preserves render versus typed
+readback classification. Two further doc-hidden production seams support
+GPU-free failure checks: `validate_gpu_limits` delegates to the same private
+resource-size validator used for rendering, and `acquire_device_with` invokes
+the actual device request once and preserves its original cause in a contextual
+`CliError::Device`.
 
 **Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions, reduced texture,
 readback/storage/binding limits, injected device-request failure, exactly-once
 acquisition success/failure, and actual map callback failure.
+`tests/cli_animation_test.rs` pins that one animation export opens exactly one
+session through the injected factory and streams the scheduled frame count.
 `scripts/test-cli-gpu.sh` runs isolated displayless workers for
 injected adapter absence, real 2D/3D dimensions/field content, PNG decoding, exact
 clear/linear-alpha-blend channel bytes, and software Vulkan when installed.
@@ -352,14 +541,15 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `material` (`MaterialPanelState`), `clock`, `screenshot`, and private
+  `material` (`MaterialPanelState`), `clock`, `screenshot`, `animation`
+  (`AnimationDialogState`), `animation_job`, and private
   scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
   [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
 - `StatusBarState` (parse message, fps/frame ms, arrow/streamline/particle/trail
-  counts, density, `is_3d`, sim time, flying, hint).
+  counts, density, `is_3d`, sim time, flying, hint, animation progress).
 - `presets_data_dir()` (native re-export of the XDG directory).
 - `Default for VfApp`.
 
@@ -581,10 +771,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
   click bursts are retraced against the new domain/formula and then composed
-  with the backdrop. Source-mode rebuilds append `source_glyph_lines` for the
-  current `plane_frame` and record their segment count; the Formula branch
-  appends none. `source_glyph_line_count` and `viewport_line_count` expose the
-  result to the doc-hidden integration harness.
+  with the backdrop by `app::compose_vector_lines`, which also appends
+  mode-owned glyphs and reports their count. The Formula branch appends none.
+  `source_glyph_line_count` and `viewport_line_count` expose the result to the
+  doc-hidden integration harness.
 - `advance_particles` calls `retarget` only with the current target. A changed
   target trims or spawns only the difference; a click burst above the count
   survives until the count changes. Off or a two-component field produces
@@ -625,7 +815,9 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
   folded into `top_bar::wheel_zoom` by egui.
 - 3D builds the combined arrow+particle stream and sorts it far-to-near; 2D
   sorts only arrows and never reads `combined`; 2D plane-slice trails are sorted
-  and painted behind them, while ordinary two-component 2D has no trails.
+  and painted behind them, while ordinary two-component 2D has no trails. The
+  ordering lives in `app::assemble_vector_scene`, shared with the detached
+  animation snapshot.
 - Ode appends current-time marker dots to a copy of the 2D `dots` list or to
   the 3D combined stream before the sort. The cached scene is never mutated;
   markers use `PARTICLE_KIND` and the fixed ODE palette.
@@ -2040,8 +2232,8 @@ advection, and the dot/trail instance builders.
 `ParticleAppearance` (+ `sanitized`); `Particles` (`with_positions`, `history`
 test seams); `target_count`, `effective_particle_count`, `count`,
 `effective_trail_len`, `clear`, `spawn`, `resize`, `retarget`, `spawn_at`;
-`AdvectSettings`, `advect`, `speed_range`, `dot_instances`, `trail_instances`,
-`DOT_QUAD_CORNERS`, `dot_billboard_corners`.
+`AdvectSettings`, `advect`, `advance_exact`, `speed_range`, `dot_instances`,
+`trail_instances`, `DOT_QUAD_CORNERS`, `dot_billboard_corners`.
 
 **Invariants.**
 - The cloud has a constant size between target changes. A particle that leaves
@@ -2058,6 +2250,10 @@ test seams); `target_count`, `effective_particle_count`, `count`,
   no-op; speed is `|q - p| / dt`; trails append and trim to
   `effective_trail_len`; stagnation is judged on speed, not per-step
   displacement; a respawn resets trail/stuck/speed.
+- `advance_exact` splits an exported frame step into
+  `ANIMATION_PARTICLE_SUBSTEP` (1/120 s) steps plus a final remainder and calls
+  `advect` at each substep's exact time. It deliberately bypasses the GUI
+  clock's `MAX_STEP` clamp; non-finite or non-positive steps are no-ops.
 - Trails are capped at 32 points per particle and 100 000 points across the
   cloud; trail alpha fades toward the tail; width scales with grid spacing.
 - Dot instances use `origin.w = PARTICLE_KIND`, `dir_len.w = radius`; RGB follows
@@ -2562,6 +2758,9 @@ silently. Scalar plot captures always pass `None`.
 - Pending PNG/SVG requests carry the provenance captured at request time;
   `take_*_with_provenance` returns `Some(provenance)` for a live request and
   `None` when idle.
+- Animation export and screenshot capture are mutually exclusive:
+  `Screenshot::is_busy` blocks Start while a PNG/SVG capture is pending or in
+  flight, and the app refuses PNG/SVG requests while an animation job exists.
 
 **Pinned by.** `tests/screenshot_test.rs` (18 tests):
 `capture_size_keeps_the_aspect_and_the_4096_cap`,

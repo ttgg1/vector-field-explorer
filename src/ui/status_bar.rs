@@ -82,7 +82,11 @@ impl FpsMeter {
     /// Current smoothed frame time in milliseconds; zero until the first valid
     /// sample.
     pub fn frame_ms(&self) -> f32 {
-        if self.ema > 0.0 { 1000.0 / self.ema } else { 0.0 }
+        if self.ema > 0.0 {
+            1000.0 / self.ema
+        } else {
+            0.0
+        }
     }
 
     /// Consume one frame's stable delta time, seconds.
@@ -155,11 +159,18 @@ pub fn format_status(status: &StatusBarState, mask: StatsMask) -> String {
     if status.flying {
         out.push_str("fly | ");
     }
-    out.push_str(&format!("{:.0} fps · {:.1} ms", status.fps, status.frame_ms));
+    out.push_str(&format!(
+        "{:.0} fps · {:.1} ms",
+        status.fps, status.frame_ms
+    ));
     out.push_str(" | ");
     out.push_str(&count_label(status.arrow_count, "arrow", "arrows"));
     out.push_str(" · ");
-    out.push_str(&count_label(status.streamline_count, "streamline", "streamlines"));
+    out.push_str(&count_label(
+        status.streamline_count,
+        "streamline",
+        "streamlines",
+    ));
     if mask.particles {
         out.push_str(" · ");
         out.push_str(&count_label(status.particle_count, "particle", "particles"));
@@ -187,6 +198,8 @@ fn status_message(ui: &mut egui::Ui, status: &StatusBarState) {
         ui.colored_label(PARSE_ERROR_COLOR, status.parse_message.as_str());
     } else if let Some(hint) = status.hint.as_deref() {
         ui.weak(hint);
+    } else if let Some(animation) = status.animation_status.as_deref() {
+        ui.weak(animation);
     } else {
         ui.weak("ready");
     }
@@ -238,10 +251,8 @@ pub fn show(ui: &mut egui::Ui, status: &StatusBarState, mode: LayoutMode) {
             });
             if !composition.is_empty() {
                 ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(composition).size(COMPACT_STATS_SIZE),
-                    )
-                    .truncate(),
+                    egui::Label::new(egui::RichText::new(composition).size(COMPACT_STATS_SIZE))
+                        .truncate(),
                 );
             }
         });

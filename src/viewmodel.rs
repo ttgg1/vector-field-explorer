@@ -243,6 +243,7 @@ impl LeftClickAction {
 
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
+#[derive(Clone)]
 pub struct State {
     pub plot: crate::plot_state::PlotState,
     pub mode_3d: bool,
