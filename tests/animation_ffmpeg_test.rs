@@ -79,6 +79,8 @@ fn ffmpeg_args_select_the_right_codec_and_metadata() {
             "title=Vector Field Explorer animation",
             "-metadata",
             "comment=Sources - softened teaching model - a = 0.01; Unavailable: 2",
+            "-f",
+            "mp4",
             "/tmp/output.video",
         ]
     );
@@ -88,6 +90,37 @@ fn ffmpeg_args_select_the_right_codec_and_metadata() {
     assert!(!contains(&webm, "libx264"));
     assert!(contains(&webm, "yuv420p"));
     assert!(!contains(&webm, "+faststart"));
+    assert_eq!(
+        &webm[..],
+        [
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "rgba",
+            "-video_size",
+            "4x4",
+            "-framerate",
+            "10",
+            "-i",
+            "pipe:0",
+            "-vf",
+            "vflip",
+            "-c:v",
+            "libvpx-vp9",
+            "-pix_fmt",
+            "yuv420p",
+            "-metadata",
+            "title=Vector Field Explorer animation",
+            "-metadata",
+            "comment=Sources - softened teaching model - a = 0.01; Unavailable: 2",
+            "-f",
+            "webm",
+            "/tmp/output.video",
+        ]
+    );
 }
 
 #[test]

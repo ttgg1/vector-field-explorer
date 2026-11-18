@@ -503,9 +503,11 @@ pub fn encode_gif_to_path(
 /// Exact ffmpeg argv for a validated video spec.
 ///
 /// Raw RGBA frames arrive on stdin at the spec frame rate. MP4 selects H.264
-/// with `yuv420p` and fast-start; WebM selects VP9. The provenance warning
-/// lines become one sanitized `comment`; `title` is always present. No shell is
-/// involved.
+/// with `yuv420p` and fast-start; WebM selects VP9. Each video format also pins
+/// its output muxer (`-f mp4` / `-f webm`) so ffmpeg does not need to infer it
+/// from the atomic temporary filename, which ends in `.tmp`. The provenance
+/// warning lines become one sanitized `comment`; `title` is always present. No
+/// shell is involved.
 pub fn ffmpeg_args(
     spec: &AnimationSpec,
     output: &Path,
@@ -553,6 +555,11 @@ pub fn ffmpeg_args(
     if let Some(comment) = provenance_comment(provenance) {
         arguments.push("-metadata".to_string());
         arguments.push(format!("comment={comment}"));
+    }
+    match spec.format {
+        AnimationFormat::Mp4 => arguments.extend(["-f", "mp4"].into_iter().map(str::to_string)),
+        AnimationFormat::Webm => arguments.extend(["-f", "webm"].into_iter().map(str::to_string)),
+        AnimationFormat::Gif => {}
     }
     arguments.push(output.to_string_lossy().into_owned());
     arguments
