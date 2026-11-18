@@ -697,12 +697,12 @@ for video and notes that it is ignored, while the CLI rejects
 pixels, and has no video path. Browser runtime and manual visual checks were
 owner-waived for this delivery and are not claimed as passed.
 
-The native benchmark of 2026-11-18 found that real MP4/WebM export failed before
-frame 1 on the recorded host even with ffmpeg 9.0.2 installed: ffmpeg could not
-infer an output muxer from the sibling temporary filename
-(`.<name>.mp4.tmp`). GIF export passed. This is recorded as a failure, not a
-video pass, in
-[docs/perf/animation-performance.md](docs/perf/animation-performance.md).
+Both native video formats are implemented and were validated with a real
+external-ffmpeg sink smoke: 64×64, 2 frames, 1.0 s, producing H.264 MP4
+(1,693 bytes) and VP9 WebM (633 bytes) with no temporary siblings. That smoke
+covers the encoder sink, not a full-app GUI export or a frame-time benchmark;
+full-app GUI MP4/WebM and browser runtime remain unverified and owner-waived.
+See [docs/perf/animation-performance.md](docs/perf/animation-performance.md).
 
 ### CLI animation
 
@@ -833,8 +833,8 @@ camera presets use `localStorage`.
   metadata.
 - **Video export depends on ffmpeg.** GIF works everywhere; MP4/WebM are
   native-only and require an installed ffmpeg or `VFE_FFMPEG`. The app never
-  silently falls back to GIF, and the 2026-11-18 benchmark recorded real
-  MP4/WebM output as failing, not passing.
+  silently falls back to GIF; real encoder-sink smokes pass, while full-app GUI
+  video and browser runtime remain unverified/owner-waived.
 - **No general solver.** The native CAS differentiates formulas and derives
   gradient, divergence, and curl. The ODE workbench is a bounded fixed-step RK4
   trajectory viewer: it has no adaptive/stiff solver, symbolic integration,

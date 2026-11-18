@@ -342,9 +342,10 @@ fake-ffmpeg process tests are Unix-only.
 
 **Limitation.** GIF color quantization may band on large viridis/neodymium
 frames; dithering is intentionally off. Video is native-only and requires a
-user-installed ffmpeg. The 2026-11-18 native evidence run recorded real
-MP4/WebM export failing because ffmpeg could not infer a muxer from the
-sibling `.<name>.mp4.tmp` output filename; GIF passed. See
+user-installed ffmpeg. The sibling temporary filename has no container
+extension, so `ffmpeg_args` selects the muxer explicitly with `-f mp4`/`-f
+webm`; a real 2-frame 64×64 sink smoke passed for both formats. Full-app GUI
+video and browser runtime remain unverified. See
 [docs/perf/animation-performance.md](perf/animation-performance.md).
 
 #### `src/animation_scene.rs` — detached animation frame source

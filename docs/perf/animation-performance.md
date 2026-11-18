@@ -1,10 +1,10 @@
 # Animation export performance and evidence
 
 Research evidence for issue 71 (2026-11-18). This records native animation
-renders, GIF encoding and the real external-ffmpeg attempt. It is not a
-frame-time target and makes **no GPU fps claim**: the measured wall time covers
-scene rebuild, offscreen GPU render, banner painting, GIF quantization and file
-write for the whole export.
+renders, GIF encoding and a real external-ffmpeg encoder-sink smoke. It is not a
+frame-time target and makes **no GPU fps claim**: the measured GIF wall time
+covers scene rebuild, offscreen GPU render, banner painting, GIF quantization
+and file write for the whole export.
 
 ## Host and build
 
@@ -85,47 +85,46 @@ Raw output: `evidence/task-5/bench/induction.log`,
 `induction-decode.log`, `content-decode.log`, harness build log and
 `induction-harness-build.log`.
 
-## Real MP4/WebM attempt: failed, not passed
+## Real MP4/WebM sink smoke: passed after muxer fix
 
-`ffmpeg` was installed, so real video was attempted rather than recorded as
-unavailable. Both formats failed before frame 1 **with the shipped temp-path
-policy**:
+The original Task 5 attempt failed because the sibling temporary path
+`.<name>.mp4.tmp` / `.<name>.webm.tmp` hid the container extension and ffmpeg
+could not infer an output muxer. Fix commit
+`b1437866d9abd40aba843758753c764a12dd4a2a` makes `ffmpeg_args` emit explicit
+`-f mp4` / `-f webm` before the temporary output path. The atomic-replace and
+byte-budget behavior is unchanged.
 
-```text
-export: ffmpeg rejected frame 2: Broken pipe (os error 32):
-[AVFormatContext ...] Unable to choose an output format for
-'.superpowers/.../bench/.formula-120.mp4.tmp'; use a standard extension for
-the filename or specify the format manually.
-```
+A real ffmpeg process smoke through the public `video_sink` then encoded 2
+synthetic frames at 64×64 and 2 fps (1.0 s). `ffmpeg n9.0.2` exited 0 for both:
 
-WebM failed the same way for `.formula-120.webm.tmp`. The app writes the
-sibling temporary filename without the container extension and does not pass an
-output `-f`, so ffmpeg cannot select the muxer. No final `.mp4`/`.webm` was
-created, and no temp file remained. This is a real-encoder **failure**, not a
-pass:
+| Format | Result | Size | ffprobe |
+| --- | --- | ---: | --- |
+| MP4 | pass | 1,693 bytes | `h264`, 64×64, 2 frames, avg 2/1 fps, 1.0 s |
+| WebM | pass | 633 bytes | `vp9`, 64×64, `nb_read_frames=2`, avg 2/1 fps, 1.0 s |
 
-| Format | Command | Result |
-| --- | --- | --- |
-| MP4 | `--animation-format mp4` | failed before frame 1; no output |
-| WebM | `--animation-format webm` | failed before frame 1; no output |
-
-Logs: `evidence/task-5/bench/formula-mp4.log` and `formula-webm.log`. The
-GIF path on the same binary and host passed.
+No `.tmp` siblings remained. Evidence:
+`.superpowers/sdd/2026-11-17-animation-export/evidence/task-4-fix/smoke/`
+(`ffprobe.log`, `video-smoke.mp4`, `video-smoke.webm`). This is a **sink
+smoke**, not a full-app GUI animation export and not a frame-time or quality
+benchmark; no full-app MP4/WebM pass is claimed here.
 
 The missing-ffmpeg path was separately exercised with
 `VFE_FFMPEG=/nonexistent/ffmpeg`; it reported
 `ffmpeg video export could not start ... Install ffmpeg or set VFE_FFMPEG to its executable.`
-and created no output (`missing-ffmpeg.log`). This confirms the documented
-"error, never a GIF fallback" behavior, but it is not a video-codec pass.
+and created no output (`evidence/task-5/bench/missing-ffmpeg.log`). That
+confirms the documented "error, never a GIF fallback" behavior independently of
+the successful sink smoke.
 
 ## Scope and exclusions
 
-- These are integrated export wall times on one host, not GPU throughput or
-  interactive fps. GIF quantization and file I/O are included.
+- GIF wall times are integrated export measurements on one host, not GPU
+  throughput or interactive fps; GIF quantization and file I/O are included. The
+  video sink smoke above is not timed here.
 - No browser/WebAssembly runtime, browser decode, or manual visual pass is
   claimed. The wasm compile gate is recorded separately in the task report.
 - The Induction GIF is warning-free only because the harness passed the
   default (empty) provenance; production captures the induction warning
   provenance at export start, and every frame receives that banner.
 - GIF metadata is not attempted; only the visible banner is the GIF warning
-  contract. MP4/WebM metadata is embedded when video succeeds.
+  contract. MP4/WebM metadata is part of the encoder-sink args and smoke path,
+  but no full-app video metadata validation is claimed.
