@@ -33,6 +33,7 @@ use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::material_panel::MaterialPanelState;
+use crate::ui::maxwell_panel::MaxwellPanelState;
 use crate::ui::menu::{self, MenuAction};
 use crate::ui::ode_panel::OdePanelState;
 use crate::ui::presets::PresetPanel;
@@ -140,6 +141,9 @@ pub struct VfApp {
     /// Panel-local draft for the Materials rail/sheet; only valid edits reach
     /// the committed scene.
     pub material: MaterialPanelState,
+    /// Panel-local draft for the Maxwell rail/sheet; only valid edits reach the
+    /// committed scene.
+    pub maxwell: MaxwellPanelState,
     /// Effective width for the later Presets phase; never persisted.
     wide_presets_width: f32,
     #[cfg(not(target_arch = "wasm32"))]
@@ -348,6 +352,10 @@ impl VfApp {
         if state.field_mode == FieldMode::Materials {
             material.sync_from(&state);
         }
+        let mut maxwell = MaxwellPanelState::default();
+        if state.field_mode == FieldMode::Maxwell {
+            maxwell.sync_from(&state);
+        }
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
@@ -361,6 +369,7 @@ impl VfApp {
             induction: InductionPanelState::default(),
             ode: OdePanelState::default(),
             material,
+            maxwell,
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),

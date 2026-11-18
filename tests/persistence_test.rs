@@ -436,6 +436,8 @@ fn sample_settings() -> AppSettings {
             ode_width: 300.0,
             materials_expanded: false,
             materials_width: 300.0,
+            maxwell_expanded: false,
+            maxwell_width: 300.0,
             help_visible: false,
             #[cfg(not(target_arch = "wasm32"))]
             cas_expanded: true,

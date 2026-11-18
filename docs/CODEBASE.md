@@ -543,7 +543,8 @@ and the helpers that belong to no single frame phase.
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
   `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
-  `material` (`MaterialPanelState`), `clock`, `screenshot`, `animation`
+  `material` (`MaterialPanelState`), `maxwell` (`MaxwellPanelState`), `clock`,
+  `screenshot`, `animation`
   (`AnimationDialogState`), `animation_job`, and private
   scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
@@ -716,11 +717,20 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   command; Reset calls `State::reset_material`, re-syncs the panel draft and
   applies the default camera command. Entering Materials syncs the panel draft
   from the committed scene only on entry, restore or reset, never every frame.
+- The Maxwell rail/body and compact Maxwell tab draw `maxwell_panel::show`; the
+  formula bar's one-shot `open_maxwell` request expands the wide rail or opens
+  the compact sheet. Fit uses the shared Fit command; Reset calls
+  `State::reset_maxwell` and re-syncs the draft; `Switch to 2D` only calls
+  `set_mode(false)` and re-samples the same case, recording the new scene frame
+  first so the entry refit cannot move the camera. Entering Maxwell syncs the
+  panel draft only on entry, restore or reset.
 - ODE mode status reports `State::ode_error`; the Features controls are
   disabled with the ODE note and the Coloring section is not drawn. Materials
   status reports `State::material_error` or the current sampling warning; its
   Features controls are disabled with the arrows-only note and its Coloring
-  section is hidden.
+  section is hidden. Maxwell reports `State::maxwell_error` or the current
+  sampling warning with the same Features/Coloring gates. CAS is disabled
+  outside Formula, including Maxwell.
 - The viewport paints `Materials - {case} - {Total|Applied|Response}` in
   Materials mode and shows `Response is identically zero for this view.` when
   the sampling is response-empty. Leaving Materials closes its compact sheet.
@@ -2029,7 +2039,7 @@ storage key, with migration and corruption tolerance.
 | Record | Fields | Compatibility |
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
-| `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `controls_width`, `presets_width`, `sources_width`, `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280 |
+| `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
 | `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
@@ -2931,7 +2941,8 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`induction_panel`, `layout`, `menu`, `ode_panel`, `panel_rails`, `plot_panel`,
+`induction_panel`, `layout`, `material_panel`, `maxwell_panel`, `menu`,
+`ode_panel`, `panel_rails`, `plot_panel`,
 `presets`, `sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`,
 `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
@@ -3101,6 +3112,48 @@ and rejection, view/Reset, exact units, disabled Features/CAS, help rows,
 viewport label, current-only warning, rail/sheet requests) and
 `tests/layout_test.rs` for `materials_expanded`/`materials_width`.
 
+#### `src/ui/maxwell_panel.rs` — the responsive Maxwell panel
+
+**Purpose.** The wide left rail/compact sheet body for `FieldMode::Maxwell`,
+plus case names, the formula-bar summary and the help rows.
+
+**Public API.** `MaxwellPanelState { draft, error, advanced }`,
+`MaxwellPanelState::default`, `commit(&mut State) -> bool`, `sync_from(&State)`,
+`show(ui, &mut panel, &mut State, compact) -> Option<MaxwellPanelAction>`,
+`MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`, `case_label`, `summary`,
+`MAXWELL_HELP_ROWS`, `maxwell_help_rows`, `MAXWELL_ONLY_NOTE`,
+`MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`.
+
+**Invariants.**
+- `commit` calls `State::set_maxwell_scene`; an invalid draft keeps the last
+  valid scene/sampling and records an actionable error naming the field.
+  `sync_from` runs on mode entry and Reset, never every frame.
+- Case, geometry, display amplitudes, outline, elements and applied x/y commit
+  through the draft on click or release; a frame never commits merely because a
+  value exists.
+- Only case-relevant geometry is shown: Conductor2D alone adds the outline
+  (circle/square), elements and applied x/y. The exact note
+  `Conductor2D is an infinite-cylinder cross-section, not a 3D finite object.`
+  is always visible for that case; in 3D it is followed by `Switch to 2D`.
+- `Switch to 2D` calls `State::set_mode(false)`, never changes the case or mode,
+  and the app records the new scene frame before the simulation pass so the
+  camera is preserved.
+- Advanced is closed by default and shows the case assumptions, the current
+  sampling status/warning only, omitted/large counts, BEM coarse/fine/relative
+  difference/target, and the accuracy opt-in. The opt-in is enabled only for a
+  finite `MaxwellStop::AccuracyNotMet`; `Unavailable` can never be shown.
+- Warnings come only from the sampling that belongs to the committed scene, so
+  a valid scene edit cannot present a prior scene's warning as current.
+- Maxwell is arrows-only, with the exact note
+  `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
+  Coloring is hidden and CAS is disabled with
+  `CAS edits the formula field; switch to Formula.`
+
+**Pinned by.** `tests/maxwell_panel_test.rs` (wide/compact reflow, case-specific
+controls, rejection, current-only warning, accuracy opt-in, Switch to 2D
+camera/mode preservation, disabled Features/CAS, help rows, rail/sheet
+requests) and `tests/layout_test.rs` for `maxwell_expanded`/`maxwell_width`.
+
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 
 **Purpose.** The wide left rail/compact sheet body for `FieldMode::Ode`: source
@@ -3241,7 +3294,8 @@ tab-bar/sheet plan.
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
 `DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
-`DEFAULT_ODE_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
+`DEFAULT_ODE_WIDTH = 300`, `DEFAULT_MATERIALS_WIDTH = 300`,
+`DEFAULT_MAXWELL_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
 `MAX_PANEL_WIDTH = 460`; `COMPACT_WIDTH = 700`,
 `SHEET_MAX_FRACTION = 0.55`, `VIEWPORT_MIN_FRACTION = 0.45`,
 `VIEWPORT_CHROME_ALLOWANCE = 20`, `TAB_BAR_HEIGHT = 48`, `TOUCH_TARGET = 40`,
@@ -3254,13 +3308,15 @@ tab-bar/sheet plan.
 
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
-- Compact is transient: `LayoutState` stores eleven desktop fields (Controls,
-  Presets, Sources, Induction and ODE visibility/width plus help) and
-  native-only `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Sources`, `SheetState::Induction` and `SheetState::Ode` share the
-  one compact sheet.
-- Sources and Induction default to collapsed at 280 pt, ODE at 300 pt, and all
-  sanitize to 180..=460; each record is consulted only in its own field mode.
+- Compact is transient: `LayoutState` stores the desktop panel
+  visibility/width fields (Controls, Presets, Sources, Induction, ODE, Materials
+  and Maxwell) plus help, and native-only `cas_expanded`/`cas_width`; the sheet
+  and mode are never persisted.
+- `SheetState::Sources`, `SheetState::Induction`, `SheetState::Ode`,
+  `SheetState::Materials` and `SheetState::Maxwell` share the one compact sheet.
+- Sources and Induction default to collapsed at 280 pt, ODE, Materials and
+  Maxwell at 300 pt, and all sanitize to 180..=460; each record is consulted
+  only in its own field mode.
 - `sheet_height` caps at 55 % of the window and keeps 45 % + 20 pt for the
   viewport; nonsense inputs yield 0.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point

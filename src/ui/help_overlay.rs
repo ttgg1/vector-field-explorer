@@ -415,6 +415,13 @@ pub static MATERIALS_HELP_SECTION: HelpSection = HelpSection {
     rows: crate::ui::material_panel::MATERIAL_HELP_ROWS,
 };
 
+/// Maxwell-mode notes. The rows live in `ui::maxwell_panel` so the panel, Help
+/// window and tests share one table.
+pub static MAXWELL_HELP_SECTION: HelpSection = HelpSection {
+    title: "Maxwell",
+    rows: crate::ui::maxwell_panel::MAXWELL_HELP_ROWS,
+};
+
 /// The three groups, in window order. Both help surfaces read this table, so a
 /// binding is spelled exactly once. A `static` (not a `const`) so the overlay
 /// and the window can be proven to hand back the very same allocation.
@@ -584,6 +591,7 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
             all.push(&SOURCES_HELP_SECTION);
             all.push(&INDUCTION_HELP_SECTION);
             all.push(&MATERIALS_HELP_SECTION);
+            all.push(&MAXWELL_HELP_SECTION);
             all.push(&crate::ui::ode_panel::ODE_HELP_SECTION);
             table(ui, &all, heading_color);
         });
