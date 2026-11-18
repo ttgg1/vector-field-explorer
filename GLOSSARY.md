@@ -432,3 +432,24 @@ _Avoid_: preset geometry
 A free-form 2D conductor boundary treated as an infinite cylinder; v1 solves it
 approximately and labels the approximation.
 _Avoid_: shape, polygon
+
+**Maxwell teaching case**:
+One named ideal electrostatic or magnetostatic configuration in the bounded
+Maxwell catalogue (parallel plates, coaxial electric or magnetic cylinders, a
+hollow charged sphere, an infinite surface-current wire, an ideal solenoid, an
+image sphere, an image plane, or a 2D conductor cross-section), with normalized
+display amplitudes and no SI constant engine.
+_Avoid_: Maxwell preset, exact Maxwell solution
+
+**2D BEM conductor**:
+The grounded, isolated-neutral infinite-cylinder approximation behind the
+Conductor2D case: a constant-panel boundary-element solve on a circle or square
+cross-section, coarse/fine convergence evidence, and a visible warning that it
+is not a 3D finite conductor.
+_Avoid_: conductor solver, finite cylinder
+
+**net-charge mode**:
+The constant-charge solution excluded by the grounded isolated-neutral 2D BEM
+conductor. A solve with a net-charge residual outside the documented roundoff
+bound is reported unavailable rather than presented as a valid field.
+_Avoid_: floating conductor, charge mode

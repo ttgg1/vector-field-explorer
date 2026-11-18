@@ -803,7 +803,14 @@ validation error, and solve lazily on the first Ode frame. Older payloads
 without Materials fields restore the default dielectric sphere without selecting
 Materials; malformed Materials fields fall back to that valid scene, and the
 error is surfaced only when the stored mode is explicitly Materials. Materials
-sampling is lazy on the first Materials frame, never during restore.
+sampling is lazy on the first Materials frame, never during restore. Older
+payloads without Maxwell fields restore the default parallel-plate teaching
+scene without selecting Maxwell; malformed Maxwell fields fall back to that
+valid scene, and the error is surfaced only when the stored mode is explicitly
+Maxwell. Maxwell restore is lazy too: it drops any cached sampling and 2D BEM
+solution, marks the first frame dirty and never samples or solves during
+restore. Global Reset clears the Maxwell scene, sampling and error and returns
+to Formula; the Maxwell section reset leaves every other durable mode alone.
 Camera presets stay fail-fast: a corrupt or foreign-format preset file is
 logged and left untouched rather than silently overwritten (a missing file
 starts with an empty list), and save or delete failures surface a non-blocking
@@ -826,6 +833,19 @@ camera presets use `localStorage`.
   solver; arbitrary geometry, multiple or overlapping inclusions, anisotropy,
   conductors and free surface charge are unsupported. Its 2D view is a slice of
   the same 3D case, and its sampling timings are not frame-time claims.
+- **Maxwell is a bounded teaching catalogue.** The nine cases are ideal
+  closed-form electrostatic or magnetostatic configurations with normalized
+  display amplitudes, not SI quantities or a constant engine. The infinite wire
+  is a thin surface-current shell; the image sphere and image plane assume ideal
+  boundaries, and the ground `z=0` slice is deliberately empty. Conductor2D is
+  a grounded isolated-neutral infinite-cylinder cross-section solved with a
+  bounded constant-panel BEM approximation (fine at most 256 elements), not a
+  3D finite conductor; its convergence, work, net-charge and accuracy
+  diagnostics are shown, and inaccurate results are drawn only after the
+  default-off opt-in. 2D azimuthal slices omit the out-of-plane component and
+  say so. There is no general Maxwell/PDE solver, 3D BEM/FEM, arbitrary CSG,
+  displacement current, radiation or retardation. Maxwell sampling and BEM
+  solve timings are not frame-time claims.
 - **No data import.** The input is a formula, a built-in preset, or an editable
   source, induction or materials scene. Screenshots are PNG or 2D SVG; animation
   export is GIF, or native MP4/WebM through a user-installed ffmpeg. There is no
@@ -840,7 +860,8 @@ camera presets use `localStorage`.
   trajectory viewer: it has no adaptive/stiff solver, symbolic integration,
   parameter sweep, or 3D phase cube, and solve timings are not frame-time
   claims. The Materials mode evaluates four closed-form cases rather than a
-  material solver. Neither mode solves PDEs or Maxwell's equations.
+  material solver, and the Maxwell mode evaluates nine ideal teaching cases
+  rather than a general field solver. Neither solves PDEs.
 - **NaN and infinite samples are skipped.** A pole inside the domain leaves a
   hole in the arrows rather than crashing or blanking the scene; a parse error
   keeps the last valid field. Built-in singular-looking presets are softened.

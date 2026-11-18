@@ -1258,7 +1258,13 @@ scene. The app branch in `src/app/simulation.rs` composes the outline at
 to the existing status slot. Test seams are `maxwell_arrow_count`,
 `maxwell_line_count`, `maxwell_scene`, `maxwell_sampling`, `maxwell_sampling_error`,
 `maxwell_bem_solves`, its `maxwell_bem_solve_count` alias, and
-`test_assemble_viewport_scene`.
+`test_assemble_viewport_scene`. `ViewRecord` persists the durable scene only
+(no sampling). `restore_maxwell_fields` validates it, then
+`State::restore_maxwell_scene` clears sampling/BEM/error and marks the first
+frame dirty without sampling or solving; a malformed payload falls back to the
+default scene and reports only for a stored Maxwell mode. Global Reset calls
+`reset_maxwell` and returns to Formula. PNG/SVG requests derive
+`maxwell_export_provenance` from the scene and cached sampling at request time.
 
 **2D and outline.** `maxwell_outline` draws world geometry in 3D (plates, coaxial
 circles, sphere great circles, wire axis and ticks, solenoid rings, image-plane
@@ -2033,7 +2039,8 @@ storage key, with migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
-`Default`); `finite_or`; `load`, `save`; private serde helpers.
+`restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
+helpers.
 
 **Schema (all under `eframe::APP_KEY`).**
 
@@ -2041,7 +2048,7 @@ storage key, with migration and corruption tolerance.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; `normalize` and `speed` are read-only legacy |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -2094,6 +2101,17 @@ storage key, with migration and corruption tolerance.
     returning to Formula; the Materials section Reset restores only the default
     scene. `VfApp::new_with_storage` refreshes the panel draft through
     `MaterialPanelState::sync_from` after a restored Materials record.
+13. Maxwell restores through `restore_maxwell_fields`: the case and flat
+    `circle:<radius>`/`square:<half-extent>` outline tokens plus every number
+    are revalidated by `validate_maxwell`; `State::restore_maxwell_scene` stores
+    the durable scene, drops sampling and the private BEM cache, clears the
+    error, marks the first frame dirty and never samples or solves. A malformed
+    payload restores the valid default parallel-plate scene and sets
+    `maxwell_error` only when the stored mode is explicitly Maxwell, so an old
+    or damaged record never promotes the mode. Global reset clears the Maxwell
+    scene, sampling, BEM cache and error before returning to Formula; the
+    Maxwell section Reset restores only the default scene. `tests/maxwell_persistence_test.rs`
+    pins this record.
 
 **Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -2734,29 +2752,33 @@ radius), `tests/particles_test.rs` (dot colours/alpha).
 
 ### 3.7 Export and capture
 
-#### `src/export_provenance.rs` — source, induction, ODE and Materials export warning contract
+#### `src/export_provenance.rs` — source, induction, ODE, Materials and Maxwell export warning contract
 
 **Purpose.** One capture-time provenance object feeds the baked PNG banner,
 PNG `tEXt` chunks, the visible SVG warning and the SVG `<metadata>` block. It is
 derived from the validated `SourceScene` plus cached `SourceSampling`, from the
 durable `InductionScene` plus shared softening and cached
 `InductionSampling`, from the durable `OdeScene` plus the already-computed
-`OdeSolution` and shared clock, or from the durable `MaterialScene` plus cached
-`MaterialSampling`; it never samples the field, re-integrates the ODE scene,
-solves a material boundary-value problem or creates vector data.
+`OdeSolution` and shared clock, from the durable `MaterialScene` plus cached
+`MaterialSampling`, or from the durable `MaxwellScene` plus cached
+`MaxwellSampling`; it never samples the field, re-integrates the ODE scene,
+solves a material or Maxwell boundary-value problem, or creates vector data.
 
 **Public API.** `ExportProvenance { warning_lines, metadata, source_mode,
-induction_mode, ode_mode, material_mode }`,
+induction_mode, ode_mode, material_mode, maxwell_mode }`,
 `source_export_provenance(mode, scene, sampling)`,
 `induction_export_provenance(mode, scene, softening, sampling)`,
 `ode_export_provenance(mode, scene, solution, error, timeline)`,
 `material_export_provenance(mode, scene, sampling)`,
+`maxwell_export_provenance(mode, scene, sampling)`,
 `provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
 `MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
 `NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
 `INDUCTION_INVALID_LINE`, `ODE_MODEL_LINE`, `ODE_BOUNDED_LINE`,
 `ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`,
-`MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`.
+`MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`,
+`MAXWELL_MODEL_LINE`, `MAXWELL_NO_SAMPLING_LINE`, `MAXWELL_DISPLAY_UNITS_LINE`,
+`MAXWELL_INVALID_LINE`.
 
 **Invariants.**
 - Formula mode returns `None` from all helpers; Sources/Induction/Ode always
@@ -2770,6 +2792,22 @@ induction_mode, ode_mode, material_mode }`,
   field with `E ... V/m` or `B ... T`, the case assumptions, then the current
   sampling warning. Missing sampling adds `Materials sampling unavailable`; an
   invalid scene adds `Materials scene invalid: {error}`. None is suppressible.
+- Maxwell mode returns `Some` with `maxwell_mode = true`; every other mode
+  returns `None`. The first line is exactly
+  `Maxwell - ideal canonical teaching cases - no general solver`, followed by
+  `Conductor2D - infinite-cylinder BEM approximation` for that case. A missing
+  sampling pass adds `Maxwell sampling unavailable`; an invalid scene adds
+  `Maxwell scene invalid: {error}` and `vfe.validation_error`; `accuracy not met`
+  is visible whenever the BEM pass misses the target; the retained
+  unavailable/projection/interface warning is appended without splitting its
+  internal punctuation; the last line is always
+  `Normalized display amplitudes; no SI constant engine.`.
+- Maxwell metadata is `vfe.model = maxwell-bounded-teaching`,
+  `vfe.maxwell_case`, `vfe.maxwell_family`, `vfe.maxwell_units = display-only`,
+  `vfe.maxwell_assumptions`, `vfe.maxwell_accuracy`, the omitted counts, the
+  three BEM coarse/fine/relative-difference keys only when convergence exists,
+  and `vfe.validation_error` only when present. Requesting an export never
+  samples the grid and never runs `solve_bem`.
 - Materials metadata is exactly `vfe.model = materials-bounded-analytic`,
   `vfe.material_case`, `vfe.material_family`, `vfe.background_eps_r`,
   `vfe.background_mu_r`, `vfe.material_eps_r`, `vfe.material_mu_r`,
@@ -2818,7 +2856,11 @@ decoded PNG banner/tEXt, visible SVG text/metadata, unavailable-solution
 warning with no fabricated geometry, and the 2D-only SVG rejection) and
 `tests/material_export_test.rs` (exact Materials lines/metadata, decoded PNG
 banner/tEXt, visible SVG text/metadata, 2D-only rule, non-Materials isolation,
-unsuppressed response/interface warnings and finite geometry).
+unsuppressed response/interface warnings and finite geometry), and
+`tests/maxwell_export_test.rs` (exact Maxwell/BEM lines and metadata, decoded
+PNG banner/tEXt, visible SVG text/metadata, 2D-only rule, unavailable/invalid
+warnings with no arrows, non-Maxwell isolation, and request-time routing that
+never solves again).
 
 #### `src/export.rs` — PNG encoding and camera-preset files
 
@@ -2877,9 +2919,9 @@ download paths.
 `sender`, `tick`, `fail`, `toast_text`, `toast`).
 `VfApp::request_png_export`/`request_svg_export` capture
 `field_export_provenance()` at request time; the viewport consumes it through
-the `take_*_with_provenance` variants. A Source-, Induction- or Ode-mode
-request made without provenance derives the fallback instead of exporting
-silently. Scalar plot captures always pass `None`.
+the `take_*_with_provenance` variants. A Source-, Induction-, Ode-, Materials-
+or Maxwell-mode request made without provenance derives the fallback instead of
+exporting silently. Scalar plot captures always pass `None`.
 
 **Invariants.**
 - Capture size converts logical points to physical pixels (`pixels_per_point`)

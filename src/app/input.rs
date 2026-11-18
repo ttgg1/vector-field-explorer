@@ -124,7 +124,12 @@ impl VfApp {
         &self,
     ) -> Option<crate::export_provenance::ExportProvenance> {
         match self.state.field_mode {
-            FieldMode::Formula | FieldMode::Maxwell => None,
+            FieldMode::Formula => None,
+            FieldMode::Maxwell => crate::export_provenance::maxwell_export_provenance(
+                self.state.field_mode,
+                &self.state.maxwell,
+                self.state.maxwell_sampling.as_ref(),
+            ),
             FieldMode::Ode => crate::export_provenance::ode_export_provenance(
                 self.state.field_mode,
                 &self.state.ode,

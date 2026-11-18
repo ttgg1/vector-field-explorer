@@ -1094,6 +1094,20 @@ impl State {
         self.maxwell_sampling = Some(sampling);
     }
 
+    /// Lazy restore seam used by [`crate::persistence::ViewRecord`]: store an
+    /// already-validated durable scene, drop any sampling/BEM cache, clear the
+    /// retained error and mark the first frame pending. It never samples and
+    /// never solves the 2D BEM system.
+    pub(crate) fn restore_maxwell_scene(self: &mut State, scene: MaxwellScene) {
+        self.maxwell = scene;
+        self.maxwell_sampling = None;
+        self.maxwell_bem = None;
+        self.maxwell_bem_failed = false;
+        self.maxwell_error = None;
+        self.maxwell_density_capped = false;
+        self.mark_dirty();
+    }
+
     /// Global reset's Maxwell half: restore the default scene and drop the
     /// sampling, BEM cache and any error. The caller selects Formula.
     pub fn reset_maxwell(self: &mut State) {
