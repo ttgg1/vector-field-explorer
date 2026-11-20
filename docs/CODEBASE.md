@@ -573,7 +573,10 @@ and the helpers that belong to no single frame phase.
   the first frame; `parameters`, `viewport_style` and `layer_styles` are then
   assigned directly, so restoring them does not dirty the scene. The persisted
   user profiles build `VfApp::profiles`; that assignment neither applies a
-  profile nor dirties the scene. A restored
+  profile nor dirties the scene. The active interaction record builds
+  `VfApp::interaction`, and the persisted user interaction profiles build
+  `VfApp::interaction_profiles`; neither restore applies a profile or dirties
+  the scene. A restored
   non-default domain is recentred on the correct
   camera (`recentre_on` in 3D, `recentre_on_2d` in 2D). It passes the restored
   reference flags into `compose_lines_with_frame` for the initial private scene;
@@ -724,8 +727,9 @@ persistence write.
 - Phase order is input → chrome → simulation → status → viewport → overlays.
 - `save` writes exactly `AppSettings { style, layout, view:
   ViewRecord::capture(&state) }` plus the durable parameter, viewport-style,
-  layer-style and user-profile records; user profiles come from
-  `VfApp::profiles.user()`. Cameras and fly state are intentionally absent.
+  layer-style, user-profile and interaction records; user profile libraries come
+  from `VfApp::profiles.user()` and `VfApp::interaction_profiles.user()`.
+  Cameras and fly state are intentionally absent.
 
 **Pinned by.** `tests/persistence_test.rs::settings_round_trip_through_eframe_storage`,
 `tests/fly_camera_test.rs::the_fly_camera_is_not_persisted`,
@@ -2318,8 +2322,8 @@ no file I/O.
 
 **Purpose.** Issue #88 slice A1: a named interaction profile bundling the
 one-chord-per-action binding table and the camera-feel multipliers. It is pure
-model code: no UI, input routing, persistence, `AppSettings`, `State`,
-renderer, camera constants or dependency changes.
+model code: no UI, input routing, `State`, renderer, camera constants or
+dependency changes. Slice A2a persists it through `AppSettings`.
 
 **Public API.** `INTERACTION_FORMAT_VERSION` (currently `1`),
 `MAX_PROFILE_NAME_BYTES = 48`, `MAX_USER_PROFILES = 16`, `MAX_BINDINGS = 19`,
@@ -2379,8 +2383,10 @@ and `is_global`; `Bindings` with `default_bindings`, `chord`, `owner_of`,
 `library_export_excludes_builtins_and_handles_empty`, and
 `profile_and_document_json_round_trip_is_stable`.
 
-**Limitations.** No panel UI, settings-envelope persistence or input routing in
-this slice; slices A2 and A3 own those.
+**Limitations.** No panel UI or input routing in this slice. Slice A2a stores
+the model in the settings envelope (`AppSettings::interaction` and
+`AppSettings::interaction_profiles`); slice A2b owns the panel and slice A3 the
+routing.
 
 ### 3.3 Viewmodel and persistence
 
@@ -2742,12 +2748,13 @@ supplies the directory and user-facing copy.
 
 #### `src/persistence.rs` — one settings envelope
 
-**Purpose.** Restore and save style, layout, parameter, appearance, profile and
-view state under one eframe storage key, with migration and corruption
-tolerance.
+**Purpose.** Restore and save style, layout, parameter, appearance, interaction
+profile and view state under one eframe storage key, with migration and
+corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
-layer_styles, appearance_profiles, preset_ui }`, `AppSettings::sanitized`;
+layer_styles, appearance_profiles, interaction, interaction_profiles,
+preset_ui }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
 helpers.
@@ -2762,6 +2769,8 @@ helpers.
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 | `LayerStyles` | `layers: [LayerOverride; 6]` in `LayerId::ALL` order, `families: [LayerOverride; 2]` in `PhysicsFamily::ALL` order; each override has optional `opacity`, `width`, `color` | `#[serde(default)]`; an absent key loads the neutral record; an invalid record is repaired by `sanitized` with a warning and never fails the envelope |
 | `appearance_profiles: Vec<AppearanceProfile>` | user profile records (`name`, `viewport`, `layer_styles`, `color`) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 32` are dropped with a warning |
+| `interaction: InteractionProfile` | active bindings (`name`, one chord per remappable action) and camera feel (`orbit_sensitivity`, `zoom_speed`, three invert flags) | `#[serde(default)]`; an absent key loads `InteractionProfile::default()` (today's chords, neutral feel); an invalid record is repaired by `InteractionProfile::sanitized` with a warning and resets to the default if it still fails validation |
+| `interaction_profiles: Vec<InteractionProfile>` | user interaction profiles only (the built-in `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry named `DEFAULT_PROFILE_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 16` are dropped with a warning |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -2836,8 +2845,25 @@ helpers.
     beyond `MAX_USER_PROFILES` are dropped with a warning. Restoring the
     envelope never applies a profile and never dirties the scene; the live
     library is wired in slice A2b.
+16. An absent `interaction` record loads the documented default chords and
+    neutral camera feel. A stored invalid record is repaired by
+    `InteractionProfile::sanitized` (name trim/truncate, out-of-range
+    multipliers clamp, non-finite values reset, missing/duplicate/reserved/
+    browser-owned bindings return to defaults) with a warning; if it still
+    fails validation it resets to the default. Startup assigns the loaded
+    record to `VfApp::interaction` directly, without applying it to the
+    document, camera, layout or panels and without dirtying the scene.
+17. An absent `interaction_profiles` list loads empty. Stored entries are
+    sanitized with `InteractionProfile::sanitized`; an entry named
+    `DEFAULT_PROFILE_NAME` is the built-in and is dropped with a warning, an
+    entry whose sanitized name duplicates an earlier entry is dropped, and
+    entries beyond `interaction::MAX_USER_PROFILES = 16` are dropped. A
+    library that still fails `ProfileLibrary::new` logs a warning and starts
+    empty rather than failing startup. Save writes the live active record and
+    `interaction_profiles.user()`, so a save cannot silently discard loaded
+    profiles.
 
-**Tested by.** `tests/persistence_test.rs` (75 tests):
+**Tested by.** `tests/persistence_test.rs` (81 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -2863,7 +2889,14 @@ restore/sanitize tests. The user-profile envelope is pinned by
 `settings_drop_duplicate_or_excess_user_profiles_on_load`,
 `restoring_the_envelope_does_not_apply_profiles_or_dirty_the_state`,
 `new_with_storage_loads_the_user_profile_library_without_applying_it` and
-`user_profile_library_round_trips_through_an_app_save`. The
+`user_profile_library_round_trips_through_an_app_save`. The interaction
+envelope is pinned by
+`interaction_settings_round_trip_through_the_envelope`,
+`older_envelopes_without_interaction_fields_load_the_defaults`,
+`sanitizing_repairs_an_invalid_active_interaction_record`,
+`sanitizing_drops_builtin_duplicate_and_excess_user_interaction_profiles`,
+`new_with_storage_restores_interaction_settings_without_dirtying_or_applying`
+and `user_interaction_profiles_round_trip_through_an_app_save`. The
 layer-style record is pinned by
 [tests/layer_style_test.rs](../tests/layer_style_test.rs): neutral resolution,
 per-attribute precedence, validation and sanitising, envelope round-trip,
@@ -4962,7 +4995,7 @@ lines: 715 are executed on this platform (714 in the suite plus the isolated
 | Viewmodel seam | `viewmodel_test.rs` | 66 |
 | Particles | `particles_test.rs` | 52 |
 | Sidebar controls | `sidebar_controls_test.rs` | 51 |
-| Persistence | `persistence_test.rs` | 39 |
+| Persistence | `persistence_test.rs` | 81 |
 | Fly camera | `fly_camera_test.rs` | 31 |
 | Arrow style | `arrow_style_test.rs` | 30 |
 | Menu | `menu_test.rs` | 26 |
