@@ -256,8 +256,10 @@ which would create a cycle; it does not block core sibling capabilities.
 - [ ] Preserve ten jobs, at most two Cargo processes, separate persistent target/
   TMPDIR pairs under `/home/paul/.cache/vector-field-explorer-targets/`.
   Web/browser/manual visual checks remain waived, not passed; preserve web behavior.
-- [ ] Standard Luna lowest; numerical/rendering Sol lowest; fresh independent
-  review; fixes Luna lowest. Stop on quota/auth without retry/provider changes.
+- [ ] Follow [Workflow](../../../references/workflow.md) role/model policy;
+  standard and numerical work use their configured roles at lowest effort; fresh
+  independent review; fixes in the configured fix role. Stop on quota/auth without
+  retry or provider changes.
 - [ ] Report exact BASE/HEAD, paths, commands/results and status. Future authorized
   commits carry `Generated-by: OpenCode`. Publication triggers no execution.
 - [ ] Self-review: #89–#99 mapped; #97/#98 dependency signatures consistent,

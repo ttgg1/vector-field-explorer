@@ -208,8 +208,10 @@ line/circle/region generator APIs; reuse the single history.
   under `/home/paul/.cache/vector-field-explorer-targets/`; never clean caches.
 - [ ] Web/browser/manual visual checks are owner-waived, not passed. Preserve
   automated functional/layout tests and web behavior despite the waiver.
-- [ ] Future standard work: Luna lowest; numerical/rendering: Sol lowest;
-  fresh independent reviewer, fixes Luna lowest. Complexity does not raise effort.
+- [ ] Future standard work uses the configured standard implementer; numerical/
+  rendering work the configured complex implementer, both at lowest effort; fresh
+  independent reviewer and the configured fix role. Follow
+  [Workflow](../../../references/workflow.md); complexity does not raise effort.
 - [ ] Report exact BASE/HEAD, paths, commands/results, waivers and status.
   Future authorized commits need `Generated-by: OpenCode`; no automatic execution,
   commit, push or merge follows publication of this draft.
