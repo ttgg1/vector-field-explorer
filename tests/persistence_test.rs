@@ -8,6 +8,8 @@ use glam::{DVec3, Vec3};
 use vector_field_explorer::VfApp;
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
+use vector_field_explorer::color_mapping::ColorQuantity;
+use vector_field_explorer::color_ramp::{ColorRamp, RampKind, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::induction::{InductionCase, InductionScene};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
@@ -2439,4 +2441,102 @@ fn app_save_captures_the_viewport_style() {
         ViewportStyle::high_contrast(),
         "the save path captures the committed record"
     );
+}
+
+#[test]
+fn legacy_records_default_the_color_mapping_fields() {
+    let loaded = load_legacy(false);
+    assert_eq!(loaded.view.color_ramp, None);
+    assert_eq!(loaded.view.color_mode, ScaleMode::Linear);
+    assert_eq!(loaded.view.color_quantity, ColorQuantity::Magnitude);
+
+    let mut state = State::new(false);
+    loaded.view.restore(&mut state, &mut Controls::new());
+    assert!(state.color_ramp.is_none());
+    assert_eq!(state.color_mode, ScaleMode::Linear);
+    assert_eq!(state.color_quantity, ColorQuantity::Magnitude);
+}
+
+#[test]
+fn color_mapping_fields_round_trip_through_storage() {
+    let mut state = State::new(false);
+    assert!(state.set_color_ramp(Some(ColorRamp::default())));
+    assert!(state.set_color_mode(ScaleMode::SignedLog { half_width: 0.5 }));
+    assert!(state.set_color_quantity(ColorQuantity::ComponentY));
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: ViewRecord::capture(&state),
+            ..Default::default()
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.color_ramp, Some(ColorRamp::default()));
+    assert_eq!(
+        loaded.view.color_mode,
+        ScaleMode::SignedLog { half_width: 0.5 }
+    );
+    assert_eq!(loaded.view.color_quantity, ColorQuantity::ComponentY);
+
+    let mut restored = State::new(false);
+    loaded
+        .view
+        .restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.color_ramp, Some(ColorRamp::default()));
+    assert_eq!(
+        restored.color_mode,
+        ScaleMode::SignedLog { half_width: 0.5 }
+    );
+    assert_eq!(restored.color_quantity, ColorQuantity::ComponentY);
+}
+
+#[test]
+fn restoring_direction_colouring_into_3d_falls_back_to_magnitude() {
+    let record = ViewRecord {
+        formula: "(x, y, z)".to_owned(),
+        mode_3d: true,
+        last_vector_mode_3d: Some(true),
+        color_quantity: ColorQuantity::Direction2d,
+        ..ViewRecord::default()
+    };
+
+    let mut state = State::new(true);
+    record.restore(&mut state, &mut Controls::new());
+
+    assert!(state.is_3d(), "the record restores the 3D view");
+    assert_eq!(
+        state.color_quantity,
+        ColorQuantity::Magnitude,
+        "direction colouring cannot survive into a 3D view"
+    );
+}
+
+#[test]
+fn corrupt_color_mapping_fields_fall_back_without_losing_the_record() {
+    let invalid_ramp = ColorRamp {
+        stops: Vec::new(),
+        reversed: false,
+        kind: RampKind::Sequential,
+    };
+    let record = ViewRecord {
+        formula: "(x, y)".to_owned(),
+        color_ramp: Some(invalid_ramp),
+        color_mode: ScaleMode::SignedLog { half_width: -1.0 },
+        color_quantity: ColorQuantity::ComponentY,
+        ..ViewRecord::default()
+    };
+
+    let mut state = State::new(false);
+    record.restore(&mut state, &mut Controls::new());
+
+    assert!(state.color_ramp.is_none(), "an invalid ramp disappears");
+    assert_eq!(state.color_mode, ScaleMode::Linear, "an invalid mode resets");
+    assert_eq!(
+        state.color_quantity,
+        ColorQuantity::ComponentY,
+        "the rest of the record survives"
+    );
+    assert_eq!(state.formula, "(x, y)");
 }
