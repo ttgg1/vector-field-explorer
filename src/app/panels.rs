@@ -315,6 +315,12 @@ impl VfApp {
                     egui::ScrollArea::vertical()
                         .id_salt("controls_body")
                         .show(ui, |ui| {
+                            // The sidebar legend reads these mirrored facts, not
+                            // `SceneColorFacts` directly, so copy stats and clips
+                            // before rendering or the legend silently shows empty
+                            // stats.
+                            self.controls.color_stats = self.color_facts.stats;
+                            self.controls.color_clips = self.color_facts.clips;
                             plot_action = crate::ui::sidebar::show_with_plot_action(
                                 ui,
                                 &mut self.state,
@@ -1027,6 +1033,11 @@ impl VfApp {
 
                 egui::ScrollArea::vertical().show(ui, |ui| match sheet {
                     SheetState::Controls => {
+                        // Copy the facts into `Controls` before rendering: the
+                        // legend reads this mirror, so skipping it silently
+                        // shows empty stats and clips.
+                        self.controls.color_stats = self.color_facts.stats;
+                        self.controls.color_clips = self.color_facts.clips;
                         plot_action = crate::ui::sidebar::show_compact_with_plot_action(
                             ui,
                             &mut self.state,

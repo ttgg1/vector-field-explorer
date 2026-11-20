@@ -28,6 +28,8 @@ use crate::arrow_style::{
     ArrowParams, ArrowStyle, ArrowStyle2D, MAX_HEAD_LENGTH, MAX_HEAD_WIDTH, MAX_SHAFT_RADIUS,
     MAX_SIDES, MIN_HEAD_LENGTH, MIN_HEAD_WIDTH, MIN_SHAFT_RADIUS, MIN_SIDES,
 };
+use crate::color_mapping::{ClipCounts, ColorMapping, ColorQuantity, ColorStats};
+use crate::color_ramp::ScaleMode;
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::particles::{
@@ -295,6 +297,17 @@ pub fn streamline_count_label(count: u32) -> String {
 /// shared magnitude range to choose.
 pub const BOTH_COLORING_NOTE: &str = "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic to use a colormap.";
 
+/// Why the Direction quantity is disabled in the 3D view.
+pub const DIRECTION_3D_EXPLANATION: &str =
+    "Direction colouring is available in 2D; it is disabled in 3D";
+
+/// Smallest half-width the signed-log DragValue accepts.
+pub const MIN_SIGNED_LOG_HALF_WIDTH: f32 = 1.0e-6;
+
+/// Largest half-width the signed-log DragValue accepts (matching
+/// [`ScaleMode::validate`]).
+pub const MAX_SIGNED_LOG_HALF_WIDTH: f32 = 1.0e6;
+
 /// Whether the Coloring section renders the colormap, auto-fit and range
 /// widgets. Sources in the `Both` display paint fixed family colours instead,
 /// so those controls would be silently inert; single-family source displays
@@ -356,6 +369,85 @@ pub fn particle_count_label(count: u32) -> String {
     }
 }
 
+/// Render the signed-log half-width for its [`egui::DragValue`].
+///
+/// The valid range reaches down to `1e-6`, which fixed decimal places would
+/// round to `0.000`; small magnitudes use scientific notation (still accepted
+/// by the widget's default parser) so the minimum stays legible.
+fn signed_log_half_width_display(value: f32) -> String {
+    let magnitude = value.abs();
+    if magnitude != 0.0 && magnitude < 1.0e-2 {
+        format!("{value:e}")
+    } else {
+        format!("{value:.3}")
+    }
+}
+
+/// Clamp a typed signed-log half-width into the validated range.
+fn sanitized_half_width(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(MIN_SIGNED_LOG_HALF_WIDTH, MAX_SIGNED_LOG_HALF_WIDTH)
+    } else {
+        1.0
+    }
+}
+
+/// One legend value, rendered as degrees for direction colouring.
+fn legend_value(value: f32, directional: bool) -> String {
+    if directional {
+        format!("{value:.0}\u{b0}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+/// Paint the gradient bar and its range/ticks/clip summary.
+///
+/// The bar is sampled directly from the active palette in 64 slices, so it
+/// shows the palette rather than clipped sample values.
+fn color_legend(ui: &mut egui::Ui, mapping: &ColorMapping, stats: &ColorStats, clips: ClipCounts) {
+    let directional = mapping.quantity == ColorQuantity::Direction2d;
+    let legend = mapping.legend(stats);
+    let desired = egui::vec2(ui.available_width().max(1.0), 14.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    const SLICES: usize = 64;
+    for slice in 0..SLICES {
+        let t0 = slice as f32 / SLICES as f32;
+        let t1 = (slice + 1) as f32 / SLICES as f32;
+        let rgb = mapping.palette.sample_unit((t0 + t1) * 0.5);
+        let slice_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + t0 * rect.width(), rect.top()),
+            egui::pos2(rect.left() + t1 * rect.width(), rect.bottom()),
+        );
+        painter.rect_filled(
+            slice_rect,
+            0.0,
+            egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+        );
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        for tick in &legend.ticks {
+            ui.label(legend_value(*tick, directional));
+        }
+    });
+    ui.label(format!(
+        "Range: {} - {}",
+        legend_value(legend.min, directional),
+        legend_value(legend.max, directional)
+    ));
+    // A cyclic ramp wraps instead of clipping, so the below/above caps and
+    // counts would be misleading (and direction colouring never clips).
+    if !legend.cyclic {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("< {}", legend_value(legend.min, directional)));
+            ui.label(format!("> {}", legend_value(legend.max, directional)));
+            ui.label(format!("{} below, {} above", clips.low, clips.high));
+        });
+    }
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -383,6 +475,21 @@ pub struct Controls {
     pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
     pub colormap: Colormap,
+    /// What the colour ramp represents (issue #83).
+    pub color_quantity: ColorQuantity,
+    /// How raw values map onto the ramp.
+    pub color_mode: ScaleMode,
+    /// UI-only mirror of the scale choice: `true` builds
+    /// [`ScaleMode::SignedLog`] in [`apply`].
+    pub signed_log: bool,
+    /// Half-width used when [`signed_log`] is on.
+    pub signed_log_half_width: f32,
+    /// Cached auto-fit bounds supplied by the app each frame.
+    pub color_stats: ColorStats,
+    /// Cached clip counts supplied by the app each frame.
+    pub color_clips: ClipCounts,
+    /// One-shot request to commit the effective range and turn auto-fit off.
+    pub freeze_requested: bool,
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
@@ -437,6 +544,13 @@ impl Controls {
             arrow_style_2d: ArrowStyle2D::Flat,
             arrow_params: ArrowParams::default(),
             colormap: Colormap::Viridis,
+            color_quantity: ColorQuantity::Magnitude,
+            color_mode: ScaleMode::Linear,
+            signed_log: false,
+            signed_log_half_width: 1.0,
+            color_stats: ColorStats::default(),
+            color_clips: ClipCounts::default(),
+            freeze_requested: false,
             auto_fit: true,
             color_min: 0.0,
             color_max: 1.0,
@@ -494,10 +608,18 @@ impl Controls {
         self.particle_appearance = defaults.particle_appearance;
     }
 
-    /// Restore the Coloring section's defaults (viridis, auto-fit, 0..1).
+    /// Restore the Coloring section's defaults (viridis, magnitude, linear,
+    /// auto-fit, 0..1, cleared cached/one-shot state).
     pub fn reset_coloring(&mut self) {
         let defaults = Controls::new();
         self.colormap = defaults.colormap;
+        self.color_quantity = defaults.color_quantity;
+        self.color_mode = defaults.color_mode;
+        self.signed_log = defaults.signed_log;
+        self.signed_log_half_width = defaults.signed_log_half_width;
+        self.color_stats = defaults.color_stats;
+        self.color_clips = defaults.color_clips;
+        self.freeze_requested = defaults.freeze_requested;
         self.auto_fit = defaults.auto_fit;
         self.color_min = defaults.color_min;
         self.color_max = defaults.color_max;
@@ -589,6 +711,9 @@ fn show_inner(
     let domain = state.domain;
     let vector_mode = state.is_vector_mode();
     let coloring_visible = coloring_controls_visible(state.field_mode, state.sources.display);
+    let color_mapping = state.color_mapping();
+    let color_explanation = color_mapping.explanation(&controls.color_stats);
+    let freeze_range = color_mapping.effective_range(&controls.color_stats);
 
     // The plane mirror follows the seam (which clamps/recentres it on grid
     // changes) except while its slider is mid-drag: the in-flight value has to
@@ -1073,6 +1198,71 @@ fn show_inner(
                             .on_hover_text("Color map for field magnitude");
                     }
                 });
+                button_row(ui, |ui| {
+                    ui.label("Quantity");
+                    for quantity in ColorQuantity::ALL {
+                        let enabled = quantity != ColorQuantity::Direction2d || !sampling_3d;
+                        ui.add_enabled_ui(enabled, |ui| {
+                            ui.selectable_value(
+                                &mut controls.color_quantity,
+                                quantity,
+                                quantity.label(),
+                            )
+                        })
+                        .response
+                        .on_hover_text("What the colour ramp represents")
+                        .on_disabled_hover_text(DIRECTION_3D_EXPLANATION);
+                    }
+                });
+                if sampling_3d {
+                    ui.label(DIRECTION_3D_EXPLANATION);
+                }
+                button_row(ui, |ui| {
+                    ui.label("Scale");
+                    ui.selectable_value(&mut controls.signed_log, false, "Linear")
+                        .on_hover_text("Uniform mapping across the colour range");
+                    ui.selectable_value(&mut controls.signed_log, true, "Signed log")
+                        .on_hover_text("Logarithmic either side of zero");
+                });
+                if controls.signed_log {
+                    ui.horizontal(|ui| {
+                        ui.label("Signed log half-width");
+                        ui.add(
+                            egui::DragValue::new(&mut controls.signed_log_half_width)
+                                .speed(0.05)
+                                .range(MIN_SIGNED_LOG_HALF_WIDTH..=MAX_SIGNED_LOG_HALF_WIDTH)
+                                .custom_formatter(|value, _| {
+                                    signed_log_half_width_display(value as f32)
+                                }),
+                        )
+                        .on_hover_text(
+                            "Width of the linear region around zero (finite, > 0, at most 1e6)",
+                        );
+                    });
+                }
+                if let Some(explanation) = &color_explanation {
+                    ui.label(explanation);
+                }
+                let freeze_usable = controls.color_quantity != ColorQuantity::Direction2d
+                    && freeze_range.0.is_finite()
+                    && freeze_range.1.is_finite()
+                    && freeze_range.0 < freeze_range.1;
+                if ui
+                    .add_enabled(freeze_usable, egui::Button::new("Freeze current range"))
+                    .on_hover_text("Commit the effective range and turn auto-fit off")
+                    .on_disabled_hover_text(
+                        "Freezing needs a usable range and is unavailable for direction colouring",
+                    )
+                    .clicked()
+                {
+                    controls.freeze_requested = true;
+                }
+                color_legend(
+                    ui,
+                    &color_mapping,
+                    &controls.color_stats,
+                    controls.color_clips,
+                );
                 ui.checkbox(&mut controls.auto_fit, "Auto-fit color range")
                     .on_hover_text("Fit the color range to the sampled magnitudes");
                 if !controls.auto_fit {
@@ -1392,9 +1582,26 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     state.set_arrow_length_mode(controls.arrow_length_mode);
     state.set_magnitude_scale(controls.magnitude_scale);
     state.set_proportional_exponent(controls.proportional_exponent);
+    state.set_color_quantity(controls.color_quantity);
+    let half_width = sanitized_half_width(controls.signed_log_half_width);
+    controls.signed_log_half_width = half_width;
+    let mode = if controls.signed_log {
+        ScaleMode::SignedLog { half_width }
+    } else {
+        ScaleMode::Linear
+    };
+    if mode.validate().is_err() {
+        state.set_color_mode(ScaleMode::Linear);
+    } else {
+        state.set_color_mode(mode);
+    }
     state.set_colormap(controls.colormap);
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
+    if controls.freeze_requested {
+        state.freeze_color_range(&controls.color_stats);
+        controls.freeze_requested = false;
+    }
     state.set_arrows(controls.arrows);
     state.set_show_grid(controls.show_grid);
     state.set_show_coordinate_system(controls.show_coordinate_system);
@@ -1431,6 +1638,15 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     controls.magnitude_scale = state.magnitude_scale;
     controls.proportional_exponent = state.proportional_exponent;
     controls.colormap = state.colormap;
+    controls.color_quantity = state.color_quantity;
+    controls.color_mode = state.color_mode;
+    match state.color_mode {
+        ScaleMode::Linear => controls.signed_log = false,
+        ScaleMode::SignedLog { half_width } => {
+            controls.signed_log = true;
+            controls.signed_log_half_width = half_width;
+        }
+    }
     controls.auto_fit = state.auto_fit;
     controls.color_min = state.color_min;
     controls.color_max = state.color_max;

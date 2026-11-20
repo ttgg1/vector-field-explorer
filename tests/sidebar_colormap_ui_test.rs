@@ -11,6 +11,8 @@ use eframe::egui;
 
 use crate::support;
 
+use vector_field_explorer::color_mapping::{ClipCounts, ColorQuantity, ColorStats};
+use vector_field_explorer::color_ramp::ScaleMode;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::persistence::{AppSettings, ViewRecord};
 use vector_field_explorer::source_scene::{FieldMode, SourceDisplay};
@@ -26,6 +28,7 @@ struct Node {
     label: Option<String>,
     value: Option<String>,
     toggled: egui::accesskit::Toggled,
+    disabled: bool,
     rect: egui::Rect,
 }
 
@@ -114,6 +117,7 @@ fn nodes(output: &egui::FullOutput) -> Vec<Node> {
                 label: node.label().map(str::to_owned),
                 value: node.value().map(str::to_owned),
                 toggled: node.toggled().unwrap_or(egui::accesskit::Toggled::False),
+                disabled: node.is_disabled(),
                 rect: egui::Rect::from_min_max(
                     egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
                     egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
@@ -425,6 +429,337 @@ fn both_source_display_hides_colormap_and_range_with_a_reason() {
             )),
         "the Both explanation disappears outside Both"
     );
+}
+
+fn has_label(nodes: &[Node], text: &str) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.role == egui::Role::Label && node.value.as_deref() == Some(text))
+}
+
+fn select_button(s: &mut Sidebar, label: &str) {
+    let out = s.idle();
+    let rows = nodes(&out);
+    let button =
+        labelled(&rows, egui::Role::Button, label).unwrap_or_else(|| panic!("the {label} button"));
+    s.click(button.center());
+    s.idle();
+}
+
+#[test]
+fn quantity_selector_applies_component_colouring() {
+    let mut s = Sidebar::new();
+    let out = open_coloring(&mut s);
+    let rows = nodes(&out);
+    let x = labelled(&rows, egui::Role::Button, "X component").expect("the X component button");
+    s.click(x.center());
+    let out = s.idle();
+
+    assert_eq!(
+        s.controls.color_quantity,
+        ColorQuantity::ComponentX,
+        "the mirror follows the quantity click"
+    );
+    assert_eq!(
+        s.state.color_quantity,
+        ColorQuantity::ComponentX,
+        "apply reaches the viewmodel"
+    );
+    assert!(s.state.dirty, "the quantity change asks for a rebuild");
+    let rows = nodes(&out);
+    assert!(
+        is_toggled(labelled(&rows, egui::Role::Button, "X component").expect("X component")),
+        "the quantity row shows the new selection"
+    );
+    assert!(
+        !is_toggled(labelled(&rows, egui::Role::Button, "Magnitude").expect("Magnitude")),
+        "Magnitude is drawn unselected"
+    );
+}
+
+#[test]
+fn direction_quantity_is_disabled_in_3d_and_enabled_in_2d() {
+    let mut s = Sidebar::new();
+    let out = open_coloring(&mut s);
+    let rows = nodes(&out);
+    let direction =
+        labelled(&rows, egui::Role::Button, "Direction (2D)").expect("the direction button");
+    assert!(!direction.disabled, "direction colouring is usable in 2D");
+    s.click(direction.center());
+    s.idle();
+    assert_eq!(s.state.color_quantity, ColorQuantity::Direction2d);
+
+    let mut s = Sidebar::new();
+    s.state = State::new(true);
+    let out = open_coloring(&mut s);
+    let rows = nodes(&out);
+    let direction =
+        labelled(&rows, egui::Role::Button, "Direction (2D)").expect("the direction button");
+    assert!(direction.disabled, "direction colouring is disabled in 3D");
+    assert!(
+        has_label(
+            &rows,
+            "Direction colouring is available in 2D; it is disabled in 3D"
+        ),
+        "the disabled control explains why"
+    );
+    s.click(direction.center());
+    s.idle();
+    assert_eq!(
+        s.state.color_quantity,
+        ColorQuantity::Magnitude,
+        "a disabled direction button cannot change the state"
+    );
+    assert_eq!(s.controls.color_quantity, ColorQuantity::Magnitude);
+}
+
+#[test]
+fn direction_legend_shows_degree_ticks_without_caps_or_clip_counts() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    select_button(&mut s, "Direction (2D)");
+    assert_eq!(s.state.color_quantity, ColorQuantity::Direction2d);
+
+    // Direction colouring wraps and never clips, so a stale mirrored count
+    // must not make the legend claim samples fall outside the ramp.
+    s.controls.color_clips = ClipCounts { low: 7, high: 9 };
+    let _ = s.idle();
+    let out = s.idle();
+    let rows = nodes(&out);
+
+    for tick in ["0°", "90°", "180°", "270°", "360°"] {
+        assert!(
+            has_label(&rows, tick),
+            "the direction legend paints the degree tick {tick}"
+        );
+    }
+    assert!(
+        has_label(&rows, "Range: 0° - 360°"),
+        "the direction legend keeps its gradient range"
+    );
+    assert!(
+        !has_label(&rows, "< 0°"),
+        "a cyclic ramp has no below-range cap"
+    );
+    assert!(
+        !has_label(&rows, "> 360°"),
+        "a cyclic ramp has no above-range cap"
+    );
+    assert!(
+        !rows.iter().any(|node| {
+            node.value
+                .as_deref()
+                .is_some_and(|value| value.contains("below") && value.contains("above"))
+        }),
+        "a cyclic ramp does not print clip counts"
+    );
+}
+
+#[test]
+fn signed_log_minimum_half_width_renders_legibly() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    select_button(&mut s, "Signed log");
+    s.controls.signed_log_half_width = 1.0e-6;
+    let _ = s.idle();
+    let out = s.idle();
+    let rows = nodes(&out);
+
+    assert!(
+        rows.iter().any(|node| {
+            node.role == egui::Role::SpinButton && node.value.as_deref() == Some("1e-6")
+        }),
+        "the minimum half-width 1e-6 stays legible rather than rounding to 0.000; values: {:?}",
+        rows.iter()
+            .filter(|node| node.role == egui::Role::SpinButton)
+            .filter_map(|node| node.value.as_deref())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn signed_log_half_width_applies_and_reports_unavailable_ranges() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    select_button(&mut s, "Signed log");
+
+    assert!(s.controls.signed_log, "the mirror follows the scale click");
+    assert_eq!(
+        s.state.color_mode,
+        ScaleMode::SignedLog { half_width: 1.0 },
+        "apply builds signed log with the default half-width"
+    );
+
+    // The default field has no negative values, so the model falls back to
+    // linear and the sidebar must say why.
+    let out = s.idle();
+    let rows = nodes(&out);
+    assert!(
+        has_label(
+            &rows,
+            "Signed log colouring needs a range that spans zero; using linear scaling."
+        ),
+        "an unavailable signed-log range is explained"
+    );
+
+    // A range spanning zero makes signed log usable.
+    s.controls.auto_fit = false;
+    s.controls.color_min = -2.0;
+    s.controls.color_max = 2.0;
+    s.idle();
+    let out = s.idle();
+    let rows = nodes(&out);
+    assert!(
+        !rows.iter().any(|node| {
+            node.value
+                .as_deref()
+                .is_some_and(|value| value.starts_with("Signed log colouring"))
+        }),
+        "a range spanning zero removes the fallback explanation"
+    );
+
+    // The half-width is sanitized through ScaleMode::validate.
+    s.controls.signed_log_half_width = f32::NAN;
+    s.idle();
+    let ScaleMode::SignedLog { half_width } = s.state.color_mode else {
+        panic!("signed log must stay selected with a sanitized half-width");
+    };
+    assert!(
+        half_width.is_finite() && half_width > 0.0 && half_width <= 1.0e6,
+        "a non-finite half-width becomes valid: {half_width}"
+    );
+    s.controls.signed_log_half_width = 5.0e7;
+    s.idle();
+    let ScaleMode::SignedLog { half_width } = s.state.color_mode else {
+        panic!("signed log must stay selected with a capped half-width");
+    };
+    assert_eq!(half_width, 1.0e6, "the half-width is capped at 1e6");
+}
+
+#[test]
+fn freeze_button_commits_the_effective_range_and_turns_off_auto_fit() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    s.controls.color_stats = ColorStats {
+        min_magnitude: 0.5,
+        max_magnitude: 4.0,
+        max_abs_component: 4.0,
+    };
+    let out = s.idle();
+    let rows = nodes(&out);
+    let freeze =
+        labelled(&rows, egui::Role::Button, "Freeze current range").expect("the freeze button");
+    assert!(!freeze.disabled, "a usable range enables freeze");
+    s.click(freeze.center());
+    s.idle();
+
+    assert!(!s.state.auto_fit, "freeze turns auto-fit off");
+    assert_eq!(s.state.color_min, 0.5);
+    assert_eq!(s.state.color_max, 4.0);
+    assert!(!s.controls.auto_fit, "the mirror follows auto-fit off");
+    assert_eq!(s.controls.color_min, 0.5);
+    assert_eq!(s.controls.color_max, 4.0);
+    assert!(
+        !s.controls.freeze_requested,
+        "the freeze request is one-shot"
+    );
+}
+
+#[test]
+fn legend_shows_effective_range_ticks_and_clip_counts() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    s.controls.color_stats = ColorStats {
+        min_magnitude: 0.0,
+        max_magnitude: 4.0,
+        max_abs_component: 4.0,
+    };
+    s.controls.color_clips = ClipCounts { low: 3, high: 2 };
+    let out = s.idle();
+    let rows = nodes(&out);
+
+    assert!(has_label(&rows, "Range: 0.00 - 4.00"));
+    for tick in ["0.00", "1.00", "2.00", "3.00", "4.00"] {
+        assert!(has_label(&rows, tick), "the legend shows tick {tick}");
+    }
+    assert!(has_label(&rows, "< 0.00"), "the below-range cap is shown");
+    assert!(has_label(&rows, "> 4.00"), "the above-range cap is shown");
+    assert!(
+        has_label(&rows, "3 below, 2 above"),
+        "clip counts come from the mirrored facts"
+    );
+}
+
+#[test]
+fn both_display_keeps_the_fixed_family_note_without_advanced_controls() {
+    let mut s = Sidebar::new();
+    s.state.set_field_mode(FieldMode::Sources);
+    let mut scene = s.state.sources.clone();
+    scene.set_display(SourceDisplay::Both);
+    s.state.set_source_scene(scene);
+    let out = open_coloring(&mut s);
+    let rows = nodes(&out);
+
+    assert!(
+        has_label(
+            &rows,
+            "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic to \
+             use a colormap.",
+        ),
+        "the fixed-family explanation stays"
+    );
+    for label in ["Quantity", "Linear", "Signed log", "Freeze current range"] {
+        assert!(
+            !rows.iter().any(|node| {
+                (node.role == egui::Role::Button || node.role == egui::Role::Label)
+                    && (node.label.as_deref() == Some(label)
+                        || node.value.as_deref() == Some(label))
+            }),
+            "Both must not render the advanced control {label}"
+        );
+    }
+    assert!(
+        !rows.iter().any(|node| {
+            node.value
+                .as_deref()
+                .is_some_and(|value| value.starts_with("Range:"))
+        }),
+        "Both must not render the legend"
+    );
+}
+
+#[test]
+fn reset_coloring_restores_quantity_scale_and_auto_fit() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    select_button(&mut s, "X component");
+    select_button(&mut s, "Signed log");
+
+    let out = s.idle();
+    let rows = nodes(&out);
+    let auto_fit =
+        labelled(&rows, egui::Role::CheckBox, "Auto-fit color range").expect("auto-fit checkbox");
+    s.click(auto_fit.center());
+    s.idle();
+    assert!(!s.state.auto_fit);
+
+    let out = s.idle();
+    let rows = nodes(&out);
+    let viridis = labelled(&rows, egui::Role::Button, "Viridis").expect("Viridis");
+    let reset = coloring_reset(&rows, viridis);
+    s.click(reset.center());
+    s.idle();
+
+    assert_eq!(s.controls.color_quantity, ColorQuantity::Magnitude);
+    assert_eq!(s.state.color_quantity, ColorQuantity::Magnitude);
+    assert_eq!(s.controls.color_mode, ScaleMode::Linear);
+    assert_eq!(s.state.color_mode, ScaleMode::Linear);
+    assert!(!s.controls.signed_log);
+    assert!(s.state.auto_fit);
+    assert!(s.controls.auto_fit);
+    assert!(!s.controls.freeze_requested);
+    assert_eq!(s.controls.color_stats, ColorStats::default());
+    assert_eq!(s.controls.color_clips, ClipCounts::default());
 }
 
 /// In-memory stand-in for eframe's disk-backed storage (the persistence test
