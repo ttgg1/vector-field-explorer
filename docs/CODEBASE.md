@@ -178,6 +178,8 @@ Why the seam matters:
 7. `frame_viewport` — camera input, click/seeding, scene sort, screenshot
    capture, paint callback, fly crosshair.
 8. `frame_overlays` — help overlay, About window, Keyboard & mouse window.
+9. `drive_history` — one edit-history transaction pass over the frame's
+   pointer state and any document change the frame committed.
 
 The order is intentional: panels can change the state before the rebuild, the
 rebuild feeds the status bar counts, and the viewport always paints the scene
@@ -557,7 +559,9 @@ and the helpers that belong to no single frame phase.
   scene/click/particle caches, including the
   `ode_lines`/`last_ode_epoch`/`ode_autofit_pending` Ode cache, the
   `scene_frame` key and particle-availability flag reconciled by
-  [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions).
+  [`src/app/plane.rs`](#srcappplaners--scene-frame-transitions), and the private
+  in-memory `history`/`last_committed` pair driven by
+  [`src/app/history.rs`](#srcapphistoryrs--edit-history-wiring).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
 - `StatusBarState` (parse message, fps/frame ms, arrow/streamline/particle/trail
   counts, density, `is_3d`, sim time, flying, hint, animation progress).
@@ -596,7 +600,65 @@ There is no dedicated `app_test.rs`; the shell itself is exercised through the
 seams it calls.
 
 **Limitations.** Click-seed history is app-local and bounded; it survives a
-rebuild but not a restart. The app does not expose a general command/undo stack.
+rebuild but not a restart. Edit history is the separate bounded document stack
+in [`src/app/history.rs`](#srcapphistoryrs--edit-history-wiring); it is
+memory-only too.
+
+#### `src/app/history.rs` — edit-history wiring
+
+**Purpose.** Issue #86 slice A2: capture and apply the document snapshot, drive
+the gesture/transaction frame pass, route undo/redo, and implement the four
+scoped resets without touching persistence or the renderer.
+
+**Public API.**
+- `VfApp::undo_document(&egui::Context) -> bool` and
+  `redo_document(&egui::Context) -> bool` (the one undo/redo seam).
+- `VfApp::reset_scope(EditScope)` — the one scoped-reset implementation behind
+  the Edit menu's colour/simulation/document actions and the View menu's
+  `Reset camera` action. The pure menu seam only reports
+  `SideEffect::ResetScope(scope)`; it does not duplicate any reset.
+- App-private `capture_document(&State, &OrbitCamera) -> EditSnapshot` and
+  `apply_document(&EditSnapshot, &mut State, &mut Controls, &mut OrbitCamera,
+  &mut Option<FlyCamera>)`; the snapshot is `ViewRecord` + `ParameterSet` +
+  `SceneCamera` + `AppearanceProfile`.
+- Doc-hidden test seams: `history_len`, `history_redo_len`,
+  `capture_document_for_test`, `apply_document_for_test`,
+  `apply_menu_action_for_test`.
+
+**Invariants.**
+- One snapshot is captured from one `State`, so the two colour copies agree.
+  Apply restores `view` first, then parameters through `commit_parameters`,
+  then the camera with the saved-scene clamps (pitch ±1.55, distance, FOV and
+  ortho-zoom constants; fly left), then the appearance profile from the same
+  source. No file IO, preset write or profile-library mutation.
+- `drive_history` runs once after the UI: a primary-button press opens one
+  transaction, every frame while any button is down is suspended, and the
+  primary release commits at most one entry. A secondary press/release is not a
+  gesture boundary and can neither commit nor split the primary gesture.
+  Outside a gesture any document change is recorded directly. Idle frames,
+  simulation ticks and save/export paths record nothing.
+- Every idle frame captures a `ViewRecord`/`ParameterSet`/`AppearanceProfile`
+  and compares it with `last_committed`. That per-frame clone-and-compare cost
+  is accepted for this slice; the intended cheap path is a dirty/fingerprint
+  gate, not a heuristic.
+- Undo/redo are inert while a text field has focus, cancel any open gesture and
+  refresh `last_committed` so applying a snapshot is not re-recorded as an
+  edit. Fly pose, time, particles and layout are never in a snapshot.
+- `Color`, `Camera` and `All` reset one document scope and are recorded once by
+  the driver; `Simulation` resets runtime state (clock time zero, particles and
+  click bursts cleared) and is undo-free because the snapshot cannot see it.
+  `State::reset_color_scope` bumps `plot.generation` once and marks dirty once;
+  `State::reset_document` replaces the state with a fresh 2D session.
+
+**Pinned by.** `tests/edit_history_app_test.rs`: one real DragValue gesture is
+one entry and undo restores the value, idle/simulation frames record nothing,
+settings save and export queueing leave history and cursor alone, a rejected
+parameter commit records nothing, each scoped reset preserves the others, and
+`apply(capture(document))` is a no-op for a changed document.
+
+**Limitations.** Memory-only: history never survives a restart and is absent
+from `AppSettings`. Scalar plot navigation and the four reset menus are wired;
+open sheets, panel widths and preset-library contents are not document state.
 
 #### `src/app/plane.rs` — scene-frame transitions
 
@@ -2626,7 +2688,8 @@ the bound, the four scope labels/`records_history` values, and `EditSnapshot`
 equality changing one field at a time.
 
 **Limitations.** The history is in-memory only and does not survive restart;
-snapshot capture/apply and all app wiring belong to slice A2.
+snapshot capture/apply and all app wiring live in
+[`src/app/history.rs`](#srcapphistoryrs--edit-history-wiring).
 
 #### `src/scene_store.rs` — saved-scene store
 
@@ -4162,20 +4225,24 @@ and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
   enum, so the test cannot drift.
 - Shortcut matching is exact: extra modifiers do not fire a plain shortcut.
 - All shortcuts except Ctrl+Q are inert while a text field has focus.
-- `MENUS`: File (screenshot, quit), Edit (copy formula, reset all controls),
-  View (toggle controls, toggle presets, reset layout, reset camera,
-  appearance), Help (keyboard & mouse, about). Fly is toggled by
-  C and the sidebar Camera section, not a menu item.
+- `MENUS`: File (screenshot, quit), Edit (undo, redo, copy formula, colour/
+  simulation/document resets, reset all controls), View (toggle controls,
+  toggle presets, reset layout, reset camera, appearance), Help (keyboard &
+  mouse, about). Fly is toggled by C and the sidebar Camera section, not a menu
+  item.
 - Shortcuts: Ctrl+B Controls, Ctrl+P Presets, Ctrl+Shift+A Appearance panel,
   Ctrl+Q quit, Ctrl+Shift+S screenshot, Ctrl+Shift+C copy formula, C fly, F1
   help.
 - `apply_action` mutates only `UiState`; app-only work is returned as a
   `SideEffect` (open popover, show help/about, screenshot, quit, copy, reset
-  ids/camera).
+  ids, and `ResetScope`).
 - `ResetAllControls` resets the Controls mirror, clears fly, reapplies, and
   resets the clock, but does not change the formula.
-- `ResetLayout` resets the persisted layout and asks for fresh panel ids;
-  `ResetCamera` leaves fly first and applies `ViewCommand::Reset`.
+- `ResetLayout` resets the persisted layout and asks for fresh panel ids.
+  `ResetCamera` reports `SideEffect::ResetScope(EditScope::Camera)`; the app's
+  one reset seam leaves fly, restores the default orbit/2D pose and clears the
+  preset highlight. The Edit menu's colour, simulation and document resets use
+  the same `ResetScope` seam, never an inline duplicate.
 - `?` is a separate secondary help key; F1 remains the one table shortcut.
 
 **Pinned by.** `tests/menu_test.rs` (26):

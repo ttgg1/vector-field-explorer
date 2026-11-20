@@ -308,6 +308,8 @@ fn add_menu_item(
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
+    can_undo: bool,
+    can_redo: bool,
 ) -> bool {
     style_panel::restore_menu_button_padding(ui);
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
@@ -319,6 +321,8 @@ fn add_menu_item(
     let reason = match item.action {
         MenuAction::ExportScreenshotSvg => svg_disabled_reason(kind, mode_3d),
         MenuAction::ExportAnimation => animation_reason,
+        MenuAction::Undo if !can_undo => Some("Nothing to undo"),
+        MenuAction::Redo if !can_redo => Some("Nothing to redo"),
         _ => None,
     };
     let response = match reason {
@@ -458,6 +462,34 @@ pub fn show_with_plot_kind(
     kind: PlotKind,
     animation_reason: Option<&'static str>,
 ) -> (Option<MenuAction>, bool) {
+    show_with_plot_kind_history(
+        ui,
+        style,
+        screenshot,
+        appearance_open,
+        mode_3d,
+        kind,
+        animation_reason,
+        true,
+        true,
+    )
+}
+
+/// Wide menu bar with explicit edit-history availability. Undo/Redo stay in
+/// the table but are disabled (with the reason as their tooltip) while their
+/// stack is empty; the pure menu table never silently ignores a click.
+#[allow(clippy::too_many_arguments)]
+pub fn show_with_plot_kind_history(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    appearance_open: &mut bool,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+    can_undo: bool,
+    can_redo: bool,
+) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
     let mut appearance_button = None;
@@ -467,7 +499,15 @@ pub fn show_with_plot_kind(
         for menu in MENUS {
             ui.menu_button(menu.title, |ui| {
                 for item in menu.items {
-                    if add_menu_item(ui, item, mode_3d, kind, animation_reason) {
+                    if add_menu_item(
+                        ui,
+                        item,
+                        mode_3d,
+                        kind,
+                        animation_reason,
+                        can_undo,
+                        can_redo,
+                    ) {
                         action = Some(item.action);
                     }
                 }
@@ -526,6 +566,29 @@ pub fn show_compact_with_plot_kind(
     kind: PlotKind,
     animation_reason: Option<&'static str>,
 ) -> (Option<MenuAction>, bool) {
+    show_compact_with_plot_kind_history(
+        ui,
+        screenshot,
+        mode_3d,
+        kind,
+        animation_reason,
+        true,
+        true,
+    )
+}
+
+/// Compact bar with explicit edit-history availability (same disabled rule as
+/// [`show_with_plot_kind_history`]).
+#[allow(clippy::too_many_arguments)]
+pub fn show_compact_with_plot_kind_history(
+    ui: &mut egui::Ui,
+    screenshot: &Screenshot,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+    can_undo: bool,
+    can_redo: bool,
+) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let style_changed = false;
     let touch = crate::ui::layout::TOUCH_TARGET;
@@ -547,7 +610,15 @@ pub fn show_compact_with_plot_kind(
                     if item.action == MenuAction::OpenAppearance {
                         continue;
                     }
-                    if add_menu_item(ui, item, mode_3d, kind, animation_reason) {
+                    if add_menu_item(
+                        ui,
+                        item,
+                        mode_3d,
+                        kind,
+                        animation_reason,
+                        can_undo,
+                        can_redo,
+                    ) {
                         action = Some(item.action);
                     }
                 }
