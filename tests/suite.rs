@@ -124,6 +124,7 @@ mod scalar_clock_test;
 mod scalar_test;
 mod scene_document_test;
 mod scene_flow_test;
+mod scene_store_test;
 mod screenshot_test;
 mod shortcut_test;
 mod sidebar_camera_ui_test;
