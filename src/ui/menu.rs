@@ -11,6 +11,7 @@
 use eframe::egui;
 
 use crate::camera::OrbitCamera;
+use crate::edit_history::EditScope;
 use crate::fly_camera::{FlyCamera, toggle_fly};
 use crate::render::Camera;
 use crate::sim_clock::SimClock;
@@ -27,6 +28,8 @@ pub const FLY_SHORTCUT: &str = "C";
 pub const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+S";
 pub const COPY_FORMULA_SHORTCUT: &str = "Ctrl+Shift+C";
 pub const QUIT_SHORTCUT: &str = "Ctrl+Q";
+pub const UNDO_SHORTCUT: &str = "Ctrl+Z";
+pub const REDO_SHORTCUT: &str = "Ctrl+Shift+Z";
 pub const HELP_SHORTCUT: &str = "F1";
 
 /// About dialog facts, all from the package metadata except the display name.
@@ -76,6 +79,11 @@ menu_actions! {
     ExportAnimation,
     Quit,
     CopyFormula,
+    Undo,
+    Redo,
+    ResetColorScope,
+    ResetSimulation,
+    ResetDocument,
     ResetAllControls,
     ToggleControls,
     #[cfg(not(target_arch = "wasm32"))]
@@ -118,8 +126,12 @@ pub enum SideEffect {
     OpenUrl(String),
     /// Give the side panels fresh ids so the default widths apply again.
     ResetLayout,
-    /// Clear the highlighted camera preset after a camera reset.
-    ResetCamera,
+    /// Apply the previous edit-history snapshot.
+    Undo,
+    /// Re-apply the next edit-history snapshot.
+    Redo,
+    /// Run the one recorded scoped-reset seam in the app.
+    ResetScope(EditScope),
 }
 
 /// One entry in a dropdown. The shortcut hint (if any) is looked up in
@@ -165,8 +177,28 @@ pub const MENUS: &[Menu] = &[
         title: "Edit",
         items: &[
             MenuItem {
+                label: "Undo",
+                action: MenuAction::Undo,
+            },
+            MenuItem {
+                label: "Redo",
+                action: MenuAction::Redo,
+            },
+            MenuItem {
                 label: "Copy formula",
                 action: MenuAction::CopyFormula,
+            },
+            MenuItem {
+                label: "Reset colour scope",
+                action: MenuAction::ResetColorScope,
+            },
+            MenuItem {
+                label: "Reset simulation",
+                action: MenuAction::ResetSimulation,
+            },
+            MenuItem {
+                label: "Reset document",
+                action: MenuAction::ResetDocument,
             },
             MenuItem {
                 label: "Reset all controls",
@@ -256,6 +288,20 @@ pub const SHORTCUTS: &[Shortcut] = &[
         key: egui::Key::Q,
         modifiers: egui::Modifiers::COMMAND,
         global: true,
+    },
+    Shortcut {
+        action: MenuAction::Undo,
+        label: UNDO_SHORTCUT,
+        key: egui::Key::Z,
+        modifiers: egui::Modifiers::COMMAND,
+        global: false,
+    },
+    Shortcut {
+        action: MenuAction::Redo,
+        label: REDO_SHORTCUT,
+        key: egui::Key::Z,
+        modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+        global: false,
     },
     Shortcut {
         action: MenuAction::CopyFormula,
@@ -387,6 +433,21 @@ pub struct UiState<'a> {
     pub clock: &'a mut SimClock,
 }
 
+/// Reset the orbit/2D camera pose to its documented defaults and leave fly
+/// mode. The framing rule behind the app's recorded `EditScope::Camera` reset;
+/// the pure menu seam only reports that scope through `SideEffect`.
+pub fn reset_camera_pose(
+    orbit: &mut OrbitCamera,
+    camera: &mut Camera,
+    fly: &mut Option<FlyCamera>,
+) {
+    // Reset is an orbit framing command: leave fly first so the reset applies
+    // to the view the user sees, and the old fly pose is gone.
+    *fly = None;
+    *orbit = OrbitCamera::default();
+    *camera = Camera::default();
+}
+
 /// Apply `action` to the UI state and report what the app must still do.
 pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
     match action {
@@ -395,6 +456,11 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         MenuAction::ExportAnimation => SideEffect::Animation,
         MenuAction::Quit => SideEffect::Quit,
         MenuAction::CopyFormula => SideEffect::CopyText(ui.state.active_source().to_string()),
+        MenuAction::Undo => SideEffect::Undo,
+        MenuAction::Redo => SideEffect::Redo,
+        MenuAction::ResetColorScope => SideEffect::ResetScope(EditScope::Color),
+        MenuAction::ResetSimulation => SideEffect::ResetScope(EditScope::Simulation),
+        MenuAction::ResetDocument => SideEffect::ResetScope(EditScope::All),
         MenuAction::ResetAllControls => {
             // The Controls panel's knobs, not the field itself: the formula is
             // the document, the controls are how it is displayed.
@@ -438,18 +504,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             ui.layout.reset();
             SideEffect::ResetLayout
         }
-        MenuAction::ResetCamera => {
-            // Reset is an orbit framing command: leave fly first so the reset
-            // applies to the view the user sees, and the old fly pose is gone.
-            *ui.fly = None;
-            *ui.orbit = crate::view_command::apply_view_command(
-                *ui.orbit,
-                crate::view_command::ViewContext::new(ui.state.mode_3d, ui.state.domain, 1.0),
-                crate::view_command::ViewCommand::Reset,
-            );
-            *ui.camera = Camera::default();
-            SideEffect::ResetCamera
-        }
+        MenuAction::ResetCamera => SideEffect::ResetScope(EditScope::Camera),
         MenuAction::ToggleHelp => {
             ui.layout.toggle_help();
             SideEffect::None

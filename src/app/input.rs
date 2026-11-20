@@ -276,7 +276,16 @@ impl VfApp {
                 layout::reset_sheet(&mut self.sheet);
                 ctx.request_repaint();
             }
-            menu::SideEffect::ResetCamera => self.presets.clear_active(),
+            menu::SideEffect::Undo => {
+                self.undo_document(ctx);
+            }
+            menu::SideEffect::Redo => {
+                self.redo_document(ctx);
+            }
+            // Every scoped reset (Color, Camera, Simulation, All) has one
+            // implementation: the app seam, which also clears the preset
+            // highlight the menu used to handle itself.
+            menu::SideEffect::ResetScope(scope) => self.reset_scope(scope),
         }
         if action == MenuAction::ResetAllControls {
             // Task 6: the menu reset owns controls/clock; the app-owned half

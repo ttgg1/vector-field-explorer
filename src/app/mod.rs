@@ -9,6 +9,7 @@ use crate::animation_scene::AnimationSnapshot;
 use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
 use crate::color_mapping::{ClipCounts, ColorMapping, ColorSample, ColorStats};
 use crate::domain::Domain;
+use crate::edit_history::{EditHistory, EditSnapshot};
 use crate::fly_camera::{
     CROSSHAIR_ALPHA, FlyCamera, FlyKeys, capture_exit_required, capture_transition,
     crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
@@ -65,6 +66,7 @@ use crate::particles::{
 };
 
 mod frame;
+mod history;
 mod input;
 mod panels;
 mod plane;
@@ -318,6 +320,12 @@ pub struct VfApp {
     particle_available: bool,
     /// The field mode observed last frame; a change clears formula transients.
     last_field_mode: FieldMode,
+    /// Issue #86 slice A2: the bounded, memory-only edit history. Never
+    /// persisted.
+    history: EditHistory<EditSnapshot>,
+    /// The document the last frame observed, so a menu/shortcut/preset/load
+    /// change can be recorded directly outside a pointer gesture.
+    last_committed: EditSnapshot,
 }
 impl VfApp {
     /// App with no persistent storage (defaults for every persisted record).
@@ -392,6 +400,9 @@ impl VfApp {
         } else {
             Some(orbit)
         };
+        // Seed the edit-history baseline from the restored document, so the
+        // first frame does not record startup restoration as a user edit.
+        let last_committed = history::capture_document(&state, &orbit);
         // Restore the persisted group expansion before the first frame without
         // reporting a layout edit; the panel's search and filters stay fresh.
         let mut presets = PresetPanel::new();
@@ -485,6 +496,8 @@ impl VfApp {
             scene_frame,
             particle_available,
             last_field_mode,
+            history: EditHistory::new(),
+            last_committed,
         }
     }
 }

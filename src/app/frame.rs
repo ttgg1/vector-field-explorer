@@ -42,6 +42,8 @@ impl eframe::App for VfApp {
         self.frame_status_bar(ui);
         self.frame_viewport(ui, frame);
         self.frame_overlays(ui);
+        // Issue #86 slice A2: one driver pass after the UI has had its say.
+        self.drive_history(&ctx);
     }
 
     /// Persist the settings envelope (style + layout + view state) under

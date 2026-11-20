@@ -82,15 +82,17 @@ impl VfApp {
         };
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = if plan.compact_top_bar {
-                top_bar::show_compact_with_plot_kind(
+                top_bar::show_compact_with_plot_kind_history(
                     ui,
                     &self.screenshot,
                     self.state.mode_3d,
                     self.state.plot.kind,
                     animation_reason,
+                    self.history.can_undo(),
+                    self.history.can_redo(),
                 )
             } else {
-                top_bar::show_with_plot_kind(
+                top_bar::show_with_plot_kind_history(
                     ui,
                     &mut self.style,
                     &self.screenshot,
@@ -98,6 +100,8 @@ impl VfApp {
                     self.state.mode_3d,
                     self.state.plot.kind,
                     animation_reason,
+                    self.history.can_undo(),
+                    self.history.can_redo(),
                 )
             };
             style_changed = changed;

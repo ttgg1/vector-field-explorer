@@ -10,6 +10,7 @@ use crate::support::menu_fixture::{MenuFixture, effect_of};
 use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::edit_history::EditScope;
 use vector_field_explorer::fly_camera::FlyCamera;
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::ui::layout::LayoutState;
@@ -68,7 +69,18 @@ fn the_bar_carries_the_v1_menu_table() {
                     "Quit",
                 ]
             ),
-            ("Edit", vec!["Copy formula", "Reset all controls"]),
+            (
+                "Edit",
+                vec![
+                    "Undo",
+                    "Redo",
+                    "Copy formula",
+                    "Reset colour scope",
+                    "Reset simulation",
+                    "Reset document",
+                    "Reset all controls",
+                ]
+            ),
             (
                 "View",
                 vec![
@@ -157,7 +169,22 @@ fn every_action_maps_to_its_side_effect() {
         (MenuAction::TogglePresets, SideEffect::None),
         (MenuAction::ToggleFly, SideEffect::None),
         (MenuAction::ResetLayout, SideEffect::ResetLayout),
-        (MenuAction::ResetCamera, SideEffect::ResetCamera),
+        (
+            MenuAction::ResetColorScope,
+            SideEffect::ResetScope(EditScope::Color),
+        ),
+        (
+            MenuAction::ResetSimulation,
+            SideEffect::ResetScope(EditScope::Simulation),
+        ),
+        (
+            MenuAction::ResetDocument,
+            SideEffect::ResetScope(EditScope::All),
+        ),
+        (
+            MenuAction::ResetCamera,
+            SideEffect::ResetScope(EditScope::Camera),
+        ),
         (MenuAction::ToggleHelp, SideEffect::None),
         (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
         (MenuAction::OpenAppearance, SideEffect::OpenAppearance),
@@ -224,9 +251,16 @@ fn reset_camera_restores_the_default_framing() {
     let effect = apply_action(MenuAction::ResetCamera, &mut fixture.ui());
     assert_eq!(
         effect,
-        SideEffect::ResetCamera,
-        "the app clears the preset highlight"
+        SideEffect::ResetScope(EditScope::Camera),
+        "the app runs the one recorded camera-reset seam"
     );
+    assert_eq!(
+        fixture.orbit.yaw, 2.4,
+        "the pure menu seam only reports the scope; the app owns the reset"
+    );
+
+    // The one framing rule shared by the menu action and the app seam.
+    menu::reset_camera_pose(&mut fixture.orbit, &mut fixture.camera, &mut fixture.fly);
     assert!(
         fixture.fly.is_none(),
         "Reset camera leaves fly mode before resetting"

@@ -454,6 +454,48 @@ impl State {
         }
     }
 
+    /// Reset only the colour mapping (issue #86 [`EditScope::Color`]): builtin
+    /// viridis, no custom ramp, linear scaling, magnitude quantity, auto-fit on
+    /// and the range cleared. The document, domain, parameters, camera and layer
+    /// styles are untouched. A real change bumps the plot generation once and
+    /// dirties the scene once; an already-default mapping is a no-op.
+    ///
+    /// [`EditScope::Color`]: crate::edit_history::EditScope::Color
+    pub fn reset_color_scope(self: &mut State) {
+        let colors_changed = self.colormap != Colormap::Viridis || self.color_ramp.is_some();
+        let changed = colors_changed
+            || self.color_mode != ScaleMode::Linear
+            || self.color_quantity != ColorQuantity::Magnitude
+            || !self.auto_fit
+            || self.color_min != 0.0
+            || self.color_max != 1.0;
+        if !changed {
+            return;
+        }
+        self.colormap = Colormap::Viridis;
+        self.color_ramp = None;
+        self.color_mode = ScaleMode::Linear;
+        self.color_quantity = ColorQuantity::Magnitude;
+        self.auto_fit = true;
+        self.color_min = 0.0;
+        self.color_max = 1.0;
+        if colors_changed {
+            self.plot.generation += 1;
+        }
+        self.mark_dirty();
+    }
+
+    /// Reset the whole editable document to a fresh 2D session (issue #86
+    /// [`EditScope::All`]): scene fields, parameters, sources, modes and the
+    /// appearance record. Runtime state (time, particles, fly pose, layout) is
+    /// not part of `State`; the app owns those and leaves them alone. The state
+    /// starts dirty so the next frame rebuilds the default scene.
+    ///
+    /// [`EditScope::All`]: crate::edit_history::EditScope::All
+    pub fn reset_document(self: &mut State) {
+        *self = State::new(false);
+    }
+
     /// The committed per-layer and per-family appearance record.
     pub fn layer_styles(self: &State) -> &LayerStyles {
         &self.layer_styles
