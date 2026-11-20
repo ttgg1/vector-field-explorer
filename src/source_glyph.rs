@@ -9,6 +9,7 @@
 use glam::Vec3;
 
 use crate::domain::Domain;
+use crate::layer_style::{LayerId, LayerStyles, PhysicsFamily};
 use crate::plane::PlaneFrame;
 use crate::renderer::LineInstanceGPU;
 use crate::source_scene::{
@@ -118,21 +119,51 @@ pub fn source_glyphs(
 
 /// Expand glyphs into line instances for the existing line pass.
 pub fn source_glyph_lines(glyphs: &[SourceGlyph], domain: &Domain) -> Vec<LineInstanceGPU> {
+    source_glyph_lines_with(glyphs, domain, &LayerStyles::default())
+}
+
+/// Expand glyphs into line instances, resolving layer and family overrides
+/// from the `Sources` layer. A neutral record reproduces
+/// [`source_glyph_lines`] byte for byte.
+pub fn source_glyph_lines_with(
+    glyphs: &[SourceGlyph],
+    domain: &Domain,
+    styles: &LayerStyles,
+) -> Vec<LineInstanceGPU> {
+    source_glyph_lines_with_layer(glyphs, domain, styles, LayerId::Sources)
+}
+
+/// Expand glyphs into line instances with overrides resolved from `layer`.
+///
+/// [`source_glyph_lines_with`] is this function fixed to [`LayerId::Sources`];
+/// the induction conductor uses [`LayerId::Induction`]. Each glyph resolves its
+/// own [`FieldFamily`] as the optional family override, so Electric and
+/// Magnetic records stay independent.
+pub fn source_glyph_lines_with_layer(
+    glyphs: &[SourceGlyph],
+    domain: &Domain,
+    styles: &LayerStyles,
+    layer: LayerId,
+) -> Vec<LineInstanceGPU> {
     let extent = scene_extent(domain);
     let on_width = ON_SLICE_WIDTH * extent;
     let off_width = OFF_SLICE_WIDTH * extent;
     let mut lines = Vec::new();
 
     for glyph in glyphs {
-        let alpha = if glyph.off_slice {
+        let resolved = styles.resolve(layer, Some(physics_family(glyph.family)));
+        let base_alpha = if glyph.off_slice {
             OFF_SLICE_ALPHA
         } else {
             ON_SLICE_ALPHA
         };
+        let opacity = crate::reference::sanitized_opacity(resolved.opacity);
+        let alpha = (base_alpha * opacity).clamp(0.0, 1.0);
+        let base_width = if glyph.off_slice { off_width } else { on_width };
         let mut emitter = LineEmitter {
             lines: &mut lines,
-            color: family_color(glyph.family, alpha),
-            width: if glyph.off_slice { off_width } else { on_width },
+            color: family_color(glyph.family, alpha, resolved.color.map(|color| color.0)),
+            width: base_width * sanitized_width_multiplier(resolved.width),
             dash: glyph
                 .off_slice
                 .then_some((DASH_ON * glyph.domain_scale, DASH_OFF * glyph.domain_scale)),
@@ -164,6 +195,26 @@ pub fn source_glyph_lines(glyphs: &[SourceGlyph], domain: &Domain) -> Vec<LineIn
     }
 
     lines
+}
+
+fn physics_family(family: FieldFamily) -> PhysicsFamily {
+    match family {
+        FieldFamily::Electric => PhysicsFamily::Electric,
+        FieldFamily::Magnetic => PhysicsFamily::Magnetic,
+    }
+}
+
+/// Defensive width repair for a directly written style record: a non-finite
+/// multiplier is neutral, a finite one clamps into the A1 bounds.
+fn sanitized_width_multiplier(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(
+            crate::layer_style::MIN_WIDTH_MULTIPLIER,
+            crate::layer_style::MAX_WIDTH_MULTIPLIER,
+        )
+    } else {
+        1.0
+    }
 }
 
 fn display_includes(display: SourceDisplay, family: FieldFamily) -> bool {
@@ -251,11 +302,11 @@ fn scene_extent(domain: &Domain) -> f32 {
     }
 }
 
-fn family_color(family: FieldFamily, alpha: f32) -> [f32; 4] {
-    let [red, green, blue] = match family {
+fn family_color(family: FieldFamily, alpha: f32, override_rgb: Option<[u8; 3]>) -> [f32; 4] {
+    let [red, green, blue] = override_rgb.unwrap_or(match family {
         FieldFamily::Electric => ELECTRIC_COLOR,
         FieldFamily::Magnetic => MAGNETIC_COLOR,
-    };
+    });
     [
         red as f32 / 255.0,
         green as f32 / 255.0,
