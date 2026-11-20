@@ -14,6 +14,7 @@ pub mod colormap;
 pub mod color_mapping;
 pub mod color_ramp;
 pub mod domain;
+pub mod edit_history;
 pub mod export;
 pub mod export_provenance;
 pub mod field;
