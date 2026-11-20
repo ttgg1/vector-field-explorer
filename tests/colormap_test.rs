@@ -65,6 +65,42 @@ fn negative_magnitudes_map() {
 }
 
 #[test]
+fn from_unit_matches_colormap_for_every_builtin() {
+    for colormap in Colormap::ALL {
+        for step in 0..=20u32 {
+            let t = step as f32 / 20.0;
+            assert_eq!(
+                colormap.from_unit(t),
+                colormap.colormap(t, 0.0, 1.0),
+                "{colormap:?} must be byte-identical at t={t}"
+            );
+        }
+    }
+}
+
+#[test]
+fn from_unit_endpoints_and_clamping_are_exact() {
+    for colormap in Colormap::ALL {
+        assert_eq!(
+            colormap.from_unit(0.0),
+            colormap.colormap(0.0, 0.0, 1.0)
+        );
+        assert_eq!(
+            colormap.from_unit(1.0),
+            colormap.colormap(1.0, 0.0, 1.0)
+        );
+        assert_eq!(
+            colormap.from_unit(-3.0),
+            colormap.colormap(-3.0, 0.0, 1.0)
+        );
+        assert_eq!(
+            colormap.from_unit(4.0),
+            colormap.colormap(4.0, 0.0, 1.0)
+        );
+    }
+}
+
+#[test]
 fn all_covers_every_variant_with_unique_labels() {
     assert_eq!(
         Colormap::ALL,

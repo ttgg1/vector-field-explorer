@@ -15,6 +15,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
+use crate::color_mapping::ColorQuantity;
+use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::colormap::Colormap;
 use crate::induction::{InductionCase, InductionScene};
 use crate::material::{
@@ -136,6 +138,18 @@ pub struct ViewRecord {
     #[serde(default = "default_proportional_exponent")]
     pub proportional_exponent: f32,
     pub colormap: Colormap,
+    /// Custom colour ramp override (issue #83). Missing on older records, where
+    /// `None` keeps the builtin colormap.
+    #[serde(default)]
+    pub color_ramp: Option<ColorRamp>,
+    /// Colour scaling mode (issue #83). Missing on older records; the default
+    /// is linear.
+    #[serde(default)]
+    pub color_mode: ScaleMode,
+    /// What the colour represents (issue #83). Missing on older records; the
+    /// default is magnitude.
+    #[serde(default)]
+    pub color_quantity: ColorQuantity,
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
@@ -370,6 +384,9 @@ impl ViewRecord {
             magnitude_scale: state.magnitude_scale,
             proportional_exponent: state.proportional_exponent,
             colormap: state.colormap,
+            color_ramp: state.color_ramp.clone(),
+            color_mode: state.color_mode,
+            color_quantity: state.color_quantity,
             auto_fit: state.auto_fit,
             color_min: state.color_min,
             color_max: state.color_max,
@@ -513,6 +530,33 @@ impl ViewRecord {
         controls.domain_min = Vec3::from_array(self.domain_min);
         controls.domain_max = Vec3::from_array(self.domain_max);
         sidebar::apply(state, controls);
+        // Issue #83 colour mapping restores directly, not through the setters:
+        // startup must not dirty per field, and corrupt values fall back
+        // individually so the rest of the record still loads.
+        state.color_ramp = match &self.color_ramp {
+            Some(ramp) if ramp.validate().is_ok() => Some(ramp.clone()),
+            Some(ramp) => {
+                log::warn!("ignoring invalid persisted colour ramp: {ramp:?}");
+                None
+            }
+            None => None,
+        };
+        state.color_mode = if self.color_mode.validate().is_ok() {
+            self.color_mode
+        } else {
+            log::warn!(
+                "ignoring invalid persisted colour mode: {:?}",
+                self.color_mode
+            );
+            ScaleMode::default()
+        };
+        state.color_quantity = self.color_quantity;
+        // Direction colouring has no 3D encoding; a record captured from the
+        // 2D view may be restored into 3D, so fold it back to magnitude here.
+        if state.color_quantity == ColorQuantity::Direction2d && state.is_3d() {
+            log::warn!("ignoring direction colour quantity in the 3D view; using magnitude");
+            state.color_quantity = ColorQuantity::Magnitude;
+        }
         state.set_plot_samples(self.curve_samples);
         state.set_plot_resolution(self.surface_resolution);
         state.set_plot_width(self.plot_line_width);

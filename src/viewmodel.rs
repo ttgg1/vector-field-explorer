@@ -8,6 +8,8 @@
 
 use super::camera::OrbitCamera;
 use super::colormap::Colormap;
+use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorStats};
+use crate::color_ramp::{ColorRamp, ScaleMode};
 use super::domain::Domain;
 use super::field::FieldExpr;
 use super::flow::{Flow, SceneFlow};
@@ -280,6 +282,12 @@ pub struct State {
     /// (ticket 57). Independent of the two scales; `1.0` is linear.
     pub proportional_exponent: f32,
     pub colormap: Colormap,
+    /// Custom colour ramp override (issue #83); `None` uses [`Self::colormap`].
+    pub color_ramp: Option<ColorRamp>,
+    /// Value-to-ramp scaling for colouring (issue #83).
+    pub color_mode: ScaleMode,
+    /// What the colour represents (issue #83).
+    pub color_quantity: ColorQuantity,
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
@@ -542,6 +550,9 @@ impl State {
             magnitude_scale: DEFAULT_MAGNITUDE_SCALE,
             proportional_exponent: DEFAULT_PROPORTIONAL_EXPONENT,
             colormap: Colormap::Viridis,
+            color_ramp: None,
+            color_mode: ScaleMode::Linear,
+            color_quantity: ColorQuantity::Magnitude,
             auto_fit: true,
             color_min: 0.0,
             color_max: 1.0,
@@ -1202,6 +1213,11 @@ impl State {
         let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
         self.plot.vector_mode_3d = mode_3d;
+        // Direction colouring is 2D-only; fold the reset into this same mode
+        // change instead of leaving an unusable quantity for the 3D view.
+        if mode_3d && self.color_quantity == ColorQuantity::Direction2d {
+            self.color_quantity = ColorQuantity::Magnitude;
+        }
         self.clamp_source_density();
         self.sync_plane(previous_grid);
         self.mark_dirty()
@@ -1348,9 +1364,90 @@ impl State {
         self.mark_dirty()
     }
 
+    /// The effective colour mapping (issue #83).
+    ///
+    /// A custom ramp overrides the builtin selection. The manual range is only
+    /// present while auto-fit is off.
+    pub fn color_mapping(self: &State) -> ColorMapping {
+        ColorMapping {
+            palette: match &self.color_ramp {
+                Some(ramp) => ColorPalette::Custom(ramp.clone()),
+                None => ColorPalette::Builtin(self.colormap),
+            },
+            mode: self.color_mode,
+            quantity: self.color_quantity,
+            manual_range: if self.auto_fit {
+                None
+            } else {
+                Some((self.color_min, self.color_max))
+            },
+        }
+    }
+
+    /// Replaces the custom ramp override. `None` returns to the builtin
+    /// colormap. An invalid ramp is rejected without touching the state.
+    pub fn set_color_ramp(self: &mut State, ramp: Option<ColorRamp>) -> bool {
+        if ramp
+            .as_ref()
+            .is_some_and(|ramp| ramp.validate().is_err())
+        {
+            return false;
+        }
+        if self.color_ramp == ramp {
+            return false;
+        }
+        self.color_ramp = ramp;
+        self.plot.generation += 1;
+        self.mark_dirty()
+    }
+
+    /// Selects the value-to-ramp scaling. An invalid mode is rejected.
+    pub fn set_color_mode(self: &mut State, mode: ScaleMode) -> bool {
+        if mode.validate().is_err() {
+            return false;
+        }
+        if self.color_mode == mode {
+            return false;
+        }
+        self.color_mode = mode;
+        self.mark_dirty()
+    }
+
+    /// Selects what the colour represents. Unavailable quantities are rejected.
+    pub fn set_color_quantity(self: &mut State, quantity: ColorQuantity) -> bool {
+        if quantity.available(self.is_3d()).is_err() {
+            return false;
+        }
+        if self.color_quantity == quantity {
+            return false;
+        }
+        self.color_quantity = quantity;
+        self.mark_dirty()
+    }
+
+    /// Commits the current effective range into the manual range and turns
+    /// auto-fit off (issue #83). Returns whether anything changed.
+    pub fn freeze_color_range(self: &mut State, stats: &ColorStats) -> bool {
+        if self.color_quantity == ColorQuantity::Direction2d {
+            return false;
+        }
+        let (min, max) = self.color_mapping().effective_range(stats);
+        if !min.is_finite() || !max.is_finite() || min >= max {
+            return false;
+        }
+        if !self.auto_fit && self.color_min == min && self.color_max == max {
+            return false;
+        }
+        self.color_min = min;
+        self.color_max = max;
+        self.auto_fit = false;
+        self.mark_dirty()
+    }
+
     /// The palette that maps magnitude to colour.
     pub fn set_colormap(self: &mut State, colormap: Colormap) -> bool {
-        if self.colormap == colormap {
+        let cleared_override = self.color_ramp.take().is_some();
+        if self.colormap == colormap && !cleared_override {
             return false;
         }
         self.colormap = colormap;

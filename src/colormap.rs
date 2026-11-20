@@ -37,6 +37,16 @@ impl Colormap {
             return [128, 128, 128];
         }
         let t = ((magnitude - min) / (max - min)).clamp(0.0, 1.0);
+        self.from_unit(t)
+    }
+
+    /// Samples the ramp at a normalized position in `0.0..=1.0`.
+    ///
+    /// Values outside the interval clamp to the ramp ends. This is the single
+    /// implementation [`Self::colormap`] routes through, so a normalized
+    /// position and the equivalent magnitude stay byte-identical.
+    pub fn from_unit(self, t: f32) -> [u8; 3] {
+        let t = t.clamp(0.0, 1.0);
         match self {
             Colormap::Mono => {
                 let v = (255.0 * t + 0.5) as u8;

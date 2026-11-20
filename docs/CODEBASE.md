@@ -1817,17 +1817,21 @@ formulas may still reference `t` when the user edits them.
 particles.
 
 **Public API.** `Colormap { Viridis, Turbo, Mono }`, `ALL`, `label`,
-`colormap(magnitude, min, max) -> [u8; 3]`.
+`colormap(magnitude, min, max) -> [u8; 3]`, `from_unit(t) -> [u8; 3]`.
 
 **Invariants.**
 - `max <= min` returns mid-grey `[128,128,128]`.
 - Values clamp to the ramp ends; `Mono` is linear black→white.
+- `colormap` normalizes and routes through `from_unit`, so a normalized
+  position and the equivalent magnitude are byte-identical.
 - `Viridis`/`Turbo` come from `colorous`; `ALL` covers every variant with a
   unique label.
 
 **Pinned by.** `tests/colormap_test.rs`: `degenerate_range_is_mid_gray`,
 `out_of_range_clamps`, `viridis_endpoints`, `mono_endpoints`,
-`offset_range_normalizes`, `all_covers_every_variant_with_unique_labels`.
+`offset_range_normalizes`, `from_unit_matches_colormap_for_every_builtin`,
+`from_unit_endpoints_and_clamping_are_exact`,
+`all_covers_every_variant_with_unique_labels`.
 
 **Limitations.** No custom/user ramps and no alpha; alpha is supplied by the
 instance colour.
@@ -1876,6 +1880,48 @@ and the extreme-input no-panic loop.
 **Limitations.** No UI, legend widget, HEX/RGB text entry, import/export or
 `State`/`AppSettings` fields in this slice; the existing `Colormap` remains the
 live renderer path.
+
+#### `src/color_mapping.rs` — pure colour mapping and legend descriptor
+
+**Purpose.** Issue #83 slice B1: the pure model tying a palette, quantity and
+scale mode to one effective range for sampling, legend ticks and clipping
+counts. It does not touch sampling, arrows, particles, the renderer, export or
+any UI widget; slice B2 wires it in.
+
+**Public API.** `ColorQuantity { Magnitude, ComponentX, ComponentY, ComponentZ,
+Direction2d }` with `ALL`, `label` and `available(is_3d)`;
+`ColorPalette { Builtin(Colormap), Custom(ColorRamp) }` with `validate`, `kind`
+and `sample_unit`; `ColorSample`, `ColorStats` (`from_samples`), `ColorMapping`
+(`validate`, `effective_range`, `sample`, `legend`, `clip_counts`,
+`explanation`); `ClipSide`, `MappedColor`, `ColorLegend`, `ClipCounts`.
+
+**Invariants.**
+- Direction colouring is rejected in 3D with a fixed message; every other
+  quantity is available in both views.
+- Magnitude auto-fits to the sample magnitudes; components auto-fit
+  symmetrically around zero; direction uses `atan2(y, x) / TAU` wrapped to
+  `[0, 1)` and ignores the range. A manual range always wins.
+- A builtin palette in linear mode calls `Colormap::colormap` directly, so
+  bytes stay identical including out-of-range values and Mono. Other paths
+  normalize then sample the palette.
+- A signed log whose range does not strictly span zero is disabled, not
+  coerced: sampling uses linear normalization on the same range and
+  `explanation` says why. Usable signed log maps zero to the ramp centre.
+- Non-finite values/bounds or `min >= max` yield mid grey `[128,128,128]`;
+  clipped samples report `Low`/`High`, direction never clips and its counts are
+  zero.
+- Legend ticks come from the effective range and mode. Direction is cyclic
+  `0..360` with `[0, 90, 180, 270, 360]`; linear and usable signed log ticks
+  match `ColorStyle::legend_ticks` exactly; invalid ranges yield empty ticks
+  with finite bounds.
+
+**Pinned by.** `tests/color_mapping_test.rs`: stats and empty stats, magnitude
+auto range, builtin byte parity across Viridis/Turbo/Mono, custom override,
+symmetric component ranges, direction angle/availability, signed-log fallback
+and centre, clipping sides/counts, legend range/mode and `ColorStyle` tick
+parity, non-finite mid grey, State mapping/setter/freeze behaviour.
+
+**Limitations.** No renderer, legend widget or export wiring in this slice.
 
 #### `src/plane.rs` — plane-by-plane selection
 
@@ -1930,12 +1976,18 @@ decisions that do not need a window.
   `set_density`, `set_domain`,
   `set_arrow_scale`, `set_arrow_opacity`, `set_plane_dim_opacity`,
   `set_arrow_length_mode`, `set_magnitude_scale`, `set_proportional_exponent`,
-  `set_colormap`, `set_auto_fit`, `set_color_range`, `set_arrows`,
+  `set_colormap`, `set_color_ramp`, `set_color_mode`, `set_color_quantity`,
+  `set_auto_fit`, `set_color_range`, `freeze_color_range`, `set_arrows`,
   `set_show_grid`, `set_show_coordinate_system`,
   `set_arrow_style`, `set_arrow_style_2d`, `set_arrow_params`,
   `set_streamlines`, `set_seed_mode`, `set_left_click_action`, `set_particles`,
   `set_particle_size`, `set_particle_count`, `set_particle_appearance`,
   `set_plane`, `set_plane_enabled`, `set_plane_axis`, `set_plane_index`.
+- Issue #83 colour fields: `color_ramp: Option<ColorRamp>` (`None` uses
+  `colormap`), `color_mode: ScaleMode` and `color_quantity: ColorQuantity`;
+  `color_mapping()` builds the effective `ColorMapping`. `set_colormap` always
+  clears a custom ramp, and `freeze_color_range` commits the current effective
+  range into `color_min`/`color_max` with auto-fit off.
 - Source mode fields: `field_mode`, `sources`, `source_sampling` and
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
   `source_sampling` and `reset_sources`.
@@ -2113,7 +2165,7 @@ helpers.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy |
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 
 **Migration and fallback rules.**
