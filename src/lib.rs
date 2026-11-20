@@ -10,6 +10,7 @@ pub mod cas;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod colormap;
+pub mod color_ramp;
 pub mod domain;
 pub mod export;
 pub mod export_provenance;

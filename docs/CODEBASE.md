@@ -1832,6 +1832,51 @@ particles.
 **Limitations.** No custom/user ramps and no alpha; alpha is supplied by the
 instance colour.
 
+#### `src/color_ramp.rs` — validated custom ramps and value scaling
+
+**Purpose.** Issue #83 slice A: a pure, panic-free model for user-editable
+colour ramps and value scaling. It is not yet wired into the sidebar, legends,
+sampling or persistence.
+
+**Public API.** `Rgb([u8; 3])` with `from_hex`/`to_hex` and serde;
+`ColorStop { position, color }`; `RampKind { Sequential, Diverging, Cyclic }`
+with `ALL` and `label`; `ColorRamp { stops, reversed, kind }` with `MIN_STOPS`,
+`MAX_STOPS`, `validate`, `sanitized`, `sample` and `builtin`;
+`ScaleMode { Linear, SignedLog { half_width } }` with `validate` and
+`normalize`; `ColorStyle { ramp, mode }` with `validate`, `sample` and
+`legend_ticks`.
+
+**Invariants.**
+- Ramps hold 2..=16 finite, strictly increasing positions covering `0.0` and
+  `1.0`; diverging ramps add a `0.5` stop and distinct endpoints, cyclic ramps
+  match endpoints. `sanitized` replaces an invalid ramp with the default
+  black-to-white sequential ramp instead of repairing it.
+- Sampling clamps, treats NaN as `0.0`, reverses as `1.0 - t`, returns stop
+  colours exactly and interpolates pending channels in `f64` with rounding.
+- Signed log accepts only finite ranges with `min < 0.0 < max` and a finite
+  `half_width` in `(0.0, 1.0e6]`; `ColorStyle::sample` falls back to mid grey
+  `[128,128,128]` when normalization is impossible.
+- Legend ticks are bounded at nine, sorted, deduplicated and include both
+  endpoints when the range is valid.
+- `builtin(Colormap)` seeds nine stops at `0.0, 0.125, ..., 1.0` for
+  Viridis/Turbo; those are editable approximations matching exactly only at
+  the endpoints. Mono is a linear byte ramp and is seeded with exactly two
+  stops (`#000000` at `0.0`, `#ffffff` at `1.0`); that seed is structurally
+  exact, but interior samples may differ from `Colormap::Mono` by one LSB at
+  f32 half-step boundaries because the legacy reference rounds
+  `(255.0 * t + 0.5)` in f32 while `ColorRamp::sample` interpolates and
+  rounds in f64.
+
+**Pinned by.** `tests/color_ramp_test.rs`: hex round-trip/malformed input,
+stop count/order/endpoint/kind rules, exact and interpolated sampling,
+reversal and clamping, `Mono`/Viridis/Turbo builtin identity, linear and
+signed-log normalization, continuity/monotonicity, legend ticks, `sanitized`
+and the extreme-input no-panic loop.
+
+**Limitations.** No UI, legend widget, HEX/RGB text entry, import/export or
+`State`/`AppSettings` fields in this slice; the existing `Colormap` remains the
+live renderer path.
+
 #### `src/plane.rs` — plane-by-plane selection
 
 **Purpose.** Select one sampled slice of the 3D cube and dim the rest.
