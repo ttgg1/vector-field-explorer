@@ -15,6 +15,7 @@ use glam::Vec3;
 use crate::domain::Domain;
 use crate::plane::PlaneFrame;
 use crate::renderer::LineInstanceGPU;
+use crate::viewport_style::ViewportStyle;
 
 /// Subdivisions per face direction; 10 gives the 11 lines that matched the old
 /// flat grid's 21-line-per-axis density.
@@ -40,7 +41,18 @@ pub const AXIS_WIDTH: f32 = 0.014;
 /// and coloured axes when sampling runs three-dimensional, one flat grid on
 /// the domain's mid-z plane otherwise.
 pub fn reference_lines(domain: &Domain, sampling_3d: bool) -> Vec<LineInstanceGPU> {
-    reference_lines_visible(domain, sampling_3d, true, true)
+    reference_lines_with(domain, sampling_3d, &ViewportStyle::default())
+}
+
+/// Reference lines for `domain` drawn with `style`. The legacy
+/// [`reference_lines`] delegates here with the default style, so its output is
+/// unchanged.
+pub fn reference_lines_with(
+    domain: &Domain,
+    sampling_3d: bool,
+    style: &ViewportStyle,
+) -> Vec<LineInstanceGPU> {
+    reference_lines_visible_with(domain, sampling_3d, true, true, style)
 }
 
 /// Selected domain decoration, with the grid and box preceding the axes.
@@ -50,20 +62,36 @@ pub(crate) fn reference_lines_visible(
     show_grid: bool,
     show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
+    reference_lines_visible_with(
+        domain,
+        sampling_3d,
+        show_grid,
+        show_coordinate_system,
+        &ViewportStyle::default(),
+    )
+}
+
+fn reference_lines_visible_with(
+    domain: &Domain,
+    sampling_3d: bool,
+    show_grid: bool,
+    show_coordinate_system: bool,
+    style: &ViewportStyle,
+) -> Vec<LineInstanceGPU> {
     let mut lines = Vec::new();
     if sampling_3d {
         if show_grid {
-            cube_grid_and_box(domain, &mut lines);
+            cube_grid_and_box(domain, &mut lines, style);
         }
         if show_coordinate_system {
-            cube_axes(domain, &mut lines);
+            cube_axes(domain, &mut lines, style);
         }
     } else {
         if show_grid {
-            plane_grid(domain, &mut lines);
+            plane_grid(domain, &mut lines, style);
         }
         if show_coordinate_system {
-            plane_axes(domain, &mut lines);
+            plane_axes(domain, &mut lines, style);
         }
     }
     lines
@@ -79,6 +107,22 @@ pub fn reference_plane_lines(
     show_grid: bool,
     show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
+    reference_plane_lines_with(
+        frame,
+        show_grid,
+        show_coordinate_system,
+        &ViewportStyle::default(),
+    )
+}
+
+/// Reference lines for one selected slice drawn with `style`. The legacy
+/// [`reference_plane_lines`] delegates here with the default style.
+pub fn reference_plane_lines_with(
+    frame: &PlaneFrame,
+    show_grid: bool,
+    show_coordinate_system: bool,
+    style: &ViewportStyle,
+) -> Vec<LineInstanceGPU> {
     let mut lines = Vec::new();
     let half_u = frame.half_u;
     let half_v = frame.half_v;
@@ -89,16 +133,16 @@ pub fn reference_plane_lines(
                 &mut lines,
                 Vec3::new(-half_u, v, 0.0),
                 Vec3::new(half_u, v, 0.0),
-                GRID_COLOR,
-                GRID_WIDTH,
+                style.grid_color,
+                style.grid_width,
             );
             let u = lerp(-half_u, half_u, k);
             push(
                 &mut lines,
                 Vec3::new(u, -half_v, 0.0),
                 Vec3::new(u, half_v, 0.0),
-                GRID_COLOR,
-                GRID_WIDTH,
+                style.grid_color,
+                style.grid_width,
             );
         }
     }
@@ -107,15 +151,15 @@ pub fn reference_plane_lines(
             &mut lines,
             Vec3::new(-half_u, 0.0, 0.0),
             Vec3::new(half_u, 0.0, 0.0),
-            world_axis_color(frame.right),
-            AXIS_WIDTH,
+            world_axis_color(frame.right, style),
+            style.axis_width,
         );
         push(
             &mut lines,
             Vec3::new(0.0, -half_v, 0.0),
             Vec3::new(0.0, half_v, 0.0),
-            world_axis_color(frame.up),
-            AXIS_WIDTH,
+            world_axis_color(frame.up, style),
+            style.axis_width,
         );
     }
     lines
@@ -123,14 +167,14 @@ pub fn reference_plane_lines(
 
 /// The colour of the world axis a frame basis vector points along, ignoring
 /// the sign (the X and Y slice bases point along `-Z` and `-X`).
-fn world_axis_color(basis: Vec3) -> [f32; 4] {
+fn world_axis_color(basis: Vec3, style: &ViewportStyle) -> [f32; 4] {
     let abs = basis.abs();
     if abs.x >= abs.y && abs.x >= abs.z {
-        AXIS_X_COLOR
+        style.axis_x_color
     } else if abs.y >= abs.z {
-        AXIS_Y_COLOR
+        style.axis_y_color
     } else {
-        AXIS_Z_COLOR
+        style.axis_z_color
     }
 }
 
@@ -147,7 +191,7 @@ fn lerp(lo: f32, hi: f32, k: u32) -> f32 {
     lo + (hi - lo) * (k as f32 / REFERENCE_DIVISIONS as f32)
 }
 
-fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
+fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &ViewportStyle) {
     let min = domain.min;
     let max = domain.max;
 
@@ -160,16 +204,16 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
             lines,
             Vec3::new(min.x, t, min.z),
             Vec3::new(min.x, t, max.z),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
         let t = lerp(min.z, max.z, k);
         push(
             lines,
             Vec3::new(min.x, min.y, t),
             Vec3::new(min.x, max.y, t),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
 
         let t = lerp(min.x, max.x, k);
@@ -177,16 +221,16 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
             lines,
             Vec3::new(t, min.y, min.z),
             Vec3::new(t, min.y, max.z),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
         let t = lerp(min.z, max.z, k);
         push(
             lines,
             Vec3::new(min.x, min.y, t),
             Vec3::new(max.x, min.y, t),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
 
         let t = lerp(min.x, max.x, k);
@@ -194,16 +238,16 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
             lines,
             Vec3::new(t, min.y, min.z),
             Vec3::new(t, max.y, min.z),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
         let t = lerp(min.y, max.y, k);
         push(
             lines,
             Vec3::new(min.x, t, min.z),
             Vec3::new(max.x, t, min.z),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
     }
 
@@ -215,8 +259,8 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
                 lines,
                 Vec3::new(min.x, y, z),
                 Vec3::new(max.x, y, z),
-                EDGE_COLOR,
-                EDGE_WIDTH,
+                style.box_color,
+                style.box_width,
             );
         }
     }
@@ -226,8 +270,8 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
                 lines,
                 Vec3::new(x, min.y, z),
                 Vec3::new(x, max.y, z),
-                EDGE_COLOR,
-                EDGE_WIDTH,
+                style.box_color,
+                style.box_width,
             );
         }
     }
@@ -237,14 +281,14 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
                 lines,
                 Vec3::new(x, y, min.z),
                 Vec3::new(x, y, max.z),
-                EDGE_COLOR,
-                EDGE_WIDTH,
+                style.box_color,
+                style.box_width,
             );
         }
     }
 }
 
-fn cube_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
+fn cube_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &ViewportStyle) {
     let min = domain.min;
     let max = domain.max;
     let centre = (min + max) * 0.5;
@@ -252,26 +296,26 @@ fn cube_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
         lines,
         Vec3::new(min.x, centre.y, centre.z),
         Vec3::new(max.x, centre.y, centre.z),
-        AXIS_X_COLOR,
-        AXIS_WIDTH,
+        style.axis_x_color,
+        style.axis_width,
     );
     push(
         lines,
         Vec3::new(centre.x, min.y, centre.z),
         Vec3::new(centre.x, max.y, centre.z),
-        AXIS_Y_COLOR,
-        AXIS_WIDTH,
+        style.axis_y_color,
+        style.axis_width,
     );
     push(
         lines,
         Vec3::new(centre.x, centre.y, min.z),
         Vec3::new(centre.x, centre.y, max.z),
-        AXIS_Z_COLOR,
-        AXIS_WIDTH,
+        style.axis_z_color,
+        style.axis_width,
     );
 }
 
-fn plane_grid(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
+fn plane_grid(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &ViewportStyle) {
     let min = domain.min;
     let max = domain.max;
     let z = (min.z + max.z) * 0.5;
@@ -282,21 +326,21 @@ fn plane_grid(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
             lines,
             Vec3::new(min.x, y, z),
             Vec3::new(max.x, y, z),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
         let x = lerp(min.x, max.x, k);
         push(
             lines,
             Vec3::new(x, min.y, z),
             Vec3::new(x, max.y, z),
-            GRID_COLOR,
-            GRID_WIDTH,
+            style.grid_color,
+            style.grid_width,
         );
     }
 }
 
-fn plane_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
+fn plane_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &ViewportStyle) {
     let min = domain.min;
     let max = domain.max;
     let z = (min.z + max.z) * 0.5;
@@ -305,14 +349,14 @@ fn plane_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>) {
         lines,
         Vec3::new(min.x, centre.y, z),
         Vec3::new(max.x, centre.y, z),
-        AXIS_X_COLOR,
-        AXIS_WIDTH,
+        style.axis_x_color,
+        style.axis_width,
     );
     push(
         lines,
         Vec3::new(centre.x, min.y, z),
         Vec3::new(centre.x, max.y, z),
-        AXIS_Y_COLOR,
-        AXIS_WIDTH,
+        style.axis_y_color,
+        style.axis_width,
     );
 }

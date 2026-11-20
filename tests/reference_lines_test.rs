@@ -12,9 +12,10 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::reference::{
     AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, EDGE_COLOR, GRID_COLOR, REFERENCE_DIVISIONS,
-    reference_lines,
+    reference_lines, reference_plane_lines, reference_plane_lines_with, reference_lines_with,
 };
 use vector_field_explorer::renderer::LineInstanceGPU;
+use vector_field_explorer::viewport_style::ViewportStyle;
 use vector_field_explorer::viewmodel::State;
 
 const EPS: f32 = 1e-5;
@@ -505,4 +506,111 @@ fn plane_frame_composition_is_local_flat_and_keeps_flow_and_clicks_after_referen
     );
     same_lines(&lines[reference_count..reference_count + flow.len()], &flow);
     same_lines(&lines[reference_count + flow.len()..], &clicks);
+}
+
+/// A non-default record whose axis colours are tagged by channel so an axis
+/// swap is visible immediately.
+fn styled() -> ViewportStyle {
+    let mut style = ViewportStyle::dark_laboratory();
+    style.background = [0.1, 0.2, 0.3];
+    style.grid_color = [0.14, 0.24, 0.34, 1.0];
+    style.box_color = [0.44, 0.54, 0.64, 1.0];
+    style.axis_x_color = [0.91, 0.11, 0.12, 1.0];
+    style.axis_y_color = [0.11, 0.92, 0.13, 1.0];
+    style.axis_z_color = [0.12, 0.13, 0.93, 1.0];
+    style.grid_width = 0.004;
+    style.box_width = 0.01;
+    style.axis_width = 0.02;
+    style
+}
+
+#[test]
+fn styled_axes_follow_world_plane() {
+    let domain = Domain::new(Vec3::new(-2.0, -1.0, -3.0), Vec3::new(2.0, 1.0, 3.0));
+    let style = styled();
+
+    let cube = reference_lines_with(&domain, true, &style);
+    for (axis, color, name) in [
+        (0usize, style.axis_x_color, "x"),
+        (1, style.axis_y_color, "y"),
+        (2, style.axis_z_color, "z"),
+    ] {
+        let axes = axis_line(&cube, axis, &domain, color);
+        assert_eq!(axes.len(), 1, "exactly one styled {name} axis");
+        assert_eq!(
+            axes[0].b[3], style.axis_width,
+            "the {name} axis takes the styled width"
+        );
+    }
+    assert!(
+        cube.iter()
+            .filter(|line| same_color(line.color, style.box_color))
+            .count()
+            == 12,
+        "the box takes the styled colour"
+    );
+
+    // X/Y/Z slices rotate the in-plane basis; each axis keeps the world-axis
+    // colour of its basis vector, and the grid takes the styled colour/width.
+    for (axis, expected_right, expected_up) in [
+        (PlaneAxis::Z, style.axis_x_color, style.axis_y_color),
+        (PlaneAxis::X, style.axis_z_color, style.axis_y_color),
+        (PlaneAxis::Y, style.axis_x_color, style.axis_z_color),
+    ] {
+        let frame = PlaneFrame::new(
+            &domain,
+            PlaneView {
+                axis,
+                index: 2,
+                ..Default::default()
+            },
+            UVec3::splat(5),
+        );
+        let lines = reference_plane_lines_with(&frame, true, true, &style);
+        let axis_colors: Vec<[f32; 4]> = lines
+            .iter()
+            .filter(|line| !same_color(line.color, style.grid_color))
+            .map(|line| line.color)
+            .collect();
+        assert_eq!(
+            axis_colors,
+            vec![expected_right, expected_up],
+            "{axis:?} slice keeps the world-axis colour of its basis vectors"
+        );
+        for line in &lines {
+            if same_color(line.color, style.grid_color) {
+                assert_eq!(line.b[3], style.grid_width, "grid width follows the style");
+            } else {
+                assert_eq!(line.b[3], style.axis_width, "axis width follows the style");
+            }
+        }
+    }
+}
+
+#[test]
+fn default_style_is_byte_identical_to_legacy() {
+    let domain = Domain::new(Vec3::new(-2.0, -1.0, -3.0), Vec3::new(2.0, 1.0, 3.0));
+    let default = ViewportStyle::default();
+    for sampling_3d in [true, false] {
+        same_lines(
+            &reference_lines(&domain, sampling_3d),
+            &reference_lines_with(&domain, sampling_3d, &default),
+        );
+    }
+
+    for axis in [PlaneAxis::X, PlaneAxis::Y, PlaneAxis::Z] {
+        let frame = PlaneFrame::new(
+            &domain,
+            PlaneView {
+                axis,
+                index: 2,
+                ..Default::default()
+            },
+            UVec3::splat(5),
+        );
+        same_lines(
+            &reference_plane_lines(&frame, true, true),
+            &reference_plane_lines_with(&frame, true, true, &default),
+        );
+    }
 }

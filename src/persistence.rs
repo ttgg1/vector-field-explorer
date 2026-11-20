@@ -37,6 +37,7 @@ use crate::source_scene::{
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
+use crate::viewport_style::ViewportStyle;
 use crate::viewmodel::{ArrowLengthMode, LeftClickAction, State, StreamlineSeedMode};
 use glam::{DVec3, Vec3};
 
@@ -57,6 +58,11 @@ pub struct AppSettings {
     /// [`AppSettings::sanitized`].
     #[serde(default)]
     pub parameters: ParameterSet,
+    /// Viewport and reference colours/widths (issue #82). Missing on older
+    /// envelopes, which load the shipped dark-laboratory look; corrupt values
+    /// are repaired by [`AppSettings::sanitized`].
+    #[serde(default)]
+    pub viewport_style: ViewportStyle,
 }
 
 impl AppSettings {
@@ -65,6 +71,7 @@ impl AppSettings {
     pub fn sanitized(mut self) -> Self {
         self.style = self.style.sanitized();
         self.layout = self.layout.sanitized();
+        self.viewport_style = self.viewport_style.sanitized();
         if let Err(error) = self.parameters.validate() {
             log::warn!(
                 "persisted parameters are invalid ({error}); falling back to the default set"
