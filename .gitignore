@@ -5,3 +5,6 @@ __pycache__/
 # Local-only working notes: SDD ledger, tickets, review packages
 .scratch/
 .superpowers/
+
+# Local CodeGraph index (per-worktree build cache)
+.codegraph/
