@@ -27,6 +27,17 @@ fn pass(
     events: Vec<egui::Event>,
     time: f64,
 ) -> RailStripResponse {
+    pass_recording(ctx, flags, order, events, time).0
+}
+
+/// As [`pass`], also returning the rectangle shapes the pass painted.
+fn pass_recording(
+    ctx: &egui::Context,
+    flags: &mut [bool; 3],
+    order: [usize; 3],
+    events: Vec<egui::Event>,
+    time: f64,
+) -> (RailStripResponse, Vec<egui::epaint::RectShape>) {
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 240.0));
     let mut result = None;
     let mut output = ctx.run_pass(
@@ -76,7 +87,50 @@ fn pass(
         },
     );
     output.textures_delta.clear();
-    result.unwrap()
+    let rects = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape) => Some(shape.clone()),
+            _ => None,
+        })
+        .collect();
+    (result.unwrap(), rects)
+}
+
+#[test]
+fn rail_entries_paint_the_configured_corner_radius() {
+    for (rounding, expected) in [
+        (6.0, egui::CornerRadius::same(6)),
+        (0.0, egui::CornerRadius::ZERO),
+    ] {
+        let ctx = crate::support::context();
+        vector_field_explorer::ui::style_panel::apply(
+            &ctx,
+            &vector_field_explorer::ui::style_panel::AppStyle {
+                rounding,
+                ..Default::default()
+            },
+        );
+        let mut flags = [false; 3];
+        let (strip, rects) = pass_recording(&ctx, &mut flags, [0, 1, 2], vec![], 0.0);
+        for entry in &strip.entries {
+            let shape = rects
+                .iter()
+                .find(|shape| shape.rect == entry.response.rect)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: no background rect painted at {:?}",
+                        entry.id, entry.response.rect
+                    )
+                });
+            assert_eq!(
+                shape.corner_radius, expected,
+                "{}: rounding {rounding} must reach the rail entry",
+                entry.id
+            );
+        }
+    }
 }
 
 fn click(ctx: &egui::Context, flags: &mut [bool; 3], pos: egui::Pos2, time: f64) {
