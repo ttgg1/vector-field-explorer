@@ -24,6 +24,9 @@ use crate::viewmodel::State;
 pub const CONTROLS_SHORTCUT: &str = "Ctrl+B";
 pub const PRESETS_SHORTCUT: &str = "Ctrl+P";
 pub const APPEARANCE_SHORTCUT: &str = "Ctrl+Shift+A";
+/// Display-only until slice A3 wires input routing; chosen because
+/// `Ctrl+Shift+I` is DevTools in Chrome, Firefox and Edge.
+pub const INTERACTION_SHORTCUT: &str = "Ctrl+Shift+L";
 pub const FLY_SHORTCUT: &str = "C";
 pub const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+S";
 pub const COPY_FORMULA_SHORTCUT: &str = "Ctrl+Shift+C";
@@ -90,6 +93,8 @@ menu_actions! {
     ToggleCas,
     TogglePresets,
     ToggleAppearancePanel,
+    ToggleInteractionPanel,
+    OpenInteraction,
     ToggleFly,
     ResetLayout,
     ResetCamera,
@@ -239,6 +244,14 @@ pub const MENUS: &[Menu] = &[
                 label: "Appearance…",
                 action: MenuAction::OpenAppearance,
             },
+            MenuItem {
+                label: "Toggle Interaction",
+                action: MenuAction::ToggleInteractionPanel,
+            },
+            MenuItem {
+                label: "Interaction…",
+                action: MenuAction::OpenInteraction,
+            },
         ],
     },
     Menu {
@@ -352,8 +365,12 @@ pub fn shortcut_for(action: MenuAction) -> Option<&'static Shortcut> {
     SHORTCUTS.iter().find(|shortcut| shortcut.action == action)
 }
 
-/// The label shown beside `action`'s menu item.
+/// The label shown beside `action`'s menu item. The Interaction toggle's
+/// shortcut is display-only until slice A3 wires the key.
 pub fn shortcut_label(action: MenuAction) -> Option<&'static str> {
+    if action == MenuAction::ToggleInteractionPanel {
+        return Some(INTERACTION_SHORTCUT);
+    }
     shortcut_for(action).map(|shortcut| shortcut.label)
 }
 
@@ -493,6 +510,15 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         }
         MenuAction::ToggleAppearancePanel => {
             ui.layout.toggle_appearance();
+            SideEffect::None
+        }
+        MenuAction::ToggleInteractionPanel => {
+            ui.layout.toggle_interaction();
+            SideEffect::None
+        }
+        MenuAction::OpenInteraction => {
+            // Open is idempotent; the compact app routes it to its sheet.
+            ui.layout.interaction_expanded = true;
             SideEffect::None
         }
         MenuAction::ToggleFly => {

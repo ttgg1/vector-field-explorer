@@ -359,8 +359,9 @@ fn wide_squeeze_preserves_requested_widths_and_resize_restore() {
     h.width = 1280.0;
     let restored = h.idle();
     assert!((viewport(&restored).left() - 685.0).abs() <= 1.0);
-    // Right chrome: Presets 211 + the 32 pt Appearance rail.
-    assert!((viewport(&restored).right() - 1027.0).abs() <= 1.0);
+    // Right chrome: Presets 211 + the 32 pt Appearance rail + the 32 pt
+    // Interaction rail.
+    assert!((viewport(&restored).right() - 995.0).abs() <= 1.0);
     let input = bounds(&restored, "Input (scalar or vector)").unwrap();
     let presets = bounds(&restored, "Reset view").unwrap();
     assert!(input.right() < viewport(&restored).left());
