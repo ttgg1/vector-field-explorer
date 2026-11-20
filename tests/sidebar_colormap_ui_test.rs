@@ -306,6 +306,7 @@ fn colormap_row_drives_state_scene_and_persistence() {
         viewport_style: Default::default(),
         layer_styles: Default::default(),
         preset_ui: Default::default(),
+        appearance_profiles: Default::default(),
     };
     let mut storage = MemoryStorage::default();
     vector_field_explorer::persistence::save(&mut storage, &settings);

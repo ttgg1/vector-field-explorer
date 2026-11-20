@@ -6,6 +6,7 @@ use eframe::Storage as _;
 use glam::{DVec3, Vec3};
 
 use vector_field_explorer::VfApp;
+use vector_field_explorer::appearance_profile::{AppearanceProfile, builtins};
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_mapping::ColorQuantity;
@@ -19,6 +20,7 @@ use vector_field_explorer::persistence::{AppSettings, PresetUiRecord, ViewRecord
 use vector_field_explorer::plane::DIM_ALPHA;
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::preset_library::PresetGroup;
+use vector_field_explorer::profile_library::{MAX_USER_PROFILES, ProfileLibrary};
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
@@ -419,6 +421,16 @@ fn configured() -> (State, Controls) {
     (state, controls)
 }
 
+/// A user profile carrying the named builtin appearance under a test name.
+fn appearance_profile(name: &str) -> AppearanceProfile {
+    let mut profile = builtins()
+        .into_iter()
+        .find(|profile| profile.name == "High contrast")
+        .expect("the named builtin exists");
+    profile.name = name.to_owned();
+    profile
+}
+
 fn sample_settings() -> AppSettings {
     let (state, _controls) = configured();
     AppSettings {
@@ -457,6 +469,7 @@ fn sample_settings() -> AppSettings {
         viewport_style: ViewportStyle::white_paper(),
         layer_styles: LayerStyles::default(),
         preset_ui: PresetUiRecord::default(),
+        appearance_profiles: Vec::new(),
     }
 }
 
@@ -2430,6 +2443,125 @@ fn restoring_viewport_style_does_not_dirty_the_scene() {
     assert_eq!(
         app.state.viewport_style, settings.viewport_style,
         "the app constructor restores the persisted record"
+    );
+}
+
+#[test]
+fn settings_drop_duplicate_or_excess_user_profiles_on_load() {
+    let mut profiles = vec![appearance_profile("  Nord  "), appearance_profile("Nord")];
+    for index in 0..MAX_USER_PROFILES {
+        profiles.push(appearance_profile(&format!("Look {index}")));
+    }
+    let settings = AppSettings {
+        appearance_profiles: profiles,
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.appearance_profiles.len(),
+        MAX_USER_PROFILES,
+        "the excess is truncated after the duplicate is dropped"
+    );
+    assert_eq!(
+        loaded.appearance_profiles.first().map(|p| p.name.as_str()),
+        Some("Nord"),
+        "the first sanitized record is kept"
+    );
+    assert_eq!(
+        loaded.appearance_profiles.last().map(|p| p.name.as_str()),
+        Some("Look 30"),
+        "the cap keeps the earliest entries in order"
+    );
+    let names: std::collections::HashSet<&str> = loaded
+        .appearance_profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect();
+    assert_eq!(
+        names.len(),
+        MAX_USER_PROFILES,
+        "every surviving name is unique"
+    );
+}
+
+#[test]
+fn restoring_the_envelope_does_not_apply_profiles_or_dirty_the_state() {
+    let stored = builtins()
+        .into_iter()
+        .find(|profile| profile.name == "High contrast")
+        .expect("the named builtin exists");
+    let settings = AppSettings {
+        appearance_profiles: vec![stored.clone()],
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.appearance_profiles,
+        vec![stored.clone()],
+        "the envelope keeps the user profiles as records"
+    );
+
+    // Loading the envelope must not apply the stored profile or request a
+    // scene rebuild.
+    let app = VfApp::new_with_storage(Some(&storage));
+    let baseline = VfApp::new_with_storage(None);
+    assert_eq!(
+        app.state.viewport_style, baseline.state.viewport_style,
+        "a stored profile is never applied at startup"
+    );
+    assert_eq!(app.state.layer_styles, baseline.state.layer_styles);
+    assert_eq!(app.state.colormap, baseline.state.colormap);
+    assert_eq!(app.state.color_ramp, baseline.state.color_ramp);
+    assert_eq!(app.state.color_mode, baseline.state.color_mode);
+    assert_eq!(app.state.color_quantity, baseline.state.color_quantity);
+    assert_eq!(
+        app.state.dirty, baseline.state.dirty,
+        "restoring profiles adds no scene rebuild"
+    );
+}
+
+#[test]
+fn new_with_storage_loads_the_user_profile_library_without_applying_it() {
+    let stored = appearance_profile("Saved look");
+    let settings = AppSettings {
+        appearance_profiles: vec![stored.clone()],
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        app.profiles.user(),
+        [stored],
+        "the loaded library is kept unchanged"
+    );
+    assert_eq!(
+        app.state.viewport_style,
+        ViewportStyle::default(),
+        "loading a profile does not apply it"
+    );
+}
+
+#[test]
+fn user_profile_library_round_trips_through_an_app_save() {
+    let stored = appearance_profile("Saved look");
+    let mut app = VfApp::new();
+    app.profiles = ProfileLibrary::new(vec![stored.clone()]).expect("the profile is valid");
+    let mut storage = MemoryStorage::default();
+    eframe::App::save(&mut app, &mut storage);
+
+    let loaded = load(Some(&storage)).sanitized();
+    assert_eq!(
+        loaded.appearance_profiles,
+        vec![stored],
+        "the save path writes the live library"
     );
 }
 

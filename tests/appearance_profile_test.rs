@@ -423,6 +423,78 @@ fn apply_without_a_colour_change_leaves_the_generation_untouched() {
 }
 
 #[test]
+fn capture_round_trips_the_live_appearance() {
+    let mut source = State::new(false);
+    source.viewport_style = ViewportStyle::high_contrast();
+    source.viewport_style.grid_width = MAX_LINE_WIDTH / 2.0;
+    source.layer_styles.layers[0].opacity = Some(0.5);
+    source.layer_styles.families[1].width = Some(1.25);
+    source.colormap = Colormap::Mono;
+    source.color_ramp = Some(sample_ramp());
+    source.color_mode = ScaleMode::SignedLog { half_width: 0.25 };
+    source.color_quantity = ColorQuantity::ComponentX;
+
+    let profile = AppearanceProfile::capture("Live look", &source);
+    assert_eq!(profile.name, "Live look");
+
+    let mut target = State::new(false);
+    profile
+        .apply(&mut target)
+        .expect("the captured profile applies");
+
+    assert_eq!(target.viewport_style, source.viewport_style);
+    assert_eq!(target.layer_styles, source.layer_styles);
+    assert_eq!(target.colormap, source.colormap);
+    assert_eq!(target.color_ramp, source.color_ramp);
+    assert_eq!(target.color_mode, source.color_mode);
+    assert_eq!(target.color_quantity, source.color_quantity);
+}
+
+#[test]
+fn captured_profiles_validate_and_double_apply_is_idempotent() {
+    let mut source = State::new(false);
+    source.viewport_style = ViewportStyle::white_paper();
+    source.layer_styles.layers[2].color = Some(Rgb::from_hex("#ff0000").expect("valid hex"));
+    source.colormap = Colormap::Turbo;
+    source.color_mode = ScaleMode::SignedLog { half_width: 0.5 };
+    source.color_quantity = ColorQuantity::ComponentY;
+
+    let profile = AppearanceProfile::capture("Captured", &source);
+    profile
+        .validate()
+        .unwrap_or_else(|error| panic!("a captured profile must validate: {error}"));
+
+    let mut target = State::new(false);
+    profile
+        .apply(&mut target)
+        .expect("the first apply succeeds");
+    let once = (
+        target.viewport_style,
+        target.layer_styles,
+        target.colormap,
+        target.color_ramp.clone(),
+        target.color_mode,
+        target.color_quantity,
+        target.plot.generation,
+    );
+
+    profile
+        .apply(&mut target)
+        .expect("the second apply succeeds");
+    let twice = (
+        target.viewport_style,
+        target.layer_styles,
+        target.colormap,
+        target.color_ramp.clone(),
+        target.color_mode,
+        target.color_quantity,
+        target.plot.generation,
+    );
+
+    assert_eq!(once, twice, "applying a captured profile twice equals once");
+}
+
+#[test]
 fn ramp_overrides_the_colormap_field() {
     let mut profile = profile_named(DEFAULT_PROFILE_NAME);
     profile.color.colormap = Colormap::Mono;

@@ -55,6 +55,7 @@ impl eframe::App for VfApp {
             parameters: self.state.parameters.clone(),
             viewport_style: self.state.viewport_style,
             layer_styles: self.state.layer_styles,
+            appearance_profiles: self.profiles.user().to_vec(),
             preset_ui: PresetUiRecord {
                 expanded: self.presets.expanded_state(),
             },

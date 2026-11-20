@@ -39,6 +39,7 @@ pub mod plot_state;
 pub mod pointer_lock;
 pub mod preset_library;
 pub mod presets;
+pub mod profile_library;
 pub mod reference;
 pub mod render;
 pub mod renderer;
