@@ -45,4 +45,4 @@ The pass:
   arrow, line or catalogue geometry can feed, without making the first slice
   generic beyond that seam.
 
-Status: proposed, pending owner approval of the design and bounded plan.
+Status: accepted 2026-11-20 (owner approved the design and bounded plan; slice 1 implementation still needs its own claim).

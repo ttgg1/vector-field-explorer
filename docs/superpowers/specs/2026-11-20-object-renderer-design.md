@@ -5,7 +5,7 @@ following the owner decision recorded there (approach C, generic reusable pass,
 Solid/Wireframe switch, GPU-side rendering). See
 [ADR 0004](../../adr/0004-object-renderer.md) and the
 [engine research note](../../research/2026-11-20-3d-renderer-options.md).
-Status: draft for owner approval; no implementation is authorized before that
+Status: accepted 2026-11-20; bounded plan `docs/superpowers/plans/2026-11-20-object-renderer.md`. Slice 1 tasks are queued after the current #80/#81 and #18 work; each task still needs a claim and its own review.
 approval and a bounded plan.
 
 ## Goal
