@@ -55,13 +55,15 @@ position, normal and barycentric attributes:
 | --- | --- | --- |
 | Sphere | 24 × 16 | 768 |
 | Cylinder | 24 sides + caps | 96 |
-| Disc | 24 sides | 48 |
+| Disc | 24 rim segments, two-sided fan | 48 |
 | Torus | 32 × 12 | 768 |
 | Tube (solenoid) | 8 × 6 per turn, 12 turns | 1152 |
 
-Worst case 64 tubes = 73,728 triangles, inside the 150k contract. Vertex data is
-bounded at roughly 8 MB worst case; instance data is under 8 KB. These numbers
-are asserted by tests, not estimated at runtime.
+All five meshes are static and reused by every instance, so total triangle
+geometry is 2,832 triangles (8,496 non-indexed vertices × 36 B = 305,856 B,
+about 0.3 MB) regardless of object count. Instance data is 64 × 96 B = 6,144 B
+worst case. Worst-case drawn triangles are 64 tubes = 73,728, inside the 150k
+contract. These numbers are asserted by tests, not estimated at runtime.
 
 ### 3. GPU pass — `src/object_renderer.rs` + `shaders/object.wgsl`
 
@@ -97,7 +99,7 @@ egui encoder; `paint` composites):
 | `src/app/mod.rs` | build `MeshScene` from sources + induction + slice alongside `compose_vector_lines` |
 | `src/app/viewport.rs` | pass the mesh scene into the callback |
 | `src/animation_scene.rs`, `src/cli_scene.rs` | `AnimationFrame` carries `Arc<MeshScene>`; headless animation renders objects |
-| `src/source_glyph.rs` | add `source_sign_marker_lines`; Solid mode draws only sign markers, line/both modes unchanged |
+| `src/source_glyph.rs` | add `source_sign_marker_lines`; Solid and Wireframe modes draw only sign markers, line modes unchanged |
 | `src/persistence.rs` | `ObjectStyle { mode: Solid, Wireframe }`, serde default Solid, non-dirtying restore |
 | `src/ui/sources_panel.rs` | one "Object style" control (Solid/Wireframe) in the display section; help text |
 | `docs/CODEBASE.md` | new modules and render-path note |
@@ -108,8 +110,8 @@ animation export include objects because they share `DrawState`.
 
 ## Behaviour decisions
 
-- Default is Solid; the mode is global, persisted and restored without dirtying
-  the scene.
+- Default is Solid. The Solid/Wireframe mode is global, persisted and restored
+  without dirtying the scene.
 - Wireframe mode suppresses body line glyphs to avoid double geometry but keeps
   sign markers.
 - Solid mode suppresses body line glyphs and keeps sign markers; the off-slice
@@ -128,6 +130,10 @@ animation export include objects because they share `DrawState`.
 - GPU: one adapter-gated test renders a single sphere offscreen and asserts
   non-background pixels and a clean error scope (the existing plot GPU test is
   the precedent); no assertion on anti-aliasing or exact colours.
+- Performance: the owner contract is at most 2 ms added GPU time at 1280×800 on
+  the RX 9070 XT. Slice 1 measures a 64-object reference scene on that host
+  (prepare/paint CPU time plus frame-time delta) and records the result as
+  evidence; it is not a CI assertion because hardware and CI GPUs differ.
 - Gates: build, full suite, clippy `-D warnings`, docs check, diff check, changed
   file formatting, `scripts/smoke-run.sh 15`, plus workflow CI (native, wasm,
   windows).
@@ -137,7 +143,8 @@ animation export include objects because they share `DrawState`.
 ## Slices
 
 1. Slice 1: pure model, primitives, pipeline, integration, persistence, mode
-   control, PNG/animation parity, tests above. No LOD or MSAA.
+   control, PNG/animation parity, the 2 ms reference measurement, tests above.
+   No LOD or MSAA.
 2. Later: LOD/perf tuning, MSAA seam, picking/selection, per-layer appearance
    (#84), more primitives for the #91 catalogue, 3D direction-colour integration.
 

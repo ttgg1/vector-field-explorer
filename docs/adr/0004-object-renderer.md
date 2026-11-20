@@ -37,8 +37,10 @@ The pass:
 - No change to the existing arrow/line/dot pipelines or their CPU ordering.
 - No change to physics semantics: solid mode still shows charge/current sign
   markers and off-slice treatment through the existing glyph model.
-- Bounded primitives and triangles, finite-input safety, native + wasm parity,
-  and the standing screenshot/manual-visual waiver.
+- Bounded primitives and triangles (≤64 objects, ≤150k drawn triangles, 2,832
+  static triangles), at most 2 ms added GPU time on the 1280×800 RX 9070 XT
+  reference scene, finite-input safety, native + wasm parity, and the standing
+  screenshot/manual-visual waiver.
 - Reusable shape: a plain `MeshScene` (instances + camera + lighting) that later
   arrow, line or catalogue geometry can feed, without making the first slice
   generic beyond that seam.

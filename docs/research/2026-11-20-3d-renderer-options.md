@@ -66,7 +66,7 @@ owned by this project, instead of adopting an engine:
 2. Offscreen colour + depth target at viewport resolution, reused across frames;
    composite the result into the egui pass at the glyph layer.
 3. One forward shader with simple directional lighting and a barycentric
-   edge factor for the solid/wireframe switch; no shadows, post-processing,
+   edge factor for the Solid/Wireframe switch; no shadows, post-processing,
    picking, CSG or mesh import in the first slice.
 4. CPU work limited to rebuilding instance buffers on scene/view change; GPU does
    transform, lighting and rasterization.
