@@ -2519,6 +2519,47 @@ composition, pinned field order, and validation never mutating the document.
 capture or `State` wiring in this slice; later slices call
 `ViewRecord::capture` at the call site.
 
+#### `src/edit_history.rs` — bounded edit history and reset scopes
+
+**Purpose.** Issue #86 slice A1: a pure, in-memory undo/redo model for the
+editable document, with transaction semantics for continuous gestures and the
+four reset scopes. No `State`/`VfApp`, UI, input, persistence, renderer or
+simulation wiring in this slice.
+
+**Public API.** `MAX_HISTORY` (`64`); `EditScope { Color, Camera, Simulation,
+All }` with `ALL`, `label` and `records_history`; `EditSnapshot { view,
+parameters, camera, appearance }` with `new`; `EditHistory<S>` (private stacks)
+with `new`, `len`, `redo_len`, `is_empty`, `can_undo`, `can_redo`,
+`is_recording`, `begin`, `commit`, `cancel`, `record`, `undo`, `redo` and
+`clear`, plus a hand-written `Default` for every `S: Clone + PartialEq`.
+
+**Contract.**
+- An entry is a document-value snapshot: `ViewRecord`, `ParameterSet`,
+  `SceneCamera` and `AppearanceProfile`. Runtime state is never stored; the
+  appearance name is a sentinel, since a snapshot carries style data only.
+- `begin` keeps the first pre-edit snapshot when called again during an open
+  transaction. `commit` records at most one entry, ends the transaction and
+  returns `true` only when `after != before`; a commit without `begin` records
+  nothing and returns `false`.
+- A recording drops the redo tail and evicts the oldest entry once the undo
+  stack reaches `MAX_HISTORY`. `cancel` discards only the pending snapshot.
+  `record(before, after)` is `begin` + `commit`.
+- `undo(current)` pops the last past snapshot, pushes `current` onto redo and
+  returns the popped value; `redo(current)` is the mirror image and preserves
+  the bound. Both return `None` and change nothing when their stack is empty.
+- `records_history` is `false` only for `Simulation`: runtime state is outside
+  the document snapshot, so its reset is undo-free. `Color`, `Camera` and `All`
+  are recorded.
+
+**Pinned by.** `tests/edit_history_test.rs`: record/undo/redo transitions, the
+redo tail, unchanged and begin-less commits, a repeated `begin`, `cancel`, the
+70-record eviction and reverse walk, no-ops at both ends, redo staying within
+the bound, the four scope labels/`records_history` values, and `EditSnapshot`
+equality changing one field at a time.
+
+**Limitations.** The history is in-memory only and does not survive restart;
+snapshot capture/apply and all app wiring belong to slice A2.
+
 #### `src/scene_store.rs` — saved-scene store
 
 **Purpose.** Issue #90 slice B2b: a validated, ordered collection of
