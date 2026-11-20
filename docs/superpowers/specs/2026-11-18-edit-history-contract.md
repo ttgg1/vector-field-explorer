@@ -22,8 +22,16 @@ A history entry is an immutable value snapshot of the *editable document*:
 
 Everything else is runtime state and is never recorded: simulation time, particle
 positions, sampled arrows, GPU buffers and caches, layout/panel widths and
-expansion, preset-panel query, messages, and open sheets. Undo restores the
-document; it does not rewind time.
+expansion, preset-panel query, messages, open sheets, and the fly-camera pose
+(`FlyCamera` position/yaw/pitch/speed). Undo while flying therefore restores the
+document and leaves the fly pose alone; it does not rewind time.
+
+Colour appears in both `view` (the `ViewRecord` colour fields) and
+`appearance.color`, because both types already carry the mapping. `ViewRecord`
+is authoritative: every snapshot is captured from one `State` in a single call,
+apply writes `view` first and then the matching appearance fields from the same
+source, and equality is the derived `PartialEq` over all four fields. A snapshot
+whose two colour copies diverge is a construction bug, pinned by a test.
 
 ## Storage and bounds
 
@@ -35,7 +43,9 @@ document; it does not rewind time.
 - Recording after an undo drops the redo tail (branching edits discard the
   abandoned future).
 - Recording a snapshot equal to the current entry is a no-op, so a gesture that
-  changed nothing does not consume history.
+  changed nothing does not consume history. Equality is the derived `PartialEq`
+  over the four snapshot fields (exact float comparison): snapshots are captured
+  from the same `State`, so a value that did not change is bit-identical.
 
 ## Transactions
 
@@ -90,7 +100,8 @@ reset is a single history entry (undo restores exactly the pre-reset document).
   when it actually changed.
 - Keyboard defaults: `Ctrl+Z` undo, `Ctrl+Shift+Z` redo (platform modifier
   conventions follow the existing shortcut handling).
-- Menu entries expose Undo, Redo and the three resets; unavailable actions are
+- Menu entries expose Undo, Redo and the four scoped resets (the three recorded
+  scopes plus the undo-free `Simulation` action); unavailable actions are
   disabled rather than silently ignored.
 - SVG export keeps the existing neutral blueprint; history has no effect on
   export content.

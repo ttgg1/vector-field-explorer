@@ -18,8 +18,13 @@ remappable actions that exist today:
   interaction panel, help.
 - View: reset, fit, zoom in, zoom out, view left/right/up/down.
 - Simulation: play/pause.
-- Tools: toggle fly, seed streamline, add particles.
+- Tools: seed streamline, add particles.
 - Files: screenshot export, copy formula, quit.
+
+Fly toggle and fly movement stay on the existing physical-key path (the
+ticket-70 behaviour pinned by `tests/fly_camera_test.rs`, where a physical `A`
+strafes on a non-QWERTY layout) and are **not** part of the chord model or
+remappable in this slice. They are therefore outside `MAX_BINDINGS`.
 
 Reserved actions are never remappable and are shown read-only:
 `Escape` (dismiss/cancel/leave capture), `Mod+Z` (undo) and `Mod+Shift+Z`
@@ -39,13 +44,20 @@ macOS. Physical key positions and raw egui events are out of scope.
   There is no silent takeover and no duplicate binding.
 - Every remappable action always has a chord. `Reset action` restores that
   action's default chord; it is not a way to leave an action unbound.
-- Chords that a browser owns (`Mod+W`, `Mod+T`, `Mod+N`, `Mod+Shift+W`) are
-  refused with a stated reason on every platform, so a saved profile behaves
-  the same natively and in wasm.
-- Chords are matched only while no text field has focus; the existing
-  typing-focus protection is preserved.
-- Defaults reproduce today's bindings exactly. `Restore defaults` always
-  exists, ignores profile contents and never requires a valid stored profile.
+- Most chords are refused while a text field has focus (the existing
+  typing-focus protection). Actions flagged `global` keep firing during text
+  entry; today that flag is set for Quit only, and it must stay set.
+- Browser-owned chords are refused when newly assigned, with a stated reason on
+  every platform, so a saved profile behaves the same natively and in wasm:
+  `Mod+W`, `Mod+T`, `Mod+N`, `Mod+Shift+W`, `Mod+Shift+I`, `Mod+Shift+J`,
+  `Mod+Shift+K`, `Mod+Shift+C`, `Mod+Q`. Chords shipped as defaults before this
+  contract (`Mod+Q` quit, `Mod+Shift+C` copy formula, `Mod+Shift+S` screenshot)
+  are grandfathered: they stay bindable as defaults and on restore, while
+  choosing them for another action is refused. The menu entry always reaches
+  the same action when a browser swallows the chord.
+- Defaults reproduce today's bindings for every action in the chord model.
+  `Restore defaults` always exists, ignores profile contents and never requires
+  a valid stored profile.
 
 ## Camera feel
 
@@ -85,15 +97,17 @@ invert_zoom }`:
 - Escape and pointer-capture recovery work with any stored or imported
   profile, including one that has been hand-edited.
 - Losing window focus clears held movement keys; a chord never stays latched.
-- Remapped bindings respect the existing `text_edit_focused()` gate and the
-  existing per-mode gating (2D/3D, fly, panel visibility).
+- Remapped bindings respect the existing `text_edit_focused()` gate (except
+  actions flagged `global`, today Quit only) and the existing per-mode gating
+  (2D/3D, fly, panel visibility).
 - A profile that cannot be validated is never applied; the current bindings
   stay active and the rejection is reported.
 
 ## UI
 
 A dedicated right-side Interaction panel (rail, compact sheet tab, menu entry
-and `Ctrl+Shift+I`), containing:
+and `Ctrl+Shift+L` — chosen because `Ctrl+Shift+I` is DevTools in Chrome,
+Firefox and Edge, so it is on the refusal list below), containing:
 
 1. Bindings: one row per remappable action with the current chord, a rebind
    capture mode, conflict text and a reset action; reserved rows read-only.
@@ -112,14 +126,16 @@ tab follow the existing panel pattern and persisted layout rules.
   (bounded, duplicate-rejecting, atomic import). No UI, input or persistence.
 - **A2** — settings-envelope persistence, startup restore, and the Interaction
   panel with bindings, camera feel and profiles.
-- **A3** — route the existing shortcut table, view keys, fly keys, transport
-  and click modifiers through the active bindings; apply camera feel to orbit,
-  wheel zoom, fly look and pointer drags; preserve Escape/undo/redo and the
-  typing gate.
+- **A3** — route the existing shortcut table, view keys, transport and click
+  modifiers through the active bindings (fly keys stay physical and exempt);
+  apply camera feel to orbit, wheel zoom, fly look and pointer drags; preserve
+  Escape/undo/redo and the typing gate.
 
 ## Pinned tests
 
-- Defaults equal today's chords and give one chord per action.
+- Defaults equal today's chords for chord-model actions and give one chord per
+  action; the fly exemption keeps ticket 70's physical-key behaviour and its
+  non-QWERTY pin is restated in A3's tests.
 - Assigning an in-use chord reports the owner and changes nothing until
   replaced; replace updates both actions in one step.
 - Reserved actions cannot be rebound or cleared; `Restore defaults` works with
