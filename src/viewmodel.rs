@@ -387,9 +387,14 @@ impl State {
     /// Atomically replace the named parameters after validating the whole set.
     /// A rejected set leaves the previous parameters, the dirty flag, the
     /// generation counters and every dependent cache untouched; an accepted
-    /// set is assigned once and requests exactly one scene rebuild.
+    /// set is assigned once and requests exactly one scene rebuild. Committing
+    /// a set equal to the committed one is a validated no-op: it leaves the
+    /// dirty flag, generation counters and caches untouched.
     pub fn commit_parameters(self: &mut State, next: ParameterSet) -> Result<(), String> {
         next.validate()?;
+        if next == self.parameters {
+            return Ok(());
+        }
         self.parameters = next;
         self.mark_dirty();
         Ok(())

@@ -216,3 +216,30 @@ fn valid_commit_replaces_once_and_marks_dirty() {
     assert_eq!(state.parameter_value("gain"), Some(2.5));
     assert_eq!(state.parameter_value("missing"), None);
 }
+
+#[test]
+fn equal_commit_is_a_no_op() {
+    let mut state = State::new(false);
+
+    let next = set(vec![parameter("gain", 2.5)]);
+    state
+        .commit_parameters(next.clone())
+        .expect("a valid set commits");
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "the first commit consumes a fresh scene"
+    );
+    assert!(!state.dirty, "the scene rebuild clears the dirty flag");
+
+    state
+        .commit_parameters(next)
+        .expect("an equal set is accepted");
+    assert!(
+        !state.dirty,
+        "committing an equal set does not dirty the scene"
+    );
+    assert!(
+        state.snapshot_if_dirty().is_none(),
+        "committing an equal set requests no rebuild"
+    );
+}
