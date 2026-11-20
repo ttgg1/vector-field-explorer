@@ -39,6 +39,8 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 | [Public-catalog workflow plan](plans/2026-11-15-public-catalog-workflow.md) | Superseded historical report-surface change; see Markdown-first workflow records. |
 | [Markdown-first agent workflow design](specs/2026-11-16-markdown-first-agent-workflow-design.md) | Owner-approved retirement of Python orchestration; native OpenCode Markdown roles and Python metrics only. |
 | [Markdown-first agent workflow plan](plans/2026-11-16-markdown-first-agent-workflow.md) | Native OpenCode modes, metrics-only Python, and runtime retirement tasks. |
+| [Object renderer design](specs/2026-11-20-object-renderer-design.md) | GitHub #106 accepted design for a depth-enabled instanced object pass, slice budgets and capture parity. |
+| [Object renderer plan](plans/2026-11-20-object-renderer.md) | Six bounded TDD tasks for #106 slice 1: primitives, mapping, GPU pass, integration, slice/sign markers, persistence and performance evidence. Queued after the current #80/#81 and #18 work. |
 
 CAS implementation evidence: [73 review record](../reviews/73-native-cas.md),
 [75 review record](../reviews/75-native-cas-panel.md), and verifiable Git history.
