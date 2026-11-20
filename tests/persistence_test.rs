@@ -13,6 +13,11 @@ use vector_field_explorer::color_mapping::ColorQuantity;
 use vector_field_explorer::color_ramp::{ColorRamp, RampKind, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::induction::{InductionCase, InductionScene};
+use vector_field_explorer::interaction::{
+    Bindings, CameraFeel, ChordModifiers, DEFAULT_PROFILE_NAME, InteractionAction,
+    InteractionProfile, KeyChord, MAX_USER_PROFILES as MAX_INTERACTION_PROFILES,
+    ProfileLibrary as InteractionProfileLibrary,
+};
 use vector_field_explorer::layer_style::LayerStyles;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
@@ -31,12 +36,12 @@ use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
-use vector_field_explorer::viewport_style::{MAX_LINE_WIDTH, ViewportStyle};
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction,
     MAX_ARROW_OPACITY, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT,
     MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
 };
+use vector_field_explorer::viewport_style::{MAX_LINE_WIDTH, ViewportStyle};
 
 use crate::support::storage::{MemoryStorage, ron_string};
 
@@ -94,7 +99,7 @@ fn plot_round_trip_restores_drafts_not_cache() {
     ] {
         assert!(raw.contains(key), "missing {key}: {raw}");
     }
-    for key in ["accepted:", "samples:Some", "mesh", "cache", "camera"] {
+    for key in ["accepted:", "samples:Some", "mesh", "cache", "camera:"] {
         assert!(!raw.contains(key), "unexpected {key}: {raw}");
     }
     let loaded = load(Some(&storage));
@@ -379,7 +384,7 @@ fn a_legacy_speed_envelope_loads_and_streamlines_keep_the_fixed_budget() {
         .get_string(eframe::APP_KEY)
         .expect("the envelope is saved");
     assert!(
-        !raw.contains("speed"),
+        !raw.contains(",speed:") && !raw.contains("(speed:"),
         "new records never write the obsolete key:\n{raw}"
     );
 }
@@ -431,6 +436,43 @@ fn appearance_profile(name: &str) -> AppearanceProfile {
     profile
 }
 
+fn interaction_chord(key: eframe::egui::Key) -> KeyChord {
+    KeyChord {
+        key,
+        modifiers: ChordModifiers::default(),
+    }
+}
+
+fn interaction_profile_named(name: &str) -> InteractionProfile {
+    InteractionProfile {
+        name: name.to_owned(),
+        bindings: Bindings::default_bindings(),
+        camera_feel: CameraFeel::default(),
+    }
+}
+
+/// A valid active record with one replaced chord and non-default camera feel.
+fn custom_interaction() -> InteractionProfile {
+    let mut bindings = Bindings::default_bindings();
+    bindings
+        .assign(
+            InteractionAction::ToggleControls,
+            interaction_chord(eframe::egui::Key::J),
+        )
+        .expect("J is a free chord");
+    InteractionProfile {
+        name: "Custom".to_owned(),
+        bindings,
+        camera_feel: CameraFeel {
+            orbit_sensitivity: 2.5,
+            zoom_speed: 0.5,
+            invert_yaw: true,
+            invert_pitch: false,
+            invert_zoom: true,
+        },
+    }
+}
+
 fn sample_settings() -> AppSettings {
     let (state, _controls) = configured();
     AppSettings {
@@ -470,6 +512,8 @@ fn sample_settings() -> AppSettings {
         layer_styles: LayerStyles::default(),
         preset_ui: PresetUiRecord::default(),
         appearance_profiles: Vec::new(),
+        interaction: InteractionProfile::default(),
+        interaction_profiles: Vec::new(),
     }
 }
 
@@ -2619,9 +2663,7 @@ fn color_mapping_fields_round_trip_through_storage() {
     assert_eq!(loaded.view.color_quantity, ColorQuantity::ComponentY);
 
     let mut restored = State::new(false);
-    loaded
-        .view
-        .restore(&mut restored, &mut Controls::new());
+    loaded.view.restore(&mut restored, &mut Controls::new());
     assert_eq!(restored.color_ramp, Some(ColorRamp::default()));
     assert_eq!(
         restored.color_mode,
@@ -2670,7 +2712,11 @@ fn corrupt_color_mapping_fields_fall_back_without_losing_the_record() {
     record.restore(&mut state, &mut Controls::new());
 
     assert!(state.color_ramp.is_none(), "an invalid ramp disappears");
-    assert_eq!(state.color_mode, ScaleMode::Linear, "an invalid mode resets");
+    assert_eq!(
+        state.color_mode,
+        ScaleMode::Linear,
+        "an invalid mode resets"
+    );
     assert_eq!(
         state.color_quantity,
         ColorQuantity::ComponentY,
@@ -2779,5 +2825,229 @@ fn startup_applies_preset_expansion_without_reporting_a_layout_change() {
     assert!(
         !app.presets.take_layout_changed(),
         "restoring expansion must not look like a user layout edit"
+    );
+}
+
+#[test]
+fn interaction_settings_round_trip_through_the_envelope() {
+    let active = custom_interaction();
+    let settings = AppSettings {
+        interaction: active.clone(),
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.interaction, active,
+        "replaced chords and camera feel survive the envelope"
+    );
+    assert!(loaded.interaction.validate().is_ok());
+}
+
+#[test]
+fn older_envelopes_without_interaction_fields_load_the_defaults() {
+    #[derive(serde::Serialize)]
+    struct OlderEnvelope {
+        style: AppStyle,
+        layout: LayoutState,
+        view: ViewRecord,
+        parameters: ParameterSet,
+        viewport_style: ViewportStyle,
+        layer_styles: LayerStyles,
+        appearance_profiles: Vec<AppearanceProfile>,
+        preset_ui: PresetUiRecord,
+    }
+
+    let current = AppSettings::default();
+    let older = OlderEnvelope {
+        style: current.style.clone(),
+        layout: current.layout.clone(),
+        view: current.view.clone(),
+        parameters: current.parameters.clone(),
+        viewport_style: current.viewport_style,
+        layer_styles: current.layer_styles,
+        appearance_profiles: Vec::new(),
+        preset_ui: current.preset_ui.clone(),
+    };
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &older);
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.interaction,
+        InteractionProfile::default(),
+        "an older envelope loads the documented chords and neutral feel"
+    );
+    assert!(loaded.interaction_profiles.is_empty());
+}
+
+#[test]
+fn sanitizing_repairs_an_invalid_active_interaction_record() {
+    // A partial table with a duplicate chord: most actions are absent and
+    // ToggleControls/TogglePresets share J.
+    let bindings: Bindings = serde_json::from_str(
+        r#"{
+            "toggle_controls": {"key": "J", "modifiers": {"command": false, "shift": false, "alt": false}},
+            "toggle_presets": {"key": "J", "modifiers": {"command": false, "shift": false, "alt": false}}
+        }"#,
+    )
+    .expect("the partial table is parseable");
+    let interaction = InteractionProfile {
+        name: "Active".to_owned(),
+        bindings,
+        camera_feel: CameraFeel {
+            orbit_sensitivity: 99.0,
+            zoom_speed: f32::NAN,
+            ..CameraFeel::default()
+        },
+    };
+    assert!(
+        interaction.validate().is_err(),
+        "the fixture must start invalid"
+    );
+
+    let repaired = AppSettings {
+        interaction,
+        ..AppSettings::default()
+    }
+    .sanitized()
+    .interaction;
+
+    assert_eq!(
+        repaired.camera_feel.orbit_sensitivity, 4.0,
+        "an out-of-range multiplier clamps"
+    );
+    assert_eq!(
+        repaired.camera_feel.zoom_speed, 1.0,
+        "a non-finite multiplier resets"
+    );
+    assert_eq!(
+        repaired.bindings.chord(InteractionAction::ToggleControls),
+        Some(interaction_chord(eframe::egui::Key::J)),
+        "the first owner keeps the custom chord"
+    );
+    assert_eq!(
+        repaired.bindings.chord(InteractionAction::TogglePresets),
+        Some(KeyChord {
+            key: eframe::egui::Key::P,
+            modifiers: ChordModifiers {
+                command: true,
+                shift: false,
+                alt: false,
+            },
+        }),
+        "a duplicate chord returns to the documented default"
+    );
+    assert!(
+        InteractionAction::REMAPPABLE
+            .iter()
+            .all(|action| repaired.bindings.chord(*action).is_some()),
+        "every absent binding is restored"
+    );
+    assert!(
+        repaired.validate().is_ok(),
+        "the repaired active record validates"
+    );
+}
+
+#[test]
+fn sanitizing_drops_builtin_duplicate_and_excess_user_interaction_profiles() {
+    let builtin_named = InteractionProfile {
+        name: DEFAULT_PROFILE_NAME.to_owned(),
+        ..InteractionProfile::default()
+    };
+    let first = interaction_profile_named("  Alpha  ");
+    let duplicate = interaction_profile_named("Alpha");
+    let mut profiles = vec![builtin_named, first, duplicate];
+    for index in 0..MAX_INTERACTION_PROFILES + 2 {
+        profiles.push(interaction_profile_named(&format!("Look {index}")));
+    }
+
+    let loaded = AppSettings {
+        interaction_profiles: profiles,
+        ..AppSettings::default()
+    }
+    .sanitized();
+
+    assert_eq!(
+        loaded.interaction_profiles.len(),
+        MAX_INTERACTION_PROFILES,
+        "the library is truncated after the built-in and duplicate are dropped"
+    );
+    assert_eq!(
+        loaded.interaction_profiles.first().map(|p| p.name.as_str()),
+        Some("Alpha"),
+        "the first sanitized record is kept"
+    );
+    assert!(
+        loaded
+            .interaction_profiles
+            .iter()
+            .all(|profile| profile.name != DEFAULT_PROFILE_NAME),
+        "the built-in Default is never stored"
+    );
+    let names: std::collections::HashSet<&str> = loaded
+        .interaction_profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect();
+    assert_eq!(
+        names.len(),
+        MAX_INTERACTION_PROFILES,
+        "every surviving name is unique"
+    );
+}
+
+#[test]
+fn new_with_storage_restores_interaction_settings_without_dirtying_or_applying() {
+    let active = custom_interaction();
+    let stored = interaction_profile_named("Saved interaction");
+    let settings = AppSettings {
+        interaction: active.clone(),
+        interaction_profiles: vec![stored.clone()],
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    let baseline = VfApp::new_with_storage(None);
+    assert_eq!(app.interaction, active, "the active record is restored");
+    assert_eq!(
+        app.interaction_profiles.user(),
+        [stored],
+        "the user library is restored"
+    );
+    assert_eq!(
+        app.state.viewport_style, baseline.state.viewport_style,
+        "a stored interaction profile is never applied at startup"
+    );
+    assert_eq!(app.state.layer_styles, baseline.state.layer_styles);
+    assert_eq!(app.state.colormap, baseline.state.colormap);
+    assert_eq!(app.state.color_ramp, baseline.state.color_ramp);
+    assert_eq!(app.state.color_mode, baseline.state.color_mode);
+    assert_eq!(app.state.color_quantity, baseline.state.color_quantity);
+    assert_eq!(
+        app.state.dirty, baseline.state.dirty,
+        "restoring interaction settings adds no scene rebuild"
+    );
+}
+
+#[test]
+fn user_interaction_profiles_round_trip_through_an_app_save() {
+    let stored = interaction_profile_named("Saved interaction");
+    let mut app = VfApp::new();
+    app.interaction_profiles =
+        InteractionProfileLibrary::new(vec![stored.clone()]).expect("the profile is valid");
+    let mut storage = MemoryStorage::default();
+    eframe::App::save(&mut app, &mut storage);
+
+    let loaded = load(Some(&storage)).sanitized();
+    assert_eq!(
+        loaded.interaction_profiles,
+        vec![stored],
+        "the save path writes the live interaction library"
     );
 }

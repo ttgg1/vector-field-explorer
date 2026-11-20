@@ -58,6 +58,8 @@ impl eframe::App for VfApp {
             viewport_style: self.state.viewport_style,
             layer_styles: self.state.layer_styles,
             appearance_profiles: self.profiles.user().to_vec(),
+            interaction: self.interaction.clone(),
+            interaction_profiles: self.interaction_profiles.user().to_vec(),
             preset_ui: PresetUiRecord {
                 expanded: self.presets.expanded_state(),
             },

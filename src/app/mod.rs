@@ -15,6 +15,7 @@ use crate::fly_camera::{
     crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
     sync_fly, sync_fly_mirror,
 };
+use crate::interaction::{self, InteractionProfile};
 use crate::layer_style::LayerId;
 use crate::persistence::{self, AppSettings, PresetUiRecord, ViewRecord};
 use crate::plane::PlaneFrame;
@@ -192,6 +193,15 @@ pub struct VfApp {
     /// profile, and written back in [`eframe::App::save`]. The Appearance panel
     /// edits it in slice A2b.
     pub profiles: ProfileLibrary,
+    /// The active interaction bindings and camera feel (issue #88 slice A2a).
+    /// Restored from eframe storage without applying a profile, and written
+    /// back in [`eframe::App::save`]. Input routing reads it in slice A3.
+    pub interaction: InteractionProfile,
+    /// The persisted user interaction profile library (issue #88 slice A2a);
+    /// the built-in `Default` is not stored. Restored without applying a
+    /// profile and written back in [`eframe::App::save`]. The Interaction panel
+    /// edits it in slice A2b.
+    pub interaction_profiles: interaction::ProfileLibrary,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
     /// It lives app-side and never touches the viewmodel `State`.
@@ -416,6 +426,17 @@ impl VfApp {
             log::warn!("persisted appearance profiles could not be loaded: {error}");
             ProfileLibrary::default()
         });
+        // The active interaction record and user library (issue #88 slice A2a).
+        // `load` has already repaired the active record and sanitized, dropped,
+        // de-duplicated and capped the stored profiles, so construction only
+        // fails on an internal bug; start empty rather than panic. Neither
+        // restore applies a profile nor dirties the scene.
+        let interaction = settings.interaction;
+        let interaction_profiles = interaction::ProfileLibrary::new(settings.interaction_profiles)
+            .unwrap_or_else(|error| {
+                log::warn!("persisted interaction profiles could not be loaded: {error}");
+                interaction::ProfileLibrary::default()
+            });
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -442,6 +463,8 @@ impl VfApp {
             presets,
             appearance: AppearancePanelState::default(),
             profiles,
+            interaction,
+            interaction_profiles,
             style: settings.style,
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,

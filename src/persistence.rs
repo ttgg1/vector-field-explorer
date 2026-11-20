@@ -20,6 +20,7 @@ use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::colormap::Colormap;
 use crate::induction::{InductionCase, InductionScene};
+use crate::interaction::{self, DEFAULT_PROFILE_NAME, InteractionProfile};
 use crate::layer_style::LayerStyles;
 use crate::material::{
     MaterialCase, MaterialError, MaterialScene, MaterialView, validate_material,
@@ -42,8 +43,8 @@ use crate::source_scene::{
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
-use crate::viewport_style::ViewportStyle;
 use crate::viewmodel::{ArrowLengthMode, LeftClickAction, State, StreamlineSeedMode};
+use crate::viewport_style::ViewportStyle;
 use glam::{DVec3, Vec3};
 
 /// Everything the app remembers across restarts. `style` is a required field
@@ -79,6 +80,19 @@ pub struct AppSettings {
     /// Restoring them never applies a profile.
     #[serde(default)]
     pub appearance_profiles: Vec<AppearanceProfile>,
+    /// The active interaction bindings and camera feel (issue #88 slice A2a).
+    /// Missing on older envelopes, which load the documented default chords
+    /// and neutral feel; an invalid stored record is repaired by
+    /// [`AppSettings::sanitized`].
+    #[serde(default)]
+    pub interaction: InteractionProfile,
+    /// User interaction profiles (issue #88 slice A2a). Missing on older
+    /// envelopes, which start with an empty library; corrupt records, the
+    /// built-in name, duplicate names and excess entries are repaired by
+    /// [`AppSettings::sanitized`]. The built-in `Default` is never stored, and
+    /// restoring the library never applies a profile.
+    #[serde(default)]
+    pub interaction_profiles: Vec<InteractionProfile>,
     /// Persisted Presets-panel expansion (issue #90 slice B). Missing on older
     /// envelopes, which open every group; a corrupt record falls back to the
     /// all-expanded default without failing the envelope.
@@ -150,6 +164,61 @@ impl AppSettings {
             profiles.push(profile);
         }
         self.appearance_profiles = profiles;
+        // The active interaction record is repaired; if it still cannot
+        // validate (unreachable for `sanitized`'s total output, but kept
+        // total), fall back to the documented default instead of failing
+        // startup or carrying an invalid table.
+        if let Err(error) = self.interaction.validate() {
+            log::warn!("persisted interaction settings are invalid ({error}); repairing them");
+            self.interaction = self.interaction.sanitized();
+            if let Err(error) = self.interaction.validate() {
+                log::warn!(
+                    "persisted interaction settings are still invalid ({error}); \
+                     resetting them to defaults"
+                );
+                self.interaction = InteractionProfile::default();
+            }
+        }
+        // User interaction profiles are records too: repair each entry, drop
+        // an entry named like the built-in, keep the first occurrence of every
+        // sanitized name and the first `MAX_USER_PROFILES` entries. A damaged
+        // profile must never fail the envelope or apply itself.
+        let mut interaction_names = std::collections::HashSet::with_capacity(
+            self.interaction_profiles
+                .len()
+                .min(interaction::MAX_USER_PROFILES),
+        );
+        let mut interaction_profiles = Vec::with_capacity(
+            self.interaction_profiles
+                .len()
+                .min(interaction::MAX_USER_PROFILES),
+        );
+        for profile in self.interaction_profiles.drain(..) {
+            let profile = profile.sanitized();
+            if profile.name == DEFAULT_PROFILE_NAME {
+                log::warn!(
+                    "persisted interaction profile {:?} is the built-in name; dropping it",
+                    profile.name
+                );
+                continue;
+            }
+            if !interaction_names.insert(profile.name.clone()) {
+                log::warn!(
+                    "persisted interaction profile {:?} duplicates an earlier name; dropping it",
+                    profile.name
+                );
+                continue;
+            }
+            if interaction_profiles.len() == interaction::MAX_USER_PROFILES {
+                log::warn!(
+                    "more than {} persisted interaction profiles; dropping the rest",
+                    interaction::MAX_USER_PROFILES
+                );
+                break;
+            }
+            interaction_profiles.push(profile);
+        }
+        self.interaction_profiles = interaction_profiles;
         // `preset_ui` is four bools, so every persisted value is valid; the
         // lenient decoder has already replaced a corrupt record.
         if let Err(error) = self.parameters.validate() {
