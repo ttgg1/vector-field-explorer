@@ -9,12 +9,13 @@
 
 use glam::{Mat4, Vec3};
 use vector_field_explorer::camera::OrbitCamera;
+use vector_field_explorer::color_mapping::ColorStats;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::particles::{
-    DOT_QUAD_CORNERS, ParticleAppearance, Particles, dot_billboard_corners, dot_instances,
-    spawn, speed_range,
+    DOT_QUAD_CORNERS, ParticleAppearance, ParticlePalette, Particles, dot_billboard_corners,
+    dot_instances, spawn, speed_range,
 };
 use vector_field_explorer::renderer::{DOT_VERTS_PER_INSTANCE, Globals, camera_basis_from_view_proj};
 
@@ -277,14 +278,20 @@ fn dot_radius_feeds_the_billboard_quad() {
     let mut cloud = Particles::default();
     spawn(&mut cloud, &domain, 16, 3);
     let radius = 0.05;
+    let stats = ColorStats::default();
+    let palette = ParticlePalette {
+        colormap: Colormap::Turbo,
+        color_range: (0.0, 1.0),
+        speed_range: speed_range(&cloud),
+        mapping: None,
+        stats: &stats,
+    };
     let dots = dot_instances(
         &cloud,
         &field,
         &domain,
-        Colormap::Turbo,
-        (0.0, 1.0),
+        &palette,
         &ParticleAppearance::default(),
-        speed_range(&cloud),
         radius,
     );
     assert_eq!(dots.len(), 16, "one dot instance per particle");

@@ -1,5 +1,6 @@
 use glam::{Mat4, Vec3};
 use vector_field_explorer::app::compose_lines_with_frame;
+use vector_field_explorer::color_mapping::{ColorSample, ColorStats};
 use vector_field_explorer::{
     camera::OrbitCamera,
     cli::{
@@ -10,7 +11,7 @@ use vector_field_explorer::{
     renderer::SceneGPU,
 };
 use vector_field_explorer::{
-    particles::{self, AdvectSettings, Particles},
+    particles::{self, AdvectSettings, ParticlePalette, Particles},
     renderer,
     viewmodel::State,
 };
@@ -185,26 +186,39 @@ fn final_particle_colors_and_appearance_use_endpoint_and_shared_range() {
         state.set_formula(o.formula.clone());
         state.set_density(4);
         state.time = 2.25;
-        let range = state.color_range(&state.sample());
+        let sampled = state.sample();
+        let stats = ColorStats::from_samples(
+            &sampled
+                .iter()
+                .map(|arrow| ColorSample {
+                    magnitude: arrow.mag,
+                    dir: arrow.dir,
+                })
+                .collect::<Vec<_>>(),
+        );
+        let range = state.color_range(&sampled);
         let speeds = particles::speed_range(&cloud);
+        let palette = ParticlePalette {
+            colormap: o.colormap,
+            color_range: range,
+            speed_range: speeds,
+            mapping: None,
+            stats: &stats,
+        };
         let dots = particles::dot_instances_at(
             &cloud,
             &state.field,
             &o.domain,
-            o.colormap,
-            range,
+            &palette,
             &o.particle_appearance,
-            speeds,
             state.particle_radius(state.spacing()) * 2.0,
             state.time,
         );
         let trails = particles::trail_instances_at(
             &cloud,
             &state.field,
-            o.colormap,
-            range,
+            &palette,
             &o.particle_appearance,
-            speeds,
             state.spacing(),
             state.time,
         );
@@ -423,14 +437,29 @@ fn trails_keep_chronology_at_equal_depth_and_sort_far_to_near() {
     let mut state = State::new(true);
     state.set_formula(o.formula.clone());
     state.set_density(4);
+    let sampled = state.sample();
+    let stats = ColorStats::from_samples(
+        &sampled
+            .iter()
+            .map(|arrow| ColorSample {
+                magnitude: arrow.mag,
+                dir: arrow.dir,
+            })
+            .collect::<Vec<_>>(),
+    );
+    let palette = ParticlePalette {
+        colormap: o.colormap,
+        color_range: state.color_range(&sampled),
+        speed_range: particles::speed_range(&cloud),
+        mapping: None,
+        stats: &stats,
+    };
     let field = &state.field;
     let expected = particles::trail_instances_at(
         &cloud,
         field,
-        o.colormap,
-        state.color_range(&state.sample()),
+        &palette,
         &o.particle_appearance,
-        particles::speed_range(&cloud),
         state.spacing(),
         o.duration_seconds as f32,
     );

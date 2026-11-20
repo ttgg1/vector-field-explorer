@@ -94,7 +94,7 @@ impl AnimationSnapshot {
             .state
             .snapshot_if_dirty()
             .ok_or_else(|| AnimationError::InvalidSpec("animation scene did not rebuild".into()))?;
-        let dots_range = crate::app::scene_dots_range(&self.state);
+        let color_facts = crate::app::scene_color_facts(&self.state);
 
         if self.state.particles && self.state.particle_target().is_some() {
             let appearance = self.state.particle_appearance.sanitized();
@@ -119,7 +119,7 @@ impl AnimationSnapshot {
             // never carries per-frame dots or trails, so the detached instances
             // must be built whether or not this frame advanced the particles.
             let (dots, trails) =
-                crate::app::particle_scene_instances(&self.state, &self.particles, dots_range);
+                crate::app::particle_scene_instances(&self.state, &self.particles, &color_facts);
             base.dots = dots;
             base.trails = trails;
         }
