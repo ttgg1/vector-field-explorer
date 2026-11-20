@@ -12,6 +12,7 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::edit_history::EditScope;
 use vector_field_explorer::fly_camera::FlyCamera;
+use vector_field_explorer::interaction::{Bindings, InteractionAction};
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::menu::{
@@ -37,7 +38,7 @@ fn fired_shortcuts(modifiers: egui::Modifiers, key: egui::Key) -> Vec<MenuAction
     let mut fired = None;
     let mut output = ctx.run_pass(input, |ctx| {
         if fired.is_none() {
-            fired = Some(menu::shortcut_actions(ctx));
+            fired = Some(menu::shortcut_actions(ctx, &Bindings::default_bindings()));
         }
     });
     // The pass is only here to feed input to the shortcut loop; no painting
@@ -408,7 +409,10 @@ fn every_enum_variant_is_reachable_from_a_menu_item_or_shortcut() {
         .collect();
     for action in MenuAction::ALL {
         let has_menu_home = menu_actions.contains(action);
-        let has_shortcut = SHORTCUTS.iter().any(|shortcut| shortcut.action == *action);
+        let has_shortcut = SHORTCUTS.iter().any(|shortcut| shortcut.action == *action)
+            || menu::interaction_action_for(*action).is_some_and(|interaction| {
+                Bindings::default_bindings().chord(interaction).is_some()
+            });
         assert!(
             has_menu_home || has_shortcut,
             "{action:?} is dead: no menu item and no shortcut",
@@ -462,27 +466,42 @@ fn every_menu_item_is_backed_by_a_variant() {
 
 #[test]
 fn shortcuts_are_shown_from_the_one_table() {
+    let bindings = Bindings::default_bindings();
     assert_eq!(
-        menu::shortcut_label(MenuAction::ToggleControls),
-        Some("Ctrl+B")
+        menu::shortcut_label(MenuAction::ToggleControls, &bindings),
+        Some("Ctrl+B".to_owned())
     );
     assert_eq!(
-        menu::shortcut_label(MenuAction::TogglePresets),
-        Some("Ctrl+P")
+        menu::shortcut_label(MenuAction::TogglePresets, &bindings),
+        Some("Ctrl+P".to_owned())
     );
     assert_eq!(
-        menu::shortcut_label(MenuAction::ExportScreenshot),
-        Some("Ctrl+Shift+S")
+        menu::shortcut_label(MenuAction::ExportScreenshot, &bindings),
+        Some("Ctrl+Shift+S".to_owned())
     );
-    assert_eq!(menu::shortcut_label(MenuAction::Quit), Some("Ctrl+Q"));
     assert_eq!(
-        menu::shortcut_label(MenuAction::CopyFormula),
-        Some("Ctrl+Shift+C")
+        menu::shortcut_label(MenuAction::Quit, &bindings),
+        Some("Ctrl+Q".to_owned())
     );
-    assert_eq!(menu::shortcut_label(MenuAction::ToggleHelp), Some("F1"));
-    assert_eq!(menu::shortcut_label(MenuAction::ToggleFly), Some("C"));
     assert_eq!(
-        menu::shortcut_label(MenuAction::ResetCamera),
+        menu::shortcut_label(MenuAction::CopyFormula, &bindings),
+        Some("Ctrl+Shift+C".to_owned())
+    );
+    assert_eq!(
+        menu::shortcut_label(MenuAction::ToggleHelp, &bindings),
+        Some("F1".to_owned())
+    );
+    assert_eq!(
+        menu::shortcut_label(MenuAction::ToggleInteractionPanel, &bindings),
+        Some("Ctrl+Shift+L".to_owned()),
+        "the Interaction panel chord is a real binding now"
+    );
+    assert_eq!(
+        menu::shortcut_label(MenuAction::ToggleFly, &bindings),
+        Some("C".to_owned())
+    );
+    assert_eq!(
+        menu::shortcut_label(MenuAction::ResetCamera, &bindings),
         None,
         "items without a shortcut show no key hint",
     );
@@ -490,23 +509,23 @@ fn shortcuts_are_shown_from_the_one_table() {
 
 #[test]
 fn shortcuts_stay_out_of_text_fields_except_quit() {
-    let controls = menu::shortcut_for(MenuAction::ToggleControls).expect("Ctrl+B exists");
+    let bindings = Bindings::default_bindings();
     assert!(
-        menu::shortcut_allowed(controls, false),
-        "Ctrl+B works outside a text field"
+        bindings.chord(InteractionAction::ToggleControls).is_some(),
+        "Ctrl+B is bound outside a text field"
     );
     assert!(
-        !menu::shortcut_allowed(controls, true),
+        !InteractionAction::ToggleControls.is_global(),
         "typing B must not toggle panels"
     );
-
-    let quit = menu::shortcut_for(MenuAction::Quit).expect("Ctrl+Q exists");
-    assert!(menu::shortcut_allowed(quit, false));
     assert!(
-        menu::shortcut_allowed(quit, true),
+        InteractionAction::Quit.is_global(),
         "Ctrl+Q quits even while typing"
     );
-    assert!(quit.global, "quit is the one global shortcut");
+    assert!(
+        bindings.chord(InteractionAction::Quit).is_some(),
+        "quit keeps its chord"
+    );
 }
 
 #[test]
@@ -594,7 +613,10 @@ fn c_types_in_a_focused_text_field_instead_of_toggling_fly() {
     let mut fired = None;
     let mut output = ctx.run_ui(input, |ui| {
         if fired.is_none() {
-            fired = Some(menu::shortcut_actions(ui.ctx()));
+            fired = Some(menu::shortcut_actions(
+                ui.ctx(),
+                &Bindings::default_bindings(),
+            ));
         }
         ui.text_edit_singleline(&mut text);
     });
@@ -655,9 +677,9 @@ fn the_help_menu_entry_opens_the_full_help_window() {
         .expect("Help keeps the Keyboard & mouse entry");
     assert_eq!(item.action, MenuAction::ShowHelpTable);
     assert_eq!(
-        menu::item_shortcut_label(item),
-        Some("F1"),
-        "the surviving item shows the F1 hint sourced from SHORTCUTS",
+        menu::item_shortcut_label(item, &Bindings::default_bindings()),
+        Some("F1".to_owned()),
+        "the surviving item shows the F1 hint sourced from the bindings",
     );
     assert_eq!(
         effect_of(item.action),

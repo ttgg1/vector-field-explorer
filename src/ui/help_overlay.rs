@@ -9,6 +9,9 @@
 
 use eframe::egui;
 
+use crate::interaction::Bindings;
+use crate::ui::menu::{self, MenuAction};
+
 /// Font size of the help window/overlay title, in points (ticket 28).
 pub const HELP_WINDOW_TITLE_SIZE: f32 = 16.0;
 /// Font size of a help section heading, in points (ticket 28).
@@ -226,36 +229,69 @@ const ROWS_2D: &[HelpRow] = &[
     },
 ];
 
-const ROWS_GLOBAL: &[HelpRow] = &[
-    HelpRow {
-        input: "Space",
-        action: "Play/pause simulation; particles follow the clock",
-    },
-    HelpRow {
-        input: "F1 / ?",
-        action: "Toggle help",
-    },
-    HelpRow {
-        input: "Ctrl+B / Ctrl+P",
-        action: "Toggle panels (not while typing)",
-    },
-    HelpRow {
-        input: "Ctrl+Shift+S",
-        action: "Export screenshot",
-    },
-    HelpRow {
-        input: "Ctrl+Shift+C",
-        action: "Copy formula",
-    },
-    HelpRow {
-        input: "Ctrl+Q",
-        action: "Quit",
-    },
-    HelpRow {
-        input: "Esc",
-        action: "Close dialogs / dismiss help",
-    },
-];
+/// A rendered help row whose input is read from the live bindings at draw
+/// time. The Global group is generated rather than stored statically, so a
+/// remap is visible in both help surfaces.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveRow {
+    pub input: String,
+    pub action: &'static str,
+}
+
+/// The Global group's live rows. Doc-hidden so the help tests can pin the
+/// default chords without duplicating the label formatting.
+#[doc(hidden)]
+pub fn live_global_rows(bindings: &Bindings) -> Vec<LiveRow> {
+    let label = |action: MenuAction| {
+        menu::shortcut_label(action, bindings).unwrap_or_else(|| "Unbound".to_owned())
+    };
+    let play = bindings
+        .chord(crate::interaction::InteractionAction::PlayPause)
+        .map(menu::chord_shortcut_label)
+        .unwrap_or_else(|| "Unbound".to_owned());
+    let help = label(MenuAction::ToggleHelp);
+    let controls = label(MenuAction::ToggleControls);
+    let presets = label(MenuAction::TogglePresets);
+    let screenshot = label(MenuAction::ExportScreenshot);
+    let copy = label(MenuAction::CopyFormula);
+    let quit = label(MenuAction::Quit);
+    let interaction = label(MenuAction::ToggleInteractionPanel);
+    vec![
+        LiveRow {
+            input: play,
+            action: "Play/pause simulation; particles follow the clock",
+        },
+        LiveRow {
+            input: format!("{help} / ?"),
+            action: "Toggle help",
+        },
+        LiveRow {
+            input: format!("{controls} / {presets}"),
+            action: "Toggle panels (not while typing)",
+        },
+        LiveRow {
+            input: interaction,
+            action: "Toggle the Interaction panel (not while typing)",
+        },
+        LiveRow {
+            input: screenshot,
+            action: "Export screenshot",
+        },
+        LiveRow {
+            input: copy,
+            action: "Copy formula",
+        },
+        LiveRow {
+            input: quit,
+            action: "Quit",
+        },
+        LiveRow {
+            input: "Esc".to_owned(),
+            action: "Close dialogs / dismiss help",
+        },
+    ]
+}
 
 /// Scalar-plot-specific notes. Kept as a separate section so the vector
 /// binding table (and its pinned three groups) stays exactly as reviewed; the
@@ -422,9 +458,10 @@ pub static MAXWELL_HELP_SECTION: HelpSection = HelpSection {
     rows: crate::ui::maxwell_panel::MAXWELL_HELP_ROWS,
 };
 
-/// The three groups, in window order. Both help surfaces read this table, so a
-/// binding is spelled exactly once. A `static` (not a `const`) so the overlay
-/// and the window can be proven to hand back the very same allocation.
+/// The three groups, in window order. The two view groups are static; Global
+/// is generated from the live bindings by [`live_global_rows`], so only its
+/// heading lives here. A `static` (not a `const`) so the overlay and the window
+/// can be proven to hand back the very same allocation.
 pub static HELP_SECTIONS: &[HelpSection] = &[
     HelpSection {
         title: "3D view",
@@ -436,11 +473,11 @@ pub static HELP_SECTIONS: &[HelpSection] = &[
     },
     HelpSection {
         title: "Global",
-        rows: ROWS_GLOBAL,
+        rows: &[],
     },
 ];
 
-/// Every documented row, across all groups (the Help window's contents).
+/// Every static (3D/2D) row; Global is generated, not stored.
 pub fn all_rows() -> Vec<HelpRow> {
     HELP_SECTIONS
         .iter()
@@ -459,7 +496,8 @@ pub fn sections_for(mode_3d: bool) -> [&'static HelpSection; 2] {
     [active, &HELP_SECTIONS[2]]
 }
 
-/// The overlay's flattened rows for the current mode.
+/// The overlay's flattened static rows for the current mode. Global rows are
+/// generated separately and must be read through [`live_global_rows`].
 pub fn rows_for(mode_3d: bool) -> Vec<HelpRow> {
     sections_for(mode_3d)
         .iter()
@@ -489,7 +527,12 @@ fn title_text(text: &str, heading_color: egui::Color32) -> egui::RichText {
         .color(heading_color)
 }
 
-fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection], heading_color: egui::Color32) {
+fn table(
+    ui: &mut egui::Ui,
+    sections: &[&'static HelpSection],
+    global_rows: &[LiveRow],
+    heading_color: egui::Color32,
+) {
     let heading_style = section_heading_style();
     for (index, section) in sections.iter().enumerate() {
         if index > 0 {
@@ -505,23 +548,39 @@ fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection], heading_color: eg
             .num_columns(2)
             .spacing([12.0, 1.0])
             .show(ui, |ui| {
-                for row in section.rows {
-                    ui.label(
-                        egui::RichText::new(row.input)
-                            .size(HELP_ROW_SIZE)
-                            .color(egui::Color32::from_gray(185)),
-                    );
-                    let action = ui.label(
-                        egui::RichText::new(row.action)
-                            .size(HELP_ROW_SIZE)
-                            .color(egui::Color32::from_gray(155)),
-                    );
-                    if row.input == SEED_HELP_INPUT {
-                        action.on_hover_text(SEED_HELP_TOOLTIP);
-                    } else if row.input == LEFT_CLICK_HELP_INPUT {
-                        action.on_hover_text(LEFT_CLICK_HELP_TOOLTIP);
+                if section.title == "Global" {
+                    for row in global_rows {
+                        ui.label(
+                            egui::RichText::new(&row.input)
+                                .size(HELP_ROW_SIZE)
+                                .color(egui::Color32::from_gray(185)),
+                        );
+                        ui.label(
+                            egui::RichText::new(row.action)
+                                .size(HELP_ROW_SIZE)
+                                .color(egui::Color32::from_gray(155)),
+                        );
+                        ui.end_row();
                     }
-                    ui.end_row();
+                } else {
+                    for row in section.rows {
+                        ui.label(
+                            egui::RichText::new(row.input)
+                                .size(HELP_ROW_SIZE)
+                                .color(egui::Color32::from_gray(185)),
+                        );
+                        let action = ui.label(
+                            egui::RichText::new(row.action)
+                                .size(HELP_ROW_SIZE)
+                                .color(egui::Color32::from_gray(155)),
+                        );
+                        if row.input == SEED_HELP_INPUT {
+                            action.on_hover_text(SEED_HELP_TOOLTIP);
+                        } else if row.input == LEFT_CLICK_HELP_INPUT {
+                            action.on_hover_text(LEFT_CLICK_HELP_TOOLTIP);
+                        }
+                        ui.end_row();
+                    }
                 }
             });
     }
@@ -543,7 +602,18 @@ fn table(ui: &mut egui::Ui, sections: &[&'static HelpSection], heading_color: eg
 /// global ones; the Help window carries the full table. Returns true when the
 /// user dismissed it, so the caller can persist the new visibility.
 pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
+    show_with_bindings(ctx, anchor, mode_3d, &Bindings::default_bindings())
+}
+
+/// [`show`] with the live bindings driving the Global rows.
+pub fn show_with_bindings(
+    ctx: &egui::Context,
+    anchor: egui::Pos2,
+    mode_3d: bool,
+    bindings: &Bindings,
+) -> bool {
     let mut dismissed = false;
+    let global_rows = live_global_rows(bindings);
     egui::Area::new(egui::Id::unique("help_overlay"))
         .fixed_pos(anchor)
         .pivot(egui::Align2::LEFT_BOTTOM)
@@ -571,7 +641,7 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
                         });
                     });
                     let sections = sections_for(mode_3d);
-                    table(ui, &sections, OVERLAY_HEADING_COLOR);
+                    table(ui, &sections, &global_rows, OVERLAY_HEADING_COLOR);
                 });
         });
     dismissed
@@ -580,7 +650,13 @@ pub fn show(ctx: &egui::Context, anchor: egui::Pos2, mode_3d: bool) -> bool {
 /// The Help menu's window: the same table, all three groups. `open` is the
 /// window's visibility flag (the menu action sets it, the × clears it).
 pub fn help_window(ctx: &egui::Context, open: &mut bool) {
+    help_window_with_bindings(ctx, open, &Bindings::default_bindings());
+}
+
+/// [`help_window`] with the live bindings driving the Global rows.
+pub fn help_window_with_bindings(ctx: &egui::Context, open: &mut bool, bindings: &Bindings) {
     let heading_color = window_heading_color(&ctx.style_of(ctx.theme()).visuals);
+    let global_rows = live_global_rows(bindings);
     egui::Window::new(title_text("Keyboard & mouse", heading_color))
         .open(open)
         .collapsible(false)
@@ -593,6 +669,6 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
             all.push(&MATERIALS_HELP_SECTION);
             all.push(&MAXWELL_HELP_SECTION);
             all.push(&crate::ui::ode_panel::ODE_HELP_SECTION);
-            table(ui, &all, heading_color);
+            table(ui, &all, &global_rows, heading_color);
         });
 }

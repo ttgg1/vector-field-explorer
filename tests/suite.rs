@@ -68,6 +68,7 @@ mod induction_export_test;
 mod induction_panel_test;
 mod induction_test;
 mod interaction_panel_test;
+mod interaction_routing_test;
 mod interaction_test;
 mod layer_style_test;
 mod layout_test;

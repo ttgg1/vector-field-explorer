@@ -302,9 +302,11 @@ pub fn github_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
 
 /// Add one menu item and close the current dropdown when it is picked. Shared
 /// by the wide menu bar and the compact hamburger so the two cannot drift.
+#[allow(clippy::too_many_arguments)]
 fn add_menu_item(
     ui: &mut egui::Ui,
     item: &menu::MenuItem,
+    bindings: &crate::interaction::Bindings,
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
@@ -315,7 +317,7 @@ fn add_menu_item(
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
     // the sidebar Camera section.
     let mut button = egui::Button::new(item.label);
-    if let Some(label) = menu::item_shortcut_label(item) {
+    if let Some(label) = menu::item_shortcut_label(item, bindings) {
         button = button.shortcut_text(label);
     }
     let reason = match item.action {
@@ -339,8 +341,12 @@ fn add_menu_item(
 }
 
 /// The screenshot button shared by both bars. Returns whether it was clicked.
-fn screenshot_button(ui: &mut egui::Ui, screenshot: &Screenshot) -> bool {
-    let tooltip = match menu::shortcut_label(MenuAction::ExportScreenshot) {
+fn screenshot_button(
+    ui: &mut egui::Ui,
+    screenshot: &Screenshot,
+    bindings: &crate::interaction::Bindings,
+) -> bool {
+    let tooltip = match menu::shortcut_label(MenuAction::ExportScreenshot, bindings) {
         Some(label) => format!("Save the viewport exactly as it looks now ({label})"),
         None => "Save the viewport exactly as it looks now".to_string(),
     };
@@ -440,7 +446,26 @@ pub fn show(
     appearance_open: &mut bool,
     mode_3d: bool,
 ) -> (Option<MenuAction>, bool) {
-    show_with_plot_kind(
+    show_with_bindings(
+        ui,
+        style,
+        screenshot,
+        appearance_open,
+        mode_3d,
+        &crate::interaction::Bindings::default_bindings(),
+    )
+}
+
+/// [`show`] with the active interaction bindings driving the shortcut labels.
+pub fn show_with_bindings(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    appearance_open: &mut bool,
+    mode_3d: bool,
+    bindings: &crate::interaction::Bindings,
+) -> (Option<MenuAction>, bool) {
+    show_with_plot_kind_bindings(
         ui,
         style,
         screenshot,
@@ -448,6 +473,7 @@ pub fn show(
         mode_3d,
         PlotKind::VectorField,
         None,
+        bindings,
     )
 }
 
@@ -475,6 +501,32 @@ pub fn show_with_plot_kind(
     )
 }
 
+/// [`show_with_plot_kind`] with the active interaction bindings.
+#[allow(clippy::too_many_arguments)]
+pub fn show_with_plot_kind_bindings(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    appearance_open: &mut bool,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+    bindings: &crate::interaction::Bindings,
+) -> (Option<MenuAction>, bool) {
+    show_with_plot_kind_history_bindings(
+        ui,
+        style,
+        screenshot,
+        appearance_open,
+        mode_3d,
+        kind,
+        animation_reason,
+        true,
+        true,
+        bindings,
+    )
+}
+
 /// Wide menu bar with explicit edit-history availability. Undo/Redo stay in
 /// the table but are disabled (with the reason as their tooltip) while their
 /// stack is empty; the pure menu table never silently ignores a click.
@@ -490,6 +542,34 @@ pub fn show_with_plot_kind_history(
     can_undo: bool,
     can_redo: bool,
 ) -> (Option<MenuAction>, bool) {
+    show_with_plot_kind_history_bindings(
+        ui,
+        style,
+        screenshot,
+        appearance_open,
+        mode_3d,
+        kind,
+        animation_reason,
+        can_undo,
+        can_redo,
+        &crate::interaction::Bindings::default_bindings(),
+    )
+}
+
+/// [`show_with_plot_kind_history`] with the active interaction bindings.
+#[allow(clippy::too_many_arguments)]
+pub fn show_with_plot_kind_history_bindings(
+    ui: &mut egui::Ui,
+    style: &mut AppStyle,
+    screenshot: &Screenshot,
+    appearance_open: &mut bool,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+    can_undo: bool,
+    can_redo: bool,
+    bindings: &crate::interaction::Bindings,
+) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let mut style_changed = false;
     let mut appearance_button = None;
@@ -502,6 +582,7 @@ pub fn show_with_plot_kind_history(
                     if add_menu_item(
                         ui,
                         item,
+                        bindings,
                         mode_3d,
                         kind,
                         animation_reason,
@@ -530,7 +611,7 @@ pub fn show_with_plot_kind_history(
         ui.with_layout(
             egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
             |ui| {
-                if screenshot_button(ui, screenshot) {
+                if screenshot_button(ui, screenshot, bindings) {
                     action = Some(MenuAction::ExportScreenshot);
                 }
                 if screenshot_svg_button(ui, mode_3d, kind) {
@@ -558,6 +639,23 @@ pub fn show_compact(
     show_compact_with_plot_kind(ui, screenshot, mode_3d, PlotKind::VectorField, None)
 }
 
+/// [`show_compact`] with the active interaction bindings.
+pub fn show_compact_with_bindings(
+    ui: &mut egui::Ui,
+    screenshot: &Screenshot,
+    mode_3d: bool,
+    bindings: &crate::interaction::Bindings,
+) -> (Option<MenuAction>, bool) {
+    show_compact_with_plot_kind_bindings(
+        ui,
+        screenshot,
+        mode_3d,
+        PlotKind::VectorField,
+        None,
+        bindings,
+    )
+}
+
 /// Compact bar with the active plot kind (same SVG guard as [`show_with_plot_kind`]).
 pub fn show_compact_with_plot_kind(
     ui: &mut egui::Ui,
@@ -577,6 +675,27 @@ pub fn show_compact_with_plot_kind(
     )
 }
 
+/// [`show_compact_with_plot_kind`] with the active interaction bindings.
+pub fn show_compact_with_plot_kind_bindings(
+    ui: &mut egui::Ui,
+    screenshot: &Screenshot,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+    bindings: &crate::interaction::Bindings,
+) -> (Option<MenuAction>, bool) {
+    show_compact_with_plot_kind_history_bindings(
+        ui,
+        screenshot,
+        mode_3d,
+        kind,
+        animation_reason,
+        true,
+        true,
+        bindings,
+    )
+}
+
 /// Compact bar with explicit edit-history availability (same disabled rule as
 /// [`show_with_plot_kind_history`]).
 #[allow(clippy::too_many_arguments)]
@@ -588,6 +707,30 @@ pub fn show_compact_with_plot_kind_history(
     animation_reason: Option<&'static str>,
     can_undo: bool,
     can_redo: bool,
+) -> (Option<MenuAction>, bool) {
+    show_compact_with_plot_kind_history_bindings(
+        ui,
+        screenshot,
+        mode_3d,
+        kind,
+        animation_reason,
+        can_undo,
+        can_redo,
+        &crate::interaction::Bindings::default_bindings(),
+    )
+}
+
+/// [`show_compact_with_plot_kind_history`] with the active interaction bindings.
+#[allow(clippy::too_many_arguments)]
+pub fn show_compact_with_plot_kind_history_bindings(
+    ui: &mut egui::Ui,
+    screenshot: &Screenshot,
+    mode_3d: bool,
+    kind: PlotKind,
+    animation_reason: Option<&'static str>,
+    can_undo: bool,
+    can_redo: bool,
+    bindings: &crate::interaction::Bindings,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
     let style_changed = false;
@@ -613,6 +756,7 @@ pub fn show_compact_with_plot_kind_history(
                     if add_menu_item(
                         ui,
                         item,
+                        bindings,
                         mode_3d,
                         kind,
                         animation_reason,
@@ -637,7 +781,7 @@ pub fn show_compact_with_plot_kind_history(
             ));
         }
 
-        if screenshot_button(ui, screenshot) {
+        if screenshot_button(ui, screenshot, bindings) {
             action = Some(MenuAction::ExportScreenshot);
         }
     });

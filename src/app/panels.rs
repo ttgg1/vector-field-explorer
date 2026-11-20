@@ -83,7 +83,7 @@ impl VfApp {
         };
         egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = if plan.compact_top_bar {
-                top_bar::show_compact_with_plot_kind_history(
+                top_bar::show_compact_with_plot_kind_history_bindings(
                     ui,
                     &self.screenshot,
                     self.state.mode_3d,
@@ -91,9 +91,10 @@ impl VfApp {
                     animation_reason,
                     self.history.can_undo(),
                     self.history.can_redo(),
+                    &self.interaction.bindings,
                 )
             } else {
-                top_bar::show_with_plot_kind_history(
+                top_bar::show_with_plot_kind_history_bindings(
                     ui,
                     &mut self.style,
                     &self.screenshot,
@@ -103,6 +104,7 @@ impl VfApp {
                     animation_reason,
                     self.history.can_undo(),
                     self.history.can_redo(),
+                    &self.interaction.bindings,
                 )
             };
             style_changed = changed;
@@ -212,11 +214,14 @@ impl VfApp {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
         self.sync_materials_draft_on_entry();
         self.sync_maxwell_draft_on_entry();
+        let controls_shortcut =
+            menu::shortcut_label(MenuAction::ToggleControls, &self.interaction.bindings)
+                .unwrap_or_default();
         let mut entries = vec![
             RailEntry {
                 id: "controls",
                 label: "Controls",
-                shortcut: Some(menu::CONTROLS_SHORTCUT),
+                shortcut: Some(controls_shortcut.as_str()),
                 expanded: &mut self.layout.controls_expanded,
             },
             #[cfg(not(target_arch = "wasm32"))]
@@ -330,7 +335,7 @@ impl VfApp {
                     collapse = layout::collapse_button(
                         ui,
                         layout::RailSide::Left,
-                        menu::CONTROLS_SHORTCUT,
+                        controls_shortcut.as_str(),
                     );
                     egui::ScrollArea::vertical()
                         .id_salt("controls_body")
@@ -800,16 +805,15 @@ impl VfApp {
         // this frame; applied after the panel so the view-command seam owns the
         // camera update.
         let mut camera_request = None;
+        let shortcut = menu::shortcut_label(MenuAction::TogglePresets, &self.interaction.bindings)
+            .unwrap_or_default();
         if self.layout.presets_expanded {
             let mut collapse = false;
             let response = egui::Panel::right(("presets_panel", self.panel_generation))
                 .exact_size(self.wide_presets_width)
                 .show(ui, |ui| {
-                    collapse = layout::collapse_button(
-                        ui,
-                        layout::RailSide::Right,
-                        menu::PRESETS_SHORTCUT,
-                    );
+                    collapse =
+                        layout::collapse_button(ui, layout::RailSide::Right, shortcut.as_str());
                     egui::ScrollArea::vertical()
                         .id_salt("presets_body")
                         .show(ui, |ui| {
@@ -828,7 +832,7 @@ impl VfApp {
             ("presets_rail", self.panel_generation),
             layout::RailSide::Right,
             "Presets",
-            menu::PRESETS_SHORTCUT,
+            shortcut.as_str(),
         )
         .clicked
         {
@@ -840,6 +844,11 @@ impl VfApp {
     /// Right Appearance panel, or its rail; same pin/collapse contract as the
     /// Presets panel. Edits commit through the viewmodel's validating seam.
     fn show_appearance_panel(&mut self, ui: &mut egui::Ui) {
+        let shortcut = menu::shortcut_label(
+            MenuAction::ToggleAppearancePanel,
+            &self.interaction.bindings,
+        )
+        .unwrap_or_default();
         if self.layout.appearance_expanded {
             let mut collapse = false;
             let response = egui::Panel::right(("appearance_panel", self.panel_generation))
@@ -849,7 +858,7 @@ impl VfApp {
                         ui,
                         layout::RailSide::Right,
                         "Appearance",
-                        menu::APPEARANCE_SHORTCUT,
+                        shortcut.as_str(),
                     );
                     egui::ScrollArea::vertical()
                         .id_salt("appearance_body")
@@ -869,7 +878,7 @@ impl VfApp {
             ("appearance_rail", self.panel_generation),
             layout::RailSide::Right,
             "Appearance",
-            menu::APPEARANCE_SHORTCUT,
+            shortcut.as_str(),
         )
         .clicked
         {
@@ -881,6 +890,11 @@ impl VfApp {
     /// Appearance panel. Binding and feel edits commit straight to
     /// `VfApp::interaction`; the profile library is edited in place.
     fn show_interaction_panel(&mut self, ui: &mut egui::Ui) {
+        let shortcut = menu::shortcut_label(
+            MenuAction::ToggleInteractionPanel,
+            &self.interaction.bindings,
+        )
+        .unwrap_or_default();
         if self.layout.interaction_expanded {
             let mut collapse = false;
             let response = egui::Panel::right(("interaction_panel", self.panel_generation))
@@ -890,7 +904,7 @@ impl VfApp {
                         ui,
                         layout::RailSide::Right,
                         "Interaction",
-                        menu::INTERACTION_SHORTCUT,
+                        shortcut.as_str(),
                     );
                     egui::ScrollArea::vertical()
                         .id_salt("interaction_body")
@@ -918,7 +932,7 @@ impl VfApp {
                 ("interaction_rail", self.panel_generation),
                 layout::RailSide::Right,
                 "Interaction",
-                menu::INTERACTION_SHORTCUT,
+                shortcut.as_str(),
             )
             .clicked
             {
@@ -1397,7 +1411,12 @@ impl VfApp {
             && let Some(rect) = self.last_viewport_rect
         {
             let anchor = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
-            if crate::ui::help_overlay::show(ui.ctx(), anchor, self.state.mode_3d) {
+            if crate::ui::help_overlay::show_with_bindings(
+                ui.ctx(),
+                anchor,
+                self.state.mode_3d,
+                &self.interaction.bindings,
+            ) {
                 self.layout.help_visible = false;
             }
         }
@@ -1476,7 +1495,11 @@ impl VfApp {
 
         // Help > Keyboard & mouse (ticket 18): the full help table, the same
         // strings the overlay above renders.
-        crate::ui::help_overlay::help_window(ui.ctx(), &mut self.help_open);
+        crate::ui::help_overlay::help_window_with_bindings(
+            ui.ctx(),
+            &mut self.help_open,
+            &self.interaction.bindings,
+        );
 
         // Animation export: publish the running job's progress, then draw the
         // dialog over everything. The dialog returns one action; the app owns

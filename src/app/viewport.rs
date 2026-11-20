@@ -149,6 +149,7 @@ impl VfApp {
             // Everything else (orbit/pan/zoom gestures) is bypassed so the
             // orbit camera keeps the pose the exit will restore.
             let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
+            let feel = self.interaction.camera_feel;
             if let Some(fly) = self.fly.as_mut() {
                 let captured = self.capture_active;
                 let drag = if resp.dragged_by(egui::PointerButton::Primary) {
@@ -166,7 +167,7 @@ impl VfApp {
                 } else {
                     Vec2::ZERO
                 };
-                let look = frame_look(captured, raw, drag);
+                let look = crate::camera::feel_orbit(frame_look(captured, raw, drag), feel);
                 let boost = ui.ctx().input(|input| input.modifiers.shift);
                 let input = self.fly_keys.input(look, boost);
                 let dt = ui.ctx().input(|input| input.stable_dt);
@@ -241,13 +242,15 @@ impl VfApp {
                     drag_channel(self.state.mode_3d, buttons)
                 };
                 let (drag, pan) = match channel {
-                    Some(DragChannel::Orbit) => (pointer_delta, Vec2::ZERO),
+                    Some(DragChannel::Orbit) => {
+                        (crate::camera::feel_orbit(pointer_delta, feel), Vec2::ZERO)
+                    }
                     Some(DragChannel::Pan) => (Vec2::ZERO, pointer_delta),
                     None => (Vec2::ZERO, Vec2::ZERO),
                 };
                 let pan = pan + touch_pan.pan;
                 let zoom = if viewport_active {
-                    crate::ui::top_bar::wheel_zoom(ui.ctx())
+                    crate::camera::feel_zoom(crate::ui::top_bar::wheel_zoom(ui.ctx()), feel)
                 } else {
                     1.0
                 };

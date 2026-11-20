@@ -950,8 +950,11 @@ fn view_menu_offers_the_interaction_panel_and_displays_its_shortcut() {
         "View carries the open-interaction command too"
     );
     assert_eq!(
-        menu::shortcut_label(MenuAction::ToggleInteractionPanel),
-        Some("Ctrl+Shift+L"),
+        menu::shortcut_label(
+            MenuAction::ToggleInteractionPanel,
+            &Bindings::default_bindings()
+        ),
+        Some("Ctrl+Shift+L".to_owned()),
         "the view item displays the documented shortcut"
     );
     assert!(

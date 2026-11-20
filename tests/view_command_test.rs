@@ -262,6 +262,11 @@ fn plus_minus_r_and_f_map_to_commands() {
         Some(ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR }),
         "minus zooms out",
     );
+    assert_eq!(
+        command_for_key(&camera, view, egui::Key::Minus, egui::Modifiers::SHIFT),
+        Some(ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR }),
+        "shift+minus keeps zooming out",
+    );
     assert_eq!(command_for_key(&camera, view, egui::Key::R, none), Some(ViewCommand::Reset));
     assert_eq!(command_for_key(&camera, view, egui::Key::F, none), Some(ViewCommand::Fit));
 }

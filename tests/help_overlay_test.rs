@@ -4,12 +4,13 @@
 // and reject the stale "right-drag pans" copy.
 
 use eframe::egui;
+use vector_field_explorer::interaction::Bindings;
 use vector_field_explorer::ui::help_overlay::{
     FLY_HELP_ACTION, HELP_ROW_SIZE, HELP_SECTION_TITLE_SIZE, HELP_SECTIONS, HELP_WINDOW_TITLE_SIZE,
-    HelpRow, LEFT_CLICK_HELP_ACTION, LEFT_CLICK_HELP_INPUT, LEFT_CLICK_HELP_TOOLTIP,
+    HelpRow, LEFT_CLICK_HELP_ACTION, LEFT_CLICK_HELP_INPUT, LEFT_CLICK_HELP_TOOLTIP, LiveRow,
     OVERLAY_HEADING_COLOR, SEED_HELP_ACTION, SEED_HELP_INPUT, SEED_HELP_TOOLTIP,
-    SOURCES_HELP_SECTION, all_rows, help_window, rows_for, section_heading_style, sections_for,
-    sources_help_rows, window_heading_color,
+    SOURCES_HELP_SECTION, all_rows, help_window, live_global_rows, rows_for,
+    section_heading_style, sections_for, sources_help_rows, window_heading_color,
 };
 
 const VIEW_3D_BINDINGS: &[(&str, &str)] = &[
@@ -56,6 +57,10 @@ const GLOBAL_BINDINGS: &[(&str, &str)] = &[
     ("Space", "Play/pause simulation; particles follow the clock"),
     ("F1 / ?", "Toggle help"),
     ("Ctrl+B / Ctrl+P", "Toggle panels (not while typing)"),
+    (
+        "Ctrl+Shift+L",
+        "Toggle the Interaction panel (not while typing)",
+    ),
     ("Ctrl+Shift+S", "Export screenshot"),
     ("Ctrl+Shift+C", "Copy formula"),
     ("Ctrl+Q", "Quit"),
@@ -104,11 +109,29 @@ fn assert_lists_once(rows: &[HelpRow], expected: &[(&str, &str)], what: &str) {
     }
 }
 
+fn assert_live_lists_once(rows: &[LiveRow], expected: &[(&str, &str)], what: &str) {
+    assert_eq!(rows.len(), expected.len(), "{what}: wrong row count");
+    for wanted in expected {
+        let matches: Vec<&LiveRow> = rows.iter().filter(|row| row.input == wanted.0).collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "{what}: `{}` must be listed exactly once",
+            wanted.0,
+        );
+        assert_eq!(matches[0].action, wanted.1, "{what}: `{}` action", wanted.0);
+    }
+}
+
 #[test]
 fn every_binding_is_listed_exactly_once_in_its_group() {
     assert_lists_once(section("3D view"), VIEW_3D_BINDINGS, "3D view");
     assert_lists_once(section("2D view"), VIEW_2D_BINDINGS, "2D view");
-    assert_lists_once(section("Global"), GLOBAL_BINDINGS, "Global");
+    assert_live_lists_once(
+        &live_global_rows(&Bindings::default_bindings()),
+        GLOBAL_BINDINGS,
+        "Global",
+    );
 }
 
 #[test]
@@ -169,6 +192,15 @@ fn help_actions_fit_the_overlay_width_budget() {
     // 87). A future row that needs more should split rather than widen.
     const MAX_ACTION_CHARS: usize = 88;
     for row in all_rows() {
+        let length = row.action.chars().count();
+        assert!(
+            length <= MAX_ACTION_CHARS,
+            "`{}: {}` is {length} characters, over the {MAX_ACTION_CHARS}-character overlay budget",
+            row.input,
+            row.action,
+        );
+    }
+    for row in live_global_rows(&Bindings::default_bindings()) {
         let length = row.action.chars().count();
         assert!(
             length <= MAX_ACTION_CHARS,
@@ -274,13 +306,18 @@ fn both_modes_document_the_panel_shortcuts_and_their_text_field_rule() {
     // Ticket 15 moved every shortcut into one table that stays inert while a
     // text field has focus (Ctrl+Q is the only exception), so the help must
     // keep describing that rule rather than dropping it.
+    let global = live_global_rows(&Bindings::default_bindings());
     for mode_3d in [false, true] {
         let rows = rows_for(mode_3d);
-        let text = rows
+        let mut text = rows
             .iter()
             .map(|row| format!("{}: {}", row.input, row.action))
             .collect::<Vec<_>>()
             .join("\n");
+        for row in &global {
+            text.push('\n');
+            text.push_str(&format!("{}: {}", row.input, row.action));
+        }
         assert!(
             text.contains("Ctrl+B"),
             "the Controls shortcut is documented: {text}"
@@ -302,7 +339,7 @@ fn both_modes_document_the_panel_shortcuts_and_their_text_field_rule() {
             "the help-overlay shortcut is documented: {text}"
         );
 
-        let panel = rows
+        let panel = global
             .iter()
             .find(|row| row.input == "Ctrl+B / Ctrl+P")
             .expect("the panel shortcut row exists");

@@ -8,7 +8,7 @@ use super::layout::{self, RailLabel, RailSide};
 pub struct RailEntry<'a> {
     pub id: &'static str,
     pub label: &'static str,
-    pub shortcut: Option<&'static str>,
+    pub shortcut: Option<&'a str>,
     pub expanded: &'a mut bool,
 }
 

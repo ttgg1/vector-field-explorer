@@ -37,12 +37,17 @@ impl VfApp {
             exit_on_focus_loss(&mut self.fly, &mut self.fly_keys, &input.events);
         });
 
+        // Issue #88 A3: while the Interaction panel is capturing a new chord,
+        // none of the normal key handlers may also act. The panel consumes the
+        // key itself when it draws later this frame.
+        let capture_armed = self.interaction_panel.capturing.is_some();
+
         // Ticket 70: while flying, global menu shortcuts are suppressed so a
         // movement key (physical A/D/...) can never fire a toggle (e.g.
         // ToggleFly on a non-QWERTY layout). Esc still exits through the
         // existing path below.
-        if self.fly.is_none() {
-            for action in menu::shortcut_actions(ctx) {
+        if !capture_armed && self.fly.is_none() {
+            for action in menu::shortcut_actions(ctx, &self.interaction.bindings) {
                 self.apply_menu_action(action, ctx);
             }
         }
@@ -52,7 +57,8 @@ impl VfApp {
         // (web), mirroring `FlyKeys::apply_key`. This is what makes the
         // toggle fire on the key physically in the C position instead of on
         // whatever key happens to report logical C on a non-QWERTY layout.
-        if !ctx.text_edit_focused()
+        if !capture_armed
+            && !ctx.text_edit_focused()
             && self.state.is_vector_mode()
             && layout::fly_allowed(self.layout_mode)
         {
@@ -74,16 +80,26 @@ impl VfApp {
             }
         }
 
-        // Space is the transport's play/pause (ticket 26). The helper is inert
-        // while a text field owns the keyboard or no clock consumer exists,
-        // and consumes the key so a focused widget never also activates.
-        crate::ui::transport::toggle_on_space(ctx, &self.state, &mut self.clock);
+        // Play/pause is the transport's bound chord (Space by default). The
+        // helper is inert while a text field owns the keyboard or no clock
+        // consumer exists, and consumes the key so a focused widget never also
+        // activates.
+        if !capture_armed {
+            crate::ui::transport::toggle_on_bindings(
+                ctx,
+                &self.state,
+                &mut self.clock,
+                &self.interaction.bindings,
+            );
+        }
 
-        // Ticket 60: plain S/P seed a streamline or add a particle burst at the
-        // pointer (viewport centre as fallback). Runs after the menu and
-        // transport tables so their chords win, and before the camera keys; S
-        // is inert while flying because it is fly's backward key.
-        self.apply_seed_shortcuts(ctx);
+        // Ticket 60: the bound seed/particle chords act at the pointer (viewport
+        // centre as fallback). Runs after the menu and transport tables so
+        // their chords win, and before the camera keys; Seed is inert while
+        // flying because it is fly's backward key.
+        if !capture_armed {
+            self.apply_seed_shortcuts(ctx);
+        }
 
         // One global clock advances once per frame from egui's stable frame
         // time, but only while something consumes it. An animation export owns
@@ -94,20 +110,31 @@ impl VfApp {
         }
         self.advance_clock(ctx.input(|input| input.stable_dt));
 
-        // Camera keys (ticket 18): arrows, `+`/`-`, `R` and `F` feed the same
+        // Camera keys (ticket 18): the bound view chords feed the same
         // view-command seam as the double-click and the camera buttons. The
         // loop is inert while a text field has focus, so the formula bar keeps
         // every key it needs (the menu's global shortcuts already ran above).
-        for command in view_command::view_key_commands(ctx, &self.orbit, self.view_context()) {
-            self.apply_view_command(command);
+        if !capture_armed {
+            for command in view_command::view_key_commands_with_bindings(
+                ctx,
+                &self.orbit,
+                self.view_context(),
+                &self.interaction.bindings,
+                self.interaction.camera_feel,
+            ) {
+                self.apply_view_command(command);
+            }
         }
 
-        // `?` is the second help key (F1 goes through the menu table); Esc
+        // `?` is the second help key (F1 goes through the binding table); Esc
         // dismisses the transient help surfaces. Neither fires while typing.
-        if menu::help_key_pressed(ctx) {
+        if !capture_armed && menu::help_key_pressed(ctx) {
             self.layout.toggle_help();
         }
-        if !ctx.text_edit_focused() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if !capture_armed
+            && !ctx.text_edit_focused()
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
             self.appearance_open = false;
             self.help_open = false;
             self.layout.help_visible = false;
@@ -360,9 +387,13 @@ impl VfApp {
     /// mode. Inert unless fly is active, so movement keys never leak into the
     /// orbit view.
     pub(super) fn update_fly_keys(&mut self, ctx: &egui::Context) {
-        if self.fly.is_none() || ctx.text_edit_focused() {
-            // Never steal keys from the formula bar: typing WASD must not fly,
-            // and Esc belongs to the text field while it has focus.
+        if self.fly.is_none()
+            || ctx.text_edit_focused()
+            || self.interaction_panel.capturing.is_some()
+        {
+            // Never steal keys from the formula bar or a chord capture: typing
+            // WASD must not fly, and Esc belongs to the field/capture while it
+            // has focus.
             self.fly_keys.clear();
             return;
         }
@@ -470,6 +501,7 @@ impl VfApp {
         }
         let text_focused = ctx.text_edit_focused();
         let flying = self.fly.is_some();
+        let bindings = &self.interaction.bindings;
         let shortcut = ctx.input(|input| {
             input.events.iter().find_map(|event| match event {
                 egui::Event::Key {
@@ -478,20 +510,30 @@ impl VfApp {
                     repeat,
                     modifiers,
                     ..
-                } => view_command::seed_shortcut(*key, *modifiers, *repeat, text_focused, flying),
+                } => view_command::seed_shortcut_with_bindings(
+                    bindings,
+                    *key,
+                    *modifiers,
+                    *repeat,
+                    text_focused,
+                    flying,
+                ),
                 _ => None,
             })
         });
         let Some(action) = shortcut else {
             return;
         };
-        let key = match action {
-            LeftClickAction::SeedStreamline => egui::Key::S,
-            LeftClickAction::AddParticles => egui::Key::P,
+        let bound = match action {
+            LeftClickAction::SeedStreamline => interaction::InteractionAction::SeedStreamline,
+            LeftClickAction::AddParticles => interaction::InteractionAction::AddParticles,
         };
-        ctx.input_mut(|input| {
-            input.consume_key(egui::Modifiers::NONE, key);
-        });
+        if let Some(chord) = self.interaction.bindings.chord(bound) {
+            let modifiers = view_command::egui_modifiers(chord);
+            ctx.input_mut(|input| {
+                input.consume_key(modifiers, chord.key);
+            });
+        }
         // The viewport rect is recorded by the central panel every frame, so a
         // first-frame shortcut has no target and does nothing.
         let Some(rect) = self.last_viewport_rect else {

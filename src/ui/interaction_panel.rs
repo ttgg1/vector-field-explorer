@@ -74,7 +74,7 @@ impl InteractionPanel {
         self.handle_capture(ui, live);
 
         ui.heading("Interaction");
-        ui.label("Bindings and camera feel apply to the live profile; input routing follows in a later slice.");
+        ui.label("Bindings and camera feel apply immediately to the live profile; edits save with the settings.");
         if let Some(message) = self.message.as_ref() {
             ui.label(message);
         }
