@@ -748,7 +748,11 @@ a save on every edit.
 **Public API (crate-visible).** `frame_input`, `apply_menu_action`,
 `view_context`, `apply_view_command`, `update_fly_keys`, `sync_fly_capture`,
 `apply_seed_shortcuts`, `seed_click`, `apply_click_action`, `click_world_seed`,
-`undo_last_click_seed`.
+`undo_last_click_seed`, `seeds_editable`, `seed_pointer_interaction`,
+`pick_seed`, `select_seed_at`, `begin_seed_drag`, `update_seed_drag`.
+Doc-hidden test seams `test_seed_click` and `test_update_seed_drag` expose the
+same production entry points because the headless viewport returns before
+`seed_pointer_interaction`.
 
 **Invariants.**
 - Input order: screenshot drain → focus-loss fly exit → menu shortcuts → Space
@@ -771,6 +775,18 @@ a save on every edit.
   view, so the first click's burst is taken back.
 - A keyboard seed clears `last_click_seed`, so a later double-click cannot undo
   an unrelated mouse click.
+- Issue #87 S2: when formula streamlines are on, a press that lands on an
+  explicit seed (12 pt screen radius) selects it and begins a drag; the camera
+  suppresses its own gesture for that press. Dragging maps the pointer onto the
+  active `PlaneFrame` and clamps the local `u`/`v`, or uses the existing
+  camera-plane pick on the scene plane; non-finite/out-of-domain moves are
+  rejected and leave the seed where it was. The drag is one existing
+  press/release history transaction. Fly or pointer capture activating mid-drag
+  clears the drag and ends the gesture instead of writing under the camera. A
+  click that hits a seed selects it instead of planting a runtime click seed;
+  "Place seed" adds one document seed and disarms, and the armed flag is cleared
+  whenever the Flow editor is not visible. Click bursts and explicit seeds
+  compose.
 
 **Pinned by.** `tests/menu_test.rs` (dispatch and focus rules),
 `tests/shortcut_test.rs` (S/P and seed point), `tests/left_click_action_test.rs`
@@ -2440,11 +2456,17 @@ decisions that do not need a window.
   `layer_styles()` and `commit_layer_styles` (validate, equal-set no-op, assign,
   exactly one dirty request; a rejected record leaves the previous styles and
   dirty untouched).
-- Issue #87 slice S1 seed field: `seed_layout: SeedLayout` with `seed_layout()`,
+- Issue #87 seed field: `seed_layout: SeedLayout` with `seed_layout()`,
   `commit_seed_layout` (validate against the visible scene domain, equal-set
   no-op, assign, exactly one dirty request; a rejected layout leaves the
-  previous seeds and dirty untouched) and `reset_seed_layout` (clear, dirty only
-  when non-empty). Streamline generation still uses the automatic grid until S2.
+  previous seeds and dirty untouched), `reset_seed_layout` (clear, dirty only
+  when non-empty), `seed_point_on_current_plane` (world position plus the active
+  plane anchor), `apply_generated_seeds` (validate the whole application, reject
+  per-application/layout over-cap requests in full, one dirty) and `place_seed`.
+  `streamlines_snapshot_with_styles` samples a non-empty layout instead of the
+  automatic grid or explicit count; an empty layout keeps the old grid path
+  byte-identical, and `Click` mode still paints an explicit layout on top of its
+  click bursts.
 - Issue #84 slice A2a drawable seams: `effective_arrow_params()` scales only the
   arrow girth (`head_width`, `shaft_radius`) by the Arrows width and leaves the
   stored record untouched; `flow_layer_style()` resolves the Flow opacity/width
@@ -2673,17 +2695,19 @@ capture or `State` wiring in this slice; later slices call
 
 #### `src/seed_layout.rs` — explicit streamline seed layout
 
-**Purpose.** Issue #87 slice S1: the pure document model for explicit
-streamline seeds. A seed is a world position plus an optional planting-plane
-anchor; the layout is document state that is validated, sanitised, persisted
-and captured by the edit history. No generators, picking, UI or named layouts
-in this slice, and streamline generation still uses the automatic grid until
-S2 consumes the layout.
+**Purpose.** Issue #87: the pure document model and deterministic generators
+for explicit streamline seeds. A seed is a world position plus an optional
+planting-plane anchor; the layout is document state that is validated,
+sanitised, persisted and captured by the edit history. Slice S1 added the
+model; S2 adds the line/circle/region generators and the pure drag clamp. Named
+layouts are S3.
 
-**Public API.** `MAX_SEEDS` (`256`); `SeedAnchor { axis, index, u, v }` (`axis`
-is a `PlaneAxis`); `SeedPoint { position, anchor: Option<SeedAnchor> }`;
-`SeedLayout { seeds }` with `Default` (empty), `is_empty`, `len`, `clear`,
-`validate`, `sanitized` and `push`.
+**Public API.** `MAX_SEEDS` (`256`), `MAX_GENERATED_PER_APPLICATION` (`64`);
+`SeedAnchor { axis, index, u, v }` (`axis` is a `PlaneAxis`);
+`SeedPoint { position, anchor: Option<SeedAnchor> }`; `SeedLayout { seeds }`
+with `Default` (empty), `is_empty`, `len`, `clear`, `validate`, `sanitized` and
+`push`; `SeedError`; `line_seeds`, `circle_seeds`, `region_seeds` and
+`clamp_seed_local`.
 
 **Contract.**
 - `validate` never repairs: it rejects more than `MAX_SEEDS` seeds, any
@@ -2706,19 +2730,45 @@ is a `PlaneAxis`); `SeedPoint { position, anchor: Option<SeedAnchor> }`;
   clears and dirties only when non-empty. Startup restore sanitises the stored
   layout against the same `scene_domain` authority and assigns it directly,
   warning once when seeds were dropped.
+- Generators are pure, deterministic and bounded: `line_seeds` includes both
+  endpoints (`count >= 2`), `circle_seeds` uses the `PlaneFrame` basis normal
+  to the chosen axis starting at angle 0 (`count >= 3`, `radius > 0`), and
+  `region_seeds` reuses `explicit_streamline_seeds`'s jitter/lattice/salt
+  scheme over `[min, max]`. `SeedError` names non-finite input, degenerate
+  geometry, zero/below-minimum/above-cap counts, points outside the scene
+  domain and an application above the layout cap. Nothing is clipped or
+  truncated, and an over-cap application is rejected in full.
+- `clamp_seed_local` clamps a dragged `(u, v)` into the frame's half extents
+  and drops the normal component; non-finite components collapse to the plane
+  centre.
 
 **Pinned by.** `tests/seed_layout_test.rs`: the empty layout, the cap and
 one-over rejection, sanitising non-finite/out-of-domain seeds and truncation,
 the rotated-plane anchor round trip, in-full push rejection and insertion
-order, and the commit no-op/dirty/reset rules. `tests/persistence_test.rs`
-round-trips the layout through the envelope, defaults older records to empty,
-sanitises a genuinely corrupt stored layout on restore (invalid seeds dropped,
-valid seeds kept in order, the result re-validated against the scene domain) and
-pins the non-dirtying startup assignment seam; `tests/scene_document_test.rs`
-keeps a non-empty layout through a saved scene.
+order, the generators' determinism/inclusivity and every rejection, in-full
+over-cap applications, explicit-seed grid replacement and Click composition,
+the anchor surviving a plane switch, the drag clamp, and the commit
+no-op/dirty/reset rules. `tests/persistence_test.rs` round-trips the layout
+through the envelope, defaults older records to empty, sanitises a genuinely
+corrupt stored layout on restore (invalid seeds dropped, valid seeds kept in
+order, the result re-validated against the scene domain) and pins the
+non-dirtying startup assignment seam; `tests/scene_document_test.rs` keeps a
+non-empty layout through a saved scene. `tests/edit_history_app_test.rs` pins
+one entry per generated application and per completed drag, that a capture
+activation mid-drag stops the seed and keeps one entry, and that hiding the Seed
+editor disarms placement while a visible editor still plants exactly one seed;
+`tests/streamlines_test.rs` pins the byte-identical empty-layout grid, and
+`tests/sidebar_controls_test.rs` pins the Flow-section enable/visibility rules.
 
-**Limitations.** S1 stores the layout only. Generators, Flow-section editing,
-viewport placement/dragging and named layouts are S2/S3.
+**Residual risk.** The headless viewport returns before
+`seed_pointer_interaction`, so the drag/placement tests call the production
+`update_seed_drag` and `seed_click` seams directly. The pointer-response gating
+and camera suppression around those seams remain pinned only by review.
+
+**Limitations.** The Flow editor, placement, picking and dragging are in S2;
+named layout libraries and portable text are S3. Seed positions are validated
+against the visible `scene_domain`, so a non-Z plane slice in 2D still uses the
+S1 authority even though the stored position is documented as world.
 
 #### `src/edit_history.rs` — bounded edit history and reset scopes
 
@@ -4522,7 +4572,10 @@ with a local mirror and a single `apply` handoff.
 `magnitude_scale_enabled`, `arrow_scale_enabled`,
 `proportional_exponent_enabled`, `ArrowStyleSet`, `arrow_style_set`,
 `sides_control_enabled`, `head_control_enabled`, `seed_mode_enabled`,
-`particle_size_enabled`, `particle_fixed_color_enabled`, `fixed_color_rgb`,
+`seed_layout_visible`, `streamline_count_enabled_with_layout`,
+`seed_layout_count_label`, `SEED_LAYOUT_DENSITY_INACTIVE_NOTE`,
+`SeedGeneratorControls`, `particle_size_enabled`, `particle_fixed_color_enabled`,
+`fixed_color_rgb`,
 `fixed_color_opaque`, `trail_fade_enabled`, `trail_width_enabled`,
 `stagnation_seconds_enabled`, `particle_count_label`, `BOTH_COLORING_NOTE`,
 `DIRECTION_3D_EXPLANATION`, `MIN_SIGNED_LOG_HALF_WIDTH`,
@@ -4551,7 +4604,17 @@ with a local mirror and a single `apply` handoff.
   for headless families, seed mode with streamlines off, particle controls with
   particles off, trail controls below length 2, stagnation time with looping
   off, z row for a two-component field, Direction quantity in 3D (with a
-  visible explanation).
+  visible explanation). The streamline count is disabled when an explicit seed
+  layout exists and a note explains that the automatic count/grid is inactive
+  until "Clear all".
+- The Features section's collapsed "Seed layout" area is shown only for
+  formula streamlines (`seed_layout_visible`). It reads the count, offers
+  "Place seed", "Clear all", numeric line/circle/region generator rows with
+  inline `SeedError` text, and editable per-seed local/world coordinates with a
+  per-seed delete. Generator and placement results go through the atomic
+  `State` helpers; the editor never mutates the committed layout directly. The
+  armed "Place seed" flag is cleared on every frame the editor is hidden, so
+  re-enabling it cannot silently plant a seed later.
 - Coloring keeps the palette row first, then Quantity, Scale, freeze and the
   legend, then auto-fit and the manual range, then the collapsed "Custom
   palette" editor. Direction is disabled in 3D. Signed log uses a validated,

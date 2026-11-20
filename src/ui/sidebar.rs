@@ -37,7 +37,11 @@ use crate::particles::{
     MAX_TRAIL_WIDTH, MIN_PARTICLE_OPACITY, MIN_STAGNATION_SECONDS, MIN_TRAIL_FADE, MIN_TRAIL_WIDTH,
     ParticleAppearance, ParticleColorMode,
 };
-use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneView, plane_coordinate};
+use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, plane_coordinate};
+use crate::seed_layout::{
+    MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedLayout, SeedPoint, circle_seeds,
+    line_seeds, region_seeds,
+};
 use crate::source_scene::{FieldMode, SourceDisplay};
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
@@ -280,6 +284,38 @@ pub fn seed_mode_enabled(streamlines: bool) -> bool {
 pub fn streamline_count_enabled(streamlines: bool, seed_mode: StreamlineSeedMode) -> bool {
     streamlines && seed_mode == StreamlineSeedMode::Auto
 }
+
+/// Whether the explicit-seed editor belongs in the Flow/Features section: it
+/// only edits formula streamlines, not the source, induction, materials,
+/// Maxwell or Ode modes that own their own seeding.
+pub fn seed_layout_visible(field_mode: FieldMode, streamlines: bool, vector_mode: bool) -> bool {
+    vector_mode && streamlines && field_mode == FieldMode::Formula
+}
+
+/// Whether the automatic streamline-count control applies. An explicit layout
+/// replaces the count and the density grid, so the control is disabled until
+/// the layout is cleared.
+pub fn streamline_count_enabled_with_layout(
+    streamlines: bool,
+    seed_mode: StreamlineSeedMode,
+    layout_empty: bool,
+) -> bool {
+    streamline_count_enabled(streamlines, seed_mode) && layout_empty
+}
+
+/// The explicit-seed readout above the layout editor.
+pub fn seed_layout_count_label(count: usize) -> String {
+    match count {
+        0 => "No explicit seeds".to_owned(),
+        1 => "1 explicit seed".to_owned(),
+        count => format!("{count} explicit seeds"),
+    }
+}
+
+/// Shown beside the disabled streamline-count control while explicit seeds
+/// replace the automatic grid.
+pub const SEED_LAYOUT_DENSITY_INACTIVE_NOTE: &str =
+    "Explicit seeds replace the automatic grid; count is inactive until Clear all.";
 
 /// The streamline-count drag value's text: `0` is the Auto sentinel, any other
 /// value shows its number so the widget can both display "Auto" and accept a
@@ -684,6 +720,38 @@ fn custom_palette_controls(
         });
 }
 
+/// Session-only generator inputs for the Flow section's "Seed layout" area.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedGeneratorControls {
+    pub line_from: Vec3,
+    pub line_to: Vec3,
+    pub line_count: u32,
+    pub circle_center: Vec3,
+    pub circle_axis: PlaneAxis,
+    pub circle_radius: f32,
+    pub circle_count: u32,
+    pub region_min: Vec3,
+    pub region_max: Vec3,
+    pub region_count: u32,
+}
+
+impl Default for SeedGeneratorControls {
+    fn default() -> Self {
+        Self {
+            line_from: Vec3::new(-1.0, 0.0, 0.0),
+            line_to: Vec3::new(1.0, 0.0, 0.0),
+            line_count: 8,
+            circle_center: Vec3::ZERO,
+            circle_axis: PlaneAxis::Z,
+            circle_radius: 1.0,
+            circle_count: 8,
+            region_min: Vec3::splat(-1.0),
+            region_max: Vec3::splat(1.0),
+            region_count: 16,
+        }
+    }
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -744,6 +812,20 @@ pub struct Controls {
     pub seed_mode: StreamlineSeedMode,
     /// Explicit streamline seed count; `0` means Auto (density-derived).
     pub streamline_count: u32,
+    /// Session-only explicit-seed editor state (issue #87 slice S2). None of
+    /// this is document state; the committed seeds live in `State`.
+    pub seed_generators: SeedGeneratorControls,
+    /// The last generator/placement rejection, shown inline under the editor.
+    pub seed_error: String,
+    /// Armed "Place seed" toggle: the next viewport click plants one seed.
+    pub place_seed: bool,
+    /// Index of the seed selected for numeric editing and viewport dragging.
+    pub selected_seed: Option<usize>,
+    /// Index of the seed whose viewport drag is in progress.
+    pub seed_drag: Option<usize>,
+    /// Whether the in-progress seed gesture has actually moved; a click that
+    /// only selects a seed must not snap or record it.
+    pub seed_drag_moved: bool,
     /// What one explicit left click does (ticket 60).
     pub left_click_action: LeftClickAction,
     pub particles: bool,
@@ -807,6 +889,12 @@ impl Controls {
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             streamline_count: 0,
+            seed_generators: SeedGeneratorControls::default(),
+            seed_error: String::new(),
+            place_seed: false,
+            selected_seed: None,
+            seed_drag: None,
+            seed_drag_moved: false,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -913,6 +1001,240 @@ impl Default for Controls {
 use crate::ui::layout;
 
 /// Draw the sidebar and hand every edit to the viewmodel setters.
+/// One row of three world-coordinate drag values.
+fn seed_vec3_row(ui: &mut egui::Ui, label: &str, value: &mut Vec3) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(egui::DragValue::new(&mut value.x).speed(0.05).prefix("x "));
+        ui.add(egui::DragValue::new(&mut value.y).speed(0.05).prefix("y "));
+        ui.add(egui::DragValue::new(&mut value.z).speed(0.05).prefix("z "));
+    });
+}
+
+/// The local frame a stored anchor belongs to, re-clamped against the current
+/// plane grid.
+fn seed_anchor_frame(state: &State, anchor: &SeedAnchor) -> PlaneFrame {
+    let grid = state.plane_grid();
+    let plane = PlaneView {
+        enabled: true,
+        axis: anchor.axis,
+        index: anchor.index,
+    };
+    PlaneFrame::new(&state.domain, plane.clamped(grid), grid)
+}
+
+/// The collapsed-by-default "Seed layout" editor inside Flow.
+fn seed_layout_editor(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    let count = state.seed_layout().len();
+    ui.horizontal(|ui| {
+        ui.label(seed_layout_count_label(count))
+            .on_hover_text(format!("At most {MAX_SEEDS} explicit seeds"));
+        if ui
+            .add_enabled(count > 0, egui::Button::new("Clear all"))
+            .clicked()
+        {
+            state.reset_seed_layout();
+            controls.selected_seed = None;
+            controls.seed_error.clear();
+        }
+    });
+    ui.checkbox(&mut controls.place_seed, "Place seed")
+        .on_hover_text("The next viewport click plants one explicit seed on the active plane");
+    controls.selected_seed = controls.selected_seed.filter(|index| *index < count);
+    controls.seed_drag = controls.seed_drag.filter(|index| *index < count);
+    if !controls.seed_error.is_empty() {
+        ui.label(egui::RichText::new(&controls.seed_error).color(ui.visuals().error_fg_color));
+    }
+
+    let max_generated = MAX_GENERATED_PER_APPLICATION as u32;
+    let mut generated = None;
+    {
+        let generators = &mut controls.seed_generators;
+        ui.separator();
+        ui.label("Line");
+        seed_vec3_row(ui, "From", &mut generators.line_from);
+        seed_vec3_row(ui, "To", &mut generators.line_to);
+        let from = generators.line_from;
+        let to = generators.line_to;
+        ui.horizontal(|ui| {
+            ui.label("Count");
+            ui.add(
+                egui::DragValue::new(&mut generators.line_count)
+                    .range(2..=max_generated)
+                    .speed(1.0),
+            );
+            if ui.button("Add line").clicked() {
+                let domain = state.scene_domain();
+                generated = Some(line_seeds(&domain, from, to, generators.line_count));
+            }
+        });
+
+        ui.separator();
+        ui.label("Circle");
+        seed_vec3_row(ui, "Centre", &mut generators.circle_center);
+        ui.horizontal(|ui| {
+            ui.label("Plane");
+            for axis in PlaneAxis::ALL {
+                ui.selectable_value(&mut generators.circle_axis, axis, axis.label());
+            }
+        });
+        let center = generators.circle_center;
+        let axis = generators.circle_axis;
+        ui.horizontal(|ui| {
+            ui.label("Radius");
+            ui.add(
+                egui::DragValue::new(&mut generators.circle_radius)
+                    .range(0.0001..=1.0e6)
+                    .speed(0.05),
+            );
+            ui.label("Count");
+            ui.add(
+                egui::DragValue::new(&mut generators.circle_count)
+                    .range(3..=max_generated)
+                    .speed(1.0),
+            );
+            if ui.button("Add circle").clicked() {
+                let domain = state.scene_domain();
+                generated = Some(circle_seeds(
+                    &domain,
+                    center,
+                    axis,
+                    generators.circle_radius,
+                    generators.circle_count,
+                ));
+            }
+        });
+
+        ui.separator();
+        ui.label("Region");
+        seed_vec3_row(ui, "Min", &mut generators.region_min);
+        seed_vec3_row(ui, "Max", &mut generators.region_max);
+        let min = generators.region_min;
+        let max = generators.region_max;
+        ui.horizontal(|ui| {
+            ui.label("Count");
+            ui.add(
+                egui::DragValue::new(&mut generators.region_count)
+                    .range(1..=max_generated)
+                    .speed(1.0),
+            );
+            if ui.button("Add region").clicked() {
+                let domain = state.scene_domain();
+                generated = Some(region_seeds(&domain, min, max, generators.region_count));
+            }
+        });
+    }
+    if let Some(result) = generated {
+        match result {
+            Ok(points) => match state.apply_generated_seeds(&points) {
+                Ok(()) => controls.seed_error.clear(),
+                Err(error) => controls.seed_error = error.to_string(),
+            },
+            Err(error) => controls.seed_error = error.to_string(),
+        }
+    }
+
+    if count == 0 {
+        return;
+    }
+    egui::CollapsingHeader::new("Seeds")
+        .default_open(false)
+        .show(ui, |ui| {
+            let mut next: Option<SeedLayout> = None;
+            let seeds = state.seed_layout().seeds.clone();
+            for (index, seed) in seeds.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let selected = controls.selected_seed == Some(index);
+                    if ui
+                        .selectable_label(selected, format!("Seed {}", index + 1))
+                        .clicked()
+                    {
+                        controls.selected_seed = Some(index);
+                    }
+                    let mut edited = *seed;
+                    let changed = if let Some(anchor) = seed.anchor {
+                        let frame = seed_anchor_frame(state, &anchor);
+                        let local = frame.to_local(seed.position);
+                        let mut u = local.x;
+                        let mut v = local.y;
+                        let u_changed = ui
+                            .add(egui::DragValue::new(&mut u).speed(0.01).prefix("u "))
+                            .changed();
+                        let v_changed = ui
+                            .add(egui::DragValue::new(&mut v).speed(0.01).prefix("v "))
+                            .changed();
+                        if u_changed || v_changed {
+                            edited = SeedPoint {
+                                position: frame.to_world(Vec3::new(u, v, 0.0)),
+                                anchor: Some(SeedAnchor { u, v, ..anchor }),
+                            };
+                            true
+                        } else {
+                            ui.label(format!(
+                                "world ({:.2}, {:.2}, {:.2})",
+                                seed.position.x, seed.position.y, seed.position.z
+                            ));
+                            false
+                        }
+                    } else {
+                        let mut position = seed.position;
+                        let changed = ui
+                            .add(
+                                egui::DragValue::new(&mut position.x)
+                                    .speed(0.01)
+                                    .prefix("x "),
+                            )
+                            .changed()
+                            | ui.add(
+                                egui::DragValue::new(&mut position.y)
+                                    .speed(0.01)
+                                    .prefix("y "),
+                            )
+                            .changed()
+                            | ui.add(
+                                egui::DragValue::new(&mut position.z)
+                                    .speed(0.01)
+                                    .prefix("z "),
+                            )
+                            .changed();
+                        if changed {
+                            edited = SeedPoint {
+                                position,
+                                anchor: None,
+                            };
+                        }
+                        changed
+                    };
+                    if changed {
+                        let mut layout = state.seed_layout().clone();
+                        layout.seeds[index] = edited;
+                        next = Some(layout);
+                    }
+                    if ui.button("Delete").clicked() {
+                        let mut layout = state.seed_layout().clone();
+                        layout.seeds.remove(index);
+                        next = Some(layout);
+                        controls.selected_seed = None;
+                    }
+                });
+            }
+            if let Some(layout) = next {
+                match state.commit_seed_layout(layout) {
+                    Ok(()) => {
+                        controls.seed_error.clear();
+                        if controls
+                            .selected_seed
+                            .is_some_and(|index| index >= state.seed_layout().len())
+                        {
+                            controls.selected_seed = None;
+                        }
+                    }
+                    Err(error) => controls.seed_error = error,
+                }
+            }
+        });
+}
+
 pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
     let _ = show_with_plot_action(ui, state, controls, false);
 }
@@ -1250,10 +1572,16 @@ fn show_inner(
             .response
             .on_disabled_hover_text("Turn Streamlines on to choose Auto or Click seeding");
             // The explicit count only replaces Auto's density-derived lattice:
-            // Click-only seeding paints click bursts instead, so the control is
-            // disabled there rather than silently ignored.
+            // Click-only seeding paints click bursts instead, and an explicit
+            // layout replaces the count itself, so each case is disabled rather
+            // than silently ignored.
+            let explicit_layout = !state.seed_layout().is_empty();
             ui.add_enabled_ui(
-                streamline_count_enabled(controls.streamlines, controls.seed_mode),
+                streamline_count_enabled_with_layout(
+                    controls.streamlines,
+                    controls.seed_mode,
+                    !explicit_layout,
+                ),
                 |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Streamline count");
@@ -1272,9 +1600,14 @@ fn show_inner(
                 },
             )
             .response
-            .on_disabled_hover_text(
-                "Click-only seeding uses click bursts; turn Streamlines on and choose Auto to set a count",
-            );
+            .on_disabled_hover_text(if explicit_layout {
+                SEED_LAYOUT_DENSITY_INACTIVE_NOTE
+            } else {
+                "Click-only seeding uses click bursts; turn Streamlines on and choose Auto to set a count"
+            });
+            if explicit_layout {
+                ui.label(SEED_LAYOUT_DENSITY_INACTIVE_NOTE);
+            }
             // Ticket 60: the left click action stays visible even while its feature
             // is off; the click is then a hinted no-op rather than a dead control.
             button_row(ui, |ui| {
@@ -1438,6 +1771,16 @@ fn show_inner(
                     .on_disabled_hover_text("Turn Particles on to change their appearance");
                 });
             });
+            if seed_layout_visible(state.field_mode, controls.streamlines, vector_mode) {
+                egui::CollapsingHeader::new("Seed layout")
+                    .default_open(false)
+                    .show(ui, |ui| seed_layout_editor(ui, state, controls));
+            } else {
+                // The editor is the only place the user can arm placement. If
+                // it disappears (Streamlines off or leaving the formula/vector
+                // context), a stale armed flag must not plant a seed later.
+                controls.place_seed = false;
+            }
         });
         });
     }

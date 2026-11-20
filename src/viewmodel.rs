@@ -38,7 +38,9 @@ use crate::maxwell::{
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
 use crate::reference::{sanitized_opacity, scaled_viewport_style};
-use crate::seed_layout::SeedLayout;
+use crate::seed_layout::{
+    MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedError, SeedLayout, SeedPoint,
+};
 use crate::viewport_style::ViewportStyle;
 use crate::particles::{
     DOT_SPACING_FRACTION, FlowLayerStyle, MAX_PARTICLES, ParticleAppearance,
@@ -552,6 +554,78 @@ impl State {
             self.seed_layout = SeedLayout::default();
             self.mark_dirty();
         }
+    }
+
+    /// Wrap `position` as a seed planted on the plane currently being edited.
+    ///
+    /// The anchor records the axis, slice index and local `u`/`v`; without a
+    /// plane slice the seed keeps `anchor = None`.
+    pub fn seed_point_on_current_plane(self: &State, position: Vec3) -> SeedPoint {
+        let anchor = self.plane_frame().map(|frame| {
+            let plane = self.plane.clamped(self.plane_grid());
+            let local = frame.to_local(position);
+            SeedAnchor {
+                axis: frame.axis,
+                index: plane.index,
+                u: local.x,
+                v: local.y,
+            }
+        });
+        SeedPoint { position, anchor }
+    }
+
+    /// Atomically append a generator/placement result to the explicit layout.
+    ///
+    /// The whole application is checked first: more than
+    /// [`MAX_GENERATED_PER_APPLICATION`] seeds, a total above [`MAX_SEEDS`] or
+    /// any invalid point rejects the request in full and leaves the committed
+    /// layout and dirty flag untouched. A successful application dirties the
+    /// scene once.
+    pub fn apply_generated_seeds(self: &mut State, positions: &[Vec3]) -> Result<(), SeedError> {
+        if positions.len() > MAX_GENERATED_PER_APPLICATION {
+            return Err(SeedError::CountTooLarge {
+                count: positions.len(),
+                max: MAX_GENERATED_PER_APPLICATION,
+            });
+        }
+        if self.seed_layout.len() + positions.len() > MAX_SEEDS {
+            return Err(SeedError::LayoutFull {
+                requested: positions.len(),
+                existing: self.seed_layout.len(),
+                max: MAX_SEEDS,
+            });
+        }
+        for position in positions {
+            if !position.is_finite() {
+                return Err(SeedError::NonFinite("generated seed"));
+            }
+        }
+        let points = positions
+            .iter()
+            .map(|position| self.seed_point_on_current_plane(*position));
+        let next = SeedLayout {
+            seeds: self
+                .seed_layout
+                .seeds
+                .iter()
+                .copied()
+                .chain(points)
+                .collect(),
+        };
+        next.validate(&self.scene_domain())
+            .map_err(SeedError::Invalid)?;
+        if next == self.seed_layout {
+            return Ok(());
+        }
+        self.seed_layout = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Place one explicit seed from a viewport pick, using the current plane
+    /// anchor and the same full-application validation as a generator.
+    pub fn place_seed(self: &mut State, position: Vec3) -> Result<(), SeedError> {
+        self.apply_generated_seeds(std::slice::from_ref(&position))
     }
 
     /// The Flow layer's resolved opacity and width multipliers (issue #84
@@ -2246,16 +2320,26 @@ impl State {
         ) {
             return Vec::new();
         }
-        // Off hides both seed sources; Click hides only the automatic grid.
-        if !self.streamlines || self.seed_mode == StreamlineSeedMode::Click {
+        // Off hides both seed sources. Click hides only the automatic grid:
+        // an explicit layout is document geometry and still paints there.
+        if !self.streamlines
+            || (self.seed_mode == StreamlineSeedMode::Click && self.seed_layout.is_empty())
+        {
             return Vec::new();
         }
-        // Half the grid density seeds the plane: enough lines to read the flow
-        // without tracing one per sampled point. An explicit count instead uses
-        // a density-independent lattice; its fixed salt keeps the seeds stable
-        // as the density changes.
+        // An explicit layout replaces both the density-derived grid and the
+        // explicit count. Otherwise half the grid density seeds the plane:
+        // enough lines to read the flow without tracing one per sampled point.
+        // An explicit count instead uses a density-independent lattice; its
+        // fixed salt keeps the seeds stable as the density changes.
         let grid = self.grid();
-        let seeds = if self.streamline_count == 0 {
+        let seeds: Vec<Vec3> = if !self.seed_layout.is_empty() {
+            self.seed_layout
+                .seeds
+                .iter()
+                .map(|seed| seed.position)
+                .collect()
+        } else if self.streamline_count == 0 {
             let axis = (self.density / 3).clamp(1, 24);
             let salt = grid.x as u64 ^ ((grid.y as u64) << 16);
             seed_grid(&self.scene_domain(), axis, STREAMLINE_JITTER, salt)

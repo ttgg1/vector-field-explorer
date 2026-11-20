@@ -6,6 +6,7 @@
 //! meets them. No GPU device is created.
 
 use eframe::egui::{self, vec2};
+use glam::{UVec3, Vec3};
 
 use crate::support;
 use crate::support::storage::MemoryStorage;
@@ -13,8 +14,11 @@ use crate::support::storage::MemoryStorage;
 use vector_field_explorer::VfApp;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::domain::Domain;
 use vector_field_explorer::edit_history::EditScope;
 use vector_field_explorer::parameters::ParameterSet;
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
+use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint, clamp_seed_local};
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::viewport_style::ViewportStyle;
 
@@ -112,8 +116,8 @@ fn menu_action(ctx: &egui::Context, app: &mut VfApp, group: &str, item: &str) {
         .unwrap_or_else(|| panic!("the menu bar paints the {group:?} button"));
     click(ctx, app, group.center());
     let out = settle(ctx, app);
-    let item = labelled_rect(&out, item)
-        .unwrap_or_else(|| panic!("the {group:?} menu paints {item:?}"));
+    let item =
+        labelled_rect(&out, item).unwrap_or_else(|| panic!("the {group:?} menu paints {item:?}"));
     click(ctx, app, item.center());
 }
 
@@ -163,7 +167,209 @@ fn drag_is_one_event() {
     assert_ne!(app.state.density, before, "the drag changed the density");
     assert_eq!(app.history_len(), 1, "one gesture is exactly one entry");
     assert!(app.undo_document(&ctx), "the gesture is undoable");
-    assert_eq!(app.state.density, before, "undo restores the pre-drag value");
+    assert_eq!(
+        app.state.density, before,
+        "undo restores the pre-drag value"
+    );
+}
+
+#[test]
+fn a_generated_application_is_one_history_entry() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    // A blank viewport press opens the gesture without focusing a text editor
+    // (the headless renderer has no wgpu device, so it seeds nothing).
+    let start = egui::pos2(450.0, 350.0);
+
+    // A generator application happens inside one primary gesture: the press
+    // opens the transaction, the release commits the whole application once.
+    let _ = frame(&ctx, &mut app, vec![moved(start), button(start, true)]);
+    let center = app.state.scene_domain().center();
+    app.state
+        .apply_generated_seeds(&[center, center + Vec3::new(0.2, 0.0, 0.0)])
+        .expect("the generated seeds apply");
+    assert_eq!(app.history_len(), 0, "mid-gesture frames stay suspended");
+    let _ = frame(&ctx, &mut app, vec![button(start, false)]);
+
+    assert_eq!(app.history_len(), 1, "one application is one history entry");
+    assert_eq!(app.state.seed_layout().len(), 2);
+    assert!(app.undo_document(&ctx), "the application is undoable");
+    assert!(
+        app.state.seed_layout().is_empty(),
+        "undo removes the whole application"
+    );
+}
+
+#[test]
+fn a_seed_drag_is_one_history_entry_and_clamps_to_the_plane() {
+    let domain = Domain::new(Vec3::splat(-1.0), Vec3::splat(1.0));
+    let plane_frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            enabled: true,
+            axis: PlaneAxis::Z,
+            index: 0,
+        },
+        UVec3::splat(8),
+    );
+    let clamped = clamp_seed_local(&plane_frame, Vec3::new(100.0, -100.0, 3.0));
+    assert!(
+        clamped.x.abs() <= plane_frame.half_u + 1e-5
+            && clamped.y.abs() <= plane_frame.half_v + 1e-5,
+        "the drag clamps into the active plane: {clamped:?}"
+    );
+    assert_eq!(clamped.z, 0.0, "the drag stays on the plane");
+
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    let start = egui::pos2(450.0, 350.0);
+
+    let center = app.state.scene_domain().center();
+    let dragged = SeedLayout {
+        seeds: vec![SeedPoint {
+            position: center,
+            anchor: Some(SeedAnchor {
+                axis: PlaneAxis::Z,
+                index: 0,
+                u: clamped.x,
+                v: clamped.y,
+            }),
+        }],
+    };
+    let _ = frame(&ctx, &mut app, vec![moved(start), button(start, true)]);
+    app.state
+        .commit_seed_layout(dragged)
+        .expect("the clamped drag position commits");
+    assert_eq!(app.history_len(), 0, "the drag is still one open gesture");
+    let _ = frame(&ctx, &mut app, vec![button(start, false)]);
+
+    assert_eq!(app.history_len(), 1, "one completed drag is one entry");
+    assert!(app.undo_document(&ctx), "the drag is undoable");
+    assert!(app.state.seed_layout().is_empty(), "undo restores no seeds");
+}
+
+#[test]
+fn hiding_the_seed_editor_disarms_place_mode_and_visible_arming_plants_one_seed() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.controls.streamlines = true;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert!(app.state.streamlines, "the Seed editor is visible");
+
+    // Arming while the editor is visible survives a frame.
+    app.controls.place_seed = true;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert!(
+        app.controls.place_seed,
+        "a visible editor keeps the armed flag"
+    );
+
+    // A viewport click plants exactly one document seed and disarms.
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(900.0, 700.0));
+    let aspect = rect.width() / rect.height();
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.seed_layout().len(),
+        1,
+        "arming plants exactly one document seed"
+    );
+    assert!(!app.controls.place_seed, "placement disarms place mode");
+
+    // Hide the editor (Streamlines off), then re-enable it. The armed flag must
+    // not survive the hidden interval: re-enabling must not silently seed.
+    app.controls.place_seed = true;
+    app.controls.streamlines = false;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert!(!app.state.streamlines, "the editor is hidden");
+    assert!(
+        !app.controls.place_seed,
+        "hiding the editor disarms place mode"
+    );
+
+    app.controls.streamlines = true;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert!(app.state.streamlines, "the editor is visible again");
+    assert!(
+        !app.controls.place_seed,
+        "re-enabling the editor does not re-arm place mode"
+    );
+
+    // A later click must not plant a seed left armed while hidden.
+    app.test_seed_click(rect.center() + vec2(40.0, 0.0), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.seed_layout().len(),
+        1,
+        "no hidden seed is planted after re-enabling"
+    );
+}
+
+#[test]
+fn capture_activation_mid_seed_drag_stops_motion_and_keeps_one_entry() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    // A 3D formula in the 3D view drives the ray-pick drag path.
+    assert!(app.state.set_formula("(y, -x, z)".into()));
+    assert!(app.state.set_mode(true));
+    let original = app.state.scene_domain().center();
+    app.state
+        .commit_seed_layout(SeedLayout {
+            seeds: vec![SeedPoint {
+                position: original,
+                anchor: None,
+            }],
+        })
+        .expect("the starting seed commits");
+    let _ = frame(&ctx, &mut app, Vec::new());
+    let base_history = app.history_len();
+
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(900.0, 700.0));
+    let aspect = rect.width() / rect.height();
+    let press = rect.center();
+    // A real primary press opens the gesture transaction. The headless viewport
+    // returns before `seed_pointer_interaction`, so the drag itself is driven
+    // through the same production move seam.
+    let _ = frame(&ctx, &mut app, vec![moved(press), button(press, true)]);
+    app.controls.seed_drag = Some(0);
+
+    app.test_update_seed_drag(press + vec2(60.0, 0.0), rect, aspect);
+    let moved_position = app.state.seed_layout().seeds[0].position;
+    assert_ne!(moved_position, original, "the drag moves the seed");
+
+    // Capture/fly activation mid-drag ends the gesture instead of writing.
+    app.test_harness().set_capture_active(true);
+    app.test_update_seed_drag(press + vec2(120.0, 0.0), rect, aspect);
+    assert_eq!(
+        app.state.seed_layout().seeds[0].position,
+        moved_position,
+        "a captured drag stops following the pointer"
+    );
+    assert!(
+        app.controls.seed_drag.is_none(),
+        "the captured drag is cleared rather than left open"
+    );
+
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(press + vec2(120.0, 0.0), false)],
+    );
+    assert_eq!(
+        app.history_len(),
+        base_history + 1,
+        "the whole gesture is still exactly one history entry"
+    );
+    assert!(app.undo_document(&ctx), "the drag is undoable");
+    assert_eq!(
+        app.state.seed_layout().seeds[0].position,
+        original,
+        "undo restores the pre-drag seed position"
+    );
 }
 
 #[test]
@@ -306,8 +512,7 @@ fn menu_camera_reset_is_reachable_recorded_and_reversible() {
     app.camera.position = [5.0, 6.0];
     app.camera.scale = 3.0;
     app.fly = Some(vector_field_explorer::fly_camera::FlyCamera::from_orbit(
-        &app.orbit,
-        1.0,
+        &app.orbit, 1.0,
     ));
     settle(&ctx, &mut app);
     assert_eq!(app.history_len(), 1, "the combined change is one entry");
@@ -381,7 +586,11 @@ fn file_effects_do_not_replay() {
     app.apply_menu_action_for_test(MenuAction::ExportScreenshotSvg, &ctx);
     idle(&ctx, &mut app);
 
-    assert_eq!(app.history_len(), entries, "file effects leave history alone");
+    assert_eq!(
+        app.history_len(),
+        entries,
+        "file effects leave history alone"
+    );
     assert_eq!(app.history_redo_len(), redo, "and leave the cursor alone");
 }
 
@@ -448,7 +657,10 @@ fn reset_scope_preserves_other_state() {
     app.reset_scope(EditScope::Camera);
     idle(&ctx, &mut app);
     assert_eq!(app.orbit, OrbitCamera::default());
-    assert_eq!(app.state.formula, formula, "formula survives a camera reset");
+    assert_eq!(
+        app.state.formula, formula,
+        "formula survives a camera reset"
+    );
     assert_eq!(
         app.state.colormap,
         Colormap::Viridis,
@@ -461,7 +673,11 @@ fn reset_scope_preserves_other_state() {
     app.reset_scope(EditScope::Simulation);
     idle(&ctx, &mut app);
     assert_eq!(app.clock.time, 0.0, "simulation time returns to zero");
-    assert_eq!(app.history_len(), entries, "a simulation reset is undo-free");
+    assert_eq!(
+        app.history_len(),
+        entries,
+        "a simulation reset is undo-free"
+    );
     assert_eq!(app.state.formula, formula);
     assert_eq!(app.state.colormap, Colormap::Viridis);
     assert_eq!(app.orbit, OrbitCamera::default());
