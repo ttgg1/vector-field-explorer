@@ -233,6 +233,18 @@ impl ColorMapping {
         Ok(())
     }
 
+    /// Whether this mapping reproduces the legacy `Colormap` path exactly.
+    ///
+    /// True only for the builtin `colormap` palette in linear mode colouring
+    /// magnitude with no manual range. Callers can then skip construction of
+    /// [`ColorStats`] and keep the old `colormap.colormap(..)` call.
+    pub fn is_legacy_equivalent(&self, colormap: Colormap) -> bool {
+        self.palette == ColorPalette::Builtin(colormap)
+            && self.mode == ScaleMode::Linear
+            && self.quantity == ColorQuantity::Magnitude
+            && self.manual_range.is_none()
+    }
+
     /// The range sampling and the legend actually use.
     ///
     /// A manual range always wins. Otherwise magnitude auto-fits to the sample

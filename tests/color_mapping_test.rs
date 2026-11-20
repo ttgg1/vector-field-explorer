@@ -798,3 +798,105 @@ fn freezes_commit_the_current_effective_range_once() {
     assert!(!state.freeze_color_range(&stats));
     assert!(!state.dirty, "direction has no freezable range");
 }
+
+#[test]
+fn is_legacy_equivalent_only_accepts_the_default_builtin_path() {
+    let default = make_mapping(
+        ColorPalette::Builtin(Colormap::Viridis),
+        ScaleMode::Linear,
+        ColorQuantity::Magnitude,
+        None,
+    );
+    assert!(default.is_legacy_equivalent(Colormap::Viridis));
+    assert!(
+        !default.is_legacy_equivalent(Colormap::Turbo),
+        "a different builtin is not the legacy path"
+    );
+
+    assert!(
+        !make_mapping(
+            ColorPalette::Custom(custom_ramp()),
+            ScaleMode::Linear,
+            ColorQuantity::Magnitude,
+            None,
+        )
+        .is_legacy_equivalent(Colormap::Viridis),
+        "a custom palette is not the legacy path"
+    );
+    assert!(
+        !make_mapping(
+            ColorPalette::Builtin(Colormap::Viridis),
+            ScaleMode::SignedLog { half_width: 0.5 },
+            ColorQuantity::Magnitude,
+            None,
+        )
+        .is_legacy_equivalent(Colormap::Viridis),
+        "a non-linear mode is not the legacy path"
+    );
+    for quantity in [
+        ColorQuantity::ComponentX,
+        ColorQuantity::ComponentY,
+        ColorQuantity::ComponentZ,
+        ColorQuantity::Direction2d,
+    ] {
+        assert!(
+            !make_mapping(
+                ColorPalette::Builtin(Colormap::Viridis),
+                ScaleMode::Linear,
+                quantity,
+                None,
+            )
+            .is_legacy_equivalent(Colormap::Viridis),
+            "{quantity:?} is not the legacy path"
+        );
+    }
+    assert!(
+        !make_mapping(
+            ColorPalette::Builtin(Colormap::Viridis),
+            ScaleMode::Linear,
+            ColorQuantity::Magnitude,
+            Some((0.0, 1.0)),
+        )
+        .is_legacy_equivalent(Colormap::Viridis),
+        "a manual range is not the legacy path"
+    );
+}
+
+#[test]
+fn view_options_forward_only_a_non_legacy_mapping() {
+    let mut state = State::new(false);
+    assert!(
+        state.view_options().color_mapping.is_none(),
+        "the default Viridis/Magnitude/Linear path stays legacy"
+    );
+
+    assert!(state.set_color_quantity(ColorQuantity::ComponentX));
+    assert_eq!(
+        state
+            .view_options()
+            .color_mapping
+            .expect("a component quantity is non-legacy")
+            .quantity,
+        ColorQuantity::ComponentX
+    );
+
+    assert!(state.set_color_quantity(ColorQuantity::Magnitude));
+    assert!(state.set_auto_fit(false));
+    assert!(state.set_color_range(1.0, 2.0));
+    assert!(
+        state.view_options().color_mapping.is_some(),
+        "a manual range is not legacy-equivalent"
+    );
+
+    assert!(state.set_auto_fit(true));
+    assert!(state.set_color_ramp(Some(custom_ramp())));
+    assert!(
+        state.view_options().color_mapping.is_some(),
+        "a custom palette is not legacy-equivalent"
+    );
+    assert!(state.set_colormap(Colormap::Viridis));
+    assert!(
+        state.view_options().color_mapping.is_none(),
+        "clearing the custom ramp returns to the legacy path"
+    );
+}

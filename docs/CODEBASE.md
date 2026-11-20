@@ -1764,20 +1764,33 @@ same inclusive test (`particles.rs`, `streamlines.rs`).
 **Purpose.** Evaluate the field over the domain grid and produce coloured arrow
 data.
 
-**Public API.** `ViewOptions { colormap, color_range }`, its `Default`;
-`ArrowData { position, dir, mag, color }`; `magnitude_range`;
-`sample_field`.
+**Public API.** `ViewOptions { colormap, color_range, color_mapping }`, its
+`Default` (`color_mapping: None`); `ArrowData { position, dir, mag, color }`;
+`magnitude_range`; `sample_field`, `sample_field_at`, `sample_plane_at`.
 
 **Invariants.**
 - Degenerate samples (non-finite field, magnitude < `1e-6`) are skipped.
 - `dir` is always unit length; `mag` is the original magnitude.
-- The colour range is the explicit `ViewOptions::color_range`, otherwise the
-  min/max of the samples actually kept; an empty input gives `(0.0, 0.0)`.
+- With an active `ViewOptions::color_mapping` (issue #83), `ColorStats` comes
+  from the arrows actually kept and each arrow is coloured by
+  `ColorMapping::sample`; the explicit/auto `color_range` is then unused.
+- Without a mapping, the colour range is the explicit
+  `ViewOptions::color_range`, otherwise the min/max of the samples actually
+  kept; an empty input gives `(0.0, 0.0)`. This legacy path is byte-identical.
+- Plane sampling projects the world field onto the frame first; both the
+  direction and the component quantities use that projected local vector,
+  which is what the slice actually draws.
 - `magnitude_range` on an empty slice gives `(0.0, 0.0)`.
 
 **Pinned by.** `tests/sampling_test.rs`: `constant_field_fills_grid`,
 `all_zero_field_yields_no_arrows`, `sample_skips_nan_arrows`,
-`color_follows_provided_range`, `magnitude_range_of_constant_field`.
+`color_follows_provided_range`, `magnitude_range_of_constant_field`,
+`legacy_mapping_is_byte_identical_to_no_mapping`,
+`legacy_manual_range_parity_includes_out_of_range_values`,
+`component_quantity_uses_a_zero_centred_range`,
+`plane_direction_uses_the_projected_local_vector`,
+`manual_range_is_honoured_and_auto_uses_the_sample_set`,
+`non_finite_or_collapsed_ranges_fall_back_to_mid_grey`.
 
 **Limitations.** One full resample per dirty rebuild; no incremental sampling.
 `sample_field` always uses the 3D evaluator, so a 2D grid is a single z slice.
@@ -1885,17 +1898,21 @@ live renderer path.
 
 **Purpose.** Issue #83 slice B1: the pure model tying a palette, quantity and
 scale mode to one effective range for sampling, legend ticks and clipping
-counts. It does not touch sampling, arrows, particles, the renderer, export or
-any UI widget; slice B2 wires it in.
+counts. Slice B2a wires it into grid/plane sampling and streamlines; it still
+does not touch particles, trails, the renderer, export or any UI widget.
 
 **Public API.** `ColorQuantity { Magnitude, ComponentX, ComponentY, ComponentZ,
 Direction2d }` with `ALL`, `label` and `available(is_3d)`;
 `ColorPalette { Builtin(Colormap), Custom(ColorRamp) }` with `validate`, `kind`
 and `sample_unit`; `ColorSample`, `ColorStats` (`from_samples`), `ColorMapping`
-(`validate`, `effective_range`, `sample`, `legend`, `clip_counts`,
-`explanation`); `ClipSide`, `MappedColor`, `ColorLegend`, `ClipCounts`.
+(`validate`, `is_legacy_equivalent`, `effective_range`, `sample`, `legend`,
+`clip_counts`, `explanation`); `ClipSide`, `MappedColor`, `ColorLegend`,
+`ClipCounts`.
 
 **Invariants.**
+- `is_legacy_equivalent(colormap)` is true only for that builtin palette in
+  `Linear` mode colouring `Magnitude` with no manual range, letting callers
+  keep the old `Colormap` path byte-identical.
 - Direction colouring is rejected in 3D with a fixed message; every other
   quantity is available in both views.
 - Magnitude auto-fits to the sample magnitudes; components auto-fit
@@ -1919,9 +1936,12 @@ and `sample_unit`; `ColorSample`, `ColorStats` (`from_samples`), `ColorMapping`
 auto range, builtin byte parity across Viridis/Turbo/Mono, custom override,
 symmetric component ranges, direction angle/availability, signed-log fallback
 and centre, clipping sides/counts, legend range/mode and `ColorStyle` tick
-parity, non-finite mid grey, State mapping/setter/freeze behaviour.
+parity, non-finite mid grey, State mapping/setter/freeze behaviour, and
+`is_legacy_equivalent_only_accepts_the_default_builtin_path`.
 
-**Limitations.** No renderer, legend widget or export wiring in this slice.
+**Limitations.** No particle/trail colouring, renderer, legend widget or export
+wiring in this slice; streamlines only use the mapping when the state passes
+one, and the legacy streamlines path stays byte-identical.
 
 #### `src/plane.rs` — plane-by-plane selection
 
@@ -2085,6 +2105,10 @@ decisions that do not need a window.
 - Streamlines: Auto seeds a jittered grid (half density, clamped 4..=24) plus
   clicks; Click hides the grid but still accepts clicks; off hides both.
   Tracing is RK4 with step `0.5 * spacing`, budget 120, both directions.
+  `view_options` passes the effective `ColorMapping` only when it is not
+  legacy-equivalent; the mapping uses stats from the sampled arrows, while
+  `None` keeps the old `Colormap` segment colours byte-identical. Click bursts
+  reuse the view's sampled arrows for the same stats.
 - Click bursts: 5 seeds, 8 % of the smallest positive extent, deterministic from
   the clicked bits; 2D pins z, 3D jitters depth.
 - `particle_target()` is `Some` only when `particles && active_dimension() == 3`
