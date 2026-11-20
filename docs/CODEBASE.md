@@ -2429,6 +2429,11 @@ decisions that do not need a window.
   `layer_styles()` and `commit_layer_styles` (validate, equal-set no-op, assign,
   exactly one dirty request; a rejected record leaves the previous styles and
   dirty untouched).
+- Issue #87 slice S1 seed field: `seed_layout: SeedLayout` with `seed_layout()`,
+  `commit_seed_layout` (validate against the visible scene domain, equal-set
+  no-op, assign, exactly one dirty request; a rejected layout leaves the
+  previous seeds and dirty untouched) and `reset_seed_layout` (clear, dirty only
+  when non-empty). Streamline generation still uses the automatic grid until S2.
 - Issue #84 slice A2a drawable seams: `effective_arrow_params()` scales only the
   arrow girth (`head_width`, `shaft_radius`) by the Arrows width and leaves the
   stored record untouched; `flow_layer_style()` resolves the Flow opacity/width
@@ -2655,6 +2660,55 @@ composition, pinned field order, and validation never mutating the document.
 capture or `State` wiring in this slice; later slices call
 `ViewRecord::capture` at the call site.
 
+#### `src/seed_layout.rs` — explicit streamline seed layout
+
+**Purpose.** Issue #87 slice S1: the pure document model for explicit
+streamline seeds. A seed is a world position plus an optional planting-plane
+anchor; the layout is document state that is validated, sanitised, persisted
+and captured by the edit history. No generators, picking, UI or named layouts
+in this slice, and streamline generation still uses the automatic grid until
+S2 consumes the layout.
+
+**Public API.** `MAX_SEEDS` (`256`); `SeedAnchor { axis, index, u, v }` (`axis`
+is a `PlaneAxis`); `SeedPoint { position, anchor: Option<SeedAnchor> }`;
+`SeedLayout { seeds }` with `Default` (empty), `is_empty`, `len`, `clear`,
+`validate`, `sanitized` and `push`.
+
+**Contract.**
+- `validate` never repairs: it rejects more than `MAX_SEEDS` seeds, any
+  non-finite position, any position outside the inclusive domain bounds (with a
+  small absolute round-off epsilon) and any non-finite anchor `u`/`v`. Errors
+  name the seed index and the failed rule.
+- `sanitized` is total: it drops invalid seeds, then truncates to `MAX_SEEDS`,
+  preserving insertion order. An empty layout is valid.
+- `push` validates the point and enforces the cap, rejecting in full without
+  partially updating the collection. Generators append; insertion order is
+  preserved.
+- The anchor stores the plane axis, slice index and local `u`/`v` so a reopened
+  plane can restore them through `PlaneFrame::to_world`/`to_local`. It is a
+  record, not a live binding: moving the plane never moves a stored seed.
+- Serde keeps `glam` out of the schema: `position` is a plain `[f32; 3]` and
+  `axis` is the lower-case `x`/`y`/`z` token. An older/absent record loads the
+  empty layout.
+- In `State`, `commit_seed_layout` validates against `scene_domain`, is a
+  validated no-op when equal and otherwise dirties once; `reset_seed_layout`
+  clears and dirties only when non-empty. Startup restore sanitises the stored
+  layout against the same `scene_domain` authority and assigns it directly,
+  warning once when seeds were dropped.
+
+**Pinned by.** `tests/seed_layout_test.rs`: the empty layout, the cap and
+one-over rejection, sanitising non-finite/out-of-domain seeds and truncation,
+the rotated-plane anchor round trip, in-full push rejection and insertion
+order, and the commit no-op/dirty/reset rules. `tests/persistence_test.rs`
+round-trips the layout through the envelope, defaults older records to empty,
+sanitises a genuinely corrupt stored layout on restore (invalid seeds dropped,
+valid seeds kept in order, the result re-validated against the scene domain) and
+pins the non-dirtying startup assignment seam; `tests/scene_document_test.rs`
+keeps a non-empty layout through a saved scene.
+
+**Limitations.** S1 stores the layout only. Generators, Flow-section editing,
+viewport placement/dragging and named layouts are S2/S3.
+
 #### `src/edit_history.rs` — bounded edit history and reset scopes
 
 **Purpose.** Issue #86 slice A1: a pure, in-memory undo/redo model for the
@@ -2765,7 +2819,7 @@ helpers.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, explicit seed layout, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy |
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 | `LayerStyles` | `layers: [LayerOverride; 6]` in `LayerId::ALL` order, `families: [LayerOverride; 2]` in `PhysicsFamily::ALL` order; each override has optional `opacity`, `width`, `color` | `#[serde(default)]`; an absent key loads the neutral record; an invalid record is repaired by `sanitized` with a warning and never fails the envelope |
 | `appearance_profiles: Vec<AppearanceProfile>` | user profile records (`name`, `viewport`, `layer_styles`, `color`) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 32` are dropped with a warning |
