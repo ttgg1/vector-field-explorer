@@ -23,6 +23,7 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::animation::ANIMATION_PARTICLE_SUBSTEP;
+use crate::color_mapping::{ColorMapping, ColorSample, ColorStats};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::flow::Flow;
@@ -834,43 +835,87 @@ pub fn speed_range(particles: &Particles) -> (f32, f32) {
     }
 }
 
+/// Everything a particle colour rule needs: the legacy colormap fallback, the
+/// active mapping (if any) and the stats that mapping auto-fits against.
+pub struct ParticlePalette<'a> {
+    pub colormap: Colormap,
+    pub color_range: (f32, f32),
+    pub speed_range: (f32, f32),
+    pub mapping: Option<&'a ColorMapping>,
+    pub stats: &'a ColorStats,
+}
+
+fn unit_rgb(rgb: [u8; 3]) -> [f32; 3] {
+    [
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+    ]
+}
+
 /// The colour one dot or trail segment gets (ticket 48), in RGBA `0..1`.
 /// `alpha` is applied by the caller; the RGB rules are shared so dots and
 /// trails always agree for a given mode.
 #[doc(hidden)]
-#[allow(clippy::too_many_arguments)]
 pub fn particle_rgb<F: Flow + ?Sized>(
     mode: ParticleColorMode,
     flow: &F,
     point: Vec3,
     speed: f32,
-    colormap: Colormap,
-    color_range: (f32, f32),
-    speed_range: (f32, f32),
+    palette: &ParticlePalette<'_>,
     appearance: &ParticleAppearance,
     time: f32,
 ) -> [f32; 3] {
     match mode {
         ParticleColorMode::Magnitude => {
-            let mag = match flow.eval(point, time) {
-                Some(v) if v.is_finite() => v.length(),
-                _ => 0.0,
+            let (mag, dir) = match flow.eval(point, time) {
+                Some(v) if v.is_finite() => {
+                    let mag = v.length();
+                    let dir = if mag > 0.0 && mag.is_finite() {
+                        v / mag
+                    } else {
+                        Vec3::ZERO
+                    };
+                    (mag, dir)
+                }
+                _ => (0.0, Vec3::ZERO),
             };
-            let ramp = colormap.colormap(mag, color_range.0, color_range.1);
-            [
-                ramp[0] as f32 / 255.0,
-                ramp[1] as f32 / 255.0,
-                ramp[2] as f32 / 255.0,
-            ]
+            match palette.mapping {
+                Some(mapping) => unit_rgb(
+                    mapping
+                        .sample(
+                            &ColorSample {
+                                magnitude: mag,
+                                dir,
+                            },
+                            palette.stats,
+                        )
+                        .rgb,
+                ),
+                None => unit_rgb(
+                    palette
+                        .colormap
+                        .colormap(mag, palette.color_range.0, palette.color_range.1),
+                ),
+            }
         }
-        ParticleColorMode::Speed => {
-            let ramp = colormap.colormap(speed, speed_range.0, speed_range.1);
-            [
-                ramp[0] as f32 / 255.0,
-                ramp[1] as f32 / 255.0,
-                ramp[2] as f32 / 255.0,
-            ]
-        }
+        ParticleColorMode::Speed => match palette.mapping {
+            Some(mapping) => {
+                let (lo, hi) = palette.speed_range;
+                let t = if hi > lo {
+                    let t = (speed - lo) / (hi - lo);
+                    if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 }
+                } else {
+                    0.0
+                };
+                unit_rgb(mapping.palette.sample_unit(t))
+            }
+            None => unit_rgb(
+                palette
+                    .colormap
+                    .colormap(speed, palette.speed_range.0, palette.speed_range.1),
+            ),
+        },
         ParticleColorMode::Fixed => {
             let [r, g, b, _] = appearance.fixed_color;
             [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
@@ -888,10 +933,8 @@ pub fn dot_instances_at<F: Flow + ?Sized>(
     particles: &Particles,
     flow: &F,
     domain: &Domain,
-    colormap: Colormap,
-    color_range: (f32, f32),
+    palette: &ParticlePalette<'_>,
     appearance: &ParticleAppearance,
-    speed_range: (f32, f32),
     radius: f32,
     time: f32,
 ) -> Vec<ArrowInstanceGPU> {
@@ -914,9 +957,7 @@ pub fn dot_instances_at<F: Flow + ?Sized>(
             flow,
             p,
             speed,
-            colormap,
-            color_range,
-            speed_range,
+            palette,
             &appearance,
             time,
         );
@@ -942,33 +983,18 @@ pub fn dot_instances<F: Flow + ?Sized>(
     particles: &Particles,
     flow: &F,
     domain: &Domain,
-    colormap: Colormap,
-    color_range: (f32, f32),
+    palette: &ParticlePalette<'_>,
     appearance: &ParticleAppearance,
-    speed_range: (f32, f32),
     radius: f32,
 ) -> Vec<ArrowInstanceGPU> {
-    dot_instances_at(
-        particles,
-        flow,
-        domain,
-        colormap,
-        color_range,
-        appearance,
-        speed_range,
-        radius,
-        0.0,
-    )
+    dot_instances_at(particles, flow, domain, palette, appearance, radius, 0.0)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn trail_instances_at<F: Flow + ?Sized>(
     particles: &Particles,
     flow: &F,
-    colormap: Colormap,
-    color_range: (f32, f32),
+    palette: &ParticlePalette<'_>,
     appearance: &ParticleAppearance,
-    speed_range: (f32, f32),
     spacing: f32,
     time: f32,
 ) -> Vec<LineInstanceGPU> {
@@ -1002,9 +1028,7 @@ pub fn trail_instances_at<F: Flow + ?Sized>(
             flow,
             midpoint,
             speed,
-            colormap,
-            color_range,
-            speed_range,
+            palette,
             &appearance,
             time,
         );
@@ -1029,22 +1053,11 @@ pub fn trail_instances_at<F: Flow + ?Sized>(
 pub fn trail_instances<F: Flow + ?Sized>(
     particles: &Particles,
     flow: &F,
-    colormap: Colormap,
-    color_range: (f32, f32),
+    palette: &ParticlePalette<'_>,
     appearance: &ParticleAppearance,
-    speed_range: (f32, f32),
     spacing: f32,
 ) -> Vec<LineInstanceGPU> {
-    trail_instances_at(
-        particles,
-        flow,
-        colormap,
-        color_range,
-        appearance,
-        speed_range,
-        spacing,
-        0.0,
-    )
+    trail_instances_at(particles, flow, palette, appearance, spacing, 0.0)
 }
 
 /// The billboard quad's six corners in dot-local space: a camera-facing square

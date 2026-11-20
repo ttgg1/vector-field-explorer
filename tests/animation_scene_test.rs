@@ -3,7 +3,9 @@
 use vector_field_explorer::VfApp;
 use vector_field_explorer::animation::{ANIMATION_PARTICLE_SUBSTEP, AnimationError};
 use vector_field_explorer::animation_scene::{AnimationFrame, AnimationSnapshot};
+use vector_field_explorer::app::scene_color_facts_for_tests;
 use vector_field_explorer::camera::OrbitCamera;
+use vector_field_explorer::color_mapping::{ColorSample, ColorStats};
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::particles::{self, AdvectSettings, Particles, advect};
 use vector_field_explorer::viewmodel::State;
@@ -198,4 +200,27 @@ fn first_frame_renders_the_captured_particle_cloud() {
         !frame.scene.combined.is_empty(),
         "the 3D combined stream must include the captured dots"
     );
+}
+
+#[test]
+fn scene_color_facts_collects_stats_from_drawn_arrows() {
+    let mut state = State::new(false);
+    state.set_formula("(x + 1, y - 1)".to_owned());
+    state.set_density(8);
+    let (range, stats, mapping) = scene_color_facts_for_tests(&state);
+    let sampled = state.sample();
+    assert!(!sampled.is_empty(), "the formula view has drawn arrows");
+    let expected = ColorStats::from_samples(
+        &sampled
+            .iter()
+            .map(|arrow| ColorSample {
+                magnitude: arrow.mag,
+                dir: arrow.dir,
+            })
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(stats, expected);
+    assert_eq!(range, state.color_range(&sampled));
+    assert_eq!(range, vector_field_explorer::sampling::magnitude_range(&sampled));
+    assert!(mapping.is_none(), "the default mapping is legacy");
 }

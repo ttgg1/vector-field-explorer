@@ -55,8 +55,15 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         state.show_coordinate_system,
     ));
     if let Some(cloud) = cloud {
-        let range = state.color_range(&state.sample());
+        let facts = crate::app::scene_color_facts(&state);
         let speeds = particles::speed_range(&cloud);
+        let palette = particles::ParticlePalette {
+            colormap: state.colormap,
+            color_range: facts.range,
+            speed_range: speeds,
+            mapping: facts.mapping.as_ref(),
+            stats: &facts.stats,
+        };
         let spacing = state.spacing();
         let domain = state.scene_domain();
         let flow = state.scene_flow();
@@ -64,20 +71,16 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
             &cloud,
             &flow,
             &domain,
-            state.colormap,
-            range,
+            &palette,
             &state.particle_appearance,
-            speeds,
             state.particle_radius(spacing),
             state.time,
         ));
         let mut trails = particles::trail_instances_at(
             &cloud,
             &flow,
-            state.colormap,
-            range,
+            &palette,
             &state.particle_appearance,
-            speeds,
             spacing,
             state.time,
         );

@@ -10,16 +10,20 @@
 //! / `crate::` to `vector_field_explorer::`.
 
 use glam::{UVec3, Vec3};
+use vector_field_explorer::color_mapping::{
+    ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats,
+};
+use vector_field_explorer::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
-use vector_field_explorer::flow::PlaneFlow;
+use vector_field_explorer::flow::{Flow, PlaneFlow};
 use vector_field_explorer::particles::{
     AdvectSettings, CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, DOT_SPACING_FRACTION, MAX_PARTICLES,
     MAX_TRAIL_LEN, MAX_TRAIL_SEGMENTS, PARTICLES_PER_DENSITY, ParticleAppearance,
-    ParticleColorMode, Particles, advect, clear, count, dot_instances, effective_particle_count,
-    effective_trail_len, particle_rgb, resize, retarget, spawn, spawn_at, speed_range,
-    target_count, trail_instances,
+    ParticleColorMode, ParticlePalette, Particles, advect, clear, count, dot_instances,
+    effective_particle_count, effective_trail_len, particle_rgb, resize, retarget, spawn, spawn_at,
+    speed_range, target_count, trail_instances,
 };
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::viewmodel::State;
@@ -34,6 +38,44 @@ fn step(dt: f32) -> AdvectSettings {
     AdvectSettings { dt, ..AdvectSettings::default() }
 }
 
+static EMPTY_STATS: ColorStats = ColorStats {
+    min_magnitude: 0.0,
+    max_magnitude: 0.0,
+    max_abs_component: 0.0,
+};
+
+/// The legacy palette: no mapping, so particle_rgb keeps the old colormap calls.
+fn legacy_palette(
+    colormap: Colormap,
+    color_range: (f32, f32),
+    speed_range: (f32, f32),
+) -> ParticlePalette<'static> {
+    ParticlePalette {
+        colormap,
+        color_range,
+        speed_range,
+        mapping: None,
+        stats: &EMPTY_STATS,
+    }
+}
+
+fn two_stop_ramp(low: [u8; 3], high: [u8; 3]) -> ColorRamp {
+    ColorRamp {
+        stops: vec![
+            ColorStop {
+                position: 0.0,
+                color: Rgb(low),
+            },
+            ColorStop {
+                position: 1.0,
+                color: Rgb(high),
+            },
+        ],
+        reversed: false,
+        kind: RampKind::Sequential,
+    }
+}
+
 /// Default dots: Magnitude colouring, opaque, with the cloud's speed range.
 fn dots(
     cloud: &Particles,
@@ -43,14 +85,13 @@ fn dots(
     range: (f32, f32),
     radius: f32,
 ) -> Vec<vector_field_explorer::renderer::ArrowInstanceGPU> {
+    let palette = legacy_palette(colormap, range, speed_range(cloud));
     dot_instances(
         cloud,
         field,
         domain,
-        colormap,
-        range,
+        &palette,
         &ParticleAppearance::default(),
-        speed_range(cloud),
         radius,
     )
 }
@@ -914,10 +955,8 @@ fn trail_alpha_fades_from_opacity_and_width_follows_spacing() {
     let segments = trail_instances(
         &cloud,
         &field,
-        Colormap::Mono,
-        (0.0, 1.0),
+        &legacy_palette(Colormap::Mono, (0.0, 1.0), speed_range(&cloud)),
         &appearance,
-        speed_range(&cloud),
         1.0,
     );
     assert_eq!(segments.len(), 3, "one segment per consecutive pair");
@@ -943,10 +982,8 @@ fn trails_are_empty_below_two_points_or_at_zero_length() {
             trail_instances(
                 &cloud,
                 &field,
-                Colormap::Viridis,
-                (0.0, 1.0),
+                &legacy_palette(Colormap::Viridis, (0.0, 1.0), speed_range(&cloud)),
                 &appearance,
-                speed_range(&cloud),
                 1.0,
             )
             .is_empty(),
@@ -967,10 +1004,8 @@ fn fixed_trails_use_the_fixed_colour_exactly() {
     let segments = trail_instances(
         &cloud,
         &field,
-        Colormap::Viridis,
-        (0.0, 1.0),
+        &legacy_palette(Colormap::Viridis, (0.0, 1.0), speed_range(&cloud)),
         &appearance,
-        speed_range(&cloud),
         1.0,
     );
     assert_eq!(segments[0].color[..3], [10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0]);
@@ -1002,20 +1037,16 @@ fn magnitude_trails_use_the_provided_range() {
     let at_max = trail_instances(
         &cloud,
         &field,
-        Colormap::Mono,
-        (0.0, 2.0),
+        &legacy_palette(Colormap::Mono, (0.0, 2.0), speed_range(&cloud)),
         &appearance,
-        speed_range(&cloud),
         1.0,
     );
     assert_eq!(at_max[0].color[..3], [1.0, 1.0, 1.0], "magnitude 2 at the ramp top");
     let at_quarter = trail_instances(
         &cloud,
         &field,
-        Colormap::Mono,
-        (0.0, 8.0),
+        &legacy_palette(Colormap::Mono, (0.0, 8.0), speed_range(&cloud)),
         &appearance,
-        speed_range(&cloud),
         1.0,
     );
     let quarter = 64.0 / 255.0;
@@ -1035,10 +1066,8 @@ fn speed_trails_normalise_over_the_observed_cloud_and_handle_equal_speeds() {
     let segments = trail_instances(
         &cloud,
         &field,
-        Colormap::Mono,
-        (0.0, 1.0),
+        &legacy_palette(Colormap::Mono, (0.0, 1.0), observed),
         &appearance,
-        observed,
         1.0,
     );
     assert_eq!(segments[0].color[..3], [0.0, 0.0, 0.0], "slowest at the ramp bottom");
@@ -1078,10 +1107,8 @@ fn a_full_cloud_with_requested_32_stays_inside_the_segment_cap() {
     let segments = trail_instances(
         &cloud,
         &field,
-        Colormap::Viridis,
-        (0.0, 1.0),
+        &legacy_palette(Colormap::Viridis, (0.0, 1.0), speed_range(&cloud)),
         &appearance,
-        speed_range(&cloud),
         1.0,
     );
     assert!(
@@ -1105,10 +1132,8 @@ fn dot_alpha_is_the_opacity_and_rgb_is_unchanged() {
         &cloud,
         &field,
         &domain,
-        Colormap::Mono,
-        (0.0, 2.0),
+        &legacy_palette(Colormap::Mono, (0.0, 2.0), speed_range(&cloud)),
         &ParticleAppearance { opacity: 0.4, ..ParticleAppearance::default() },
-        speed_range(&cloud),
         0.1,
     );
     for (opaque_dot, translucent_dot) in opaque.iter().zip(translucent.iter()) {
@@ -1129,14 +1154,12 @@ fn fixed_dots_use_the_fixed_colour_and_speed_dots_use_speed_range() {
         &cloud,
         &field,
         &domain,
-        Colormap::Viridis,
-        (0.0, 1.0),
+        &legacy_palette(Colormap::Viridis, (0.0, 1.0), speed_range(&cloud)),
         &ParticleAppearance {
             color_mode: ParticleColorMode::Fixed,
             fixed_color: [1, 2, 3, 255],
             ..ParticleAppearance::default()
         },
-        speed_range(&cloud),
         0.1,
     );
     assert_eq!(fixed[0].color[..3], [1.0 / 255.0, 2.0 / 255.0, 3.0 / 255.0]);
@@ -1144,13 +1167,11 @@ fn fixed_dots_use_the_fixed_colour_and_speed_dots_use_speed_range() {
         &cloud,
         &field,
         &domain,
-        Colormap::Mono,
-        (0.0, 1.0),
+        &legacy_palette(Colormap::Mono, (0.0, 1.0), speed_range(&cloud)),
         &ParticleAppearance {
             color_mode: ParticleColorMode::Speed,
             ..ParticleAppearance::default()
         },
-        speed_range(&cloud),
         0.1,
     );
     assert_eq!(speed[0].color[..3], [0.0, 0.0, 0.0], "slowest dot");
@@ -1209,19 +1230,292 @@ fn magnitude_colour_uses_the_projected_plane_magnitude() {
         expected[1] as f32 / 255.0,
         expected[2] as f32 / 255.0,
     ];
+    let palette = legacy_palette(colormap, (0.0, 100.0), (0.0, 1.0));
     let rgb = particle_rgb(
         ParticleColorMode::Magnitude,
         &flow,
         Vec3::ZERO,
         0.0,
-        colormap,
-        (0.0, 100.0),
-        (0.0, 1.0),
+        &palette,
         &ParticleAppearance::default(),
         0.0,
     );
     assert_eq!(
         rgb, expected,
         "the normal component is projected out, so colour uses magnitude 1, not 100"
+    );
+}
+
+struct NonFiniteFlow;
+
+impl Flow for NonFiniteFlow {
+    fn eval(&self, _point: Vec3, _t: f32) -> Option<Vec3> {
+        Some(Vec3::new(f32::NAN, 0.0, 0.0))
+    }
+}
+
+#[test]
+fn particle_magnitude_uses_custom_ramp_and_manual_range() {
+    let field = FieldExpr::parse("(3, 4)").expect("magnitude 5 field parses");
+    let mapping = ColorMapping {
+        palette: ColorPalette::Custom(two_stop_ramp([10, 20, 30], [200, 210, 220])),
+        mode: ScaleMode::Linear,
+        quantity: ColorQuantity::Magnitude,
+        manual_range: Some((0.0, 10.0)),
+    };
+    let palette = ParticlePalette {
+        colormap: Colormap::Turbo,
+        color_range: (0.0, 1.0),
+        speed_range: (0.0, 1.0),
+        mapping: Some(&mapping),
+        stats: &EMPTY_STATS,
+    };
+    let rgb = particle_rgb(
+        ParticleColorMode::Magnitude,
+        &field,
+        Vec3::ZERO,
+        0.0,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        rgb,
+        [105.0 / 255.0, 115.0 / 255.0, 125.0 / 255.0],
+        "magnitude 5 in 0..10 samples the custom ramp midpoint",
+    );
+}
+
+#[test]
+fn particle_magnitude_follows_component_quantity() {
+    let field = FieldExpr::parse("(3, 4)").expect("3-4 field parses");
+    let mapping = ColorMapping {
+        palette: ColorPalette::Custom(two_stop_ramp([0, 0, 0], [100, 100, 100])),
+        mode: ScaleMode::Linear,
+        quantity: ColorQuantity::ComponentX,
+        manual_range: Some((0.0, 10.0)),
+    };
+    let palette = ParticlePalette {
+        colormap: Colormap::Turbo,
+        color_range: (0.0, 10.0),
+        speed_range: (0.0, 1.0),
+        mapping: Some(&mapping),
+        stats: &EMPTY_STATS,
+    };
+    let rgb = particle_rgb(
+        ParticleColorMode::Magnitude,
+        &field,
+        Vec3::ZERO,
+        0.0,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        rgb, [30.0 / 255.0; 3],
+        "the normalized direction's x component (0.6 * 5 = 3) drives the ramp",
+    );
+}
+
+#[test]
+fn particle_legacy_colours_are_byte_identical_without_a_mapping() {
+    let field = FieldExpr::parse("(3, 4)").expect("3-4 field parses");
+    let palette = legacy_palette(Colormap::Turbo, (0.0, 10.0), (0.0, 2.0));
+
+    let expected = Colormap::Turbo.colormap(5.0, 0.0, 10.0);
+    let magnitude = particle_rgb(
+        ParticleColorMode::Magnitude,
+        &field,
+        Vec3::ZERO,
+        0.0,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        magnitude,
+        [
+            expected[0] as f32 / 255.0,
+            expected[1] as f32 / 255.0,
+            expected[2] as f32 / 255.0,
+        ],
+        "no mapping keeps the exact colormap magnitude rule",
+    );
+
+    let expected = Colormap::Turbo.colormap(1.5, 0.0, 2.0);
+    let speed = particle_rgb(
+        ParticleColorMode::Speed,
+        &field,
+        Vec3::ZERO,
+        1.5,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        speed,
+        [
+            expected[0] as f32 / 255.0,
+            expected[1] as f32 / 255.0,
+            expected[2] as f32 / 255.0,
+        ],
+        "no mapping keeps the exact colormap speed rule",
+    );
+
+    let appearance = ParticleAppearance {
+        color_mode: ParticleColorMode::Fixed,
+        fixed_color: [7, 8, 9, 255],
+        ..ParticleAppearance::default()
+    };
+    let fixed = particle_rgb(
+        ParticleColorMode::Fixed,
+        &field,
+        Vec3::ZERO,
+        0.0,
+        &palette,
+        &appearance,
+        0.0,
+    );
+    assert_eq!(fixed, [7.0 / 255.0, 8.0 / 255.0, 9.0 / 255.0]);
+}
+
+#[test]
+fn particle_speed_uses_custom_palette_with_its_own_range() {
+    let field = FieldExpr::parse("(1, 0)").expect("pump field parses");
+    let mapping = ColorMapping {
+        palette: ColorPalette::Custom(two_stop_ramp([0, 0, 0], [200, 200, 200])),
+        mode: ScaleMode::Linear,
+        quantity: ColorQuantity::Magnitude,
+        manual_range: Some((0.0, 100.0)),
+    };
+    let palette = ParticlePalette {
+        colormap: Colormap::Turbo,
+        color_range: (0.0, 1.0),
+        speed_range: (0.0, 10.0),
+        mapping: Some(&mapping),
+        stats: &EMPTY_STATS,
+    };
+    let mid = particle_rgb(
+        ParticleColorMode::Speed,
+        &field,
+        Vec3::ZERO,
+        5.0,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        mid, [100.0 / 255.0; 3],
+        "speed 5 in its own 0..10 range is the palette midpoint, not manual_range",
+    );
+    let top = particle_rgb(
+        ParticleColorMode::Speed,
+        &field,
+        Vec3::ZERO,
+        25.0,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(top, [200.0 / 255.0; 3], "above the observed range clamps to 1");
+}
+
+#[test]
+fn particle_fixed_colour_ignores_mapping() {
+    let field = FieldExpr::parse("(3, 4)").expect("3-4 field parses");
+    let mapping = ColorMapping {
+        palette: ColorPalette::Custom(two_stop_ramp([255, 0, 0], [0, 0, 255])),
+        mode: ScaleMode::Linear,
+        quantity: ColorQuantity::Magnitude,
+        manual_range: Some((0.0, 10.0)),
+    };
+    let palette = ParticlePalette {
+        colormap: Colormap::Turbo,
+        color_range: (0.0, 1.0),
+        speed_range: (0.0, 1.0),
+        mapping: Some(&mapping),
+        stats: &EMPTY_STATS,
+    };
+    let appearance = ParticleAppearance {
+        color_mode: ParticleColorMode::Fixed,
+        fixed_color: [11, 22, 33, 255],
+        ..ParticleAppearance::default()
+    };
+    let rgb = particle_rgb(
+        ParticleColorMode::Fixed,
+        &field,
+        Vec3::ZERO,
+        0.0,
+        &palette,
+        &appearance,
+        0.0,
+    );
+    assert_eq!(rgb, [11.0 / 255.0, 22.0 / 255.0, 33.0 / 255.0]);
+}
+
+#[test]
+fn particle_dots_and_trails_agree_for_the_same_palette() {
+    let (cloud, field, domain) = cloud_with_one_trail(2);
+    let stats = ColorStats::from_samples(&[ColorSample {
+        magnitude: 1.0,
+        dir: Vec3::X,
+    }]);
+    let mapping = ColorMapping {
+        palette: ColorPalette::Custom(two_stop_ramp([10, 20, 30], [200, 210, 220])),
+        mode: ScaleMode::Linear,
+        quantity: ColorQuantity::Magnitude,
+        manual_range: Some((0.0, 2.0)),
+    };
+    let palette = ParticlePalette {
+        colormap: Colormap::Viridis,
+        color_range: (0.0, 1.0),
+        speed_range: speed_range(&cloud),
+        mapping: Some(&mapping),
+        stats: &stats,
+    };
+    let appearance = ParticleAppearance {
+        color_mode: ParticleColorMode::Magnitude,
+        trail_len: 2,
+        ..ParticleAppearance::default()
+    };
+    let dots = dot_instances(&cloud, &field, &domain, &palette, &appearance, 0.1);
+    let trails = trail_instances(&cloud, &field, &palette, &appearance, 1.0);
+    assert_eq!(dots.len(), 1);
+    assert!(!trails.is_empty());
+    assert_eq!(
+        dots[0].color[..3],
+        trails[0].color[..3],
+        "dots and trails share the palette and sample the same constant field",
+    );
+    assert_eq!(dots[0].color[..3], [105.0 / 255.0, 115.0 / 255.0, 125.0 / 255.0]);
+}
+
+#[test]
+fn non_finite_particle_sample_falls_back_to_mid_grey() {
+    let mapping = ColorMapping {
+        palette: ColorPalette::Custom(two_stop_ramp([0, 0, 0], [255, 255, 255])),
+        mode: ScaleMode::Linear,
+        quantity: ColorQuantity::Magnitude,
+        manual_range: None,
+    };
+    let palette = ParticlePalette {
+        colormap: Colormap::Turbo,
+        color_range: (0.0, 10.0),
+        speed_range: (0.0, 1.0),
+        mapping: Some(&mapping),
+        stats: &EMPTY_STATS,
+    };
+    let rgb = particle_rgb(
+        ParticleColorMode::Magnitude,
+        &NonFiniteFlow,
+        Vec3::ZERO,
+        0.0,
+        &palette,
+        &ParticleAppearance::default(),
+        0.0,
+    );
+    assert_eq!(
+        rgb, [128.0 / 255.0; 3],
+        "a non-finite sample keeps magnitude 0, and empty auto stats map it to mid grey",
     );
 }

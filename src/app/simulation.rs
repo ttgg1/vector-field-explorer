@@ -143,7 +143,8 @@ impl VfApp {
             }
             self.state.refresh_maxwell_sampling();
             let fresh = self.state.snapshot();
-            self.dots_range = scene_dots_range(&self.state);
+            self.color_facts = scene_color_facts(&self.state);
+            self.dots_range = self.color_facts.range;
             self.flow_lines.clear();
             self.click_lines.clear();
             self.streamline_count = 0;
@@ -177,7 +178,8 @@ impl VfApp {
             // their own colours and there is no particle cloud to share a
             // range with. Avoid sampling the formula field, which is not on
             // screen.
-            self.dots_range = scene_dots_range(&self.state);
+            self.color_facts = scene_color_facts(&self.state);
+            self.dots_range = self.color_facts.range;
             self.flow_lines = Arc::unwrap_or_clone(fresh.lines);
             // Click bursts outlive the rebuild: they are anchored on the field,
             // not on the sampling grid, so retrace them against the new
@@ -260,6 +262,7 @@ impl VfApp {
         self.streamline_count = 0;
         self.source_glyph_line_count = 0;
         self.dots_range = (0.0, 1.0);
+        self.color_facts = SceneColorFacts::default();
         if let Some(scene) = self.scene.as_vector_mut() {
             scene.arrows = Arc::new(Vec::new());
             scene.lines = Arc::clone(&self.ode_lines);
@@ -350,7 +353,7 @@ impl VfApp {
                 },
             );
             let (dots, trails) =
-                particle_scene_instances(&self.state, &self.particles, self.dots_range);
+                particle_scene_instances(&self.state, &self.particles, &self.color_facts);
             let count = particle_count(&self.particles);
             if let Some(scene) = self.scene.as_vector_mut() {
                 scene.dots = dots;

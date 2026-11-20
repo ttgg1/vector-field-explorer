@@ -2602,8 +2602,9 @@ advection, and the dot/trail instance builders.
 `ParticleAppearance` (+ `sanitized`); `Particles` (`with_positions`, `history`
 test seams); `target_count`, `effective_particle_count`, `count`,
 `effective_trail_len`, `clear`, `spawn`, `resize`, `retarget`, `spawn_at`;
-`AdvectSettings`, `advect`, `advance_exact`, `speed_range`, `dot_instances`,
-`trail_instances`, `DOT_QUAD_CORNERS`, `dot_billboard_corners`.
+`AdvectSettings`, `advect`, `advance_exact`, `speed_range`, `ParticlePalette`,
+`particle_rgb`, `dot_instances`, `trail_instances`, `DOT_QUAD_CORNERS`,
+`dot_billboard_corners`.
 
 **Invariants.**
 - The cloud has a constant size between target changes. A particle that leaves
@@ -2628,10 +2629,15 @@ test seams); `target_count`, `effective_particle_count`, `count`,
   cloud; trail alpha fades toward the tail; width scales with grid spacing.
 - Dot instances use `origin.w = PARTICLE_KIND`, `dir_len.w = radius`; RGB follows
   Magnitude / Speed / Fixed; alpha is the particle opacity.
+- With an active `ParticlePalette::mapping`, Magnitude colours through the full
+  mapping (quantity/palette/scale/manual-or-frozen range) and Speed uses only
+  that palette with the observed `speed_range`; Fixed ignores the mapping.
+  Without a mapping the legacy colormap calls are byte-identical. Dots and
+  trails share one palette; trails sample the newest segment's midpoint.
 - `dot_billboard_corners` mirrors the camera-facing quad used by both dot
   shaders.
 
-**Pinned by.** `tests/particles_test.rs` (52 tests):
+**Pinned by.** `tests/particles_test.rs` (63 tests):
 `spawn_is_reproducible`, `spawn_2d_mode_pins_the_plane`,
 `outside_particle_respawns_inside`, `count_constant_under_vortex_advection`,
 `resize_caps_at_the_particle_budget`,
@@ -2640,8 +2646,17 @@ test seams); `target_count`, `effective_particle_count`, `count`,
 `stagnation_verdict_uses_speed_not_step_displacement`,
 `trails_append_cap_and_keep_the_newest_point_last`,
 `a_full_cloud_with_requested_32_stays_inside_the_segment_cap`,
-`dots_colored_by_field_magnitude`, `fixed_dots_use_the_fixed_colour_and_speed_dots_use_speed_range`.
-`tests/dot_billboard_test.rs` pins the billboard geometry.
+`dots_colored_by_field_magnitude`, `fixed_dots_use_the_fixed_colour_and_speed_dots_use_speed_range`,
+`particle_magnitude_uses_custom_ramp_and_manual_range`,
+`particle_magnitude_follows_component_quantity`,
+`particle_legacy_colours_are_byte_identical_without_a_mapping`,
+`particle_speed_uses_custom_palette_with_its_own_range`,
+`particle_fixed_colour_ignores_mapping`,
+`particle_dots_and_trails_agree_for_the_same_palette`,
+`non_finite_particle_sample_falls_back_to_mid_grey`.
+`tests/dot_billboard_test.rs` pins the billboard geometry;
+`tests/animation_scene_test.rs` pins
+`scene_color_facts_collects_stats_from_drawn_arrows`.
 
 **Limitations.** CPU simulation only; no GPU compute. Particles only exist in
 the 3D view (`particle_target` keys on `mode_3d`). Trail history is capped, and

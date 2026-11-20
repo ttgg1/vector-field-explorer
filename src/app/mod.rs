@@ -7,6 +7,7 @@ use crate::animation::AnimationError;
 use crate::animation_job::{AnimationEligibility, AnimationJob, AnimationJobState};
 use crate::animation_scene::AnimationSnapshot;
 use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
+use crate::color_mapping::{ColorMapping, ColorSample, ColorStats};
 use crate::domain::Domain;
 use crate::fly_camera::{
     CROSSHAIR_ALPHA, FlyCamera, FlyKeys, capture_exit_required, capture_transition,
@@ -54,8 +55,9 @@ use crate::viewmodel::{
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
 use crate::particles::{
-    AdvectSettings, CLICK_BURST_PARTICLES, Particles, advect, clear, count as particle_count,
-    dot_instances_at, retarget, spawn, spawn_at, speed_range, trail_instances_at,
+    AdvectSettings, CLICK_BURST_PARTICLES, ParticlePalette, Particles, advect, clear,
+    count as particle_count, dot_instances_at, retarget, spawn, spawn_at, speed_range,
+    trail_instances_at,
 };
 
 mod frame;
@@ -250,6 +252,9 @@ pub struct VfApp {
     /// starts at time 0, playing, 1x.
     pub clock: SimClock,
     dots_range: (f32, f32),
+    /// Particle colour inputs cached with the scene rebuild. `dots_range` is
+    /// kept separately for click streamlines, which only need the range.
+    color_facts: SceneColorFacts,
     /// Where the user clicked in the viewport (ticket 06), bounded by
     /// [`MAX_CLICK_SEEDS`] and oldest-first. The viewmodel turns each pick into
     /// a deterministic streamline burst; the newest click also drops a
@@ -433,6 +438,7 @@ impl VfApp {
             particle_target: None,
             clock: SimClock::default(),
             dots_range: (0.0, 1.0),
+            color_facts: SceneColorFacts::default(),
             click_seeds: Vec::new(),
             last_click_seed: None,
             flow_lines: Vec::new(),
@@ -594,28 +600,84 @@ pub(crate) fn compose_vector_lines(
     (lines, count)
 }
 
+/// Everything the particle colours need, cached alongside the arrows so dots
+/// and trails ramp exactly like the scene's arrows: the visible magnitude
+/// range, the mapping's auto-fit stats and the active mapping (if any).
+pub(crate) struct SceneColorFacts {
+    pub range: (f32, f32),
+    pub stats: ColorStats,
+    pub mapping: Option<ColorMapping>,
+}
+
+impl Default for SceneColorFacts {
+    fn default() -> Self {
+        Self {
+            range: (0.0, 1.0),
+            stats: ColorStats::default(),
+            mapping: None,
+        }
+    }
+}
+
+fn color_stats_from_arrows(arrows: &[crate::sampling::ArrowData]) -> ColorStats {
+    let samples: Vec<ColorSample> = arrows
+        .iter()
+        .map(|arrow| ColorSample {
+            magnitude: arrow.mag,
+            dir: arrow.dir,
+        })
+        .collect();
+    ColorStats::from_samples(&samples)
+}
+
+fn family_color_facts(arrows: Option<&[crate::sampling::ArrowData]>) -> ((f32, f32), ColorStats) {
+    match arrows {
+        Some(arrows) => (
+            crate::sampling::magnitude_range(arrows),
+            color_stats_from_arrows(arrows),
+        ),
+        None => ((0.0, 1.0), ColorStats::default()),
+    }
+}
+
 /// The colour range shared by the field scene and its particle dots, matching
 /// the live rebuild: Induction/Materials use their own sampling, everything
-/// else samples the active field.
-pub(crate) fn scene_dots_range(state: &State) -> (f32, f32) {
-    match state.field_mode {
-        FieldMode::Induction => state
-            .induction_sampling
-            .as_ref()
-            .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
-            .unwrap_or((0.0, 1.0)),
-        FieldMode::Materials => state
-            .material_sampling
-            .as_ref()
-            .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
-            .unwrap_or((0.0, 1.0)),
-        FieldMode::Maxwell => state
-            .maxwell_sampling
-            .as_ref()
-            .map(|sampling| crate::sampling::magnitude_range(&sampling.arrows))
-            .unwrap_or((0.0, 1.0)),
-        _ => state.color_range(&state.sample()),
+/// else samples the active field. Stats come from the same drawn arrows as the
+/// range, so an auto-fitted mapping cannot disagree with the arrow colours.
+pub(crate) fn scene_color_facts(state: &State) -> SceneColorFacts {
+    let (range, stats) = match state.field_mode {
+        FieldMode::Induction => {
+            family_color_facts(state.induction_sampling.as_ref().map(|s| s.arrows.as_slice()))
+        }
+        FieldMode::Materials => {
+            family_color_facts(state.material_sampling.as_ref().map(|s| s.arrows.as_slice()))
+        }
+        FieldMode::Maxwell => {
+            family_color_facts(state.maxwell_sampling.as_ref().map(|s| s.arrows.as_slice()))
+        }
+        _ => {
+            let sampled = state.sample();
+            (
+                state.color_range(&sampled),
+                color_stats_from_arrows(&sampled),
+            )
+        }
+    };
+    SceneColorFacts {
+        range,
+        stats,
+        mapping: state.view_options().color_mapping,
     }
+}
+
+/// Test seam: integration tests live outside the crate, so expose the facts
+/// `scene_color_facts` computes without widening the internal API.
+#[doc(hidden)]
+pub fn scene_color_facts_for_tests(
+    state: &State,
+) -> ((f32, f32), ColorStats, Option<ColorMapping>) {
+    let facts = scene_color_facts(state);
+    (facts.range, facts.stats, facts.mapping)
 }
 
 /// Build the live dot and trail instances for a cloud. Shared by the live
@@ -623,31 +685,33 @@ pub(crate) fn scene_dots_range(state: &State) -> (f32, f32) {
 pub(crate) fn particle_scene_instances(
     state: &State,
     particles: &Particles,
-    dots_range: (f32, f32),
+    facts: &SceneColorFacts,
 ) -> (Arc<Vec<ArrowInstanceGPU>>, Arc<Vec<LineInstanceGPU>>) {
     let appearance = state.particle_appearance.sanitized();
     let spacing = state.spacing();
     let flow = state.scene_flow();
     let domain = state.scene_domain();
-    let speeds = speed_range(particles);
+    let palette = ParticlePalette {
+        colormap: state.colormap,
+        color_range: facts.range,
+        speed_range: speed_range(particles),
+        mapping: facts.mapping.as_ref(),
+        stats: &facts.stats,
+    };
     let dots = Arc::new(dot_instances_at(
         particles,
         &flow,
         &domain,
-        state.colormap,
-        dots_range,
+        &palette,
         &appearance,
-        speeds,
         state.particle_radius(spacing),
         state.time,
     ));
     let trails = Arc::new(trail_instances_at(
         particles,
         &flow,
-        state.colormap,
-        dots_range,
+        &palette,
         &appearance,
-        speeds,
         spacing,
         state.time,
     ));
