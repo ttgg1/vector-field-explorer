@@ -601,7 +601,8 @@ pub fn rail(ui: &mut egui::Ui, side: RailSide, label: &str, shortcut: &str) -> b
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
-        ui.painter().rect_filled(rect, 0.0, visuals.bg_fill);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
 
         let font = egui::FontId::proportional(RAIL_LABEL_SIZE);
         let color = visuals.text_color();

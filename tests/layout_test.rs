@@ -346,6 +346,7 @@ fn rail_pass(
 ) -> (
     vector_field_explorer::ui::layout::RailPanel,
     Vec<egui::epaint::TextShape>,
+    Vec<egui::epaint::RectShape>,
 ) {
     let screen = screen_rect();
     let mut input = egui::RawInput {
@@ -390,7 +391,48 @@ fn rail_pass(
             _ => None,
         })
         .collect();
-    (panel.expect("the pass shows the panel"), text)
+    let rects = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape) => Some(shape.clone()),
+            _ => None,
+        })
+        .collect();
+    (panel.expect("the pass shows the panel"), text, rects)
+}
+
+#[test]
+fn rail_panel_paints_the_configured_corner_radius() {
+    for (rounding, expected) in [
+        (6.0, egui::CornerRadius::same(6)),
+        (0.0, egui::CornerRadius::ZERO),
+    ] {
+        for side in [RailSide::Left, RailSide::Right] {
+            let ctx = support::context();
+            vector_field_explorer::ui::style_panel::apply(
+                &ctx,
+                &vector_field_explorer::ui::style_panel::AppStyle {
+                    rounding,
+                    ..Default::default()
+                },
+            );
+            let (panel, _, rects) = rail_pass(&ctx, side, "Controls", None, 0.0);
+            let shape = rects
+                .iter()
+                .find(|shape| shape.rect == panel.content_rect)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{side:?}: no rail background rect painted at {:?}",
+                        panel.content_rect
+                    )
+                });
+            assert_eq!(
+                shape.corner_radius, expected,
+                "{side:?}: rounding {rounding} must reach the rail panel"
+            );
+        }
+    }
 }
 
 #[test]
@@ -426,7 +468,7 @@ fn rail_panel_is_outer_width_and_the_label_band_is_narrower() {
     let ctx = support::context();
     let line_height = measure_galley("Controls").size().y;
     for side in [RailSide::Left, RailSide::Right] {
-        let (panel, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
+        let (panel, _, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
         assert!(
             (panel.outer_rect.width() - RAIL_WIDTH).abs() < 0.5,
             "{side:?} outer panel is {} wide, expected RAIL_WIDTH {RAIL_WIDTH}",
@@ -458,7 +500,7 @@ fn rail_panel_is_outer_width_and_the_label_band_is_narrower() {
 fn rotated_labels_fit_inside_the_real_rail_band() {
     let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
-        let (panel, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
+        let (panel, _, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let band = panel.content_rect;
         for label in ["Controls", "Presets"] {
             let galley = measure_galley(label);
@@ -497,7 +539,7 @@ fn chevron_stays_at_the_bottom_pointing_outward() {
 
     let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
-        let (panel, text) = rail_pass(&ctx, side, "Controls", None, 0.0);
+        let (panel, text, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let band = panel.content_rect;
         let pos = rail_chevron_pos(band);
         assert_eq!(
@@ -553,7 +595,7 @@ fn rail_paints_one_rotated_label_inside_the_real_band() {
     let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
         for label in ["Controls", "Presets"] {
-            let (panel, text) = rail_pass(&ctx, side, label, None, 0.0);
+            let (panel, text, _) = rail_pass(&ctx, side, label, None, 0.0);
             let labels: Vec<_> = text
                 .iter()
                 .filter(|shape| shape.galley.text() == label)
@@ -596,7 +638,7 @@ fn rail_click_target_covers_the_label_and_pins() {
         let ctx = support::context();
         // One paint pass gives the label's painted ink, so the click can target
         // the glyph itself rather than the panel's geometric centre.
-        let (panel, text) = rail_pass(&ctx, side, "Controls", None, 0.0);
+        let (panel, text, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let ink = text
             .iter()
             .find(|shape| shape.galley.text() == "Controls")
@@ -611,10 +653,10 @@ fn rail_click_target_covers_the_label_and_pins() {
 
         // Move the pointer onto the glyph once, then leave it still: egui only
         // shows a tooltip after 0.5 s without pointer movement.
-        let (_, _) = rail_pass(&ctx, side, "Controls", Some((target, None)), 0.1);
+        let (_, _, _) = rail_pass(&ctx, side, "Controls", Some((target, None)), 0.1);
         let mut tooltip_seen = false;
         for time in [0.7, 1.0, 1.3] {
-            let (_, shapes) = rail_pass(&ctx, side, "Controls", None, time);
+            let (_, shapes, _) = rail_pass(&ctx, side, "Controls", None, time);
             tooltip_seen |= shapes
                 .iter()
                 .any(|shape| shape.galley.text().contains("Show Controls (Ctrl+B)"));
@@ -625,8 +667,8 @@ fn rail_click_target_covers_the_label_and_pins() {
         );
 
         // Press and release over the same glyph: the click fires on release.
-        let (press, _) = rail_pass(&ctx, side, "Controls", Some((target, Some(true))), 1.4);
-        let (release, _) = rail_pass(&ctx, side, "Controls", Some((target, Some(false))), 1.5);
+        let (press, _, _) = rail_pass(&ctx, side, "Controls", Some((target, Some(true))), 1.4);
+        let (release, _, _) = rail_pass(&ctx, side, "Controls", Some((target, Some(false))), 1.5);
         assert!(!press.clicked, "the press alone does not report a click");
         assert!(
             release.clicked,

@@ -66,7 +66,8 @@ pub fn show_rail_strip(
                         let placed = RailLabel::place(rect, galley.mesh_bounds, side);
                         let label_bounds = placed.visual_bounds(galley.mesh_bounds);
                         if ui.is_rect_visible(rect) {
-                            ui.painter().rect_filled(rect, 0.0, visuals.bg_fill);
+                            ui.painter()
+                                .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
                             ui.painter().add(
                                 egui::epaint::TextShape::new(placed.pos, galley, color)
                                     .with_angle(placed.angle),
