@@ -150,5 +150,6 @@ mod ui_style_panel_test;
 mod version_test;
 mod view_command_test;
 mod viewmodel_test;
+mod viewport_style_test;
 mod web_assets_test;
 mod window_test;

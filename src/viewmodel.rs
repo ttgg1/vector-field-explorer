@@ -34,6 +34,7 @@ use crate::maxwell::{
 };
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
+use crate::viewport_style::ViewportStyle;
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
 };
@@ -257,6 +258,10 @@ pub struct State {
     /// Durable shared named parameters (issue #89). Only
     /// [`State::commit_parameters`] may replace it in response to an edit.
     pub parameters: ParameterSet,
+    /// Durable viewport/reference colours and widths (issue #82). Only
+    /// [`State::commit_viewport_style`] may replace it in response to an edit;
+    /// startup restores assign it directly.
+    pub viewport_style: ViewportStyle,
     pub field: FieldExpr,
     pub parse_error: String,
     pub density: u32,
@@ -405,6 +410,30 @@ impl State {
         self.parameters.value(name)
     }
 
+    /// Atomically replace the viewport style after validating the whole record.
+    /// A rejected style leaves the previous record and the dirty flag untouched;
+    /// an accepted style is assigned once and requests exactly one scene
+    /// rebuild. Committing a style equal to the committed one is a validated
+    /// no-op and does not dirty the scene.
+    pub fn commit_viewport_style(self: &mut State, next: ViewportStyle) -> Result<(), String> {
+        next.validate()?;
+        if next == self.viewport_style {
+            return Ok(());
+        }
+        self.viewport_style = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Restore the shipped dark-laboratory style. Dirties the scene only when
+    /// the committed record actually changed.
+    pub fn reset_viewport_style(self: &mut State) {
+        if self.viewport_style != ViewportStyle::default() {
+            self.viewport_style = ViewportStyle::default();
+            self.mark_dirty();
+        }
+    }
+
     /// Queue a lazy re-solve only when the active Ode RHS actually changes.
     /// Formula and domain edits call this; presentation edits never do, so
     /// playback is not restarted for a style change. Invalid formula edits
@@ -501,6 +530,7 @@ impl State {
             mode_3d,
             formula: formula.to_string(),
             parameters: ParameterSet::default(),
+            viewport_style: ViewportStyle::default(),
             field,
             parse_error: String::new(),
             density,

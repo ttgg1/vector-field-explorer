@@ -320,6 +320,10 @@ impl VfApp {
         // it directly so it never dirties the scene on its own. `load` already
         // replaced an invalid stored set with the default.
         state.parameters = settings.parameters;
+        // Same for the viewport style: startup assigns the loaded record
+        // directly and does not dirty the scene on its own. `load` already
+        // sanitized corrupt values.
+        state.viewport_style = settings.viewport_style;
         // Ticket 47: a restored non-default domain must already be framed on
         // the first frame, not only after the first edit. This is the same
         // tested recentre helper the live domain editor uses; the default

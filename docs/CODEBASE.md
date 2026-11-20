@@ -257,8 +257,8 @@ called the single `src/app` module is now `src/app/mod.rs` plus
 `panels.rs`, `simulation.rs`, and `viewport.rs`; the later tickets also added
 `arrow_geometry.rs`, `arrow_style.rs`, `fly_camera.rs`, `fonts.rs`, `plane.rs`,
 `pointer_lock.rs`, `reference.rs`, `sim_clock.rs`, `render/instancer.rs`,
-`ui/branding.rs`, `ui/menu.rs`, `ui/transport.rs`, `version.rs`, and the four
-shaders. Two files on disk are not compiled at all (`render/instancer.rs` and
+`ui/branding.rs`, `ui/menu.rs`, `ui/transport.rs`, `version.rs`,
+`viewport_style.rs`, and the four shaders. Two files on disk are not compiled at all (`render/instancer.rs` and
 `ui/arrows.rs`); they are documented where they appear so nobody adds live code
 to them by mistake.
 
@@ -2540,7 +2540,10 @@ flat 2D grid, with coloured axes.
 
 **Public API.** `REFERENCE_DIVISIONS = 10`; `EDGE_COLOR`, `GRID_COLOR`,
 `AXIS_X_COLOR`, `AXIS_Y_COLOR`, `AXIS_Z_COLOR`; `GRID_WIDTH`, `EDGE_WIDTH`,
-`AXIS_WIDTH`; `reference_lines(domain, sampling_3d)`.
+`AXIS_WIDTH`; `reference_lines(domain, sampling_3d)`; `reference_lines_with`
+and `reference_plane_lines_with` take a validated
+[`ViewportStyle`](../src/viewport_style.rs) (issue #82 slice A), while the
+legacy entry points delegate to the default style and stay byte-identical.
 
 **Invariants.**
 - 3D draws the far-face grids first, then the 12 box edges, then the coloured
@@ -2555,12 +2558,14 @@ flat 2D grid, with coloured axes.
 - Reference geometry is never counted as field geometry and is not part of the
   viewmodel snapshot.
 
-**Pinned by.** `tests/reference_lines_test.rs` (10 tests):
+**Pinned by.** `tests/reference_lines_test.rs` (13 tests):
 `three_d_reference_has_twelve_box_edges_subdivided_faces_and_three_axes`,
 `three_d_reference_stays_inside_the_domain_and_draws_every_bound`,
 `face_grid_is_drawn_before_the_box_edges_and_axes_last`,
 `two_d_reference_is_one_flat_grid_on_the_mid_z_plane`,
-`two_d_reference_has_coloured_x_and_y_axes_through_the_centre`.
+`two_d_reference_has_coloured_x_and_y_axes_through_the_centre`,
+`styled_axes_follow_world_plane`,
+`default_style_is_byte_identical_to_legacy`.
 
 **Limitations.** It is decoration only: no labels, ticks, or numeric axis
 annotation, and no plane-mode dimming.

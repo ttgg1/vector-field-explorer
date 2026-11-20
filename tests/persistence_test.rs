@@ -25,6 +25,7 @@ use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
     AppStyle, MAX_FONT_SIZE, MAX_ROUNDING, MAX_SPACING, MIN_ROUNDING,
 };
+use vector_field_explorer::viewport_style::{MAX_LINE_WIDTH, ViewportStyle};
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction,
     MAX_ARROW_OPACITY, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT,
@@ -447,6 +448,7 @@ fn sample_settings() -> AppSettings {
         },
         view: ViewRecord::capture(&state),
         parameters: ParameterSet::default(),
+        viewport_style: ViewportStyle::white_paper(),
     }
 }
 
@@ -2313,5 +2315,128 @@ fn restoring_parameters_does_not_dirty_the_scene() {
     assert_eq!(
         app.state.parameters, settings.parameters,
         "the app constructor restores the persisted set"
+    );
+}
+
+#[test]
+fn old_envelope_without_viewport_style_keeps_everything_and_defaults_the_record() {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &legacy_settings(false));
+    let loaded = load(Some(&storage));
+
+    assert_eq!(
+        loaded.viewport_style,
+        ViewportStyle::default(),
+        "an old envelope loads the historical dark-laboratory look"
+    );
+    assert_eq!(loaded.view.formula, "(x, y)", "the view survives");
+    assert_eq!(loaded.view.density, 24);
+    assert_eq!(loaded.view.arrow_scale, 2.0);
+    assert_eq!(loaded.style, AppStyle::default(), "the style survives");
+    assert_eq!(loaded.layout, LayoutState::default(), "the layout survives");
+    assert_eq!(
+        loaded.parameters,
+        ParameterSet::default(),
+        "a missing parameter set defaults without failing the envelope"
+    );
+
+    // The new save path writes the record back.
+    let mut rewritten = MemoryStorage::default();
+    save(&mut rewritten, &loaded);
+    let raw = rewritten
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
+    assert!(
+        raw.contains("viewport_style:"),
+        "new records write the viewport style:\n{raw}"
+    );
+}
+
+#[test]
+fn viewport_style_round_trips_through_storage() {
+    let style = ViewportStyle::white_paper();
+    let settings = AppSettings {
+        viewport_style: style,
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.viewport_style, style);
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        app.state.viewport_style, style,
+        "the app constructor restores the viewport style"
+    );
+}
+
+#[test]
+fn corrupt_viewport_style_falls_back_without_discarding_other_sections() {
+    let mut settings = sample_settings();
+    settings.viewport_style.grid_color = [f32::NAN, 0.2, 0.3, 1.0];
+    settings.viewport_style.grid_width = 9.0;
+    let expected_style = settings.style.clone();
+    let expected_layout = settings.layout.clone();
+    let expected_view = settings.view.clone();
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    assert_eq!(loaded.style, expected_style, "the appearance survives");
+    assert_eq!(loaded.layout, expected_layout, "the layout survives");
+    assert_eq!(loaded.view, expected_view, "the view survives");
+    let default = ViewportStyle::default();
+    assert_eq!(
+        loaded.viewport_style.grid_color, default.grid_color,
+        "a non-finite colour resets to the default record"
+    );
+    assert_eq!(
+        loaded.viewport_style.grid_width, MAX_LINE_WIDTH,
+        "a finite out-of-range width clamps"
+    );
+}
+
+#[test]
+fn restoring_viewport_style_does_not_dirty_the_scene() {
+    let mut settings = sample_settings();
+    settings.viewport_style = ViewportStyle::high_contrast();
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    // Startup assigns the loaded record directly; unlike a user commit, a
+    // restore must not request a scene rebuild on its own.
+    let mut state = State::new(false);
+    state.dirty = false;
+    state.viewport_style = loaded.viewport_style;
+    assert!(
+        !state.dirty,
+        "assigning the restored viewport style leaves dirty alone"
+    );
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        app.state.viewport_style, settings.viewport_style,
+        "the app constructor restores the persisted record"
+    );
+}
+
+#[test]
+fn app_save_captures_the_viewport_style() {
+    let mut app = VfApp::new();
+    app.state
+        .commit_viewport_style(ViewportStyle::high_contrast())
+        .expect("the named look is valid");
+    let mut storage = MemoryStorage::default();
+    eframe::App::save(&mut app, &mut storage);
+
+    assert_eq!(
+        load(Some(&storage)).viewport_style,
+        ViewportStyle::high_contrast(),
+        "the save path captures the committed record"
     );
 }

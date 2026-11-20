@@ -53,6 +53,7 @@ impl eframe::App for VfApp {
             layout: self.layout.clone(),
             view: ViewRecord::capture(&self.state),
             parameters: self.state.parameters.clone(),
+            viewport_style: self.state.viewport_style,
         };
         persistence::save(storage, &settings);
     }

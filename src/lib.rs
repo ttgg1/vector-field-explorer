@@ -49,6 +49,7 @@ pub mod ui;
 pub mod version;
 pub mod view_command;
 pub mod viewmodel;
+pub mod viewport_style;
 pub mod window;
 
 // Re-export key types for tests and external use
