@@ -568,6 +568,9 @@ and the helpers that belong to no single frame phase.
   or local slice) and then the cached flow and click segments; the status bar's
   streamline count is `flow_lines + click_lines`, not the full scene line count.
 - `scene` is a cache; `State` remains the source of truth.
+- `scene_color_facts` derives the shared range, colour stats, clip counts and
+  active mapping from the same drawn arrows; `clips` is computed with
+  `ColorMapping::clip_counts` when a mapping is active and defaults otherwise.
 - `camera` is the 2D preset mirror (`Camera { position, scale }`), not the live
   painting camera; `orbit` is live.
 
@@ -3714,9 +3717,11 @@ with a local mirror and a single `apply` handoff.
 `sides_control_enabled`, `head_control_enabled`, `seed_mode_enabled`,
 `particle_size_enabled`, `particle_fixed_color_enabled`, `fixed_color_rgb`,
 `fixed_color_opaque`, `trail_fade_enabled`, `trail_width_enabled`,
-`stagnation_seconds_enabled`, `particle_count_label`, `Controls` (+ `new`,
-per-section resets, `Default`), `show`, `show_with_plot_action`,
-`show_compact`, `show_compact_with_plot_action`, `apply`.
+`stagnation_seconds_enabled`, `particle_count_label`, `BOTH_COLORING_NOTE`,
+`DIRECTION_3D_EXPLANATION`, `MIN_SIGNED_LOG_HALF_WIDTH`,
+`MAX_SIGNED_LOG_HALF_WIDTH`, `Controls` (+ `new`, per-section resets,
+`Default`), `show`, `show_with_plot_action`, `show_compact`,
+`show_compact_with_plot_action`, `apply`.
 
 **Invariants.**
 - Section order is Display → Camera → Features → Coloring → Domain; the first
@@ -3738,7 +3743,19 @@ per-section resets, `Default`), `show`, `show_with_plot_action`,
   magnitude scale outside Magnitude, contrast outside Proportional, head/sides
   for headless families, seed mode with streamlines off, particle controls with
   particles off, trail controls below length 2, stagnation time with looping
-  off, z row for a two-component field.
+  off, z row for a two-component field, Direction quantity in 3D (with a
+  visible explanation).
+- Coloring keeps the palette row first, then Quantity, Scale, freeze and the
+  legend, then auto-fit and the manual range. Direction is disabled in 3D.
+  Signed log uses a validated, clamped half-width and shows the mapping's
+  fallback explanation when the range does not span zero. Freeze is a one-shot
+  request applied after the colour setters and before the mirror.
+- The legend paints 64 palette slices and reports the effective range, ticks,
+  `<min`/`>max` caps and the app-supplied clip counts. Its stats and clips are
+  cached `SceneColorFacts` copied into `Controls` before each wide or compact
+  sidebar call.
+- In Sources + Both the Coloring section shows `BOTH_COLORING_NOTE` and none of
+  the palette, quantity, scale, freeze, legend or range controls.
 - Domain extents are clamped before `set_domain`; NaN keeps the previous value;
   reversed pairs swap in the seam and mirror back.
 - Plane index commits on toggle/axis/click or slider release, not during a live
@@ -3759,7 +3776,14 @@ per-section resets, `Default`), `show`, `show_with_plot_action`,
 `apply_never_commits_the_plane_mirror`,
 `every_control_dirties_the_scene_through_apply`;
 `tests/sidebar_sections_test.rs` (order/reset isolation),
-`tests/sidebar_camera_ui_test.rs`, `tests/sidebar_colormap_ui_test.rs`.
+`tests/sidebar_camera_ui_test.rs`, `tests/sidebar_colormap_ui_test.rs`
+(`quantity_selector_applies_component_colouring`,
+`direction_quantity_is_disabled_in_3d_and_enabled_in_2d`,
+`signed_log_half_width_applies_and_reports_unavailable_ranges`,
+`freeze_button_commits_the_effective_range_and_turns_off_auto_fit`,
+`legend_shows_effective_range_ticks_and_clip_counts`,
+`both_display_keeps_the_fixed_family_note_without_advanced_controls`,
+`reset_coloring_restores_quantity_scale_and_auto_fit`).
 
 **Limitations.** The panel is long; it relies on collapsing sections rather than
 a second settings page. There is no search/filter. `Controls` is a hand-written

@@ -7,7 +7,7 @@ use crate::animation::AnimationError;
 use crate::animation_job::{AnimationEligibility, AnimationJob, AnimationJobState};
 use crate::animation_scene::AnimationSnapshot;
 use crate::camera::{OrbitCamera, ViewCamera, apply_camera_record};
-use crate::color_mapping::{ColorMapping, ColorSample, ColorStats};
+use crate::color_mapping::{ClipCounts, ColorMapping, ColorSample, ColorStats};
 use crate::domain::Domain;
 use crate::fly_camera::{
     CROSSHAIR_ALPHA, FlyCamera, FlyKeys, capture_exit_required, capture_transition,
@@ -606,6 +606,7 @@ pub(crate) fn compose_vector_lines(
 pub(crate) struct SceneColorFacts {
     pub range: (f32, f32),
     pub stats: ColorStats,
+    pub clips: ClipCounts,
     pub mapping: Option<ColorMapping>,
 }
 
@@ -614,29 +615,31 @@ impl Default for SceneColorFacts {
         Self {
             range: (0.0, 1.0),
             stats: ColorStats::default(),
+            clips: ClipCounts::default(),
             mapping: None,
         }
     }
 }
 
-fn color_stats_from_arrows(arrows: &[crate::sampling::ArrowData]) -> ColorStats {
-    let samples: Vec<ColorSample> = arrows
+fn color_samples_from_arrows(arrows: &[crate::sampling::ArrowData]) -> Vec<ColorSample> {
+    arrows
         .iter()
         .map(|arrow| ColorSample {
             magnitude: arrow.mag,
             dir: arrow.dir,
         })
-        .collect();
-    ColorStats::from_samples(&samples)
+        .collect()
 }
 
-fn family_color_facts(arrows: Option<&[crate::sampling::ArrowData]>) -> ((f32, f32), ColorStats) {
+fn family_color_samples(
+    arrows: Option<&[crate::sampling::ArrowData]>,
+) -> ((f32, f32), Vec<ColorSample>) {
     match arrows {
         Some(arrows) => (
             crate::sampling::magnitude_range(arrows),
-            color_stats_from_arrows(arrows),
+            color_samples_from_arrows(arrows),
         ),
-        None => ((0.0, 1.0), ColorStats::default()),
+        None => ((0.0, 1.0), Vec::new()),
     }
 }
 
@@ -645,28 +648,42 @@ fn family_color_facts(arrows: Option<&[crate::sampling::ArrowData]>) -> ((f32, f
 /// else samples the active field. Stats come from the same drawn arrows as the
 /// range, so an auto-fitted mapping cannot disagree with the arrow colours.
 pub(crate) fn scene_color_facts(state: &State) -> SceneColorFacts {
-    let (range, stats) = match state.field_mode {
-        FieldMode::Induction => {
-            family_color_facts(state.induction_sampling.as_ref().map(|s| s.arrows.as_slice()))
-        }
-        FieldMode::Materials => {
-            family_color_facts(state.material_sampling.as_ref().map(|s| s.arrows.as_slice()))
-        }
+    let (range, samples) = match state.field_mode {
+        FieldMode::Induction => family_color_samples(
+            state
+                .induction_sampling
+                .as_ref()
+                .map(|s| s.arrows.as_slice()),
+        ),
+        FieldMode::Materials => family_color_samples(
+            state
+                .material_sampling
+                .as_ref()
+                .map(|s| s.arrows.as_slice()),
+        ),
         FieldMode::Maxwell => {
-            family_color_facts(state.maxwell_sampling.as_ref().map(|s| s.arrows.as_slice()))
+            family_color_samples(state.maxwell_sampling.as_ref().map(|s| s.arrows.as_slice()))
         }
         _ => {
             let sampled = state.sample();
             (
                 state.color_range(&sampled),
-                color_stats_from_arrows(&sampled),
+                color_samples_from_arrows(&sampled),
             )
         }
     };
+    let stats = ColorStats::from_samples(&samples);
+    let mapping = state.view_options().color_mapping;
+    let clips = mapping
+        .as_ref()
+        .map_or_else(ClipCounts::default, |mapping| {
+            mapping.clip_counts(&samples, &stats)
+        });
     SceneColorFacts {
         range,
         stats,
-        mapping: state.view_options().color_mapping,
+        clips,
+        mapping,
     }
 }
 
