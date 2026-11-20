@@ -46,6 +46,7 @@ mod cli_svg_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cli_test;
 mod click_seed_zoom_test;
+mod color_ramp_test;
 mod colormap_test;
 mod domain_test;
 mod dot_billboard_test;
