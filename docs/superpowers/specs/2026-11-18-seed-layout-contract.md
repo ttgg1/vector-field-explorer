@@ -167,7 +167,7 @@ the slice adds the seed path without moving other behaviour.
 
 | Consumer | Where | Owner and check |
 | --- | --- | --- |
-| Viewport picking | `src/app/input.rs` (click-seed path, `ray_seed`), `src/plane.rs` | S2 implementer; `cargo test --test suite plane_test_input_seed` |
+| Viewport picking | `src/app/input.rs` (click-seed path), `src/streamlines.rs` `ray_seed`, `src/plane.rs` | S2 implementer; `cargo test --test suite plane_test_input_seed` |
 | Seed regeneration | `src/viewmodel.rs` snapshot/`push_line`, `click_streamlines_snapshot`, `src/streamlines.rs` `trace_at` | S1/S2 implementer; `cargo test --test suite streamlines seed_layout` |
 | History capture/apply | `src/app/history.rs` `capture_document`/`apply_document`, `src/edit_history.rs` | S1 implementer; `cargo test --test suite edit_history_app` |
 | Envelope persistence | `src/persistence.rs` `ViewRecord`/`AppSettings`, `src/app/mod.rs` startup | S1 implementer; `cargo test --test suite persistence seed_layout` |
