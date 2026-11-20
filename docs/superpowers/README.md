@@ -40,6 +40,7 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 | [Markdown-first agent workflow design](specs/2026-11-16-markdown-first-agent-workflow-design.md) | Owner-approved retirement of Python orchestration; native OpenCode Markdown roles and Python metrics only. |
 | [Markdown-first agent workflow plan](plans/2026-11-16-markdown-first-agent-workflow.md) | Native OpenCode modes, metrics-only Python, and runtime retirement tasks. |
 | [Object renderer design](specs/2026-11-20-object-renderer-design.md) | GitHub #106 accepted design for a depth-enabled instanced object pass, slice budgets and capture parity. |
+| [Layer style contract](specs/2026-11-20-layer-style-contract.md) | GitHub #84 owner-accepted layer/family appearance overrides, precedence, persistence and appearance-panel boundaries; A1/A2/B slices need their own claims. |
 | [Object renderer plan](plans/2026-11-20-object-renderer.md) | Six bounded TDD tasks for #106 slice 1: primitives, mapping, GPU pass, integration, slice/sign markers, persistence and performance evidence. Queued after the current #80/#81 and #18 work. |
 
 CAS implementation evidence: [73 review record](../reviews/73-native-cas.md),
