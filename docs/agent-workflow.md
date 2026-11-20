@@ -9,12 +9,12 @@ deterministic orchestration service.
 
 - `/develop-openai <request>` explicitly selects the OpenAI orchestrator.
 - `/develop-opencode-go <request>` explicitly selects the OpenCode Go orchestrator.
-- `/review-openai <diff-package> <acceptance-criteria>` uses a fresh read-only GPT-6.1 Sol reviewer.
+- `/review-openai <diff-package> <acceptance-criteria>` uses a fresh read-only GPT-6.2 Sol reviewer.
 - `/review-opencode-go <diff-package> <acceptance-criteria>` uses a fresh read-only GLM 5.3 Flash reviewer.
 - `/review-opencode-go-mimo ...` explicitly chooses MiMo V2.6 Flash instead; it is not an automatic fallback.
 
-The current configured roles use GPT-6.1 Sol low for OpenAI orchestration,
-complex implementation, and review; GPT-6 Luna `none` (its catalog's lowest
+The current configured roles use GPT-6.2 Sol low for OpenAI orchestration,
+complex implementation, and review; GPT-6.2 Astra `low` (its catalog's lowest
 variant) for simple/standard implementation and review fixes; DeepSeek V4.1 Flash low
 for Go orchestration, implementation, and fixes; and GLM 5.3 Flash low for Go
 review. MiMo V2.6 Flash currently exposes no effort variant. Verify the enabled
