@@ -1,7 +1,7 @@
 ---
 description: Applies scoped review fixes in OpenAI mode
 mode: subagent
-model: openai/gpt-6-luna#none
+model: openai/gpt-6.2-astra#low
 permissions:
   - action: subagent
     resource: "*"

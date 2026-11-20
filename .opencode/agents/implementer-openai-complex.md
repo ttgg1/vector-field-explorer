@@ -1,7 +1,7 @@
 ---
 description: Implements a complex task in OpenAI mode, starting at lowest effort
 mode: subagent
-model: openai/gpt-6.1-sol#low
+model: openai/gpt-6.2-sol#low
 permissions:
   - action: subagent
     resource: "*"

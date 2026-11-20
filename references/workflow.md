@@ -100,9 +100,9 @@ after checking requirements, context, and approach; record the failure and
 reason. Escalation is local to that task/role. A new independent task resets to
 lowest effort. More expensive model changes require explicit owner authorization.
 
-OpenAI: GPT-6.1 Sol low for orchestration, complex implementation, and review;
-GPT-6 Luna uses its lowest supported variant for simple/standard implementation
-and review fixes. OpenCode Go: DeepSeek V4.1 Flash low for orchestration, implementation,
+OpenAI: GPT-6.2 Sol low for orchestration, complex implementation, and review;
+GPT-6.2 Astra uses its lowest supported variant (`low`) for simple/standard
+implementation and review fixes, because the 6.2 family exposes no `none`. OpenCode Go: DeepSeek V4.1 Flash low for orchestration, implementation,
 and fixes; GLM 5.3 Flash low for independent review. MiMo V2.6 Flash is an
 explicit alternative reviewer; the current catalog exposes no variant for it.
 Catalog discovery confirms model IDs/capabilities, not internal checkpoints,

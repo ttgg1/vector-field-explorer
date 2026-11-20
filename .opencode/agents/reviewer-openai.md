@@ -1,7 +1,7 @@
 ---
 description: Independently reviews a supplied diff in OpenAI mode
 mode: subagent
-model: openai/gpt-6.1-sol#low
+model: openai/gpt-6.2-sol#low
 permissions:
   - action: edit
     resource: "*"
