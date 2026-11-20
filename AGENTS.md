@@ -18,7 +18,9 @@ keep dependencies compatible.
    Workflow; preserved local tickets/queue and old handoffs are historical
    evidence, not current authority. Verify completion against Git and reports.
 3. Read only the references needed for the task:
-   - **Code/navigation:** [module map](docs/CODEBASE.md).
+   - **Code/navigation:** [module map](docs/CODEBASE.md). When `.codegraph/`
+     exists, every agent, including dispatched subagents, answers code questions
+     and locates edits with `codegraph_explore` before grep or file reads.
    - **Rust, UI, rendering, persistence:** [engineering notes](references/rust.md).
    - **Tests:** [layout and test-profile rationale](docs/wiki/process/test-layout-and-gates.md).
    - **Review fixes:** [fix loop](references/fix-loop.md).
