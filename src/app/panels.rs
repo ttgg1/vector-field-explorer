@@ -54,6 +54,7 @@ impl VfApp {
         self.recentre_domain(domain_before);
         if plan.presets_panel {
             self.show_presets_panel(ui);
+            self.show_appearance_panel(ui);
         } else {
             // The sheet draws after the status bar; mirror the camera now so
             // "Save current view" captures the recentred view.
@@ -294,11 +295,16 @@ impl VfApp {
         if self.layout.presets_expanded {
             requests.push(self.layout.presets_width);
         }
-        let right_rail = if self.layout.presets_expanded {
-            0.0
-        } else {
-            layout::RAIL_WIDTH
-        };
+        if self.layout.appearance_expanded {
+            requests.push(self.layout.appearance_width);
+        }
+        let mut right_rail = 0.0;
+        if !self.layout.presets_expanded {
+            right_rail += layout::RAIL_WIDTH;
+        }
+        if !self.layout.appearance_expanded {
+            right_rail += layout::RAIL_WIDTH;
+        }
         let widths = fit_panel_widths(
             &requests,
             ui.available_width() - right_rail - 100.0 - layout::VIEWPORT_CHROME_ALLOWANCE,
@@ -531,6 +537,9 @@ impl VfApp {
         }
         if self.layout.presets_expanded {
             self.wide_presets_width = widths.next().unwrap();
+        }
+        if self.layout.appearance_expanded {
+            self.wide_appearance_width = widths.next().unwrap();
         }
         if let Some(action) = plot_action {
             self.apply_plot_panel_action(action);
@@ -814,6 +823,45 @@ impl VfApp {
         self.finish_presets(camera_request);
     }
 
+    /// Right Appearance panel, or its rail; same pin/collapse contract as the
+    /// Presets panel. Edits commit through the viewmodel's validating seam.
+    fn show_appearance_panel(&mut self, ui: &mut egui::Ui) {
+        if self.layout.appearance_expanded {
+            let mut collapse = false;
+            let response = egui::Panel::right(("appearance_panel", self.panel_generation))
+                .exact_size(self.wide_appearance_width)
+                .show(ui, |ui| {
+                    collapse = layout::collapse_button_named(
+                        ui,
+                        layout::RailSide::Right,
+                        "Appearance",
+                        menu::APPEARANCE_SHORTCUT,
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("appearance_body")
+                        .show(ui, |ui| {
+                            self.appearance.show(ui, &mut self.state, false);
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
+                self.layout.appearance_width = width;
+            }
+            if collapse {
+                self.layout.appearance_expanded = false;
+            }
+        } else if layout::rail_panel(
+            ui,
+            ("appearance_rail", self.panel_generation),
+            layout::RailSide::Right,
+            "Appearance",
+            menu::APPEARANCE_SHORTCUT,
+        )
+        .clicked
+        {
+            self.layout.appearance_expanded = true;
+        }
+    }
+
     /// Frame phase: the bottom status bar readouts and the panel itself.
     pub(super) fn frame_status_bar(&mut self, ui: &mut egui::Ui) {
         // One FPS sample per frame, from the same stable delta the simulation
@@ -945,6 +993,7 @@ impl VfApp {
                         #[cfg(not(target_arch = "wasm32"))]
                         (SheetState::Cas, "CAS"),
                         (SheetState::Presets, "Presets"),
+                        (SheetState::Appearance, "Appearance"),
                         (SheetState::Sources, "Sources"),
                     ];
                     if self.state.field_mode == FieldMode::Induction {
@@ -1071,6 +1120,7 @@ impl VfApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     SheetState::Cas => "CAS",
                     SheetState::Presets => "Presets",
+                    SheetState::Appearance => "Appearance",
                     SheetState::Sources => "Sources",
                     SheetState::Induction => "Induction",
                     SheetState::Ode => "ODE",
@@ -1142,6 +1192,9 @@ impl VfApp {
                         camera_request =
                             self.presets
                                 .show_compact(ui, &mut self.camera, &mut self.state, true);
+                    }
+                    SheetState::Appearance => {
+                        self.appearance.show(ui, &mut self.state, true);
                     }
                     SheetState::Sources => {
                         crate::ui::sources_panel::show(

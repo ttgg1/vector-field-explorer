@@ -432,8 +432,10 @@ fn sample_settings() -> AppSettings {
         layout: LayoutState {
             controls_expanded: false,
             presets_expanded: true,
+            appearance_expanded: false,
             controls_width: 300.0,
             presets_width: 210.0,
+            appearance_width: 240.0,
             sources_expanded: false,
             sources_width: 280.0,
             induction_expanded: false,

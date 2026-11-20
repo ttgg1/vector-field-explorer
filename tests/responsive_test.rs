@@ -89,6 +89,17 @@ fn only_one_sheet_is_open_at_a_time() {
     );
     assert!(!sheet.shows(SheetState::Presets));
 
+    sheet.open(SheetState::Appearance);
+    assert_eq!(
+        sheet,
+        SheetState::Appearance,
+        "Appearance shares the one compact sheet"
+    );
+    assert!(
+        !sheet.shows(SheetState::Sources),
+        "opening Appearance closes the previous sheet"
+    );
+
     sheet.close();
     assert_eq!(sheet, SheetState::None);
 }

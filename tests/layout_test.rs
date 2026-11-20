@@ -9,11 +9,11 @@ use eframe::egui;
 use crate::support;
 
 use vector_field_explorer::ui::layout::{
-    DEFAULT_CONTROLS_WIDTH, DEFAULT_INDUCTION_WIDTH, DEFAULT_PRESETS_WIDTH, DEFAULT_SOURCES_WIDTH,
-    LayoutMode, LayoutState, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE,
-    RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel, RailSide, clamp_width,
-    collapse_chevron, compact_plan, layout_mode, rail_chevron, rail_chevron_pos, rail_text_angle,
-    rail_tooltip,
+    DEFAULT_APPEARANCE_WIDTH, DEFAULT_CONTROLS_WIDTH, DEFAULT_INDUCTION_WIDTH,
+    DEFAULT_PRESETS_WIDTH, DEFAULT_SOURCES_WIDTH, LayoutMode, LayoutState, MAX_PANEL_WIDTH,
+    MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel,
+    RailSide, clamp_width, collapse_chevron, compact_plan, layout_mode, rail_chevron,
+    rail_chevron_pos, rail_text_angle, rail_tooltip,
 };
 
 // The rail must stay narrower than any expanded panel.
@@ -41,6 +41,11 @@ fn first_launch_expands_both_panels_and_shows_help() {
     );
     assert_eq!(layout.controls_width, DEFAULT_CONTROLS_WIDTH);
     assert_eq!(layout.presets_width, DEFAULT_PRESETS_WIDTH);
+    assert!(
+        !layout.appearance_expanded,
+        "the Appearance panel starts collapsed to its rail"
+    );
+    assert_eq!(layout.appearance_width, DEFAULT_APPEARANCE_WIDTH);
     assert!(
         !layout.sources_expanded,
         "the Sources panel starts collapsed to its rail"
@@ -122,6 +127,7 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
     let corrupt = LayoutState {
         controls_width: f32::NAN,
         presets_width: 5000.0,
+        appearance_width: f32::NEG_INFINITY,
         sources_width: 10.0,
         induction_width: f32::NAN,
         maxwell_width: f32::NAN,
@@ -130,6 +136,10 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
     .sanitized();
     assert_eq!(corrupt.controls_width, DEFAULT_CONTROLS_WIDTH);
     assert_eq!(corrupt.presets_width, MAX_PANEL_WIDTH);
+    assert_eq!(
+        corrupt.appearance_width, DEFAULT_APPEARANCE_WIDTH,
+        "a non-finite Appearance width falls back to its default"
+    );
     assert_eq!(corrupt.sources_width, MIN_PANEL_WIDTH);
     assert_eq!(corrupt.induction_width, DEFAULT_INDUCTION_WIDTH);
     assert_eq!(
@@ -189,8 +199,10 @@ fn layout_state_serializes_exactly_its_platform_persisted_fields() {
     let expected: std::collections::BTreeSet<&str> = [
         "controls_expanded",
         "presets_expanded",
+        "appearance_expanded",
         "controls_width",
         "presets_width",
+        "appearance_width",
         "sources_expanded",
         "sources_width",
         "induction_expanded",
@@ -222,6 +234,8 @@ fn old_layout_defaults_only_new_fields_and_round_trips() {
         (333.0, 211.0)
     );
     assert!(!layout.help_visible);
+    assert!(!layout.appearance_expanded);
+    assert_eq!(layout.appearance_width, DEFAULT_APPEARANCE_WIDTH);
     assert!(!layout.sources_expanded);
     assert_eq!(layout.sources_width, DEFAULT_SOURCES_WIDTH);
     assert!(!layout.induction_expanded);
@@ -502,7 +516,7 @@ fn rotated_labels_fit_inside_the_real_rail_band() {
     for side in [RailSide::Left, RailSide::Right] {
         let (panel, _, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
         let band = panel.content_rect;
-        for label in ["Controls", "Presets"] {
+        for label in ["Controls", "Presets", "Appearance"] {
             let galley = measure_galley(label);
             let ink = galley.mesh_bounds;
             let placed = RailLabel::place(band, ink, side);
@@ -594,7 +608,7 @@ fn rail_tooltip_is_unchanged() {
 fn rail_paints_one_rotated_label_inside_the_real_band() {
     let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
-        for label in ["Controls", "Presets"] {
+        for label in ["Controls", "Presets", "Appearance"] {
             let (panel, text, _) = rail_pass(&ctx, side, label, None, 0.0);
             let labels: Vec<_> = text
                 .iter()
