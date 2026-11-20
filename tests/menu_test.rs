@@ -91,6 +91,8 @@ fn the_bar_carries_the_v1_menu_table() {
                     "Reset layout",
                     "Reset camera",
                     "Appearance…",
+                    "Toggle Interaction",
+                    "Interaction…",
                 ],
             ),
             (

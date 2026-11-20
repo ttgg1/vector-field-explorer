@@ -60,6 +60,9 @@ pub const DEFAULT_PRESETS_WIDTH: f32 = 240.0;
 /// Default expanded width of the right Appearance panel, points.
 pub const DEFAULT_APPEARANCE_WIDTH: f32 = 240.0;
 
+/// Default expanded width of the right Interaction panel, points.
+pub const DEFAULT_INTERACTION_WIDTH: f32 = 240.0;
+
 /// Default expanded width of the left Sources panel, points.
 pub const DEFAULT_SOURCES_WIDTH: f32 = 280.0;
 
@@ -185,6 +188,8 @@ pub enum SheetState {
     Presets,
     /// The right Appearance panel, as a bottom sheet.
     Appearance,
+    /// The right Interaction panel, as a bottom sheet.
+    Interaction,
     /// The left Sources panel, as a bottom sheet.
     Sources,
     /// The left Induction panel, as a bottom sheet.
@@ -452,6 +457,8 @@ pub struct LayoutState {
     pub presets_expanded: bool,
     /// Appearance panel (right) expanded rather than collapsed to its rail.
     pub appearance_expanded: bool,
+    /// Interaction panel (right) expanded rather than collapsed to its rail.
+    pub interaction_expanded: bool,
     /// Sources panel (left) expanded rather than collapsed to its rail.
     pub sources_expanded: bool,
     /// Induction panel (left) expanded rather than collapsed to its rail.
@@ -473,6 +480,8 @@ pub struct LayoutState {
     pub presets_width: f32,
     /// Expanded width of the Appearance panel, points.
     pub appearance_width: f32,
+    /// Expanded width of the Interaction panel, points.
+    pub interaction_width: f32,
     /// Expanded width of the Sources panel, points.
     pub sources_width: f32,
     /// Expanded width of the Induction panel, points.
@@ -499,6 +508,7 @@ impl Default for LayoutState {
             controls_expanded: true,
             presets_expanded: true,
             appearance_expanded: false,
+            interaction_expanded: false,
             sources_expanded: false,
             induction_expanded: false,
             ode_expanded: false,
@@ -507,6 +517,7 @@ impl Default for LayoutState {
             controls_width: DEFAULT_CONTROLS_WIDTH,
             presets_width: DEFAULT_PRESETS_WIDTH,
             appearance_width: DEFAULT_APPEARANCE_WIDTH,
+            interaction_width: DEFAULT_INTERACTION_WIDTH,
             sources_width: DEFAULT_SOURCES_WIDTH,
             induction_width: DEFAULT_INDUCTION_WIDTH,
             ode_width: DEFAULT_ODE_WIDTH,
@@ -529,6 +540,7 @@ impl LayoutState {
         self.controls_width = clamp_width(self.controls_width, DEFAULT_CONTROLS_WIDTH);
         self.presets_width = clamp_width(self.presets_width, DEFAULT_PRESETS_WIDTH);
         self.appearance_width = clamp_width(self.appearance_width, DEFAULT_APPEARANCE_WIDTH);
+        self.interaction_width = clamp_width(self.interaction_width, DEFAULT_INTERACTION_WIDTH);
         self.sources_width = clamp_width(self.sources_width, DEFAULT_SOURCES_WIDTH);
         self.induction_width = clamp_width(self.induction_width, DEFAULT_INDUCTION_WIDTH);
         self.ode_width = clamp_width(self.ode_width, DEFAULT_ODE_WIDTH);
@@ -560,6 +572,11 @@ impl LayoutState {
     /// Show the Appearance panel (or its rail).
     pub fn toggle_appearance(&mut self) {
         self.appearance_expanded = !self.appearance_expanded;
+    }
+
+    /// Show the Interaction panel (or its rail).
+    pub fn toggle_interaction(&mut self) {
+        self.interaction_expanded = !self.interaction_expanded;
     }
 
     /// Show the Sources panel (or its rail).

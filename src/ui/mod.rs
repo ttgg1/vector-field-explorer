@@ -6,6 +6,7 @@ pub mod cas_panel;
 pub mod formula_bar;
 pub mod help_overlay;
 pub mod induction_panel;
+pub mod interaction_panel;
 pub mod layout;
 pub mod material_panel;
 pub mod maxwell_panel;

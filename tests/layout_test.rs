@@ -10,10 +10,10 @@ use crate::support;
 
 use vector_field_explorer::ui::layout::{
     DEFAULT_APPEARANCE_WIDTH, DEFAULT_CONTROLS_WIDTH, DEFAULT_INDUCTION_WIDTH,
-    DEFAULT_PRESETS_WIDTH, DEFAULT_SOURCES_WIDTH, LayoutMode, LayoutState, MAX_PANEL_WIDTH,
-    MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN, RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel,
-    RailSide, clamp_width, collapse_chevron, compact_plan, layout_mode, rail_chevron,
-    rail_chevron_pos, rail_text_angle, rail_tooltip,
+    DEFAULT_INTERACTION_WIDTH, DEFAULT_PRESETS_WIDTH, DEFAULT_SOURCES_WIDTH, LayoutMode,
+    LayoutState, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, RAIL_CHEVRON_ZONE, RAIL_FRAME_MARGIN,
+    RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel, RailSide, clamp_width, collapse_chevron, compact_plan,
+    layout_mode, rail_chevron, rail_chevron_pos, rail_text_angle, rail_tooltip,
 };
 
 // The rail must stay narrower than any expanded panel.
@@ -46,6 +46,11 @@ fn first_launch_expands_both_panels_and_shows_help() {
         "the Appearance panel starts collapsed to its rail"
     );
     assert_eq!(layout.appearance_width, DEFAULT_APPEARANCE_WIDTH);
+    assert!(
+        !layout.interaction_expanded,
+        "the Interaction panel starts collapsed to its rail"
+    );
+    assert_eq!(layout.interaction_width, DEFAULT_INTERACTION_WIDTH);
     assert!(
         !layout.sources_expanded,
         "the Sources panel starts collapsed to its rail"
@@ -128,6 +133,7 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
         controls_width: f32::NAN,
         presets_width: 5000.0,
         appearance_width: f32::NEG_INFINITY,
+        interaction_width: f32::NAN,
         sources_width: 10.0,
         induction_width: f32::NAN,
         maxwell_width: f32::NAN,
@@ -139,6 +145,10 @@ fn widths_clamp_and_corrupt_widths_fall_back() {
     assert_eq!(
         corrupt.appearance_width, DEFAULT_APPEARANCE_WIDTH,
         "a non-finite Appearance width falls back to its default"
+    );
+    assert_eq!(
+        corrupt.interaction_width, DEFAULT_INTERACTION_WIDTH,
+        "a non-finite Interaction width falls back to its default"
     );
     assert_eq!(corrupt.sources_width, MIN_PANEL_WIDTH);
     assert_eq!(corrupt.induction_width, DEFAULT_INDUCTION_WIDTH);
@@ -200,9 +210,11 @@ fn layout_state_serializes_exactly_its_platform_persisted_fields() {
         "controls_expanded",
         "presets_expanded",
         "appearance_expanded",
+        "interaction_expanded",
         "controls_width",
         "presets_width",
         "appearance_width",
+        "interaction_width",
         "sources_expanded",
         "sources_width",
         "induction_expanded",
@@ -236,6 +248,8 @@ fn old_layout_defaults_only_new_fields_and_round_trips() {
     assert!(!layout.help_visible);
     assert!(!layout.appearance_expanded);
     assert_eq!(layout.appearance_width, DEFAULT_APPEARANCE_WIDTH);
+    assert!(!layout.interaction_expanded);
+    assert_eq!(layout.interaction_width, DEFAULT_INTERACTION_WIDTH);
     assert!(!layout.sources_expanded);
     assert_eq!(layout.sources_width, DEFAULT_SOURCES_WIDTH);
     assert!(!layout.induction_expanded);

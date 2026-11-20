@@ -790,6 +790,11 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 - Wide layout shows both side panels (or rails) and no compact chrome; Compact
   uses `layout::compact_plan` to hide both panels, swap the top bar, and show
   one bottom sheet. The left rail strip orders Controls, native CAS and Sources.
+- The right Appearance rail/body and compact Appearance tab draw
+  `appearance_panel::show`; the right Interaction rail/body and compact
+  Interaction tab draw `interaction_panel::show` against
+  `VfApp::interaction`/`VfApp::interaction_profiles`. Both rails count in the
+  right-rail width budget.
 - The Sources rail/body and the compact Sources tab draw
   `sources_panel::show`; the formula bar's one-shot `open_sources` request
   expands the wide rail or opens the compact sheet, then clears.
@@ -3776,9 +3781,9 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `appearance_panel`, `branding`, native-only `cas_panel`, `formula_bar`,
-`help_overlay`, `induction_panel`, `layout`, `material_panel`, `maxwell_panel`,
-`menu`, `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
-`sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+`help_overlay`, `induction_panel`, `interaction_panel`, `layout`, `material_panel`,
+`maxwell_panel`, `menu`, `ode_panel`, `panel_rails`, `plot_panel`, `presets`,
+`sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -3831,6 +3836,64 @@ and its rejected-record path, save/replace/built-in/empty-name handling,
 two-click delete, the armed-delete-cleared-by-save case, the user-profile cap,
 atomic import with its added-profile delta, replacement-only import, empty
 import document, empty export/Copy, and the compact profile section.
+
+#### `src/ui/interaction_panel.rs` — the Interaction panel
+
+**Purpose.** Issue #88 slice A2b: expose the pure A1 interaction model in the
+right-side Interaction panel. `Bindings` lists one row per remappable action
+with its current chord, a rebind capture mode, conflict Replace/Cancel and a
+per-action reset; reserved `Dismiss`/`Undo`/`Redo` rows are read-only with
+their fixed chords. `Camera feel` exposes the two bounded multipliers and three
+invert flags with a reset. `Profiles` applies the built-in `Default` and user
+profiles, saves the live bindings/feel under a typed name, deletes user
+profiles after a two-click confirm, restores the default bindings/feel and
+imports/exports the portable document. Every binding/feel edit commits straight
+to `VfApp::interaction`, and profile edits mutate
+`VfApp::interaction_profiles`; input routing is slice A3.
+
+**Public API.** `InteractionPanel` with `show(ui, live, profiles, compact)`,
+`begin_capture`, `cancel_capture`, `apply_capture`, `resolve_conflict`,
+`cancel_conflict`, `reset_action`, `commit_camera_feel`, `reset_camera_feel`,
+`apply_profile`, `save_current`, `delete_profile`, `import_profiles`,
+`sync_export`; `PendingConflict`; session drafts (`capturing`, `profile_name`,
+`import_text`, `export_text`, `message`, `pending_delete`, `conflict`).
+
+**Invariants.**
+- A captured non-Escape key becomes a `KeyChord` from the same egui `Key` type
+  as A1; pure modifier keys are ignored and Escape cancels without an edit.
+- Capture never survives the panel being hidden: `cancel_capture` drops the
+  armed target and any pending conflict when the wide panel is collapsed to
+  its rail or the compact sheet closes or switches away from Interaction, so a
+  later key press after reopening cannot bind silently.
+- The panel's own profile-name and import fields are identified by stable ids;
+  while either owns keyboard focus, capture ignores key events so typing edits
+  text instead of binding a chord.
+- `Bindings::assign` owns conflict detection: an in-use chord changes nothing,
+  names the owner and offers Replace (A1 `replace`, swapping both chords
+  atomically) or Cancel. Reserved/browser-owned refusals leave one message.
+- `Reset action` uses the A1 swap path with the documented default, so even a
+  cross-action default collision cannot leave a duplicate.
+- Camera-feel writes pass through `CameraFeel::sanitized`; out-of-range
+  multipliers clamp and non-finite values return to the default.
+- Applying a profile replaces bindings and feel only; the live record's name,
+  scene, camera pose, simulation and layout are untouched.
+- Saving rejects empty and built-in names, replaces a same-named user profile
+  in place, and reports library validation/cap errors verbatim.
+- Restore defaults installs `Bindings::default_bindings()` and
+  `CameraFeel::default()` directly, so it also repairs a damaged live record.
+- Import is atomic through `ProfileLibrary::import_text`; the message reports
+  new profiles, an honest zero-delta replacement, or `Nothing to import` for an
+  empty document. Export/copy stay disabled when the user library is empty.
+
+**Pinned by.** `tests/interaction_panel_test.rs` (18): every remappable row and
+default chord, capture/assign and Escape cancel, modifier capture, capture
+cleared by collapsing the wide panel or switching the compact sheet away,
+typing in a focused text field without binding, conflict Replace swap and
+Cancel, reserved read-only rows, per-action reset, camera-feel
+clamp/apply/reset, profile apply, save validation/replace-in-place, restore
+defaults from a damaged record, import/export delta wording, the compact
+Interaction tab and single-sheet switch, layout defaults/clamping and the
+display-only menu shortcut.
 
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
@@ -4177,7 +4240,7 @@ tab-bar/sheet plan.
 **Public API.** `RAIL_WIDTH = 32`, `RAIL_FRAME_MARGIN = 4`,
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
-`DEFAULT_APPEARANCE_WIDTH = 240`,
+`DEFAULT_APPEARANCE_WIDTH = 240`, `DEFAULT_INTERACTION_WIDTH = 240`,
 `DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
 `DEFAULT_ODE_WIDTH = 300`, `DEFAULT_MATERIALS_WIDTH = 300`,
 `DEFAULT_MAXWELL_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
@@ -4194,13 +4257,14 @@ tab-bar/sheet plan.
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
 - Compact is transient: `LayoutState` stores the desktop panel
-  visibility/width fields (Controls, Presets, Appearance, Sources, Induction,
-  ODE, Materials and Maxwell) plus help, and native-only
+  visibility/width fields (Controls, Presets, Appearance, Interaction, Sources,
+  Induction, ODE, Materials and Maxwell) plus help, and native-only
   `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
-- `SheetState::Appearance` joins `SheetState::Sources`,
+- `SheetState::Appearance`, `SheetState::Interaction`, `SheetState::Sources`,
   `SheetState::Induction`, `SheetState::Ode`, `SheetState::Materials` and
-  `SheetState::Maxwell` in sharing the one compact sheet.
-- Appearance defaults to collapsed at 240 pt and sanitizes to 180..=460.
+  `SheetState::Maxwell` share the one compact sheet.
+- Appearance and Interaction default to collapsed at 240 pt and sanitize to
+  180..=460.
 - Sources and Induction default to collapsed at 280 pt, ODE, Materials and
   Maxwell at 300 pt, and all sanitize to 180..=460; each record is consulted
   only in its own field mode.
@@ -4247,8 +4311,9 @@ are pinned by `tests/panel_rails_test.rs`.
 **Purpose.** Every menu item, shortcut, and the state/effect dispatch behind
 them.
 
-**Public API.** Shortcut label constants, `ABOUT_*`; `MenuAction` (14 variants)
-and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
+**Public API.** Shortcut label constants, `ABOUT_*`; `MenuAction` (25 variants,
+`ToggleCas` native-only) and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`;
+`Shortcut`; `SHORTCUTS`;
 `shortcut_for`, `shortcut_label`, `item_shortcut_label`, `shortcut_allowed`,
 `shortcut_actions`, `help_key_pressed`; `UiState`; `apply_action`.
 
@@ -4260,12 +4325,13 @@ and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
 - All shortcuts except Ctrl+Q are inert while a text field has focus.
 - `MENUS`: File (screenshot, quit), Edit (undo, redo, copy formula, colour/
   simulation/document resets, reset all controls), View (toggle controls,
-  toggle presets, reset layout, reset camera, appearance), Help (keyboard &
-  mouse, about). Fly is toggled by C and the sidebar Camera section, not a menu
-  item.
+  toggle presets, reset layout, reset camera, appearance, toggle/open
+  interaction), Help (keyboard & mouse, about). Fly is toggled by C and the
+  sidebar Camera section, not a menu item.
 - Shortcuts: Ctrl+B Controls, Ctrl+P Presets, Ctrl+Shift+A Appearance panel,
   Ctrl+Q quit, Ctrl+Shift+S screenshot, Ctrl+Shift+C copy formula, C fly, F1
-  help.
+  help. Ctrl+Shift+L is *displayed* beside View > Toggle Interaction only;
+  slice A3 adds it to the handled table.
 - `apply_action` mutates only `UiState`; app-only work is returned as a
   `SideEffect` (open popover, show help/about, screenshot, quit, copy, reset
   ids, and `ResetScope`).

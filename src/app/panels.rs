@@ -55,6 +55,7 @@ impl VfApp {
         if plan.presets_panel {
             self.show_presets_panel(ui);
             self.show_appearance_panel(ui);
+            self.show_interaction_panel(ui);
         } else {
             // The sheet draws after the status bar; mirror the camera now so
             // "Save current view" captures the recentred view.
@@ -302,11 +303,17 @@ impl VfApp {
         if self.layout.appearance_expanded {
             requests.push(self.layout.appearance_width);
         }
+        if self.layout.interaction_expanded {
+            requests.push(self.layout.interaction_width);
+        }
         let mut right_rail = 0.0;
         if !self.layout.presets_expanded {
             right_rail += layout::RAIL_WIDTH;
         }
         if !self.layout.appearance_expanded {
+            right_rail += layout::RAIL_WIDTH;
+        }
+        if !self.layout.interaction_expanded {
             right_rail += layout::RAIL_WIDTH;
         }
         let widths = fit_panel_widths(
@@ -544,6 +551,9 @@ impl VfApp {
         }
         if self.layout.appearance_expanded {
             self.wide_appearance_width = widths.next().unwrap();
+        }
+        if self.layout.interaction_expanded {
+            self.wide_interaction_width = widths.next().unwrap();
         }
         if let Some(action) = plot_action {
             self.apply_plot_panel_action(action);
@@ -867,6 +877,56 @@ impl VfApp {
         }
     }
 
+    /// Right Interaction panel, or its rail; same pin/collapse contract as the
+    /// Appearance panel. Binding and feel edits commit straight to
+    /// `VfApp::interaction`; the profile library is edited in place.
+    fn show_interaction_panel(&mut self, ui: &mut egui::Ui) {
+        if self.layout.interaction_expanded {
+            let mut collapse = false;
+            let response = egui::Panel::right(("interaction_panel", self.panel_generation))
+                .exact_size(self.wide_interaction_width)
+                .show(ui, |ui| {
+                    collapse = layout::collapse_button_named(
+                        ui,
+                        layout::RailSide::Right,
+                        "Interaction",
+                        menu::INTERACTION_SHORTCUT,
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("interaction_body")
+                        .show(ui, |ui| {
+                            self.interaction_panel.show(
+                                ui,
+                                &mut self.interaction,
+                                &mut self.interaction_profiles,
+                                false,
+                            );
+                        });
+                });
+            if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
+                self.layout.interaction_width = width;
+            }
+            if collapse {
+                self.layout.interaction_expanded = false;
+            }
+        } else {
+            // The body is not drawn (collapsed to the rail): an armed capture
+            // must not stay latched with nothing on screen.
+            self.interaction_panel.cancel_capture();
+            if layout::rail_panel(
+                ui,
+                ("interaction_rail", self.panel_generation),
+                layout::RailSide::Right,
+                "Interaction",
+                menu::INTERACTION_SHORTCUT,
+            )
+            .clicked
+            {
+                self.layout.interaction_expanded = true;
+            }
+        }
+    }
+
     /// Frame phase: the bottom status bar readouts and the panel itself.
     pub(super) fn frame_status_bar(&mut self, ui: &mut egui::Ui) {
         // One FPS sample per frame, from the same stable delta the simulation
@@ -999,6 +1059,7 @@ impl VfApp {
                         (SheetState::Cas, "CAS"),
                         (SheetState::Presets, "Presets"),
                         (SheetState::Appearance, "Appearance"),
+                        (SheetState::Interaction, "Interaction"),
                         (SheetState::Sources, "Sources"),
                     ];
                     if self.state.field_mode == FieldMode::Induction {
@@ -1066,6 +1127,12 @@ impl VfApp {
     /// or written here.
     fn show_compact_sheet(&mut self, ui: &mut egui::Ui) {
         let sheet = self.sheet;
+        if sheet != SheetState::Interaction {
+            // The Interaction panel is not drawn this frame (the sheet is
+            // closed or another tab is active): drop any armed capture so a
+            // hidden panel never binds the next key silently.
+            self.interaction_panel.cancel_capture();
+        }
         if !sheet.is_open() {
             return;
         }
@@ -1104,6 +1171,9 @@ impl VfApp {
             // No room above the status/tab bars: an invisible open sheet would
             // leave the tab UI claiming a panel with nothing on screen.
             self.sheet.close();
+            if sheet == SheetState::Interaction {
+                self.interaction_panel.cancel_capture();
+            }
             ui.ctx().request_repaint();
             return;
         }
@@ -1126,6 +1196,7 @@ impl VfApp {
                     SheetState::Cas => "CAS",
                     SheetState::Presets => "Presets",
                     SheetState::Appearance => "Appearance",
+                    SheetState::Interaction => "Interaction",
                     SheetState::Sources => "Sources",
                     SheetState::Induction => "Induction",
                     SheetState::Ode => "ODE",
@@ -1201,6 +1272,14 @@ impl VfApp {
                     SheetState::Appearance => {
                         self.appearance
                             .show(ui, &mut self.state, &mut self.profiles, true);
+                    }
+                    SheetState::Interaction => {
+                        self.interaction_panel.show(
+                            ui,
+                            &mut self.interaction,
+                            &mut self.interaction_profiles,
+                            true,
+                        );
                     }
                     SheetState::Sources => {
                         crate::ui::sources_panel::show(

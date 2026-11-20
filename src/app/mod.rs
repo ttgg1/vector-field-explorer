@@ -37,6 +37,7 @@ use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogSt
 use crate::ui::appearance_panel::AppearancePanelState;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::induction_panel::InductionPanelState;
+use crate::ui::interaction_panel::InteractionPanel;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
 use crate::ui::material_panel::MaterialPanelState;
 use crate::ui::maxwell_panel::MaxwellPanelState;
@@ -157,6 +158,12 @@ pub struct VfApp {
     wide_presets_width: f32,
     /// Effective width for the later Appearance phase; never persisted.
     wide_appearance_width: f32,
+    /// Effective width for the later Interaction phase; never persisted.
+    wide_interaction_width: f32,
+    /// The right Interaction panel's session state (issue #88 slice A2b).
+    /// Binding/feel edits commit through `VfApp::interaction` and
+    /// `VfApp::interaction_profiles`; nothing here is persisted.
+    pub interaction_panel: InteractionPanel,
     #[cfg(not(target_arch = "wasm32"))]
     pub cas: crate::ui::cas_panel::CasPanelState,
     pub status: StatusBarState,
@@ -448,6 +455,8 @@ impl VfApp {
             maxwell,
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
             wide_appearance_width: layout::DEFAULT_APPEARANCE_WIDTH,
+            wide_interaction_width: layout::DEFAULT_INTERACTION_WIDTH,
+            interaction_panel: InteractionPanel::default(),
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),
             status: StatusBarState::default(),
