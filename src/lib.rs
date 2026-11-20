@@ -23,6 +23,7 @@ pub mod induction;
 pub mod material;
 pub mod maxwell;
 pub mod ode;
+pub mod palette_io;
 pub mod parameters;
 pub mod particles;
 pub mod persistence;
