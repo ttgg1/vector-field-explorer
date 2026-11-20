@@ -2080,6 +2080,58 @@ panel, Sources/Induction/Teaching wiring, or scene/profile bundling yet. `State`
 holds the record, the settings envelope round-trips it, and startup assigns it
 directly without dirtying the scene.
 
+#### `src/appearance_profile.rs` — pure appearance profiles
+
+**Purpose.** Issue #85 slice A1: a named record bundling the #82 viewport
+style, the #84 layer/family overrides and the #83 colour mapping. It validates,
+sanitizes and applies atomically to `State`, and round-trips through a strict
+versioned JSON document. It does not touch the Appearance panel, settings or
+on-disk profile storage, scene documents, the renderer or sampling.
+
+**Public API.** `PROFILE_FORMAT_VERSION` (currently `1`),
+`MAX_PROFILE_NAME_BYTES = 48`, `DEFAULT_PROFILE_NAME = "Dark laboratory"`;
+`ProfileColor { colormap, ramp, mode, quantity }`;
+`AppearanceProfile { name, viewport, layer_styles, color }` with `validate`,
+`sanitized` and `apply(&self, state)`; `ProfileDocument { version, profiles }`
+with `to_json` and `from_json`; `builtins()`.
+
+**Contract.**
+- Names are trimmed, non-empty, at most 48 UTF-8 bytes and free of control
+  characters; duplicates are rejected case-sensitively within a document.
+- Validation checks the name, `ViewportStyle::validate`,
+  `LayerStyles::validate`, an optional ramp (`ColorRamp::validate`) and
+  `ScaleMode::validate`. A ramp is allowed alongside any builtin colormap; when
+  present it wins and only the informational `colormap` field is retained.
+- `sanitized` is total: names are trimmed, cleaned and truncated on a character
+  boundary (empty becomes the default), viewport/layer fields use their own
+  sanitizers, an invalid ramp becomes `ColorRamp::default`, and an invalid
+  signed-log mode becomes linear. The output validates.
+- `apply` validates everything before the first mutation, then writes only
+  `viewport_style`, `layer_styles`, `colormap`, `color_ramp`, `color_mode` and
+  `color_quantity`. A failure restores those fields and leaves the dirty flag
+  untouched; a real change requests one rebuild. Formula, parameters, sources,
+  camera, layout and UI preferences are never touched.
+- Documents use `deny_unknown_fields`; `from_json` probes the version first, so
+  a future version is reported before the profile body is parsed. Semantic
+  errors use `invalid appearance profiles: `; serde errors use
+  `invalid appearance profile JSON: `. Imports are atomic and reject duplicate
+  names. `to_json` emits compact JSON with pinned field order.
+- `builtins` ships Dark laboratory (the defaults), White paper, High contrast,
+  Tokyo Night, Catppuccin Mocha, Catppuccin Latte, Nord, Gruvbox Dark and
+  Solarized Light. Theme text colours are sRGB hex converted to the linear RGB
+  stored by `ViewportStyle`; ramp stops stay sRGB bytes with positions
+  `0.0`, `0.5`, `1.0`.
+
+**Pinned by.** `tests/appearance_profile_test.rs`: builtin validity and unique
+names, the default profile, JSON round trip and pinned field order,
+version-first and unknown-field rejection, atomic duplicate-name import,
+appearance-only apply, rollback on invalid input, total sanitization,
+sRGB-to-linear theme conversion (Tokyo Night background and axis), and the ramp
+overriding the colormap field.
+
+**Limitations.** No panel UI, settings-envelope or on-disk profile storage, no
+scene-document integration and no renderer/sampling changes in this slice.
+
 #### `src/palette_io.rs` — portable palette document
 
 **Purpose.** Issue #83 slice C1: a strict, versioned JSON form for a custom

@@ -18,6 +18,7 @@ mod animation_job_test;
 mod animation_scene_test;
 mod animation_test;
 mod appearance_panel_test;
+mod appearance_profile_test;
 mod arrow_alpha_test;
 mod arrow_geometry_test;
 mod arrow_layer_style_test;
