@@ -2266,6 +2266,50 @@ existing bounds. Errors name the parameter and the failed rule.
 **Pinned by.** `tests/parameters_test.rs` (reserved/duplicate/malformed names,
 bounds, cap, atomic `State::commit_parameters`).
 
+#### `src/scene_document.rs` — versioned scene document
+
+**Purpose.** Issue #90 slice B2a: a strict, versioned JSON form for a whole
+scene (the durable view record, shared parameters and a camera pose). Pure
+model only; no `State`, storage, UI, renderer or app wiring yet.
+
+**Public API.** `SCENE_FORMAT_VERSION` (currently `1`),
+`MAX_SCENE_NAME_BYTES` (`64`); `SceneCamera { position, scale, yaw, pitch,
+distance, target, fov_y, ortho_zoom }` with `Default` (orbit defaults, 2D
+position zero and scale `1.0`) and `validate`; `SceneDocument { version, name,
+view, parameters, camera }` with `capture`, `validate`, `to_json` and
+`from_json`; `export_scene` and `import_scene`.
+
+**Contract.**
+- `capture` stores the name unchanged at `SCENE_FORMAT_VERSION`; validation,
+  not capture, rejects an empty or over-long name.
+- `validate` checks the version first (naming the found and expected versions),
+  then the trimmed-non-empty name (at most 64 UTF-8 bytes, no ASCII control
+  characters), the camera and finally `ParameterSet::validate`. The view record
+  is deliberately not re-validated: `ViewRecord::restore` owns those rules.
+- Every camera component must be finite. `scale` is `0.05..=50`, `distance`
+  `0.05..=1.0e4`, `fov_y` `1°..=179°` in radians and `ortho_zoom` within
+  `OrbitCamera::MIN_ORTHO_ZOOM..=OrbitCamera::MAX_ORTHO_ZOOM`; errors name the
+  field and the accepted range.
+- Documents and the camera reject unknown fields (`deny_unknown_fields`);
+  `from_json` maps serde failures to `invalid scene JSON: {error}` and
+  validation failures to `invalid scene: {error}`. Imports never clamp, repair
+  or default a field.
+- `to_json` is compact serde output in declaration order `version`, `name`,
+  `view`, `parameters`, `camera`, and returns an error rather than an empty
+  string.
+- `export_scene` validates before serializing; `import_scene` parses and
+  validates.
+
+**Pinned by.** `tests/scene_document_test.rs`: full JSON round trip including a
+custom colour ramp, future-version rejection naming both versions, unknown
+document and camera fields, the name rules, non-finite and out-of-range camera
+fields, the exact `ParameterSet` error, malformed-JSON prefixes, export/import
+composition, pinned field order, and validation never mutating the document.
+
+**Limitations.** No UI, file/clipboard I/O, persistence-envelope, camera
+capture or `State` wiring in this slice; later slices call
+`ViewRecord::capture` at the call site.
+
 #### `src/persistence.rs` — one settings envelope
 
 **Purpose.** Restore and save style, layout, parameter and view state under one
