@@ -93,7 +93,10 @@ pub fn sample_field_at(
 
 /// Colour every kept sample: through the active [`ColorMapping`] when one is
 /// present, otherwise the legacy colormap with the explicit or auto range.
-fn arrow_colors(sampled: &[(glam::Vec3, glam::Vec3, f32)], view: &ViewOptions) -> Vec<[u8; 3]> {
+pub(crate) fn arrow_colors(
+    sampled: &[(glam::Vec3, glam::Vec3, f32)],
+    view: &ViewOptions,
+) -> Vec<[u8; 3]> {
     if let Some(mapping) = &view.color_mapping {
         let samples: Vec<ColorSample> = sampled
             .iter()
