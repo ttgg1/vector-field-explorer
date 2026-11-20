@@ -12,6 +12,7 @@ use vector_field_explorer::color_mapping::ColorQuantity;
 use vector_field_explorer::color_ramp::{ColorRamp, RampKind, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::induction::{InductionCase, InductionScene};
+use vector_field_explorer::layer_style::LayerStyles;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{AppSettings, PresetUiRecord, ViewRecord, load, save};
@@ -452,6 +453,7 @@ fn sample_settings() -> AppSettings {
         view: ViewRecord::capture(&state),
         parameters: ParameterSet::default(),
         viewport_style: ViewportStyle::white_paper(),
+        layer_styles: LayerStyles::default(),
         preset_ui: PresetUiRecord::default(),
     }
 }

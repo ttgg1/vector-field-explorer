@@ -258,7 +258,7 @@ called the single `src/app` module is now `src/app/mod.rs` plus
 `arrow_geometry.rs`, `arrow_style.rs`, `fly_camera.rs`, `fonts.rs`, `plane.rs`,
 `pointer_lock.rs`, `reference.rs`, `sim_clock.rs`, `render/instancer.rs`,
 `ui/branding.rs`, `ui/menu.rs`, `ui/transport.rs`, `version.rs`,
-`viewport_style.rs`, and the four shaders. Two files on disk are not compiled at all (`render/instancer.rs` and
+`viewport_style.rs`, `layer_style.rs`, and the four shaders. Two files on disk are not compiled at all (`render/instancer.rs` and
 `ui/arrows.rs`); they are documented where they appear so nobody adds live code
 to them by mistake.
 
@@ -558,7 +558,9 @@ and the helpers that belong to no single frame phase.
 
 **Invariants.**
 - `new_with_storage` restores `AppSettings` through the viewmodel setters before
-  the first frame; a restored non-default domain is recentred on the correct
+  the first frame; `parameters`, `viewport_style` and `layer_styles` are then
+  assigned directly, so restoring them does not dirty the scene. A restored
+  non-default domain is recentred on the correct
   camera (`recentre_on` in 3D, `recentre_on_2d` in 2D). It passes the restored
   reference flags into `compose_lines_with_frame` for the initial private scene;
   dirty rebuilds and click recompositions use that same frame-aware path.
@@ -2003,6 +2005,53 @@ parity, non-finite mid grey, State mapping/setter/freeze behaviour, and
 wiring in this slice; streamlines only use the mapping when the state passes
 one, and the legacy streamlines path stays byte-identical.
 
+#### `src/layer_style.rs` — bounded layer and family appearance overrides
+
+**Purpose.** Issue #84 slice A1: the pure appearance model for per-layer and
+per-family opacity, width and fixed-colour overrides. It stores and validates
+the record and resolves effective values; it does not touch the UI, renderer,
+scene documents or profiles, so a neutral record renders exactly today's scene.
+
+**Public API.** `MIN_WIDTH_MULTIPLIER = 0.05`, `MAX_WIDTH_MULTIPLIER = 4.0`;
+`LayerId { Arrows, Flow, Sources, Induction, TeachingScene, Reference }` with
+`ALL` and `label`; `PhysicsFamily { Electric, Magnetic }` with `ALL` and
+`label`; `LayerOverride { opacity, width, color }` with `validate(field)`,
+`sanitized` and `is_neutral`; `LayerStyles { layers, families }` with
+`validate`, `sanitized`, `is_neutral` and `resolve(layer, family)`;
+`ResolvedLayerStyle { opacity, width, color }`.
+
+**Invariants.**
+- `layers` is in `LayerId::ALL` order and `families` in `PhysicsFamily::ALL`
+  order; both records are serde-defaulted arrays.
+- Validation rejects non-finite values and opacity outside `0.0..=1.0` or
+  width outside `0.05..=4.0`, naming the first path such as
+  `layers[2].opacity`; bounds are inclusive.
+- `sanitized` turns a non-finite value into `None` and clamps a finite
+  out-of-range value into its bound; colours need no repair.
+- Resolution is per attribute: defaults `1.0`, `1.0`, no colour, then the
+  optional family override, then the layer override. `None` ignores the family
+  record.
+- `Default` is neutral, so an absent or empty record leaves drawing unchanged.
+
+**Pinned by.** `tests/layer_style_test.rs`:
+`neutral_styles_resolve_to_drawable_defaults`,
+`layer_override_sets_only_the_fields_it_names`,
+`family_override_applies_to_family_aware_layers`,
+`layer_beats_family_per_attribute`,
+`validation_rejects_non_finite_and_out_of_range_values`,
+`sanitized_repairs_a_stored_record`,
+`layer_styles_round_trip_through_settings`,
+`older_settings_load_neutral_styles`,
+`commit_is_a_no_op_for_an_equal_set`,
+`invalid_commit_keeps_the_previous_styles`,
+`commit_marks_dirty_once_for_a_real_change`,
+`restored_layer_styles_reach_the_state_without_dirtying`.
+
+**Limitations.** No Appearance panel, renderer/drawable wiring, or
+scene/profile bundling in this slice; `State` holds the record, the settings
+envelope round-trips it, and startup assigns it directly without dirtying the
+scene.
+
 #### `src/palette_io.rs` — portable palette document
 
 **Purpose.** Issue #83 slice C1: a strict, versioned JSON form for a custom
@@ -2102,6 +2151,10 @@ decisions that do not need a window.
   `color_mapping()` builds the effective `ColorMapping`. `set_colormap` always
   clears a custom ramp, and `freeze_color_range` commits the current effective
   range into `color_min`/`color_max` with auto-fit off.
+- Issue #84 slice A1 appearance field: `layer_styles: LayerStyles` with
+  `layer_styles()` and `commit_layer_styles` (validate, equal-set no-op, assign,
+  exactly one dirty request; a rejected record leaves the previous styles and
+  dirty untouched).
 - Source mode fields: `field_mode`, `sources`, `source_sampling` and
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
   `source_sampling` and `reset_sources`.
@@ -2364,8 +2417,8 @@ supplies the directory and user-facing copy.
 **Purpose.** Restore and save style, layout, parameter and view state under one
 eframe storage key, with migration and corruption tolerance.
 
-**Public API.** `AppSettings { style, layout, view, parameters }`,
-`AppSettings::sanitized`;
+**Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
+layer_styles, preset_ui }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
 helpers.
@@ -2378,6 +2431,7 @@ helpers.
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
 | `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy |
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
+| `LayerStyles` | `layers: [LayerOverride; 6]` in `LayerId::ALL` order, `families: [LayerOverride; 2]` in `PhysicsFamily::ALL` order; each override has optional `opacity`, `width`, `color` | `#[serde(default)]`; an absent key loads the neutral record; an invalid record is repaired by `sanitized` with a warning and never fails the envelope |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -2441,6 +2495,11 @@ helpers.
     scene, sampling, BEM cache and error before returning to Formula; the
     Maxwell section Reset restores only the default scene. `tests/maxwell_persistence_test.rs`
     pins this record.
+14. An absent `layer_styles` record loads neutral. A stored invalid record is
+    repaired by `LayerStyles::sanitized` (a non-finite value becomes unset, a
+    finite out-of-range value clamps into its bound) with a warning, and the
+    envelope still loads. Startup restore assigns the loaded record directly,
+    without dirtying the scene.
 
 **Tested by.** `tests/persistence_test.rs` (54 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -2464,7 +2523,10 @@ helpers.
 `induction_scene_round_trips_and_legacy_defaults_to_formula`,
 `malformed_induction_fields_fall_back_and_report_the_error`,
 `global_reset_clears_induction_cache_and_restores_defaults`, and the
-restore/sanitize tests.
+restore/sanitize tests. The layer-style record is pinned by
+[tests/layer_style_test.rs](../tests/layer_style_test.rs): neutral resolution,
+per-attribute precedence, validation and sanitising, envelope round-trip,
+older-envelope defaults, and the State commit no-op/keep/one-dirty rules.
 
 ODE persistence is pinned separately by
 [tests/ode_persistence_test.rs](../tests/ode_persistence_test.rs):

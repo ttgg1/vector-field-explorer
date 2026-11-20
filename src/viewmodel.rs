@@ -25,6 +25,7 @@ use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
 };
+use crate::layer_style::LayerStyles;
 use crate::material::{
     MaterialError, MaterialSampling, MaterialScene, material_outline, sample_materials,
     validate_material,
@@ -269,6 +270,10 @@ pub struct State {
     /// [`State::commit_viewport_style`] may replace it in response to an edit;
     /// startup restores assign it directly.
     pub viewport_style: ViewportStyle,
+    /// Durable per-layer and per-family appearance overrides (issue #84 slice
+    /// A1). Only [`State::commit_layer_styles`] may replace it in response to
+    /// an edit; an invalid commit leaves the previous record untouched.
+    pub layer_styles: LayerStyles,
     pub field: FieldExpr,
     pub parse_error: String,
     pub density: u32,
@@ -447,6 +452,26 @@ impl State {
         }
     }
 
+    /// The committed per-layer and per-family appearance record.
+    pub fn layer_styles(self: &State) -> &LayerStyles {
+        &self.layer_styles
+    }
+
+    /// Atomically replace the appearance overrides after validating the whole
+    /// record. A rejected record leaves the previous styles and the dirty flag
+    /// untouched; an accepted record requests exactly one scene rebuild.
+    /// Committing a record equal to the committed one is a validated no-op and
+    /// does not dirty the scene.
+    pub fn commit_layer_styles(self: &mut State, next: LayerStyles) -> Result<(), String> {
+        next.validate()?;
+        if next == self.layer_styles {
+            return Ok(());
+        }
+        self.layer_styles = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
     /// Queue a lazy re-solve only when the active Ode RHS actually changes.
     /// Formula and domain edits call this; presentation edits never do, so
     /// playback is not restarted for a style change. Invalid formula edits
@@ -544,6 +569,7 @@ impl State {
             formula: formula.to_string(),
             parameters: ParameterSet::default(),
             viewport_style: ViewportStyle::default(),
+            layer_styles: LayerStyles::default(),
             field,
             parse_error: String::new(),
             density,
