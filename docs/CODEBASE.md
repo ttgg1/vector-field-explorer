@@ -2032,12 +2032,32 @@ sanitize controls and invalidate relevant caches; `plot_scene` lazily samples
 accepted expressions and delegates scene construction to `plot_scene`.
 `tests/plot_state_test.rs` covers editing, transitions, settings and caching.
 
+#### `src/parameters.rs` — shared named-parameter records
+
+**Purpose.** Validated, durable named numbers (issue #89 slice A) with no parser
+or UI binding yet.
+
+**Public API.** `MAX_PARAMETERS = 32`, `MAX_NAME_LEN = 32`,
+`PARAMETER_VERSION = 1`, `RESERVED_NAMES`; `Parameter { name, value, min, max,
+step }`; `ParameterSet { version, entries }` (`Default` is version 1 with no
+entries; `validate`, `value`).
+
+**Invariants.** At most 32 entries. Names are 1–32 ASCII bytes matching
+`[A-Za-z_][A-Za-z0-9_]*`, case-sensitive and unique, and may not be `x`, `y`,
+`z`, `t`, `pi`, `e`, or any `meval` 0.2.0 builtin. Values, bounds and step are
+finite; `step > 0`; `min <= max` when both exist; `value` lies within the
+existing bounds. Errors name the parameter and the failed rule.
+
+**Pinned by.** `tests/parameters_test.rs` (reserved/duplicate/malformed names,
+bounds, cap, atomic `State::commit_parameters`).
+
 #### `src/persistence.rs` — one settings envelope
 
-**Purpose.** Restore and save style, layout, and view state under one eframe
-storage key, with migration and corruption tolerance.
+**Purpose.** Restore and save style, layout, parameter and view state under one
+eframe storage key, with migration and corruption tolerance.
 
-**Public API.** `AppSettings { style, layout, view }`, `AppSettings::sanitized`;
+**Public API.** `AppSettings { style, layout, view, parameters }`,
+`AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
 helpers.
@@ -2049,6 +2069,7 @@ helpers.
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
 | `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; `normalize` and `speed` are read-only legacy |
+| `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.

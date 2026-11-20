@@ -316,6 +316,10 @@ impl VfApp {
         // Restore through the viewmodel setters so the first frame samples the
         // saved field; a corrupt record cannot poison the grid.
         settings.view.restore(&mut state, &mut controls);
+        // Restoring the durable parameter set is not a parameter edit: assign
+        // it directly so it never dirties the scene on its own. `load` already
+        // replaced an invalid stored set with the default.
+        state.parameters = settings.parameters;
         // Ticket 47: a restored non-default domain must already be framed on
         // the first frame, not only after the first edit. This is the same
         // tested recentre helper the live domain editor uses; the default

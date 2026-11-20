@@ -10,6 +10,7 @@ use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::induction::{InductionCase, InductionScene};
+use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
 use vector_field_explorer::plane::DIM_ALPHA;
@@ -445,6 +446,7 @@ fn sample_settings() -> AppSettings {
             cas_width: 333.0,
         },
         view: ViewRecord::capture(&state),
+        parameters: ParameterSet::default(),
     }
 }
 
@@ -2206,4 +2208,110 @@ fn global_reset_clears_induction_cache_and_restores_defaults() {
     assert!(app.state.induction_prepared.is_none());
     assert!(app.state.induction_sampling.is_none());
     assert!(app.state.induction_error.is_none());
+}
+
+fn sample_parameters() -> ParameterSet {
+    ParameterSet {
+        version: 1,
+        entries: vec![
+            Parameter {
+                name: "gain".to_string(),
+                value: 2.5,
+                min: Some(0.0),
+                max: Some(5.0),
+                step: 0.5,
+            },
+            Parameter {
+                name: "offset".to_string(),
+                value: -1.0,
+                min: None,
+                max: None,
+                step: 0.25,
+            },
+        ],
+    }
+}
+
+#[test]
+fn old_envelope_without_parameters_loads_the_empty_default_set() {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &legacy_settings(false));
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.parameters,
+        ParameterSet::default(),
+        "an envelope without the key gets the default set"
+    );
+    assert_eq!(loaded.parameters.version, 1);
+    assert!(loaded.parameters.entries.is_empty());
+    assert_eq!(loaded.view.formula, "(x, y)", "the old view still loads");
+    assert_eq!(loaded.view.density, 24);
+    assert_eq!(loaded.view.arrow_scale, 2.0);
+}
+
+#[test]
+fn valid_parameters_round_trip_through_save_and_load() {
+    let mut settings = sample_settings();
+    settings.parameters = sample_parameters();
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
+    assert!(raw.contains("parameters:"), "the set is written:\n{raw}");
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.parameters, settings.parameters);
+    assert_eq!(loaded, settings, "no other field changes in the round trip");
+}
+
+#[test]
+fn corrupt_parameters_fall_back_to_the_default_set_without_losing_other_fields() {
+    let mut settings = sample_settings();
+    settings.parameters = ParameterSet {
+        version: 2,
+        entries: sample_parameters().entries,
+    };
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    assert_eq!(
+        loaded.parameters,
+        ParameterSet::default(),
+        "an unsupported version falls back to the empty default set"
+    );
+    assert_eq!(loaded.style, settings.style, "the appearance survives");
+    assert_eq!(loaded.layout, settings.layout, "the layout survives");
+    assert_eq!(loaded.view, settings.view, "the view survives");
+}
+
+#[test]
+fn restoring_parameters_does_not_dirty_the_scene() {
+    let mut settings = sample_settings();
+    settings.parameters = sample_parameters();
+
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    // Startup assigns the loaded set directly; unlike a parameter edit, a
+    // restore must not request a scene rebuild on its own.
+    let mut state = State::new(false);
+    state.dirty = false;
+    state.parameters = loaded.parameters.clone();
+    assert!(
+        !state.dirty,
+        "assigning restored parameters leaves dirty alone"
+    );
+    assert_eq!(state.parameter_value("gain"), Some(2.5));
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        app.state.parameters, settings.parameters,
+        "the app constructor restores the persisted set"
+    );
 }

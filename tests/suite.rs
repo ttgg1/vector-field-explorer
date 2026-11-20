@@ -90,6 +90,7 @@ mod ode_panel_test;
 mod ode_persistence_test;
 mod ode_test;
 mod packaging_notices_test;
+mod parameters_test;
 mod panel_rails_test;
 mod particle_playback_test;
 mod particles_test;
