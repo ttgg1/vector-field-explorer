@@ -25,15 +25,15 @@ use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
 };
-use crate::layer_style::{LayerId, LayerStyles};
+use crate::layer_style::{LayerId, LayerStyles, PhysicsFamily, ResolvedLayerStyle};
 use crate::material::{
-    MaterialError, MaterialSampling, MaterialScene, material_outline, sample_materials,
-    validate_material,
+    MaterialError, MaterialFamily, MaterialSampling, MaterialScene, material_family,
+    material_outline, sample_materials, validate_material,
 };
 use crate::maxwell::{
     BemSolution, MAXWELL_DENSITY_CAP_WARNING, MAXWELL_MAX_DENSITY_2D, MAXWELL_MAX_DENSITY_3D,
-    MaxwellError, MaxwellSampling, MaxwellScene, maxwell_outline, sample_maxwell_with_bem,
-    solve_bem, validate_maxwell,
+    MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family, maxwell_outline,
+    sample_maxwell_with_bem, solve_bem, validate_maxwell,
 };
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
@@ -516,11 +516,36 @@ impl State {
         styles: &LayerStyles,
     ) -> ArrowParams {
         let params = self.arrow_params;
-        let width = sanitized_width_for_style(styles.resolve(LayerId::Arrows, None).width);
+        let width = sanitized_width_for_style(self.arrow_layer_resolution(styles).width);
         ArrowParams {
             head_width: params.head_width * width,
             shaft_radius: params.shaft_radius * width,
             ..params
+        }
+    }
+
+    /// The one physics family a teaching scene draws in Materials/Maxwell
+    /// mode; `None` for every other mode. Slice B2 resolves the Teaching-scene
+    /// layer with this family once per snapshot.
+    fn teaching_family(self: &State) -> Option<PhysicsFamily> {
+        match self.field_mode {
+            FieldMode::Materials => Some(physics_family_of_material(material_family(
+                self.material.case,
+            ))),
+            FieldMode::Maxwell => {
+                Some(physics_family_of_maxwell(maxwell_family(self.maxwell.case)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The layer style that drives a mode's arrows. Materials and Maxwell use
+    /// their single `(TeachingScenes, family)` record; every other mode keeps
+    /// the Arrows layer.
+    fn arrow_layer_resolution(self: &State, styles: &LayerStyles) -> ResolvedLayerStyle {
+        match self.teaching_family() {
+            Some(family) => styles.resolve(LayerId::TeachingScene, Some(family)),
+            None => styles.resolve(LayerId::Arrows, None),
         }
     }
 
@@ -2053,7 +2078,9 @@ impl State {
         let plane_active = self.plane_active();
         let grid = self.grid();
         let domain = self.domain;
-        let layer_opacity = sanitized_opacity(styles.resolve(LayerId::Arrows, None).opacity);
+        let resolved = self.arrow_layer_resolution(styles);
+        let layer_opacity = sanitized_opacity(resolved.opacity);
+        let family_rgb = resolved.color.map(|color| color.0);
         arrows
             .iter()
             .map(|a| {
@@ -2077,16 +2104,17 @@ impl State {
                     }
                     ArrowLengthMode::Magnitude => a.mag * self.magnitude_scale,
                 };
+                let base_rgb = family_rgb.unwrap_or(a.color);
                 let (rgb, alpha) =
                     if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
                         (
-                            dim_color(a.color),
+                            dim_color(base_rgb),
                             (self.arrow_opacity * self.plane_dim_opacity * layer_opacity)
                                 .clamp(0.0, 1.0),
                         )
                     } else {
                         (
-                            a.color,
+                            base_rgb,
                             (self.arrow_opacity * layer_opacity).clamp(0.0, 1.0),
                         )
                     };
@@ -2402,12 +2430,23 @@ impl State {
             } else {
                 crate::reference::EDGE_WIDTH
             };
+            let resolved = styles.resolve(
+                LayerId::TeachingScene,
+                Some(physics_family_of_maxwell(maxwell_family(self.maxwell.case))),
+            );
+            let opacity = sanitized_opacity(resolved.opacity);
+            let width_multiplier = sanitized_width_for_style(resolved.width);
             let lines = maxwell_outline(&self.maxwell, &domain, plane.as_ref())
                 .into_iter()
                 .map(|segment| LineInstanceGPU {
                     a: [segment.a[0], segment.a[1], segment.a[2], 1.0],
-                    b: [segment.b[0], segment.b[1], segment.b[2], width],
-                    color: segment.color,
+                    b: [
+                        segment.b[0],
+                        segment.b[1],
+                        segment.b[2],
+                        styled_teaching_line_width(width, width_multiplier),
+                    ],
+                    color: styled_teaching_line_color(segment.color, opacity, resolved.color),
                 })
                 .collect::<Vec<_>>();
             return SceneGPU {
@@ -2434,6 +2473,14 @@ impl State {
                 Vec::new()
             };
             let plane = self.plane_frame();
+            let resolved = styles.resolve(
+                LayerId::TeachingScene,
+                Some(physics_family_of_material(material_family(
+                    self.material.case,
+                ))),
+            );
+            let opacity = sanitized_opacity(resolved.opacity);
+            let width_multiplier = sanitized_width_for_style(resolved.width);
             let lines = material_outline(&self.material, &self.scene_domain(), plane.as_ref())
                 .into_iter()
                 .map(|segment| LineInstanceGPU {
@@ -2442,9 +2489,9 @@ impl State {
                         segment.b[0],
                         segment.b[1],
                         segment.b[2],
-                        crate::reference::EDGE_WIDTH,
+                        styled_teaching_line_width(crate::reference::EDGE_WIDTH, width_multiplier),
                     ],
-                    color: segment.color,
+                    color: styled_teaching_line_color(segment.color, opacity, resolved.color),
                 })
                 .collect::<Vec<_>>();
             return SceneGPU {
@@ -2512,6 +2559,51 @@ fn sanitized_width_for_style(width: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+/// The Teaching-scene family axis for a Materials case.
+fn physics_family_of_material(family: MaterialFamily) -> PhysicsFamily {
+    match family {
+        MaterialFamily::Electric => PhysicsFamily::Electric,
+        MaterialFamily::Magnetic => PhysicsFamily::Magnetic,
+    }
+}
+
+/// The Teaching-scene family axis for a Maxwell case.
+fn physics_family_of_maxwell(family: MaxwellFamily) -> PhysicsFamily {
+    match family {
+        MaxwellFamily::Electric => PhysicsFamily::Electric,
+        MaxwellFamily::Magnetic => PhysicsFamily::Magnetic,
+    }
+}
+
+/// Teaching outlines multiply their base width by the resolved multiplier and
+/// keep the historical fallback when the product is unusable.
+fn styled_teaching_line_width(base: f32, multiplier: f32) -> f32 {
+    let width = base * multiplier;
+    if width.is_finite() && width > 0.0 {
+        width
+    } else {
+        crate::reference::EDGE_WIDTH
+    }
+}
+
+/// Teaching outlines keep their base alpha times the sanitized opacity and
+/// take the fixed family colour when one is set.
+fn styled_teaching_line_color(
+    base: [f32; 4],
+    opacity: f32,
+    override_rgb: Option<crate::color_ramp::Rgb>,
+) -> [f32; 4] {
+    let [red, green, blue] = match override_rgb {
+        Some(crate::color_ramp::Rgb([red, green, blue])) => [
+            red as f32 / 255.0,
+            green as f32 / 255.0,
+            blue as f32 / 255.0,
+        ],
+        None => [base[0], base[1], base[2]],
+    };
+    [red, green, blue, (base[3] * opacity).clamp(0.0, 1.0)]
 }
 
 /// A readable message for a rejected material scene.

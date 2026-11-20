@@ -8,9 +8,12 @@
 use glam::Vec3;
 use vector_field_explorer::app::{compose_lines_with_frame, compose_lines_with_frame_style};
 use vector_field_explorer::color_mapping::ColorStats;
+use vector_field_explorer::color_ramp::Rgb;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
-use vector_field_explorer::layer_style::{LayerId, LayerOverride, LayerStyles};
+use vector_field_explorer::layer_style::{LayerId, LayerOverride, LayerStyles, PhysicsFamily};
+use vector_field_explorer::material::MaterialCase;
+use vector_field_explorer::maxwell::MaxwellCase;
 use vector_field_explorer::particles::{
     AdvectSettings, FlowLayerStyle, ParticleAppearance, ParticlePalette, Particles, advect,
     dot_instances_at, dot_instances_styled_at, spawn, speed_range, trail_instances_at,
@@ -18,6 +21,7 @@ use vector_field_explorer::particles::{
 };
 use vector_field_explorer::plane::on_plane;
 use vector_field_explorer::renderer::{ArrowInstanceGPU, LineInstanceGPU};
+use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::viewmodel::{STREAMLINE_WIDTH, State};
 
 fn slot(layer: LayerId) -> usize {
@@ -239,6 +243,343 @@ fn arrow_width_scales_girth_not_length() {
         wide.effective_arrow_params().shaft_radius,
         stored.shaft_radius * 2.0
     );
+}
+
+// ---- Issue #84 slice B2: Teaching-scene layer styling ----
+
+fn family_slot(family: PhysicsFamily) -> usize {
+    PhysicsFamily::ALL
+        .iter()
+        .position(|candidate| *candidate == family)
+        .expect("every family is in PhysicsFamily::ALL")
+}
+
+fn set_layer_full(
+    state: &mut State,
+    layer: LayerId,
+    opacity: Option<f32>,
+    width: Option<f32>,
+    color: Option<Rgb>,
+) {
+    let mut styles = *state.layer_styles();
+    styles.layers[slot(layer)] = LayerOverride {
+        opacity,
+        width,
+        color,
+    };
+    state
+        .commit_layer_styles(styles)
+        .expect("the test style is valid");
+}
+
+fn set_family_full(
+    state: &mut State,
+    family: PhysicsFamily,
+    opacity: Option<f32>,
+    width: Option<f32>,
+    color: Option<Rgb>,
+) {
+    let mut styles = *state.layer_styles();
+    styles.families[family_slot(family)] = LayerOverride {
+        opacity,
+        width,
+        color,
+    };
+    state
+        .commit_layer_styles(styles)
+        .expect("the test style is valid");
+}
+
+fn material_state(case: MaterialCase) -> State {
+    let mut state = State::new(true);
+    assert!(state.set_field_mode(FieldMode::Materials));
+    let mut scene = state.material.clone();
+    scene.case = case;
+    state
+        .set_material_scene(scene)
+        .expect("the teaching case validates");
+    state.set_plane_enabled(false);
+    state.refresh_material_sampling();
+    state
+}
+
+fn maxwell_state(case: MaxwellCase) -> State {
+    let mut state = State::new(true);
+    assert!(state.set_field_mode(FieldMode::Maxwell));
+    state.set_mode(true);
+    let mut scene = state.maxwell.clone();
+    scene.case = case;
+    let _ = state.set_maxwell_scene(scene);
+    state.refresh_maxwell_sampling();
+    state
+}
+
+fn assert_scene_bytes_equal(
+    a: &vector_field_explorer::renderer::SceneGPU,
+    b: &vector_field_explorer::renderer::SceneGPU,
+) {
+    assert!(same_arrows(&a.arrows, &b.arrows), "arrow instances differ");
+    assert!(same_lines(&a.lines, &b.lines), "line instances differ");
+    assert_eq!(a.arrow_params, b.arrow_params, "arrow params differ");
+}
+
+#[test]
+fn materials_arrows_follow_the_teaching_scene_layer() {
+    let mut state = material_state(MaterialCase::DielectricSphere);
+    let neutral = state.snapshot();
+    assert!(
+        !neutral.arrows.is_empty(),
+        "the fixture really draws arrows"
+    );
+
+    set_layer_full(
+        &mut state,
+        LayerId::TeachingScene,
+        Some(0.5),
+        Some(0.5),
+        None,
+    );
+    set_family_full(
+        &mut state,
+        PhysicsFamily::Electric,
+        None,
+        None,
+        Some(Rgb([10, 20, 30])),
+    );
+    let styled = state.snapshot();
+
+    assert_eq!(styled.arrows.len(), neutral.arrows.len());
+    for (before, after) in neutral.arrows.iter().zip(styled.arrows.iter()) {
+        assert_eq!(
+            [after.color[0], after.color[1], after.color[2]],
+            [10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0],
+            "the family colour replaces the fixed family RGB"
+        );
+        assert_eq!(after.color[3], before.color[3] * 0.5, "opacity multiplies");
+        assert_eq!(after.dir_len, before.dir_len, "width never changes length");
+        assert_eq!(after.origin, before.origin);
+    }
+    assert_eq!(
+        styled.arrow_params.head_width,
+        neutral.arrow_params.head_width * 0.5
+    );
+    assert_eq!(
+        styled.arrow_params.shaft_radius,
+        neutral.arrow_params.shaft_radius * 0.5
+    );
+    assert_eq!(
+        styled.arrow_params.head_length, neutral.arrow_params.head_length,
+        "width never changes the head length"
+    );
+}
+
+#[test]
+fn maxwell_outline_follows_the_teaching_scene_layer() {
+    let mut state = maxwell_state(MaxwellCase::HollowSphere);
+    let neutral = state.snapshot();
+    assert!(!neutral.lines.is_empty(), "the fixture really outlines");
+
+    set_layer_full(
+        &mut state,
+        LayerId::TeachingScene,
+        Some(0.5),
+        Some(2.0),
+        None,
+    );
+    set_family_full(
+        &mut state,
+        PhysicsFamily::Electric,
+        None,
+        None,
+        Some(Rgb([10, 20, 30])),
+    );
+    let styled = state.snapshot();
+
+    assert_eq!(styled.lines.len(), neutral.lines.len());
+    for (before, after) in neutral.lines.iter().zip(styled.lines.iter()) {
+        assert_eq!(after.a, before.a);
+        assert_eq!(after.b[0], before.b[0]);
+        assert_eq!(after.b[1], before.b[1]);
+        assert_eq!(after.b[2], before.b[2]);
+        assert_eq!(after.b[3], before.b[3] * 2.0, "width multiplier applies");
+        assert_eq!(
+            [after.color[0], after.color[1], after.color[2]],
+            [10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0],
+            "the family colour replaces the outline RGB"
+        );
+        assert_eq!(after.color[3], before.color[3] * 0.5, "opacity multiplies");
+    }
+}
+
+#[test]
+fn materials_outline_follows_the_teaching_scene_layer() {
+    let mut state = material_state(MaterialCase::PermeableSphere);
+    let neutral = state.snapshot();
+    assert!(!neutral.lines.is_empty(), "the fixture really outlines");
+
+    set_layer_full(
+        &mut state,
+        LayerId::TeachingScene,
+        Some(0.25),
+        Some(3.0),
+        None,
+    );
+    set_family_full(
+        &mut state,
+        PhysicsFamily::Magnetic,
+        None,
+        None,
+        Some(Rgb([200, 100, 50])),
+    );
+    let styled = state.snapshot();
+
+    assert_eq!(styled.lines.len(), neutral.lines.len());
+    for (before, after) in neutral.lines.iter().zip(styled.lines.iter()) {
+        assert_eq!(after.b[3], before.b[3] * 3.0);
+        assert_eq!(after.color[3], before.color[3] * 0.25);
+        assert_eq!(
+            [after.color[0], after.color[1], after.color[2]],
+            [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0]
+        );
+    }
+}
+
+#[test]
+fn neutral_teaching_styles_are_byte_identical() {
+    for state in [
+        material_state(MaterialCase::DielectricSphere),
+        material_state(MaterialCase::PermeableSphere),
+        maxwell_state(MaxwellCase::ParallelPlates),
+        maxwell_state(MaxwellCase::Solenoid),
+    ] {
+        let mut neutral = state.clone();
+        neutral
+            .commit_layer_styles(LayerStyles::default())
+            .expect("neutral styles validate");
+        assert_scene_bytes_equal(&neutral.snapshot(), &state.snapshot_blueprint());
+        assert_scene_bytes_equal(&neutral.snapshot(), &state.snapshot());
+    }
+}
+
+#[test]
+fn teaching_modes_ignore_the_arrows_layer() {
+    let mut material = material_state(MaterialCase::DielectricSphere);
+    let neutral_material = material.snapshot();
+    set_layer_full(
+        &mut material,
+        LayerId::Arrows,
+        Some(0.1),
+        Some(3.0),
+        Some(Rgb([1, 2, 3])),
+    );
+    assert_scene_bytes_equal(&neutral_material, &material.snapshot());
+
+    let mut maxwell = maxwell_state(MaxwellCase::ParallelPlates);
+    let neutral_maxwell = maxwell.snapshot();
+    set_layer_full(
+        &mut maxwell,
+        LayerId::Arrows,
+        Some(0.1),
+        Some(3.0),
+        Some(Rgb([1, 2, 3])),
+    );
+    assert_scene_bytes_equal(&neutral_maxwell, &maxwell.snapshot());
+
+    // The teaching override still applies, so the equality above is not
+    // vacuous.
+    let mut changed = material_state(MaterialCase::DielectricSphere);
+    set_layer_full(
+        &mut changed,
+        LayerId::TeachingScene,
+        Some(0.5),
+        Some(2.0),
+        None,
+    );
+    assert!(!same_arrows(
+        &neutral_material.arrows,
+        &changed.snapshot().arrows
+    ));
+    assert_ne!(
+        neutral_material.arrow_params,
+        changed.snapshot().arrow_params
+    );
+}
+
+#[test]
+fn teaching_svg_blueprint_stays_neutral() {
+    for neutral in [
+        material_state(MaterialCase::DielectricSphere),
+        maxwell_state(MaxwellCase::ParallelPlates),
+    ] {
+        let mut styled = neutral.clone();
+        set_layer_full(
+            &mut styled,
+            LayerId::TeachingScene,
+            Some(0.2),
+            Some(2.5),
+            Some(Rgb([9, 8, 7])),
+        );
+        let blueprint = styled.snapshot_blueprint();
+        assert_scene_bytes_equal(&neutral.snapshot(), &blueprint);
+        // The styled live scene really differs, so the blueprint equality is
+        // not vacuous.
+        assert!(!same_arrows(
+            &neutral.snapshot().arrows,
+            &styled.snapshot().arrows
+        ));
+        assert!(!same_lines(
+            &neutral.snapshot().lines,
+            &styled.snapshot().lines
+        ));
+    }
+}
+
+#[test]
+fn non_finite_teaching_styles_are_defensively_repaired() {
+    let mut state = material_state(MaterialCase::DielectricSphere);
+    let baseline = state.snapshot();
+    assert!(!baseline.arrows.is_empty() && !baseline.lines.is_empty());
+
+    // A direct field write bypasses `commit_layer_styles` validation.
+    state.layer_styles.layers[slot(LayerId::TeachingScene)].opacity = Some(f32::NAN);
+    state.layer_styles.layers[slot(LayerId::TeachingScene)].width = Some(-2.0);
+
+    let repaired = state.snapshot();
+    for (before, after) in baseline.arrows.iter().zip(repaired.arrows.iter()) {
+        assert_eq!(
+            after.color[3], before.color[3],
+            "NaN opacity repairs to neutral"
+        );
+        assert!(after.color.iter().all(|channel| channel.is_finite()));
+    }
+    for (before, after) in baseline.lines.iter().zip(repaired.lines.iter()) {
+        assert_eq!(
+            after.color[3], before.color[3],
+            "NaN opacity repairs to neutral alpha"
+        );
+        assert!(after.color.iter().all(|channel| channel.is_finite()));
+        assert!(
+            after.b[3].is_finite() && after.b[3] > 0.0,
+            "a negative width is clamped to a usable positive value"
+        );
+        assert_eq!(
+            after.b[3],
+            before.b[3] * vector_field_explorer::layer_style::MIN_WIDTH_MULTIPLIER,
+            "a finite out-of-range width clamps to the A1 bound"
+        );
+    }
+    assert_eq!(
+        repaired.arrow_params.head_width,
+        baseline.arrow_params.head_width * vector_field_explorer::layer_style::MIN_WIDTH_MULTIPLIER
+    );
+
+    // A non-finite width repairs to the neutral multiplier.
+    state.layer_styles.layers[slot(LayerId::TeachingScene)].width = Some(f32::INFINITY);
+    let infinite = state.snapshot();
+    assert_eq!(infinite.arrow_params, baseline.arrow_params);
+    for (before, after) in baseline.lines.iter().zip(infinite.lines.iter()) {
+        assert_eq!(after.b[3], before.b[3]);
+    }
 }
 
 #[test]
