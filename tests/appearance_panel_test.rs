@@ -11,8 +11,13 @@ use eframe::egui;
 use crate::support;
 use crate::support::storage::{from_ron, ron_string};
 
+use vector_field_explorer::appearance_profile::{
+    AppearanceProfile, PROFILE_FORMAT_VERSION, ProfileDocument, builtins,
+};
 use vector_field_explorer::color_ramp::Rgb;
+use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::layer_style::{LayerId, LayerStyles, PhysicsFamily};
+use vector_field_explorer::profile_library::ProfileLibrary;
 use vector_field_explorer::ui::appearance_panel::{
     AppearanceEdit, AppearancePanelState, apply_edit, reset_all, resolve_family,
 };
@@ -272,6 +277,33 @@ fn panel_shows_inline_error_and_clears_it_on_a_valid_edit() {
 }
 
 #[test]
+fn a_failed_edit_after_a_successful_save_replaces_the_status_message() {
+    let mut h = ProfileHarness::new();
+    h.panel.profile_name = "Saved".to_owned();
+    let saved = h.click_label("Save current appearance");
+    assert!(
+        painted(&saved).contains("Saved profile Saved"),
+        "the save reports success:\n{}",
+        painted(&saved)
+    );
+
+    h.panel.apply(
+        &mut h.state,
+        AppearanceEdit::LayerOpacity(LayerId::Arrows, Some(f32::NAN)),
+    );
+    let out = h.idle();
+    let text = painted(&out);
+    assert!(
+        text.contains("finite"),
+        "the failed edit paints its error:\n{text}"
+    );
+    assert!(
+        !text.contains("Saved profile Saved"),
+        "the stale success message does not survive a later failed edit:\n{text}"
+    );
+}
+
+#[test]
 fn clearing_a_field_restores_the_fallback() {
     let mut state = State::new(false);
     apply_edit(
@@ -386,23 +418,589 @@ fn render_panel(
     panel: &mut AppearancePanelState,
     state: &mut State,
 ) -> egui::FullOutput {
+    let mut profiles = ProfileLibrary::default();
+    render_panel_with(panel, state, &mut profiles, 420.0, false)
+}
+
+fn render_panel_with(
+    panel: &mut AppearancePanelState,
+    state: &mut State,
+    profiles: &mut ProfileLibrary,
+    width: f32,
+    compact: bool,
+) -> egui::FullOutput {
     let ctx = context();
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(420.0, 3200.0),
+                egui::vec2(width, 3200.0),
             )),
             ..Default::default()
         },
         |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                panel.show(ui, state, false);
+                panel.show(ui, state, profiles, compact);
             });
         },
     );
     output.textures_delta.clear();
     output
+}
+
+/// Drives the real panel widgets for the profile section: buttons are found
+/// through accesskit and clicked with real pointer events, while the drafts are
+/// set the same way a user's text edit would leave them.
+struct ProfileHarness {
+    ctx: egui::Context,
+    panel: AppearancePanelState,
+    state: State,
+    profiles: ProfileLibrary,
+    width: f32,
+    compact: bool,
+    time: f64,
+}
+
+impl ProfileHarness {
+    fn new() -> Self {
+        Self {
+            ctx: context(),
+            panel: AppearancePanelState::default(),
+            state: State::new(false),
+            profiles: ProfileLibrary::default(),
+            width: 420.0,
+            compact: false,
+            time: 0.0,
+        }
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(self.width, 3200.0),
+            )),
+            time: Some(self.time),
+            predicted_dt: 1.0 / 60.0,
+            events,
+            ..Default::default()
+        };
+        self.time += 1.0 / 60.0;
+        let mut output = {
+            let panel = &mut self.panel;
+            let state = &mut self.state;
+            let profiles = &mut self.profiles;
+            let compact = self.compact;
+            self.ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    panel.show(ui, state, profiles, compact);
+                });
+            })
+        };
+        output.textures_delta.clear();
+        output
+    }
+
+    fn idle(&mut self) -> egui::FullOutput {
+        self.frame(Vec::new())
+    }
+
+    fn click(&mut self, pos: egui::Pos2) {
+        self.frame(pointer(pos, true));
+        self.frame(pointer(pos, false));
+    }
+
+    fn click_label(&mut self, label: &str) -> egui::FullOutput {
+        let out = self.idle();
+        let pos = button_center(&out, label)
+            .unwrap_or_else(|| panic!("the {label} button is painted"));
+        self.click(pos);
+        self.idle()
+    }
+
+    fn click_nth_label(&mut self, label: &str, index: usize) -> egui::FullOutput {
+        let out = self.idle();
+        let pos = nth_button_center(&out, label, index)
+            .unwrap_or_else(|| panic!("{label} button {index} is painted"));
+        self.click(pos);
+        self.idle()
+    }
+}
+
+fn button_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
+        return Vec::new();
+    };
+    let mut rects: Vec<egui::Rect> = update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            if node.role() != egui::Role::Button || node.label() != Some(label) {
+                return None;
+            }
+            let bounds = node.bounds()?;
+            Some(egui::Rect::from_min_max(
+                egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+            ))
+        })
+        .collect();
+    rects.sort_by(|a, b| {
+        a.center()
+            .y
+            .total_cmp(&b.center().y)
+            .then(a.center().x.total_cmp(&b.center().x))
+    });
+    rects
+}
+
+fn nth_button_center(output: &egui::FullOutput, label: &str, index: usize) -> Option<egui::Pos2> {
+    button_rects(output, label).get(index).map(egui::Rect::center)
+}
+
+fn button_disabled(output: &egui::FullOutput, label: &str) -> Option<bool> {
+    let update = output.platform_output.accesskit_update.as_ref()?;
+    update.nodes.iter().find_map(|(_, node)| {
+        (node.role() == egui::Role::Button && node.label() == Some(label))
+            .then(|| node.is_disabled())
+    })
+}
+
+fn painted(output: &egui::FullOutput) -> String {
+    painted_texts(output)
+        .into_iter()
+        .chain(accesskit_labels(output))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn applying_a_user_profile_updates_the_appearance_state() {
+    let mut h = ProfileHarness::new();
+    apply_edit(
+        &mut h.state,
+        AppearanceEdit::LayerOpacity(LayerId::Arrows, Some(0.35)),
+    )
+    .expect("the layer override commits");
+    h.state.colormap = Colormap::Turbo;
+    let saved = AppearanceProfile::capture("Mine", &h.state);
+    h.profiles = ProfileLibrary::new(vec![saved.clone()]).expect("the captured profile is valid");
+
+    // Move every appearance field away from the captured profile.
+    apply_edit(
+        &mut h.state,
+        AppearanceEdit::LayerOpacity(LayerId::Arrows, None),
+    )
+    .expect("clearing the layer override commits");
+    h.state.colormap = Colormap::Mono;
+
+    let user_apply = builtins().len();
+    let out = h.click_nth_label("Apply", user_apply);
+
+    assert_eq!(h.state.viewport_style, saved.viewport);
+    assert_eq!(*h.state.layer_styles(), saved.layer_styles);
+    assert_eq!(h.state.colormap, saved.color.colormap);
+    assert_eq!(h.state.color_ramp, saved.color.ramp);
+    assert_eq!(h.state.color_mode, saved.color.mode);
+    assert_eq!(h.state.color_quantity, saved.color.quantity);
+    assert!(
+        painted(&out).contains("Applied Mine"),
+        "applying reports the profile name:\n{}",
+        painted(&out)
+    );
+}
+
+#[test]
+fn applying_a_profile_reports_a_rejected_record_without_mutating_state() {
+    let mut state = State::new(false);
+    let before = AppearanceProfile::capture("Probe", &state);
+    let mut invalid = AppearanceProfile::capture("Invalid", &state);
+    invalid.name = "   ".to_owned();
+
+    let mut panel = AppearancePanelState::default();
+    panel.apply_profile(&mut state, &invalid);
+
+    let after = AppearanceProfile::capture("Probe", &state);
+    assert_eq!(
+        after, before,
+        "a rejected profile never mutates the committed appearance"
+    );
+    assert!(panel.error.is_some(), "the rejection is recorded inline");
+    assert!(panel.message.is_none());
+
+    let output = render_panel(&mut panel, &mut state);
+    let text = painted(&output);
+    assert!(
+        text.contains("name"),
+        "the rejected record's message is painted:\n{text}"
+    );
+}
+
+#[test]
+fn saving_the_current_appearance_adds_a_user_profile() {
+    let mut h = ProfileHarness::new();
+    apply_edit(
+        &mut h.state,
+        AppearanceEdit::LayerOpacity(LayerId::Flow, Some(0.45)),
+    )
+    .expect("the layer override commits");
+    h.panel.profile_name = "  My look  ".to_owned();
+
+    let out = h.click_label("Save current appearance");
+
+    assert_eq!(h.profiles.len(), 1);
+    assert_eq!(h.profiles.user()[0].name, "My look", "the draft is trimmed");
+    assert_eq!(
+        h.profiles.user()[0].layer_styles,
+        *h.state.layer_styles(),
+        "the saved profile captures the current appearance"
+    );
+    assert!(
+        h.profiles.export_text().contains("My look"),
+        "the saved profile appears in the export text"
+    );
+    assert!(
+        painted(&out).contains("Saved"),
+        "the save is reported:\n{}",
+        painted(&out)
+    );
+}
+
+#[test]
+fn saving_with_a_builtin_name_is_rejected() {
+    let mut h = ProfileHarness::new();
+    h.panel.profile_name = builtins()[0].name.clone();
+
+    let out = h.click_label("Save current appearance");
+
+    assert!(
+        h.profiles.is_empty(),
+        "a built-in name never becomes a user profile"
+    );
+    let text = painted(&out);
+    assert!(
+        text.contains("built in") || text.contains("built-in"),
+        "the rejection explains the reserved name:\n{text}"
+    );
+}
+
+#[test]
+fn saving_with_an_empty_name_is_rejected() {
+    let mut h = ProfileHarness::new();
+    h.panel.profile_name = "   ".to_owned();
+
+    let out = h.click_label("Save current appearance");
+
+    assert!(h.profiles.is_empty(), "an empty name never saves");
+    assert!(
+        painted(&out).contains("name"),
+        "the rejection is shown:\n{}",
+        painted(&out)
+    );
+}
+
+#[test]
+fn saving_twice_with_the_same_name_replaces_in_place() {
+    let mut h = ProfileHarness::new();
+    h.panel.profile_name = "First".to_owned();
+    h.click_label("Save current appearance");
+    h.panel.profile_name = "Second".to_owned();
+    h.click_label("Save current appearance");
+
+    apply_edit(
+        &mut h.state,
+        AppearanceEdit::LayerOpacity(LayerId::Arrows, Some(0.7)),
+    )
+    .expect("the layer override commits");
+    h.panel.profile_name = "First".to_owned();
+    let out = h.click_label("Save current appearance");
+
+    let names: Vec<&str> = h
+        .profiles
+        .user()
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect();
+    assert_eq!(names, ["First", "Second"], "order and length are preserved");
+    assert_eq!(
+        h.profiles.user()[0].layer_styles.layers[layer_slot(LayerId::Arrows)].opacity,
+        Some(0.7),
+        "the replacement holds the newly captured appearance"
+    );
+    assert!(
+        painted(&out).contains("Replaced"),
+        "the replacement is reported:\n{}",
+        painted(&out)
+    );
+
+    let document =
+        ProfileDocument::from_json(&h.profiles.export_text()).expect("the export parses");
+    assert_eq!(document.profiles.len(), 2);
+    assert_eq!(
+        document
+            .profiles
+            .iter()
+            .filter(|profile| profile.name == "First")
+            .count(),
+        1,
+        "the export has one entry for the replaced name"
+    );
+}
+
+#[test]
+fn saving_at_the_user_profile_cap_reports_the_cap_and_keeps_the_library() {
+    let mut h = ProfileHarness::new();
+    let seeded: Vec<AppearanceProfile> = (0..32)
+        .map(|index| AppearanceProfile::capture(format!("Profile {index}"), &h.state))
+        .collect();
+    h.profiles = ProfileLibrary::new(seeded).expect("32 profiles fit the cap");
+    h.panel.profile_name = "One more".to_owned();
+
+    let out = h.click_label("Save current appearance");
+
+    assert_eq!(h.profiles.len(), 32, "the over-cap save adds nothing");
+    let text = painted(&out);
+    assert!(
+        text.contains("at most 32 user profiles"),
+        "the library's cap wording is painted verbatim:\n{text}"
+    );
+    assert!(
+        !text.contains("Saved profile One more"),
+        "an over-cap save is not reported as a success:\n{text}"
+    );
+}
+
+#[test]
+fn deleting_a_user_profile_needs_two_clicks() {
+    let mut h = ProfileHarness::new();
+    h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("Mine", &h.state)])
+        .expect("the profile is valid");
+
+    let out = h.click_label("Delete");
+    assert_eq!(
+        h.panel.pending_delete.as_deref(),
+        Some("Mine"),
+        "the first click only arms the delete"
+    );
+    assert_eq!(h.profiles.len(), 1, "the profile survives the first click");
+    assert!(
+        painted(&out).contains("again") || painted(&out).contains("confirm"),
+        "the panel asks for the second click:\n{}",
+        painted(&out)
+    );
+
+    h.click_label("Confirm delete");
+    assert!(h.panel.pending_delete.is_none());
+    assert!(h.profiles.is_empty(), "the second click removes the profile");
+}
+
+#[test]
+fn saving_over_an_armed_delete_clears_the_pending_delete() {
+    let mut h = ProfileHarness::new();
+    h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("X", &h.state)])
+        .expect("the profile is valid");
+    h.click_label("Delete");
+    assert_eq!(
+        h.panel.pending_delete.as_deref(),
+        Some("X"),
+        "the first delete click arms the delete"
+    );
+
+    h.panel.profile_name = "X".to_owned();
+    let out = h.click_label("Save current appearance");
+
+    assert!(
+        h.panel.pending_delete.is_none(),
+        "a successful save clears the armed delete"
+    );
+    assert_eq!(h.profiles.len(), 1, "the save replaces rather than adds");
+    assert!(
+        painted(&out).contains("Replaced profile X"),
+        "the replacement is reported:\n{}",
+        painted(&out)
+    );
+}
+
+#[test]
+fn import_replaces_the_user_library_atomically() {
+    let mut h = ProfileHarness::new();
+    let gamma = AppearanceProfile::capture("Gamma", &h.state);
+    let delta = AppearanceProfile::capture("Delta", &h.state);
+    h.profiles = ProfileLibrary::new(vec![
+        AppearanceProfile::capture("Alpha", &h.state),
+        gamma.clone(),
+        delta.clone(),
+    ])
+    .expect("the profiles are valid");
+    let mut updated = AppearanceProfile::capture("Alpha", &h.state);
+    updated.color.colormap = Colormap::Turbo;
+    let added = AppearanceProfile::capture("Beta", &h.state);
+    let document = ProfileDocument {
+        version: PROFILE_FORMAT_VERSION,
+        profiles: vec![updated.clone(), added.clone()],
+    };
+    h.panel.import_text = document.to_json().expect("the document serializes");
+
+    let out = h.click_label("Apply text");
+
+    assert_eq!(
+        h.profiles.user(),
+        [updated, gamma, delta, added],
+        "the import merges in document order"
+    );
+    let text = painted(&out);
+    assert!(
+        text.contains("Imported 1 new user profile"),
+        "the delta over the starting library is reported, not the post-merge total:\n{text}"
+    );
+    assert!(
+        !text.contains("Imported 4"),
+        "the post-merge total is not painted as the imported count:\n{text}"
+    );
+}
+
+#[test]
+fn import_that_only_replaces_existing_names_reports_no_new_profiles() {
+    let mut h = ProfileHarness::new();
+    h.profiles = ProfileLibrary::new(vec![
+        AppearanceProfile::capture("Alpha", &h.state),
+        AppearanceProfile::capture("Beta", &h.state),
+    ])
+    .expect("the profiles are valid");
+    let mut updated = AppearanceProfile::capture("Alpha", &h.state);
+    updated.color.colormap = Colormap::Turbo;
+    let document = ProfileDocument {
+        version: PROFILE_FORMAT_VERSION,
+        profiles: vec![updated.clone()],
+    };
+    h.panel.import_text = document.to_json().expect("the document serializes");
+
+    let out = h.click_label("Apply text");
+
+    assert_eq!(h.profiles.user()[0], updated, "the existing name is replaced");
+    assert_eq!(h.profiles.len(), 2, "the replacement grows nothing");
+    let text = painted(&out);
+    assert!(
+        text.contains("no new profiles"),
+        "a zero delta says nothing new was imported:\n{text}"
+    );
+    assert!(
+        !text.contains("Imported 1") && !text.contains("Imported 2"),
+        "a replacement is not painted as an import:\n{text}"
+    );
+}
+
+#[test]
+fn empty_import_document_reports_nothing_to_import_without_replacement_wording() {
+    let empty = ProfileDocument {
+        version: PROFILE_FORMAT_VERSION,
+        profiles: Vec::new(),
+    }
+    .to_json()
+    .expect("the document serializes");
+
+    let mut fresh = ProfileHarness::new();
+    fresh.panel.import_text = empty.clone();
+    let out = fresh.click_label("Apply text");
+    let text = painted(&out);
+    assert!(
+        text.contains("Nothing to import"),
+        "an empty document says there is nothing to import:\n{text}"
+    );
+    assert!(
+        !text.contains("replaced") && !text.contains("no new profiles"),
+        "an empty document is not painted as a replacement:\n{text}"
+    );
+    assert!(fresh.profiles.is_empty(), "the empty import adds nothing");
+
+    let mut populated = ProfileHarness::new();
+    let mine = AppearanceProfile::capture("Mine", &fresh.state);
+    populated.profiles =
+        ProfileLibrary::new(vec![mine.clone()]).expect("the profile is valid");
+    let before = populated.profiles.user().to_vec();
+    populated.panel.import_text = empty;
+    let out = populated.click_label("Apply text");
+    let text = painted(&out);
+    assert!(
+        text.contains("Nothing to import"),
+        "an empty document against a non-empty library says there is nothing to import:\n{text}"
+    );
+    assert!(
+        !text.contains("replaced") && !text.contains("no new profiles"),
+        "the empty import is not painted as a replacement:\n{text}"
+    );
+    assert_eq!(
+        populated.profiles.user(),
+        before.as_slice(),
+        "the non-empty library is unchanged"
+    );
+}
+
+#[test]
+fn importing_malformed_text_reports_an_error_and_keeps_the_library() {
+    let mut h = ProfileHarness::new();
+    let original = AppearanceProfile::capture("Mine", &h.state);
+    h.profiles = ProfileLibrary::new(vec![original.clone()]).expect("the profile is valid");
+    h.panel.import_text = "not json".to_owned();
+
+    let out = h.click_label("Apply text");
+
+    assert_eq!(
+        h.profiles.user(),
+        [original],
+        "a malformed import leaves the library untouched"
+    );
+    let text = painted(&out).to_lowercase();
+    assert!(
+        text.contains("json"),
+        "the malformed document is named:\n{text}"
+    );
+}
+
+#[test]
+fn export_text_is_empty_without_user_profiles_and_copy_is_disabled() {
+    let mut h = ProfileHarness::new();
+
+    let before = h.idle();
+    assert_eq!(
+        button_disabled(&before, "Copy"),
+        Some(true),
+        "an empty buffer cannot be copied"
+    );
+
+    let out = h.click_label("Export text");
+    assert_eq!(h.panel.export_text, "", "no user profile means no export text");
+    assert_eq!(
+        button_disabled(&out, "Copy"),
+        Some(true),
+        "Copy stays disabled for the empty export"
+    );
+}
+
+#[test]
+fn compact_width_keeps_the_profile_section_usable() {
+    let mut h = ProfileHarness::new();
+    h.width = 320.0;
+    h.compact = true;
+    h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("Mine", &h.state)])
+        .expect("the profile is valid");
+
+    let out = h.idle();
+    let text = painted(&out);
+    for label in [
+        "Profiles",
+        "Apply",
+        "Delete",
+        "Save current appearance",
+        "Export text",
+        "Copy",
+        "Apply text",
+    ] {
+        assert!(
+            text.contains(label),
+            "the compact panel renders {label:?}:\n{text}"
+        );
+    }
 }
 
 #[test]

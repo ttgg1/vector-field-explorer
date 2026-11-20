@@ -9,11 +9,13 @@
 
 use eframe::egui;
 
+use crate::appearance_profile::{AppearanceProfile, ProfileDocument, builtins};
 use crate::color_ramp::Rgb;
 use crate::layer_style::{
     LayerId, LayerStyles, MAX_WIDTH_MULTIPLIER, MIN_WIDTH_MULTIPLIER, PhysicsFamily,
     ResolvedLayerStyle,
 };
+use crate::profile_library::ProfileLibrary;
 use crate::viewmodel::State;
 
 /// One field edit the panel can request.
@@ -91,22 +93,52 @@ pub fn reset_all(state: &mut State) -> Result<(), String> {
     state.commit_layer_styles(LayerStyles::default())
 }
 
-/// Panel-local state: the last rejected edit, if any.
+/// Panel-local state: the last rejected edit or profile action, the success
+/// message, and the session-only profile drafts.
 #[derive(Debug, Clone, Default)]
 pub struct AppearancePanelState {
     pub error: Option<String>,
+    /// The last successful profile action, painted in a weak colour.
+    pub message: Option<String>,
+    /// The save-current name draft.
+    pub profile_name: String,
+    /// The import draft.
+    pub import_text: String,
+    /// The cached portable export, recomputed after every user-library mutation
+    /// and when the user clicks Export.
+    pub export_text: String,
+    /// The name awaiting the second delete click.
+    pub pending_delete: Option<String>,
 }
 
 impl AppearancePanelState {
     /// Apply one edit through the panel's own commit path, recording any
     /// validation error inline. The real controls call this for every change.
     pub fn apply(&mut self, state: &mut State, edit: AppearanceEdit) {
-        self.error = apply_edit(state, edit).err();
+        match apply_edit(state, edit) {
+            Ok(()) => self.error = None,
+            Err(error) => self.fail(error),
+        }
+    }
+
+    /// Apply one profile through [`AppearanceProfile::apply`], recording a
+    /// success message or the rejection inline.
+    pub fn apply_profile(&mut self, state: &mut State, profile: &AppearanceProfile) {
+        match profile.apply(state) {
+            Ok(()) => self.succeed(format!("Applied {}", profile.name)),
+            Err(error) => self.fail(error),
+        }
     }
 
     /// Draw the panel body. `compact` raises the row height to the shared
     /// finger-sized floor used by the compact bottom sheet.
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State, compact: bool) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut State,
+        profiles: &mut ProfileLibrary,
+        compact: bool,
+    ) {
         if compact {
             ui.spacing_mut().interact_size.y = crate::ui::layout::COMPACT_ROW_HEIGHT;
             ui.spacing_mut().item_spacing.y = crate::ui::layout::COMPACT_ITEM_SPACING;
@@ -120,6 +152,11 @@ impl AppearancePanelState {
         if let Some(error) = self.error.as_ref() {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(message) = self.message.as_ref() {
+            ui.weak(message);
+        }
+
+        self.profile_section(ui, state, profiles);
 
         ui.separator();
         ui.label(egui::RichText::new("Layers").strong());
@@ -141,6 +178,176 @@ impl AppearancePanelState {
         {
             self.error = reset_all(state).err();
         }
+    }
+
+    fn profile_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut State,
+        profiles: &mut ProfileLibrary,
+    ) {
+        ui.separator();
+        ui.label(egui::RichText::new("Profiles").strong());
+
+        let shipped = builtins();
+        let builtin_count = shipped.len();
+        let all = profiles.all();
+        for (index, profile) in all.iter().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(&profile.name);
+                if ui
+                    .button("Apply")
+                    .on_hover_text("Apply this appearance profile")
+                    .clicked()
+                {
+                    self.apply_profile(state, profile);
+                    if self.error.is_none() {
+                        self.pending_delete = None;
+                    }
+                }
+                if index >= builtin_count {
+                    let label = if self.pending_delete.as_deref() == Some(profile.name.as_str()) {
+                        "Confirm delete"
+                    } else {
+                        "Delete"
+                    };
+                    if ui
+                        .button(label)
+                        .on_hover_text("Delete this user profile")
+                        .clicked()
+                    {
+                        self.delete_profile(profiles, &profile.name);
+                    }
+                }
+            });
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Name");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.profile_name)
+                    .hint_text("Profile name")
+                    .desired_width(180.0),
+            );
+        });
+        if ui.button("Save current appearance").clicked() {
+            self.save_current(state, profiles);
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Export text").clicked() {
+                self.sync_export(profiles);
+            }
+            let can_copy = !self.export_text.is_empty();
+            if ui
+                .add_enabled(can_copy, egui::Button::new("Copy"))
+                .on_hover_text("Copy the profile document")
+                .clicked()
+            {
+                let text = self.export_text.clone();
+                ui.ctx().copy_text(text);
+                self.succeed("Copied profile text".to_owned());
+            }
+        });
+        ui.add(
+            egui::TextEdit::multiline(&mut self.export_text)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY)
+                .interactive(false),
+        );
+
+        ui.label("Import profiles");
+        ui.add(
+            egui::TextEdit::multiline(&mut self.import_text)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .hint_text("Paste a profile document"),
+        );
+        if ui.button("Apply text").clicked() {
+            self.import_profiles(profiles);
+        }
+    }
+
+    fn save_current(&mut self, state: &State, profiles: &mut ProfileLibrary) {
+        let name = self.profile_name.trim().to_owned();
+        if name.is_empty() {
+            self.fail("enter a profile name before saving".to_owned());
+            return;
+        }
+        if builtins().iter().any(|builtin| builtin.name == name) {
+            self.fail(format!(
+                "profile name {name:?} is built in and cannot be overwritten"
+            ));
+            return;
+        }
+
+        let replaces = profiles.user().iter().any(|profile| profile.name == name);
+        let profile = AppearanceProfile::capture(name.clone(), state);
+        match profiles.upsert(profile) {
+            Ok(()) => {
+                self.profile_name.clear();
+                self.pending_delete = None;
+                self.sync_export(profiles);
+                let action = if replaces { "Replaced" } else { "Saved" };
+                self.succeed(format!("{action} profile {name}"));
+            }
+            Err(error) => self.fail(error),
+        }
+    }
+
+    fn delete_profile(&mut self, profiles: &mut ProfileLibrary, name: &str) {
+        if self.pending_delete.as_deref() != Some(name) {
+            self.pending_delete = Some(name.to_owned());
+            self.succeed(format!("Click Delete again to remove {name}"));
+            return;
+        }
+
+        self.pending_delete = None;
+        if profiles.remove(name) {
+            self.sync_export(profiles);
+            self.succeed(format!("Deleted profile {name}"));
+        } else {
+            self.fail(format!("profile {name} was not found"));
+        }
+    }
+
+    fn import_profiles(&mut self, profiles: &mut ProfileLibrary) {
+        let before = profiles.len();
+        match profiles.import_text(&self.import_text) {
+            Ok(after) => {
+                self.sync_export(profiles);
+                let added = after.saturating_sub(before);
+                let message = match added {
+                    0 if ProfileDocument::from_json(&self.import_text)
+                        .is_ok_and(|document| document.profiles.is_empty()) =>
+                    {
+                        "Nothing to import".to_owned()
+                    }
+                    0 => "Import replaced existing user profiles; no new profiles imported"
+                        .to_owned(),
+                    1 => "Imported 1 new user profile".to_owned(),
+                    count => format!("Imported {count} new user profiles"),
+                };
+                self.succeed(message);
+            }
+            Err(error) => self.fail(error),
+        }
+    }
+
+    /// Recompute the cached portable export. Every user-library mutation and the
+    /// Export click call this one helper, so no revision bookkeeping is needed.
+    fn sync_export(&mut self, profiles: &ProfileLibrary) {
+        self.export_text = export_buffer(profiles);
+    }
+
+    fn succeed(&mut self, message: String) {
+        self.error = None;
+        self.message = Some(message);
+    }
+
+    fn fail(&mut self, error: String) {
+        self.error = Some(error);
+        self.message = None;
     }
 
     fn layer_row(&mut self, ui: &mut egui::Ui, state: &mut State, layer: LayerId) {
@@ -271,6 +478,16 @@ impl AppearancePanelState {
                 ui.weak(effective);
             });
         });
+    }
+}
+
+/// The portable buffer for a library: an empty user library exports as an empty
+/// buffer so Copy stays disabled, otherwise the compact document text.
+fn export_buffer(profiles: &ProfileLibrary) -> String {
+    if profiles.is_empty() {
+        String::new()
+    } else {
+        profiles.export_text()
     }
 }
 

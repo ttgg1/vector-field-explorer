@@ -840,7 +840,8 @@ impl VfApp {
                     egui::ScrollArea::vertical()
                         .id_salt("appearance_body")
                         .show(ui, |ui| {
-                            self.appearance.show(ui, &mut self.state, false);
+                            self.appearance
+                                .show(ui, &mut self.state, &mut self.profiles, false);
                         });
                 });
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
@@ -1194,7 +1195,8 @@ impl VfApp {
                                 .show_compact(ui, &mut self.camera, &mut self.state, true);
                     }
                     SheetState::Appearance => {
-                        self.appearance.show(ui, &mut self.state, true);
+                        self.appearance
+                            .show(ui, &mut self.state, &mut self.profiles, true);
                     }
                     SheetState::Sources => {
                         crate::ui::sources_panel::show(
