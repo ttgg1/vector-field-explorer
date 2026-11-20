@@ -22,6 +22,7 @@ use crate::viewmodel::State;
 /// [`SHORTCUTS`] so a label can never drift from the key it describes.
 pub const CONTROLS_SHORTCUT: &str = "Ctrl+B";
 pub const PRESETS_SHORTCUT: &str = "Ctrl+P";
+pub const APPEARANCE_SHORTCUT: &str = "Ctrl+Shift+A";
 pub const FLY_SHORTCUT: &str = "C";
 pub const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+S";
 pub const COPY_FORMULA_SHORTCUT: &str = "Ctrl+Shift+C";
@@ -80,6 +81,7 @@ menu_actions! {
     #[cfg(not(target_arch = "wasm32"))]
     ToggleCas,
     TogglePresets,
+    ToggleAppearancePanel,
     ToggleFly,
     ResetLayout,
     ResetCamera,
@@ -277,6 +279,13 @@ pub const SHORTCUTS: &[Shortcut] = &[
         global: false,
     },
     Shortcut {
+        action: MenuAction::ToggleAppearancePanel,
+        label: APPEARANCE_SHORTCUT,
+        key: egui::Key::A,
+        modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+        global: false,
+    },
+    Shortcut {
         action: MenuAction::ToggleFly,
         label: FLY_SHORTCUT,
         key: egui::Key::C,
@@ -414,6 +423,10 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         }
         MenuAction::TogglePresets => {
             ui.layout.toggle_presets();
+            SideEffect::None
+        }
+        MenuAction::ToggleAppearancePanel => {
+            ui.layout.toggle_appearance();
             SideEffect::None
         }
         MenuAction::ToggleFly => {

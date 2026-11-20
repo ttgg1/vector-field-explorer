@@ -458,13 +458,19 @@ fn real_compact_app_tabs_keep_large_font_ink_inside_the_panel() {
                 },
             ]
         };
-        frame_at(&ctx, 360.0, 800.0, scroll(-400.0), &mut draw);
+        let presets_left = button(&out, "Presets").left();
+        // Five tabs overflow the 360 pt bar. Scroll just far enough to bring
+        // Presets (and the new Appearance tab after it) fully into view; a
+        // fixed -400 overshoots them past the viewport at large fonts.
+        let forward = -((presets_left - 16.0).max(0.0));
+        frame_at(&ctx, 360.0, 800.0, scroll(forward), &mut draw);
         for _ in 0..10 {
             frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
         }
         let out = frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
         assert_text_fits(&out, "Presets", true);
-        frame_at(&ctx, 360.0, 800.0, scroll(400.0), &mut draw);
+        assert_text_fits(&out, "Appearance", true);
+        frame_at(&ctx, 360.0, 800.0, scroll(-forward), &mut draw);
         for _ in 0..10 {
             frame_at(&ctx, 360.0, 800.0, vec![], &mut draw);
         }

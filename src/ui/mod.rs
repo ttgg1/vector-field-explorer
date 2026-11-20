@@ -1,4 +1,5 @@
 pub mod animation_dialog;
+pub mod appearance_panel;
 pub mod branding;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cas_panel;

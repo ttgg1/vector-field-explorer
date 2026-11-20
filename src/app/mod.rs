@@ -30,6 +30,7 @@ use crate::sim_clock::SimClock;
 use crate::source_scene::FieldMode;
 use crate::streamlines::click_seed;
 use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogState};
+use crate::ui::appearance_panel::AppearancePanelState;
 use crate::ui::formula_bar::FormulaBarState;
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
@@ -149,6 +150,8 @@ pub struct VfApp {
     pub maxwell: MaxwellPanelState,
     /// Effective width for the later Presets phase; never persisted.
     wide_presets_width: f32,
+    /// Effective width for the later Appearance phase; never persisted.
+    wide_appearance_width: f32,
     #[cfg(not(target_arch = "wasm32"))]
     pub cas: crate::ui::cas_panel::CasPanelState,
     pub status: StatusBarState,
@@ -177,6 +180,9 @@ pub struct VfApp {
     /// also seed the field through the captured-click path.
     suppress_capture_click: bool,
     pub presets: PresetPanel,
+    /// The right Appearance panel's inline error/readout state (issue #84
+    /// slice A2b). The committed styles live in [`State::layer_styles`].
+    pub appearance: AppearancePanelState,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
     /// It lives app-side and never touches the viewmodel `State`.
@@ -393,6 +399,7 @@ impl VfApp {
             material,
             maxwell,
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
+            wide_appearance_width: layout::DEFAULT_APPEARANCE_WIDTH,
             #[cfg(not(target_arch = "wasm32"))]
             cas: crate::ui::cas_panel::CasPanelState::default(),
             status: StatusBarState::default(),
@@ -406,6 +413,7 @@ impl VfApp {
             capture_active: false,
             suppress_capture_click: false,
             presets,
+            appearance: AppearancePanelState::default(),
             style: settings.style,
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,

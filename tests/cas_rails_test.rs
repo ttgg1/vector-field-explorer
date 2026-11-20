@@ -259,14 +259,18 @@ fn compact_cas_reuses_single_sheet_without_changing_wide_layout() {
         assert_eq!(h.app.sheet, SheetState::Cas);
         h.pick("Controls");
         assert_eq!(h.app.sheet, SheetState::Controls);
-        // Scroll the tab row to its far end to reach Presets at large fonts.
+        // Scroll the tab row far enough to bring Presets into the viewport.
+        // Five tabs overflow at large fonts, and a fixed -400 now overshoots
+        // Presets and lands on Controls.
         let out = h.idle();
         let tabs = bounds(&out, "CAS").unwrap();
+        let presets_left = bounds(&out, "Presets").unwrap().left();
+        let delta = -((presets_left - 12.0).max(0.0));
         h.frame(vec![
             egui::Event::PointerMoved(tabs.center()),
             egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(-400.0, 0.0),
+                delta: egui::vec2(delta, 0.0),
                 modifiers: egui::Modifiers::NONE,
                 phase: egui::TouchPhase::Move,
                 source: egui::MouseWheelSource::Unknown,
@@ -355,7 +359,8 @@ fn wide_squeeze_preserves_requested_widths_and_resize_restore() {
     h.width = 1280.0;
     let restored = h.idle();
     assert!((viewport(&restored).left() - 685.0).abs() <= 1.0);
-    assert!((viewport(&restored).right() - 1059.0).abs() <= 1.0);
+    // Right chrome: Presets 211 + the 32 pt Appearance rail.
+    assert!((viewport(&restored).right() - 1027.0).abs() <= 1.0);
     let input = bounds(&restored, "Input (scalar or vector)").unwrap();
     let presets = bounds(&restored, "Reset view").unwrap();
     assert!(input.right() < viewport(&restored).left());

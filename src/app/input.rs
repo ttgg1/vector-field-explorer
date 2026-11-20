@@ -221,6 +221,12 @@ impl VfApp {
                     ctx.request_repaint();
                     return;
                 }
+                MenuAction::ToggleAppearancePanel => {
+                    self.sheet.toggle(SheetState::Appearance);
+                    self.sheet_expanded = SheetSize::Default;
+                    ctx.request_repaint();
+                    return;
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 MenuAction::ToggleCas => {
                     self.sheet.toggle(SheetState::Cas);

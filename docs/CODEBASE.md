@@ -3424,13 +3424,40 @@ thread.
 
 #### `src/ui/mod.rs` — UI module list
 
-Declares `branding`, native-only `cas_panel`, `formula_bar`, `help_overlay`,
-`induction_panel`, `layout`, `material_panel`, `maxwell_panel`, `menu`,
-`ode_panel`, `panel_rails`, `plot_panel`,
-`presets`, `sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`,
-`transport`.
+Declares `appearance_panel`, `branding`, native-only `cas_panel`, `formula_bar`,
+`help_overlay`, `induction_panel`, `layout`, `material_panel`, `maxwell_panel`,
+`menu`, `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`,
+`sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
+
+#### `src/ui/appearance_panel.rs` — the Appearance panel
+
+**Purpose.** Issue #84 slice A2b: edit the six per-layer and two per-family
+`LayerStyles` overrides. Each row exposes bounded opacity (`0.0..=1.0`) and
+width (`0.05..=4.0`) sliders with an explicit `Default` escape that clears the
+field, plus family colour and a global `Reset all`. The header notes that
+styling affects the live/raster view only; SVG exports keep the unstyled
+blueprint.
+
+**Public API.** `AppearanceEdit` (`LayerOpacity`, `LayerWidth`, `FamilyOpacity`,
+`FamilyWidth`, `FamilyColor`); `apply_edit`, `reset_all`; `AppearancePanelState`
+with `show(ui, state, compact)` and an inline `error`.
+
+**Invariants.**
+- Every edit copies the committed record, changes exactly one field and calls
+  `State::commit_layer_styles`; validation is atomic, so a rejected direct write
+  surfaces an error and leaves both the record and the dirty flag untouched.
+- Slider values stay inside the model bounds, so normal UI edits cannot produce
+  an invalid record.
+- `reset_all` commits `LayerStyles::default()`; resetting this panel never
+  touches particle or viewport controls.
+
+**Pinned by.** `tests/appearance_panel_test.rs` (13): panel toggle/width
+round trip and clamp, single compact sheet, compact Appearance tab opening,
+layer/family commit and resolution, layer-over-family precedence and the
+family-only fallback, default escape, inline error display/clearing, invalid
+write rejection, reset, and the rendered six-layer/two-family body.
 
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
@@ -3777,6 +3804,7 @@ tab-bar/sheet plan.
 **Public API.** `RAIL_WIDTH = 32`, `RAIL_FRAME_MARGIN = 4`,
 `RAIL_LABEL_SIZE = 14`, `RAIL_CHEVRON_ZONE = 24`, `rail_frame`;
 `DEFAULT_CONTROLS_WIDTH = 260`, `DEFAULT_PRESETS_WIDTH = 240`,
+`DEFAULT_APPEARANCE_WIDTH = 240`,
 `DEFAULT_SOURCES_WIDTH = 280`, `DEFAULT_INDUCTION_WIDTH = 280`,
 `DEFAULT_ODE_WIDTH = 300`, `DEFAULT_MATERIALS_WIDTH = 300`,
 `DEFAULT_MAXWELL_WIDTH = 300`, `MIN_PANEL_WIDTH = 180`,
@@ -3793,11 +3821,13 @@ tab-bar/sheet plan.
 **Invariants.**
 - Compact applies at width ≤ 700; non-finite width stays Wide.
 - Compact is transient: `LayoutState` stores the desktop panel
-  visibility/width fields (Controls, Presets, Sources, Induction, ODE, Materials
-  and Maxwell) plus help, and native-only `cas_expanded`/`cas_width`; the sheet
-  and mode are never persisted.
-- `SheetState::Sources`, `SheetState::Induction`, `SheetState::Ode`,
-  `SheetState::Materials` and `SheetState::Maxwell` share the one compact sheet.
+  visibility/width fields (Controls, Presets, Appearance, Sources, Induction,
+  ODE, Materials and Maxwell) plus help, and native-only
+  `cas_expanded`/`cas_width`; the sheet and mode are never persisted.
+- `SheetState::Appearance` joins `SheetState::Sources`,
+  `SheetState::Induction`, `SheetState::Ode`, `SheetState::Materials` and
+  `SheetState::Maxwell` in sharing the one compact sheet.
+- Appearance defaults to collapsed at 240 pt and sanitizes to 180..=460.
 - Sources and Induction default to collapsed at 280 pt, ODE, Materials and
   Maxwell at 300 pt, and all sanitize to 180..=460; each record is consulted
   only in its own field mode.
@@ -3844,7 +3874,7 @@ are pinned by `tests/panel_rails_test.rs`.
 **Purpose.** Every menu item, shortcut, and the state/effect dispatch behind
 them.
 
-**Public API.** Shortcut label constants, `ABOUT_*`; `MenuAction` (13 variants)
+**Public API.** Shortcut label constants, `ABOUT_*`; `MenuAction` (14 variants)
 and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
 `shortcut_for`, `shortcut_label`, `item_shortcut_label`, `shortcut_allowed`,
 `shortcut_actions`, `help_key_pressed`; `UiState`; `apply_action`.
@@ -3857,8 +3887,11 @@ and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
 - All shortcuts except Ctrl+Q are inert while a text field has focus.
 - `MENUS`: File (screenshot, quit), Edit (copy formula, reset all controls),
   View (toggle controls, toggle presets, reset layout, reset camera,
-  appearance), Help (keyboard & mouse, about). Fly is toggled by C and the
-  sidebar Camera section, not a menu item.
+  appearance), Help (keyboard & mouse, about). Fly is toggled by
+  C and the sidebar Camera section, not a menu item.
+- Shortcuts: Ctrl+B Controls, Ctrl+P Presets, Ctrl+Shift+A Appearance panel,
+  Ctrl+Q quit, Ctrl+Shift+S screenshot, Ctrl+Shift+C copy formula, C fly, F1
+  help.
 - `apply_action` mutates only `UiState`; app-only work is returned as a
   `SideEffect` (open popover, show help/about, screenshot, quit, copy, reset
   ids/camera).
