@@ -2,11 +2,16 @@
 //! Faraday contour, classification and native CAS parity.
 
 use glam::{DVec3, UVec3, Vec3};
+use vector_field_explorer::color_mapping::{
+    ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats,
+};
+use vector_field_explorer::color_ramp::ScaleMode;
+use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::induction::{
     InductionCase, InductionScene, evaluate_induction_point, prepare_induction, sample_induction,
 };
-use vector_field_explorer::sampling::ViewOptions;
+use vector_field_explorer::sampling::{ViewOptions, magnitude_range};
 use vector_field_explorer::source_scene::SourceDisplay;
 use vector_field_explorer::sources::AccuracyRequest;
 
@@ -25,6 +30,41 @@ fn loop_scene() -> InductionScene {
         display: SourceDisplay::Both,
         allow_inaccurate: false,
     }
+}
+
+fn colour_view(
+    colormap: Colormap,
+    color_range: Option<(f32, f32)>,
+    color_mapping: Option<ColorMapping>,
+) -> ViewOptions {
+    ViewOptions {
+        colormap,
+        color_range,
+        color_mapping,
+    }
+}
+
+fn colour_mapping(quantity: ColorQuantity, manual_range: Option<(f32, f32)>) -> ColorMapping {
+    ColorMapping {
+        palette: ColorPalette::Builtin(Colormap::Turbo),
+        mode: ScaleMode::Linear,
+        quantity,
+        manual_range,
+    }
+}
+
+fn induction_prepared(
+    scene: &InductionScene,
+) -> vector_field_explorer::induction::InductionPrepared {
+    prepare_induction(
+        scene,
+        &Domain::new(Vec3::splat(-1.5), Vec3::splat(1.5)),
+        UVec3::new(5, 5, 5),
+        None,
+        0.1,
+        Default::default(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -338,4 +378,83 @@ fn validation_rejects_bad_geometry() {
         scene.validate().unwrap_err(),
         "induction frequency must be finite and non-negative"
     );
+}
+
+#[test]
+fn induction_arrows_follow_the_active_colour_mapping() {
+    let mut scene = loop_scene();
+    scene.display = SourceDisplay::Electric;
+    scene.allow_inaccurate = true;
+    let prepared = induction_prepared(&scene);
+
+    let legacy = sample_induction(
+        &prepared,
+        &scene,
+        0.25,
+        &colour_view(Colormap::Turbo, None, None),
+    );
+    assert!(
+        !legacy.arrows.is_empty(),
+        "the colour comparison is not vacuous"
+    );
+
+    let mapping = colour_mapping(ColorQuantity::ComponentX, None);
+    let mapped = sample_induction(
+        &prepared,
+        &scene,
+        0.25,
+        &colour_view(Colormap::Turbo, None, Some(mapping.clone())),
+    );
+    assert_eq!(legacy.arrows.len(), mapped.arrows.len());
+    assert!(
+        legacy
+            .arrows
+            .iter()
+            .zip(&mapped.arrows)
+            .any(|(old, new)| old.color != new.color),
+        "the signed component mapping paints induction arrows differently"
+    );
+
+    let samples: Vec<ColorSample> = mapped
+        .arrows
+        .iter()
+        .map(|arrow| ColorSample {
+            magnitude: arrow.mag,
+            dir: arrow.dir,
+        })
+        .collect();
+    let stats = ColorStats::from_samples(&samples);
+    for (arrow, sample) in mapped.arrows.iter().zip(&samples) {
+        assert_eq!(
+            arrow.color,
+            mapping.sample(sample, &stats).rgb,
+            "induction arrow colour comes from the mapping and the family stats"
+        );
+    }
+}
+
+#[test]
+fn induction_legacy_colours_are_byte_identical_without_a_mapping() {
+    let mut scene = loop_scene();
+    scene.display = SourceDisplay::Magnetic;
+    scene.allow_inaccurate = true;
+    let prepared = induction_prepared(&scene);
+    for range in [None, Some((0.2, 0.8))] {
+        let view = colour_view(Colormap::Viridis, range, None);
+        let sampled = sample_induction(&prepared, &scene, 0.25, &view);
+        assert!(
+            !sampled.arrows.is_empty(),
+            "the parity check is not vacuous"
+        );
+        let (min, max) = view
+            .color_range
+            .unwrap_or_else(|| magnitude_range(&sampled.arrows));
+        for arrow in &sampled.arrows {
+            assert_eq!(
+                arrow.color,
+                view.colormap.colormap(arrow.mag, min, max),
+                "the no-mapping path keeps the legacy colormap bytes"
+            );
+        }
+    }
 }

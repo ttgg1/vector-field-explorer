@@ -985,11 +985,12 @@ reset leaves sources alone.
 evaluates in world and projects onto the plane, returning local `(u, v, 0)`
 positions. `TargetMet` is drawable; `AccuracyNotMet` is drawable only with the
 opt-in; `Unavailable` and non-finite values never are. `Both` tags E amber and B
-cyan without summing or sharing one magnitude scale; a single family uses the
-normal colormap over its drawn magnitudes. An enabled family with no sources is
-`empty: true` with zero arrows and no error, and invalid scenes return their
-typed message with no arrows. Counters track sources, drawn arrows, target-met,
-accuracy-not-met total/drawn and unavailable per family.
+cyan without summing or sharing one magnitude scale, ignoring any active colour
+mapping; a single family colours through `ViewOptions::color_mapping` when one is
+set, otherwise the normal colormap over its drawn magnitudes. An enabled family
+with no sources is `empty: true` with zero arrows and no error, and invalid scenes
+return their typed message with no arrows. Counters track sources, drawn arrows,
+target-met, accuracy-not-met total/drawn and unavailable per family.
 
 **Pinned by.** [tests/source_scene_test.rs](../tests/source_scene_test.rs):
 `the_default_scene_is_empty_in_formula_mode`,
@@ -997,8 +998,11 @@ accuracy-not-met total/drawn and unavailable per family.
 `add_remove_enable_and_reset_change_only_the_scene`,
 `source_limit_stops_the_sixty_fifth_entry`,
 `invalid_geometry_is_rejected_with_a_parameter_name`,
-`softening_is_bounded_and_never_nan`, and
-`disabled_entries_are_not_part_of_the_validated_scene`; source-mode behaviour is
+`softening_is_bounded_and_never_nan`,
+`disabled_entries_are_not_part_of_the_validated_scene`,
+`source_arrows_follow_the_active_colour_mapping`,
+`source_legacy_colours_are_byte_identical_without_a_mapping` and
+`both_display_keeps_fixed_family_colours_with_a_mapping`; source-mode behaviour is
 in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
 
 **Limitations.** Sampling is CPU and static. Persistence stores the scene; the
@@ -1039,7 +1043,9 @@ value/uncertainty/stop reason. `sample_induction` only rescales and
 reclassifies: E by `dI/dt`, B by `I(t)`. Non-finite or over-target results are
 `Unavailable`/`AccuracyNotMet`, never drawable confident arrows; accuracy-not-met
 is hidden unless the opt-in is set. `Both` emits E amber `[255,176,64]` then B
-cyan `[64,196,255]`; a single family uses the normal colormap magnitude range.
+cyan `[64,196,255]`, ignoring any active colour mapping; a single family colours
+through `ViewOptions::color_mapping` when one is set, otherwise the normal
+colormap magnitude range.
 Native-only sampling may report the CAS waveform derivative string as
 diagnostics; the induced field itself never depends on CAS.
 
@@ -1049,7 +1055,9 @@ diagnostics; the induced field itself never depends on CAS.
 `solenoid_vector_potential_matches_independent_fixtures_and_curl_matches_b`,
 `faraday_contour_matches_flux_rate_for_both_cases`,
 `static_current_has_exactly_zero_induced_field`,
-`nonfinite_scene_is_rejected`, `validation_rejects_bad_geometry`, and the
+`nonfinite_scene_is_rejected`, `validation_rejects_bad_geometry`,
+`induction_arrows_follow_the_active_colour_mapping`,
+`induction_legacy_colours_are_byte_identical_without_a_mapping`, and the
 native-only `cas_derivative_matches_the_analytic_waveform`. Fixtures and their
 independent mpmath generator live in `tests/support/induction/`.
 

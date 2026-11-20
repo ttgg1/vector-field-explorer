@@ -9,7 +9,7 @@ use glam::{DVec3, UVec3, Vec3};
 
 use crate::domain::Domain;
 use crate::plane::PlaneFrame;
-use crate::sampling::{ArrowData, ViewOptions, magnitude_range};
+use crate::sampling::{ArrowData, ViewOptions};
 use crate::sources::{
     EvalOptions, Evaluator, FamilyResult, FieldFamily, InputError, InvalidOption, MAX_SOURCES,
     Source, SourceKind, SourceParameter, SourceSet, WorkLimits,
@@ -819,20 +819,17 @@ fn observe_family(
 }
 
 fn color_family(points: Vec<(Vec3, Vec3, f32)>, view: &ViewOptions) -> Vec<ArrowData> {
-    let mut arrows: Vec<ArrowData> = points
+    let colors = crate::sampling::arrow_colors(&points, view);
+    points
         .into_iter()
-        .map(|(position, dir, mag)| ArrowData {
+        .zip(colors)
+        .map(|((position, dir, mag), color)| ArrowData {
             position,
             dir,
             mag,
-            color: [128, 128, 128],
+            color,
         })
-        .collect();
-    let (min, max) = view.color_range.unwrap_or_else(|| magnitude_range(&arrows));
-    for arrow in &mut arrows {
-        arrow.color = view.colormap.colormap(arrow.mag, min, max);
-    }
-    arrows
+        .collect()
 }
 
 fn drawable(estimate: &crate::sources::Estimate) -> bool {
