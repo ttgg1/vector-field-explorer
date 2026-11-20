@@ -21,6 +21,7 @@ pub mod induction;
 pub mod material;
 pub mod maxwell;
 pub mod ode;
+pub mod parameters;
 pub mod particles;
 pub mod persistence;
 pub mod plane;

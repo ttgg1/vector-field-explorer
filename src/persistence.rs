@@ -24,6 +24,7 @@ use crate::maxwell::{
     ConductorOutline, MaxwellCase, MaxwellError, MaxwellScene, MaxwellView, validate_maxwell,
 };
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
+use crate::parameters::ParameterSet;
 use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
     DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
@@ -51,6 +52,11 @@ pub struct AppSettings {
     pub layout: LayoutState,
     #[serde(default)]
     pub view: ViewRecord,
+    /// Shared named parameters (issue #89). Missing on older envelopes, which
+    /// load the empty version-1 default; an invalid stored set is replaced by
+    /// [`AppSettings::sanitized`].
+    #[serde(default)]
+    pub parameters: ParameterSet,
 }
 
 impl AppSettings {
@@ -59,6 +65,12 @@ impl AppSettings {
     pub fn sanitized(mut self) -> Self {
         self.style = self.style.sanitized();
         self.layout = self.layout.sanitized();
+        if let Err(error) = self.parameters.validate() {
+            log::warn!(
+                "persisted parameters are invalid ({error}); falling back to the default set"
+            );
+            self.parameters = ParameterSet::default();
+        }
         self
     }
 }

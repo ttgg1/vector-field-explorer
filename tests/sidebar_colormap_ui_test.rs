@@ -297,6 +297,7 @@ fn colormap_row_drives_state_scene_and_persistence() {
         style: AppStyle::default(),
         layout: LayoutState::default(),
         view: record,
+        parameters: Default::default(),
     };
     let mut storage = MemoryStorage::default();
     vector_field_explorer::persistence::save(&mut storage, &settings);

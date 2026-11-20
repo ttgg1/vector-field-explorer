@@ -33,6 +33,7 @@ use crate::maxwell::{
     solve_bem, validate_maxwell,
 };
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
+use crate::parameters::ParameterSet;
 use crate::particles::{
     DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
 };
@@ -253,6 +254,9 @@ pub struct State {
     pub plot: crate::plot_state::PlotState,
     pub mode_3d: bool,
     pub formula: String,
+    /// Durable shared named parameters (issue #89). Only
+    /// [`State::commit_parameters`] may replace it in response to an edit.
+    pub parameters: ParameterSet,
     pub field: FieldExpr,
     pub parse_error: String,
     pub density: u32,
@@ -380,6 +384,27 @@ impl State {
         true
     }
 
+    /// Atomically replace the named parameters after validating the whole set.
+    /// A rejected set leaves the previous parameters, the dirty flag, the
+    /// generation counters and every dependent cache untouched; an accepted
+    /// set is assigned once and requests exactly one scene rebuild. Committing
+    /// a set equal to the committed one is a validated no-op: it leaves the
+    /// dirty flag, generation counters and caches untouched.
+    pub fn commit_parameters(self: &mut State, next: ParameterSet) -> Result<(), String> {
+        next.validate()?;
+        if next == self.parameters {
+            return Ok(());
+        }
+        self.parameters = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// The committed named-parameter value, if it exists.
+    pub fn parameter_value(self: &State, name: &str) -> Option<f64> {
+        self.parameters.value(name)
+    }
+
     /// Queue a lazy re-solve only when the active Ode RHS actually changes.
     /// Formula and domain edits call this; presentation edits never do, so
     /// playback is not restarted for a style change. Invalid formula edits
@@ -475,6 +500,7 @@ impl State {
             },
             mode_3d,
             formula: formula.to_string(),
+            parameters: ParameterSet::default(),
             field,
             parse_error: String::new(),
             density,
