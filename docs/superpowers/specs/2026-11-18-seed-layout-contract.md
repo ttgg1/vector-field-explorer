@@ -55,6 +55,9 @@ pub struct SeedLayout {
   it never repairs.
 - `SeedLayout::sanitized` drops invalid seeds, truncates to `MAX_SEEDS` and is
   total (an empty layout is valid).
+- An edit that would exceed `MAX_SEEDS` is rejected in full with a message; the
+  collection is never partially updated. Sanitising truncation applies only to
+  stored or imported records.
 - The collection preserves insertion order; generators append.
 
 ## Generators
@@ -72,9 +75,11 @@ pub fn region_seeds(min: Vec3, max: Vec3, count: u32) -> Result<Vec<Vec3>, SeedE
   endpoints distinct.
 - `circle`: in the active plane's basis (or world XY with no plane); `count`
   points at even angles starting at angle 0; `count >= 3`, `radius > 0`.
-- `region`: deterministic stratified lattice inside `[min, max]`, capped at
-  `count`, reusing the existing `explicit_streamline_seeds` lattice rules so a
-  region generator and the automatic grid agree where they overlap.
+- `region`: deterministic jittered lattice inside `[min, max]`, capped at
+  `count`, reusing the lattice and salt/index scheme of
+  `explicit_streamline_seeds` (the jitter stays clamped into the requested box,
+  exactly as the automatic grid clamps into the domain). Seeds of a sub-region
+  are therefore reproducible but do not coincide with automatic-grid seeds.
 - Invalid input returns `SeedError` with a message; nothing is clamped
   silently. Generated points are checked against the scene domain and rejected
   rather than clipped.
@@ -93,13 +98,17 @@ Induction, Materials, Maxwell and Ode keep their own seeding):
   picked point (same picking path as click seeding today) and disarms.
 - Dragging a seed moves it in the selected plane; the drag is one history
   transaction, committed on release, and a rejected position leaves the seed
-  where it was with a message.
+  where it was with a message. A drag re-anchors the seed to the plane active
+  during the drag (a seed dragged with no plane keeps `anchor = None`).
 - Clicking a seed selects it; a numeric editor edits the selected seed's local
   coordinates and the selection can be deleted.
 - With a non-empty layout the automatic jittered grid seeds are hidden and the
   density/count control is disabled with a note; "Clear all" restores the
   generated grid. `StreamlineSeedMode::Click` keeps its click-only behaviour
   and composes with an explicit layout by painting both.
+- Existing click seeds (the runtime `clicks` list added by viewport clicks) stay
+  runtime state and are not converted into the layout: they remain the
+  ad-hoc exploration aid, while `SeedLayout` is the saved document seeds.
 
 ## History and persistence
 
@@ -107,6 +116,10 @@ Induction, Materials, Maxwell and Ode keep their own seeding):
   generator application, placement, drag, deletion, clear and layout apply are
   recorded; each accepted gesture is exactly one entry. Rejected edits record
   nothing.
+- Mechanically, `drive_history` already opens one transaction per primary press
+  and commits on release, and an unchanged snapshot is a no-op. A rejected drag
+  therefore leaves the document unchanged and records nothing; each slice's
+  tests pin that reliance rather than adding a second recording path.
 - It persists in the settings envelope as part of the view record, and saved
   scenes capture it (scenes stay appearance-neutral but keep document
   geometry). Missing on older envelopes → empty layout.
@@ -138,13 +151,33 @@ pub struct SeedLayoutLibrary { /* built-in "Default" + <= 16 user layouts */ }
 ## Work limits and safety
 
 - Total seeds and per-application caps bound regeneration work; a full layout
-  of 256 seeds must stay within the existing streamline cost budget (each seed
-  is one streamline segment loop).
+  of 256 seeds must stay within the existing streamline cost budget, remembering
+  that each seed is a full `trace_at` integration of up to
+  `MAX_STREAMLINE_POINTS` steps, not one segment loop.
 - All stored and imported positions are finite and inside the scene domain
   before use; a corrupt stored layout is sanitized with a warning and the app
   keeps running.
 - No per-frame allocation, generation or layout parsing: generators and
   parsing run only on explicit user action.
+
+## Consumers, ownership and commands
+
+Task 6 also owns this inventory. Each consumer keeps its existing file owner;
+the slice adds the seed path without moving other behaviour.
+
+| Consumer | Where | Owner and check |
+| --- | --- | --- |
+| Viewport picking | `src/app/input.rs` (click-seed path, `ray_seed`), `src/plane.rs` | S2 implementer; `cargo test --test suite plane_test_input_seed` |
+| Seed regeneration | `src/viewmodel.rs` snapshot/`push_line`, `click_streamlines_snapshot`, `src/streamlines.rs` `trace_at` | S1/S2 implementer; `cargo test --test suite streamlines seed_layout` |
+| History capture/apply | `src/app/history.rs` `capture_document`/`apply_document`, `src/edit_history.rs` | S1 implementer; `cargo test --test suite edit_history_app` |
+| Envelope persistence | `src/persistence.rs` `ViewRecord`/`AppSettings`, `src/app/mod.rs` startup | S1 implementer; `cargo test --test suite persistence seed_layout` |
+| Saved scenes | `src/scene_document.rs` `SceneDocument::capture` | S1 implementer; `cargo test --test suite scene_document` |
+| Flow-section UI | `src/ui/sidebar.rs` Flow section | S2 implementer; `cargo test --test suite sidebar_colormap_ui seed_ui` |
+| Raster, SVG and animation capture | `src/app/viewport.rs`, `src/cli_scene.rs`, `src/animation_scene.rs` consume the snapshot only | S1 verifier; `cargo test --test suite cli_svg animation_scene` |
+
+A consumer that turns out to need a new file gets that ownership written into
+its slice brief before dispatch; the shared files above stay serialized across
+slices.
 
 ## Slices
 
@@ -163,7 +196,9 @@ pub struct SeedLayoutLibrary { /* built-in "Default" + <= 16 user layouts */ }
 - Generators are deterministic for the same input and honour their caps;
   non-finite, zero-size and out-of-domain input is rejected with a message.
 - A layout of `MAX_SEEDS` seeds validates; `MAX_SEEDS + 1` is rejected and
-  sanitising truncates.
+  sanitising truncates; an edit that would exceed the cap is rejected whole.
+- A drag re-anchors to the plane active during the drag, and a rotated-plane
+  round trip still reproduces the stored local coordinates.
 - One drag is one undo entry; a rejected drag records nothing and keeps the
   seed; `Clear all` is one entry and restores the grid.
 - Envelope round trip, older-envelope default, corrupt-layout sanitising and
