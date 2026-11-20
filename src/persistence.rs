@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::appearance_profile::AppearanceProfile;
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::{ColorRamp, ScaleMode};
@@ -34,6 +35,7 @@ use crate::particles::{
 };
 use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
+use crate::profile_library::MAX_USER_PROFILES;
 use crate::source_scene::{
     FieldMode, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceRecord, SourceScene,
 };
@@ -71,6 +73,12 @@ pub struct AppSettings {
     /// values are repaired by [`AppSettings::sanitized`].
     #[serde(default)]
     pub layer_styles: LayerStyles,
+    /// User appearance profiles (issue #85 slice A2a). Missing on older
+    /// envelopes, which start with an empty library; corrupt values, duplicate
+    /// names and excess entries are repaired by [`AppSettings::sanitized`].
+    /// Restoring them never applies a profile.
+    #[serde(default)]
+    pub appearance_profiles: Vec<AppearanceProfile>,
     /// Persisted Presets-panel expansion (issue #90 slice B). Missing on older
     /// envelopes, which open every group; a corrupt record falls back to the
     /// all-expanded default without failing the envelope.
@@ -114,6 +122,34 @@ impl AppSettings {
         self.style = self.style.sanitized();
         self.layout = self.layout.sanitized();
         self.viewport_style = self.viewport_style.sanitized();
+        // User profiles are records, not live appearance: repair each entry,
+        // keep the first occurrence of every sanitized name and the first
+        // `MAX_USER_PROFILES` entries. A damaged profile must never fail the
+        // envelope or apply itself.
+        let mut names = std::collections::HashSet::with_capacity(
+            self.appearance_profiles.len().min(MAX_USER_PROFILES),
+        );
+        let mut profiles =
+            Vec::with_capacity(self.appearance_profiles.len().min(MAX_USER_PROFILES));
+        for profile in self.appearance_profiles.drain(..) {
+            let profile = profile.sanitized();
+            if !names.insert(profile.name.clone()) {
+                log::warn!(
+                    "persisted appearance profile {:?} duplicates an earlier name; dropping it",
+                    profile.name
+                );
+                continue;
+            }
+            if profiles.len() == MAX_USER_PROFILES {
+                log::warn!(
+                    "more than {MAX_USER_PROFILES} persisted appearance profiles; \
+                     dropping the rest"
+                );
+                break;
+            }
+            profiles.push(profile);
+        }
+        self.appearance_profiles = profiles;
         // `preset_ui` is four bools, so every persisted value is valid; the
         // lenient decoder has already replaced a corrupt record.
         if let Err(error) = self.parameters.validate() {

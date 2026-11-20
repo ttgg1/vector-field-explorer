@@ -119,6 +119,7 @@ mod pointer_lock_test;
 mod preset_library_test;
 mod preset_test;
 mod presets_test;
+mod profile_library_test;
 mod reference_lines_test;
 mod responsive_test;
 mod sampling_test;

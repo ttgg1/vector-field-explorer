@@ -20,6 +20,7 @@ use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
 use crate::plot_camera::PlotCamera;
 use crate::plot_scene::{PlotScene, ViewportScene};
+use crate::profile_library::ProfileLibrary;
 use crate::reference::{reference_lines_visible_with, reference_plane_lines_with};
 use crate::render::Camera;
 use crate::renderer::{
@@ -184,6 +185,11 @@ pub struct VfApp {
     /// The right Appearance panel's inline error/readout state (issue #84
     /// slice A2b). The committed styles live in [`State::layer_styles`].
     pub appearance: AppearancePanelState,
+    /// The persisted user profile library (issue #85 slice A2a); built-ins are
+    /// not stored. Restored from eframe storage on startup without applying a
+    /// profile, and written back in [`eframe::App::save`]. The Appearance panel
+    /// edits it in slice A2b.
+    pub profiles: ProfileLibrary,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
     /// It lives app-side and never touches the viewmodel `State`.
@@ -390,6 +396,15 @@ impl VfApp {
         // reporting a layout edit; the panel's search and filters stay fresh.
         let mut presets = PresetPanel::new();
         presets.restore_expanded(settings.preset_ui.expanded);
+        // The persisted user profile library (issue #85 slice A2a). `load` has
+        // already sanitized, de-duplicated and capped the stored records, so
+        // construction only fails on an internal bug; start empty rather than
+        // panic. Restoring the library never applies a profile or dirties the
+        // scene.
+        let profiles = ProfileLibrary::new(settings.appearance_profiles).unwrap_or_else(|error| {
+            log::warn!("persisted appearance profiles could not be loaded: {error}");
+            ProfileLibrary::default()
+        });
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -415,6 +430,7 @@ impl VfApp {
             suppress_capture_click: false,
             presets,
             appearance: AppearancePanelState::default(),
+            profiles,
             style: settings.style,
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,

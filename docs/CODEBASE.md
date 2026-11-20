@@ -546,7 +546,8 @@ and the helpers that belong to no single frame phase.
 **Public API.**
 - `VfApp` (fields are mostly `pub` for the integration tests and sibling
   modules): `state`, `bar`, `sidebar`, `status`, `fps_meter`, `camera`, `orbit`,
-  `fly`, `fly_keys`, `presets`, `style`, `layout`, `layout_mode`, `sheet`,
+  `fly`, `fly_keys`, `presets`, `profiles` (`ProfileLibrary`), `style`,
+  `layout`, `layout_mode`, `sheet`,
   `material` (`MaterialPanelState`), `maxwell` (`MaxwellPanelState`), `clock`,
   `screenshot`, `animation`
   (`AnimationDialogState`), `animation_job`, and private
@@ -563,7 +564,9 @@ and the helpers that belong to no single frame phase.
 **Invariants.**
 - `new_with_storage` restores `AppSettings` through the viewmodel setters before
   the first frame; `parameters`, `viewport_style` and `layer_styles` are then
-  assigned directly, so restoring them does not dirty the scene. A restored
+  assigned directly, so restoring them does not dirty the scene. The persisted
+  user profiles build `VfApp::profiles`; that assignment neither applies a
+  profile nor dirties the scene. A restored
   non-default domain is recentred on the correct
   camera (`recentre_on` in 3D, `recentre_on_2d` in 2D). It passes the restored
   reference flags into `compose_lines_with_frame` for the initial private scene;
@@ -655,7 +658,9 @@ persistence write.
   mode change requests one more frame, and Wide closes any stale compact sheet.
 - Phase order is input → chrome → simulation → status → viewport → overlays.
 - `save` writes exactly `AppSettings { style, layout, view:
-  ViewRecord::capture(&state) }`. Cameras and fly state are intentionally absent.
+  ViewRecord::capture(&state) }` plus the durable parameter, viewport-style,
+  layer-style and user-profile records; user profiles come from
+  `VfApp::profiles.user()`. Cameras and fly state are intentionally absent.
 
 **Pinned by.** `tests/persistence_test.rs::settings_round_trip_through_eframe_storage`,
 `tests/fly_camera_test.rs::the_fly_camera_is_not_persisted`,
@@ -2091,9 +2096,10 @@ on-disk profile storage, scene documents, the renderer or sampling.
 **Public API.** `PROFILE_FORMAT_VERSION` (currently `1`),
 `MAX_PROFILE_NAME_BYTES = 48`, `DEFAULT_PROFILE_NAME = "Dark laboratory"`;
 `ProfileColor { colormap, ramp, mode, quantity }`;
-`AppearanceProfile { name, viewport, layer_styles, color }` with `validate`,
-`sanitized` and `apply(&self, state)`; `ProfileDocument { version, profiles }`
-with `to_json` and `from_json`; `builtins()`.
+`AppearanceProfile { name, viewport, layer_styles, color }` with `capture`,
+`validate`, `sanitized` and `apply(&self, state)`;
+`ProfileDocument { version, profiles }` with `to_json` and `from_json`;
+`builtins()`.
 
 **Contract.**
 - Names are trimmed, non-empty, at most 48 UTF-8 bytes and free of control
@@ -2106,6 +2112,10 @@ with `to_json` and `from_json`; `builtins()`.
   boundary (empty becomes the default), viewport/layer fields use their own
   sanitizers, an invalid ramp becomes `ColorRamp::default`, and an invalid
   signed-log mode becomes linear. The output validates.
+- `capture(name, state)` reads exactly the fields `apply` writes
+  (`viewport_style`, `layer_styles`, `colormap`, `color_ramp`, `color_mode`,
+  `color_quantity`); the name is stored verbatim and the result validates for a
+  valid name. Applying a captured profile twice equals applying it once.
 - `apply` validates everything before the first mutation, then writes only
   `viewport_style`, `layer_styles`, `colormap`, `color_ramp`, `color_mode` and
   `color_quantity`. A failure restores those fields and leaves the dirty flag
@@ -2125,12 +2135,14 @@ with `to_json` and `from_json`; `builtins()`.
 **Pinned by.** `tests/appearance_profile_test.rs`: builtin validity and unique
 names, the default profile, JSON round trip and pinned field order,
 version-first and unknown-field rejection, atomic duplicate-name import,
-appearance-only apply, rollback on invalid input, total sanitization,
+appearance-only apply, capture round trip of all six appearance fields and
+double-apply idempotence, rollback on invalid input, total sanitization,
 sRGB-to-linear theme conversion (Tokyo Night background and axis), and the ramp
 overriding the colormap field.
 
-**Limitations.** No panel UI, settings-envelope or on-disk profile storage, no
-scene-document integration and no renderer/sampling changes in this slice.
+**Limitations.** No panel UI, on-disk profile library wiring or startup
+application, no scene-document integration and no renderer/sampling changes in
+this slice. Capturing reads the committed records only.
 
 #### `src/palette_io.rs` — portable palette document
 
@@ -2193,6 +2205,49 @@ this slice.
 arrows, streamlines, particles and references are all local to the selected
 plane; the out-of-plane flow component is omitted, so a purely normal field has
 no slice flow (particles stay put rather than respawning).
+
+#### `src/profile_library.rs` — user appearance-profile library
+
+**Purpose.** Issue #85 slice A2a: validated user appearance profiles kept
+beside the nine shipped looks, with a documented cap and an atomic
+import/export text format. Pure model only; no UI, no `State` application and
+no file I/O.
+
+**Public API.** `MAX_USER_PROFILES = 32`; `ProfileLibrary` (`Default`, `new`,
+`user`, `len`, `is_empty`, `upsert`, `remove`, `all`, `import_text`,
+`export_text`).
+
+**Contract.**
+- `new` validates every profile, rejects duplicate names case-sensitively and
+  rejects more than 32 user profiles. Validation errors name the profile and
+  use the `invalid profile` prefix; a duplicate uses
+  `duplicate profile name ...`.
+- `upsert` validates the candidate, then replaces a same-named entry in place
+  (order preserved) or appends. Replacing never grows the library; appending at
+  the cap is rejected with `at most 32 user profiles`. A rejected upsert
+  changes nothing.
+- `remove` deletes by exact name and reports whether one was removed.
+- `all` returns `builtins()` order, then the user profiles in library order.
+- `import_text` parses with `ProfileDocument` (strict, versioned), then merges
+  through a candidate clone; any error — malformed JSON, duplicate or invalid
+  profile, or an over-cap result — leaves the library unchanged. It returns the
+  user-profile count after the merge.
+- `export_text` emits the user profiles as a compact `ProfileDocument` with the
+  current version. Every stored profile is already validated, so serialization
+  cannot fail; the fallback logs a warning rather than panicking.
+
+**Pinned by.** `tests/profile_library_test.rs`:
+`library_rejects_duplicate_and_invalid_profiles`,
+`library_upsert_replaces_in_place_and_preserves_order`,
+`library_enforces_the_user_profile_cap`,
+`library_import_is_atomic_on_invalid_or_duplicate_documents`,
+`library_import_merges_new_names_and_reports_the_user_count`,
+`library_export_round_trips_through_import`, and
+`library_all_lists_builtins_before_user_profiles`.
+
+**Limitations.** No panel UI and no `State` apply in this slice. The app stores
+the library in `VfApp::profiles` and persists it through `AppSettings`; slice
+A2b owns the Appearance-panel section and profile application.
 
 ### 3.3 Viewmodel and persistence
 
@@ -2512,11 +2567,12 @@ supplies the directory and user-facing copy.
 
 #### `src/persistence.rs` — one settings envelope
 
-**Purpose.** Restore and save style, layout, parameter and view state under one
-eframe storage key, with migration and corruption tolerance.
+**Purpose.** Restore and save style, layout, parameter, appearance, profile and
+view state under one eframe storage key, with migration and corruption
+tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
-layer_styles, preset_ui }`, `AppSettings::sanitized`;
+layer_styles, appearance_profiles, preset_ui }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
 helpers.
@@ -2530,6 +2586,7 @@ helpers.
 | `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy |
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 | `LayerStyles` | `layers: [LayerOverride; 6]` in `LayerId::ALL` order, `families: [LayerOverride; 2]` in `PhysicsFamily::ALL` order; each override has optional `opacity`, `width`, `color` | `#[serde(default)]`; an absent key loads the neutral record; an invalid record is repaired by `sanitized` with a warning and never fails the envelope |
+| `appearance_profiles: Vec<AppearanceProfile>` | user profile records (`name`, `viewport`, `layer_styles`, `color`) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 32` are dropped with a warning |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -2598,8 +2655,14 @@ helpers.
     finite out-of-range value clamps into its bound) with a warning, and the
     envelope still loads. Startup restore assigns the loaded record directly,
     without dirtying the scene.
+15. An absent `appearance_profiles` list loads empty. Stored entries are
+    sanitized with `AppearanceProfile::sanitized`; an entry whose sanitized
+    name duplicates an earlier entry is dropped with a warning, and entries
+    beyond `MAX_USER_PROFILES` are dropped with a warning. Restoring the
+    envelope never applies a profile and never dirties the scene; the live
+    library is wired in slice A2b.
 
-**Tested by.** `tests/persistence_test.rs` (54 tests):
+**Tested by.** `tests/persistence_test.rs` (75 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -2621,7 +2684,12 @@ helpers.
 `induction_scene_round_trips_and_legacy_defaults_to_formula`,
 `malformed_induction_fields_fall_back_and_report_the_error`,
 `global_reset_clears_induction_cache_and_restores_defaults`, and the
-restore/sanitize tests. The layer-style record is pinned by
+restore/sanitize tests. The user-profile envelope is pinned by
+`settings_drop_duplicate_or_excess_user_profiles_on_load`,
+`restoring_the_envelope_does_not_apply_profiles_or_dirty_the_state`,
+`new_with_storage_loads_the_user_profile_library_without_applying_it` and
+`user_profile_library_round_trips_through_an_app_save`. The
+layer-style record is pinned by
 [tests/layer_style_test.rs](../tests/layer_style_test.rs): neutral resolution,
 per-attribute precedence, validation and sanitising, envelope round-trip,
 older-envelope defaults, and the State commit no-op/keep/one-dirty rules.

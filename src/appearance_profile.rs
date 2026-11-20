@@ -100,6 +100,26 @@ impl AppearanceProfile {
         }
     }
 
+    /// Capture the live appearance under `name`.
+    ///
+    /// Reads exactly the fields [`Self::apply`] writes, so applying the result
+    /// reproduces the current look. The name is stored verbatim; validating it
+    /// is the caller's responsibility (a profile created here still validates
+    /// for any valid name).
+    pub fn capture(name: impl Into<String>, state: &State) -> Self {
+        Self {
+            name: name.into(),
+            viewport: state.viewport_style,
+            layer_styles: *state.layer_styles(),
+            color: ProfileColor {
+                colormap: state.colormap,
+                ramp: state.color_ramp.clone(),
+                mode: state.color_mode,
+                quantity: state.color_quantity,
+            },
+        }
+    }
+
     /// Validates the whole profile, then applies it to the appearance fields.
     ///
     /// Formula, parameters, sources, camera, layout, UI preferences and every
