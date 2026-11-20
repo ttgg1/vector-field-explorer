@@ -465,6 +465,15 @@ impl Default for VfApp {
     }
 }
 
+#[doc(hidden)]
+impl VfApp {
+    /// Test-only: run the Presets finish phase against the live app, the same
+    /// seam the frame uses after the panel has drawn.
+    pub fn finish_presets_for_test(&mut self) {
+        self.finish_presets(None);
+    }
+}
+
 impl AnimationSnapshot {
     /// Copy the live app's animatable state without mutating it.
     pub fn capture(app: &VfApp) -> Result<Self, AnimationError> {

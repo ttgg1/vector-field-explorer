@@ -6,13 +6,21 @@
 // way a button press would.
 
 use eframe::egui;
+use glam::Vec3;
 
 use crate::support;
 
+use vector_field_explorer::VfApp;
+use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::export::{delete_preset, load_presets};
+use vector_field_explorer::fly_camera::FlyCamera;
+use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::persistence::ViewRecord;
 use vector_field_explorer::preset_library::{PresetFilters, PresetGroup};
 use vector_field_explorer::presets::presets;
 use vector_field_explorer::render::Camera;
+use vector_field_explorer::scene_document::{SceneCamera, SceneDocument};
+use vector_field_explorer::scene_store;
 use vector_field_explorer::source_scene::{FieldMode, SourceKindTag};
 use vector_field_explorer::ui::presets::PresetPanel;
 use vector_field_explorer::viewmodel::State;
@@ -849,4 +857,410 @@ fn collapsing_a_group_header_is_a_layout_change_not_a_preset_load() {
         state.formula, formula_before,
         "collapsing a group must not apply a preset"
     );
+}
+
+// Issue #90 slice B2c: the My-presets section saves whole scenes, loads one
+// atomically, deletes with confirmation and round-trips the collection as
+// portable text. App-level tests drive the panel through the accesskit harness
+// and then the real `finish_presets` seam.
+
+fn document_named(name: &str) -> SceneDocument {
+    SceneDocument::capture(
+        name,
+        ViewRecord::default(),
+        ParameterSet::default(),
+        SceneCamera::default(),
+    )
+}
+
+fn test_parameters(value: f64) -> ParameterSet {
+    let mut parameters = ParameterSet::default();
+    parameters.entries.push(Parameter {
+        name: "k".to_string(),
+        value,
+        min: Some(0.0),
+        max: Some(10.0),
+        step: 0.5,
+    });
+    parameters
+}
+
+fn app_in(dir: &std::path::Path) -> VfApp {
+    let mut app = VfApp::new();
+    app.presets = panel_in(dir);
+    app
+}
+
+fn run_app_panel(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 1400.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = app.presets.show(ui, &mut app.camera, &mut app.state);
+                });
+            });
+        },
+    );
+    app.finish_presets_for_test();
+    output.textures_delta.clear();
+    output
+}
+
+fn click_app_label(ctx: &egui::Context, app: &mut VfApp, label: &str) {
+    let out = run_app_panel(ctx, app, Vec::new());
+    let rect = nodes(&out)
+        .into_iter()
+        .find(|node| node.label == label)
+        .unwrap_or_else(|| panic!("missing clickable {label}"))
+        .rect;
+    run_app_panel(ctx, app, pointer(rect.center(), true));
+    run_app_panel(ctx, app, pointer(rect.center(), false));
+}
+
+#[test]
+fn saving_a_scene_captures_view_parameters_and_camera() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.state.set_formula("x + y".to_string());
+    app.state
+        .set_domain(Vec3::new(-2.0, -1.0, 0.0), Vec3::new(2.0, 1.0, 1.0));
+    app.state
+        .commit_parameters(test_parameters(2.5))
+        .expect("valid parameters");
+    app.camera = Camera {
+        position: [0.25, -0.5],
+        scale: 2.5,
+    };
+    app.orbit = OrbitCamera {
+        yaw: 0.7,
+        pitch: 0.3,
+        distance: 6.0,
+        target: Vec3::new(1.0, 2.0, 3.0),
+        fov_y: 1.2,
+        ortho_zoom: 2.5,
+    };
+    app.presets.set_scene_name("scene one");
+
+    click_app_label(&ctx, &mut app, "Save current scene");
+
+    let document = app
+        .presets
+        .scenes()
+        .get("scene one")
+        .expect("the scene was captured");
+    assert_eq!(document.view, ViewRecord::capture(&app.state));
+    assert_eq!(document.view.domain_min, [-2.0, -1.0, 0.0]);
+    assert_eq!(document.view.domain_max, [2.0, 1.0, 1.0]);
+    assert_eq!(document.parameters, app.state.parameters);
+    assert_eq!(document.camera.position, [0.25, -0.5]);
+    assert_eq!(document.camera.scale, 2.5);
+    assert_eq!(document.camera.yaw, 0.7);
+    assert_eq!(document.camera.pitch, 0.3);
+    assert_eq!(document.camera.distance, 6.0);
+    assert_eq!(document.camera.target, [1.0, 2.0, 3.0]);
+    assert_eq!(document.camera.fov_y, 1.2);
+    assert_eq!(document.camera.ortho_zoom, 2.5);
+}
+
+#[test]
+fn duplicate_scene_names_are_rejected_with_a_message() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.presets.set_scene_name("home");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    assert_eq!(app.presets.scenes().scenes().len(), 1);
+
+    app.state.set_formula("x - y".to_string());
+    app.presets.set_scene_name("home");
+    click_app_label(&ctx, &mut app, "Save current scene");
+
+    assert_eq!(
+        app.presets.scenes().scenes().len(),
+        1,
+        "a duplicate name must not append a second scene"
+    );
+    assert!(
+        app.presets
+            .scene_message()
+            .is_some_and(|message| message.contains("already exists")),
+        "the duplicate must be reported: {:?}",
+        app.presets.scene_message()
+    );
+}
+
+#[test]
+fn loading_a_scene_applies_view_and_parameters_without_touching_ui_preferences() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+
+    let mut saved_state = State::new(false);
+    saved_state.set_formula("x - y".to_string());
+    saved_state.set_domain(Vec3::new(-3.0, -2.0, -1.0), Vec3::new(3.0, 2.0, 1.0));
+    let saved_parameters = test_parameters(4.0);
+    let saved_view = ViewRecord::capture(&saved_state);
+    app.presets
+        .insert_scene(SceneDocument::capture(
+            "saved",
+            saved_view.clone(),
+            saved_parameters.clone(),
+            SceneCamera::default(),
+        ))
+        .expect("scene stores");
+
+    app.state.set_formula("x + y".to_string());
+    app.state.set_domain(Vec3::splat(-1.0), Vec3::splat(1.0));
+    app.state
+        .commit_parameters(test_parameters(1.0))
+        .expect("valid parameters");
+    app.style.theme_dark = !app.style.theme_dark;
+    app.layout.presets_expanded = false;
+    app.presets.set_expanded(PresetGroup::Physics, false);
+    let style_before = app.style.clone();
+    let layout_before = app.layout.clone();
+    let preset_ui_before = app.presets.expanded_state();
+    let viewport_before = app.state.viewport_style;
+
+    click_app_label(&ctx, &mut app, "Load");
+
+    assert_eq!(app.state.formula, saved_view.formula);
+    assert_eq!(app.state.domain.min, Vec3::from_array(saved_view.domain_min));
+    assert_eq!(app.state.domain.max, Vec3::from_array(saved_view.domain_max));
+    assert_eq!(app.state.parameters, saved_parameters);
+    assert_eq!(app.style, style_before, "loading keeps the app style");
+    assert_eq!(app.layout, layout_before, "loading keeps the layout record");
+    assert_eq!(
+        app.presets.expanded_state(),
+        preset_ui_before,
+        "loading keeps the preset expansion record"
+    );
+    assert_eq!(
+        app.state.viewport_style, viewport_before,
+        "loading keeps the viewport style"
+    );
+}
+
+#[test]
+fn loading_a_scene_clamps_the_camera_to_live_limits() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    let camera = SceneCamera {
+        position: [1.0, 2.0],
+        scale: 1.5,
+        yaw: 0.4,
+        pitch: 2.0,
+        distance: 100.0,
+        target: [1.0, 2.0, 3.0],
+        fov_y: 1.0,
+        ortho_zoom: 1.5,
+    };
+    app.presets
+        .insert_scene(SceneDocument::capture(
+            "clamped",
+            ViewRecord::default(),
+            ParameterSet::default(),
+            camera,
+        ))
+        .expect("scene stores");
+    app.fly = Some(FlyCamera::default());
+
+    click_app_label(&ctx, &mut app, "Load");
+
+    assert_eq!(app.orbit.yaw, 0.4);
+    assert_eq!(app.orbit.pitch, 1.55, "pitch clamps to the live limit");
+    assert_eq!(
+        app.orbit.distance,
+        OrbitCamera::MAX_DISTANCE,
+        "distance clamps to the live limit"
+    );
+    assert_eq!(app.orbit.target, Vec3::new(1.0, 2.0, 3.0));
+    assert_eq!(app.orbit.fov_y, 1.0);
+    assert_eq!(app.orbit.ortho_zoom, 1.5);
+    assert_eq!(app.camera.position, [1.0, 2.0]);
+    assert_eq!(app.camera.scale, 1.5);
+    assert!(app.fly.is_none(), "loading a scene leaves fly mode");
+}
+
+#[test]
+fn deleting_a_scene_needs_a_confirmation_click() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    panel
+        .insert_scene(document_named("gone"))
+        .expect("scene stores");
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Delete");
+    assert!(
+        panel.scenes().get("gone").is_some(),
+        "the first click only asks for confirmation"
+    );
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Delete scene");
+    assert!(
+        panel.scenes().get("gone").is_none(),
+        "the confirmation click deletes the scene"
+    );
+    let (persisted, _) = scene_store::load_dir(dir.path());
+    assert!(
+        persisted.get("gone").is_none(),
+        "the deletion reaches the scene file"
+    );
+}
+
+#[test]
+fn portable_scene_text_round_trips_through_apply_text() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    panel
+        .insert_scene(document_named("one"))
+        .expect("scene one stores");
+    panel
+        .insert_scene(document_named("two"))
+        .expect("scene two stores");
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Export text");
+    assert!(
+        !panel.scene_text().is_empty(),
+        "export fills the portable text buffer"
+    );
+    assert!(panel.delete_scene("one"), "mutating the live store");
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Apply text");
+
+    assert!(panel.scenes().get("one").is_some());
+    assert!(panel.scenes().get("two").is_some());
+    let (persisted, _) = scene_store::load_dir(dir.path());
+    assert!(persisted.get("one").is_some());
+    assert!(persisted.get("two").is_some());
+}
+
+#[test]
+fn invalid_portable_text_leaves_the_saved_scenes_untouched() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    panel
+        .insert_scene(document_named("keeper"))
+        .expect("scene stores");
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    panel.set_scene_text("this is not scene JSON");
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Apply text");
+    assert!(
+        panel.scenes().get("keeper").is_some(),
+        "corrupt text must not change the store"
+    );
+    assert!(
+        panel.scene_message().is_some(),
+        "corrupt text must be reported"
+    );
+
+    panel.set_scene_text(r#"{"version":2,"scenes":[]}"#);
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Apply text");
+    assert!(
+        panel.scenes().get("keeper").is_some(),
+        "future-version text must not change the store"
+    );
+    assert!(
+        panel
+            .scene_message()
+            .is_some_and(|message| message.contains("version")),
+        "the unsupported version must be named: {:?}",
+        panel.scene_message()
+    );
+}
+
+#[test]
+fn scene_name_rules_are_enforced_by_the_panel() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+
+    app.presets.set_scene_name("bad\u{0}name");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    assert!(
+        app.presets.scenes().scenes().is_empty(),
+        "a control character must not be stored"
+    );
+    assert!(
+        app.presets.scene_message().is_some(),
+        "the rejected name must be reported"
+    );
+
+    app.presets.set_scene_name("a".repeat(65));
+    click_app_label(&ctx, &mut app, "Save current scene");
+    assert!(
+        app.presets.scenes().scenes().is_empty(),
+        "a 65-byte name must not be stored"
+    );
+    assert!(
+        app.presets.scene_message().is_some(),
+        "the over-long name must be reported"
+    );
+}
+
+#[test]
+fn saved_scenes_load_from_the_preset_directory() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let store = scene_store::SceneStore::from_documents(vec![document_named("from disk")])
+        .expect("valid fixture store");
+    scene_store::save_dir(dir.path(), &store).expect("fixture scene file");
+
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+    let out = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+
+    assert!(
+        has_text(&out, "from disk"),
+        "a scene written to the preset directory appears as a row"
+    );
+    assert!(panel.scenes().get("from disk").is_some());
+}
+
+#[test]
+fn save_failures_surface_without_panicking() {
+    let ctx = render_context();
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("not-a-directory");
+    std::fs::write(&file, "x").unwrap();
+    let dir = file.join("child");
+    let mut app = app_in(&dir);
+    app.presets.set_scene_name("unwritable");
+
+    click_app_label(&ctx, &mut app, "Save current scene");
+
+    assert!(
+        app.presets.scenes().scenes().is_empty(),
+        "a failed save leaves the in-memory store consistent"
+    );
+    assert!(
+        app.presets.scene_message().is_some(),
+        "the write failure surfaces in the panel"
+    );
+    let result = app.presets.insert_scene(document_named("unwritable"));
+    assert!(result.is_err(), "the write failure is reported");
 }
