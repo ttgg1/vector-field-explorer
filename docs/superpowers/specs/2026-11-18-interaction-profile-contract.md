@@ -128,8 +128,9 @@ tab follow the existing panel pattern and persisted layout rules.
   panel with bindings, camera feel and profiles.
 - **A3** — route the existing shortcut table, view keys, transport and click
   modifiers through the active bindings (fly keys stay physical and exempt);
-  apply camera feel to orbit, wheel zoom, fly look and pointer drags; preserve
-  Escape/undo/redo and the typing gate.
+  apply camera feel to the vector viewports (3D orbit, 2D pan/zoom and fly
+  look). The scalar plot viewport keeps its own scale control and is excluded;
+  preserve Escape/undo/redo and the typing gate.
 
 ## Pinned tests
 

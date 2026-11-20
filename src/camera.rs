@@ -5,6 +5,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::domain::Domain;
 use crate::fly_camera::FlyCamera;
+use crate::interaction::CameraFeel;
 use crate::render::Camera;
 
 /// Spherical orbit camera around a target point.
@@ -186,6 +187,40 @@ impl OrbitCamera {
         let direction = (self.view().inverse() * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
             .truncate();
         (self.position(), direction)
+    }
+}
+
+/// Scale and invert one orbit/look delta by the live camera feel. The feel is
+/// sanitized first, so a non-finite or out-of-range stored multiplier can never
+/// reach the camera raw. Multipliers scale the existing constants; they do not
+/// replace them, and every camera clamp still applies downstream.
+pub fn feel_orbit(delta: Vec2, feel: CameraFeel) -> Vec2 {
+    let feel = feel.sanitized();
+    let yaw = if feel.invert_yaw { -1.0 } else { 1.0 };
+    let pitch = if feel.invert_pitch { -1.0 } else { 1.0 };
+    Vec2::new(
+        delta.x * feel.orbit_sensitivity * yaw,
+        delta.y * feel.orbit_sensitivity * pitch,
+    )
+}
+
+/// Scale and invert one wheel/pinch zoom factor by the live camera feel. The
+/// multiplier scales the existing exponential wheel rate; `invert_zoom` takes
+/// the reciprocal. A non-finite or non-positive factor is left for the camera
+/// seam's own guard rather than invented here.
+pub fn feel_zoom(factor: f32, feel: CameraFeel) -> f32 {
+    let feel = feel.sanitized();
+    if !factor.is_finite() || factor <= 0.0 {
+        return factor;
+    }
+    let scaled = factor.powf(feel.zoom_speed);
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return factor;
+    }
+    if feel.invert_zoom {
+        1.0 / scaled
+    } else {
+        scaled
     }
 }
 

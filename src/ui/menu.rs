@@ -13,27 +13,20 @@ use eframe::egui;
 use crate::camera::OrbitCamera;
 use crate::edit_history::EditScope;
 use crate::fly_camera::{FlyCamera, toggle_fly};
+use crate::interaction::{Bindings, InteractionAction, KeyChord};
 use crate::render::Camera;
 use crate::sim_clock::SimClock;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
+use crate::view_command;
 use crate::viewmodel::State;
 
-/// Shortcut labels shown beside menu items and in tooltips. They live next to
-/// [`SHORTCUTS`] so a label can never drift from the key it describes.
-pub const CONTROLS_SHORTCUT: &str = "Ctrl+B";
-pub const PRESETS_SHORTCUT: &str = "Ctrl+P";
-pub const APPEARANCE_SHORTCUT: &str = "Ctrl+Shift+A";
-/// Display-only until slice A3 wires input routing; chosen because
-/// `Ctrl+Shift+I` is DevTools in Chrome, Firefox and Edge.
-pub const INTERACTION_SHORTCUT: &str = "Ctrl+Shift+L";
+/// Display-only fly-centre label (ticket 70). Fly toggle and movement stay on
+/// the physical-key path and are not part of the binding model.
 pub const FLY_SHORTCUT: &str = "C";
-pub const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+S";
-pub const COPY_FORMULA_SHORTCUT: &str = "Ctrl+Shift+C";
-pub const QUIT_SHORTCUT: &str = "Ctrl+Q";
+/// Reserved edit-history labels. Undo and redo are never remappable.
 pub const UNDO_SHORTCUT: &str = "Ctrl+Z";
 pub const REDO_SHORTCUT: &str = "Ctrl+Shift+Z";
-pub const HELP_SHORTCUT: &str = "F1";
 
 /// About dialog facts, all from the package metadata except the display name.
 /// The version is the compile-time seam, so a nightly build reports its
@@ -273,9 +266,9 @@ pub const MENUS: &[Menu] = &[
     },
 ];
 
-/// One keyboard shortcut. `global` shortcuts fire even while a text field has
-/// focus; only Quit is global, because view state is already persisted and
-/// there is no save prompt to intercept.
+/// One keyboard shortcut that is not part of the interaction binding model:
+/// the reserved undo/redo chords and the display-only fly toggle. Remappable
+/// actions resolve through [`Bindings`] instead.
 #[derive(Debug, Clone, Copy)]
 pub struct Shortcut {
     pub action: MenuAction,
@@ -285,23 +278,10 @@ pub struct Shortcut {
     pub global: bool,
 }
 
-/// The one shortcut table. Menu rendering, tooltips and the app's input loop
-/// all read it, so a displayed key is always a handled key.
+/// The static shortcut table: reserved chords plus the physical fly hint. The
+/// remappable actions live in `Bindings`, so their labels and routing have one
+/// source of truth each.
 pub const SHORTCUTS: &[Shortcut] = &[
-    Shortcut {
-        action: MenuAction::ExportScreenshot,
-        label: SCREENSHOT_SHORTCUT,
-        key: egui::Key::S,
-        modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-        global: false,
-    },
-    Shortcut {
-        action: MenuAction::Quit,
-        label: QUIT_SHORTCUT,
-        key: egui::Key::Q,
-        modifiers: egui::Modifiers::COMMAND,
-        global: true,
-    },
     Shortcut {
         action: MenuAction::Undo,
         label: UNDO_SHORTCUT,
@@ -317,71 +297,85 @@ pub const SHORTCUTS: &[Shortcut] = &[
         global: false,
     },
     Shortcut {
-        action: MenuAction::CopyFormula,
-        label: COPY_FORMULA_SHORTCUT,
-        key: egui::Key::C,
-        modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-        global: false,
-    },
-    Shortcut {
-        action: MenuAction::ToggleControls,
-        label: CONTROLS_SHORTCUT,
-        key: egui::Key::B,
-        modifiers: egui::Modifiers::COMMAND,
-        global: false,
-    },
-    Shortcut {
-        action: MenuAction::TogglePresets,
-        label: PRESETS_SHORTCUT,
-        key: egui::Key::P,
-        modifiers: egui::Modifiers::COMMAND,
-        global: false,
-    },
-    Shortcut {
-        action: MenuAction::ToggleAppearancePanel,
-        label: APPEARANCE_SHORTCUT,
-        key: egui::Key::A,
-        modifiers: egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-        global: false,
-    },
-    Shortcut {
         action: MenuAction::ToggleFly,
         label: FLY_SHORTCUT,
         key: egui::Key::C,
         modifiers: egui::Modifiers::NONE,
         global: false,
     },
-    Shortcut {
-        action: MenuAction::ToggleHelp,
-        label: HELP_SHORTCUT,
-        key: egui::Key::F1,
-        modifiers: egui::Modifiers::NONE,
-        global: false,
-    },
 ];
 
-/// The shortcut bound to `action`, if it has one.
+/// The interaction-model action backing `action`, for the menu commands that
+/// are remappable. View actions are handled by their separate keyboard/view
+/// seam and are deliberately absent.
+pub fn interaction_action_for(action: MenuAction) -> Option<InteractionAction> {
+    Some(match action {
+        MenuAction::ToggleControls => InteractionAction::ToggleControls,
+        MenuAction::TogglePresets => InteractionAction::TogglePresets,
+        MenuAction::ToggleAppearancePanel => InteractionAction::ToggleAppearance,
+        MenuAction::ToggleInteractionPanel => InteractionAction::ToggleInteraction,
+        MenuAction::ToggleHelp => InteractionAction::ToggleHelp,
+        MenuAction::ExportScreenshot => InteractionAction::Screenshot,
+        MenuAction::CopyFormula => InteractionAction::CopyFormula,
+        MenuAction::Quit => InteractionAction::Quit,
+        _ => return None,
+    })
+}
+
+/// The menu command an interaction action dispatches, if it has a menu entry.
+pub fn menu_action_for(action: InteractionAction) -> Option<MenuAction> {
+    Some(match action {
+        InteractionAction::ToggleControls => MenuAction::ToggleControls,
+        InteractionAction::TogglePresets => MenuAction::TogglePresets,
+        InteractionAction::ToggleAppearance => MenuAction::ToggleAppearancePanel,
+        InteractionAction::ToggleInteraction => MenuAction::ToggleInteractionPanel,
+        InteractionAction::ToggleHelp => MenuAction::ToggleHelp,
+        InteractionAction::Screenshot => MenuAction::ExportScreenshot,
+        InteractionAction::CopyFormula => MenuAction::CopyFormula,
+        InteractionAction::Quit => MenuAction::Quit,
+        _ => return None,
+    })
+}
+
+/// A chord label in the menu's platform spelling: `Mod` becomes `Ctrl` on
+/// Linux/Windows and `Cmd` on macOS, matching the labels the menus have always
+/// shown. The Interaction panel uses [`KeyChord::label`]'s `Mod` spelling.
+pub fn chord_shortcut_label(chord: KeyChord) -> String {
+    let mod_name = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else {
+        "Ctrl"
+    };
+    let mut label = chord.label();
+    if let Some(rest) = label.strip_prefix("Mod+") {
+        label = format!("{mod_name}+{rest}");
+    }
+    label
+}
+
+/// The shortcut bound to a static (non-remappable) action, if any.
 pub fn shortcut_for(action: MenuAction) -> Option<&'static Shortcut> {
     SHORTCUTS.iter().find(|shortcut| shortcut.action == action)
 }
 
-/// The label shown beside `action`'s menu item. The Interaction toggle's
-/// shortcut is display-only until slice A3 wires the key.
-pub fn shortcut_label(action: MenuAction) -> Option<&'static str> {
-    if action == MenuAction::ToggleInteractionPanel {
-        return Some(INTERACTION_SHORTCUT);
+/// The label shown beside `action`'s menu item, read from the active bindings
+/// for remappable commands and from the static table for reserved ones.
+pub fn shortcut_label(action: MenuAction, bindings: &Bindings) -> Option<String> {
+    if let Some(interaction) = interaction_action_for(action) {
+        return bindings.chord(interaction).map(chord_shortcut_label);
     }
-    shortcut_for(action).map(|shortcut| shortcut.label)
+    if action == MenuAction::ShowHelpTable {
+        return shortcut_label(MenuAction::ToggleHelp, bindings);
+    }
+    shortcut_for(action).map(|shortcut| shortcut.label.to_owned())
 }
 
-/// The hint shown beside `item`. Normally the item's own shortcut; Help >
-/// Keyboard & mouse is the exception: it opens the full table window while F1
-/// toggles the compact overlay, so the item shows the help shortcut's label
-/// (F1) and the two help surfaces advertise the same key.
-pub fn item_shortcut_label(item: &MenuItem) -> Option<&'static str> {
+/// The hint shown beside `item`. Help > Keyboard & mouse opens the full table
+/// while F1 toggles the compact overlay, so it shows the help chord too.
+pub fn item_shortcut_label(item: &MenuItem, bindings: &Bindings) -> Option<String> {
     match item.action {
-        MenuAction::ShowHelpTable => shortcut_label(MenuAction::ToggleHelp),
-        action => shortcut_label(action),
+        MenuAction::ShowHelpTable => shortcut_label(MenuAction::ToggleHelp, bindings),
+        action => shortcut_label(action, bindings),
     }
 }
 
@@ -392,25 +386,44 @@ pub fn shortcut_allowed(shortcut: &Shortcut, text_edit_focused: bool) -> bool {
 }
 
 /// Consume this frame's pressed shortcuts and report the actions to dispatch,
-/// in table order. Called before any widget so a focused text field never
-/// receives a key the menu table owns (Ctrl+Q is consumed from anywhere).
-/// Matching is exact: `Ctrl+Shift+B` is not `Ctrl+B`, and `Shift+F1` is not
-/// `F1`, so an extra modifier never fires a plain shortcut.
-pub fn shortcut_actions(ctx: &egui::Context) -> Vec<MenuAction> {
+/// in binding-table order followed by the static reserved table. Called before
+/// any widget so a focused text field never receives a key the menu owns.
+/// Matching is exact: an extra modifier never fires a plain chord.
+pub fn shortcut_actions(ctx: &egui::Context, bindings: &Bindings) -> Vec<MenuAction> {
     let text_edit_focused = ctx.text_edit_focused();
     ctx.input_mut(|input| {
         let modifiers = input.modifiers;
-        SHORTCUTS
-            .iter()
-            .filter(|shortcut| shortcut_allowed(shortcut, text_edit_focused))
-            .filter(|shortcut| modifiers.matches_exact(shortcut.modifiers))
-            // Ticket 70: ToggleFly is handled on the physical key (see
-            // `app::input`), so it must not also fire on the logical key —
-            // otherwise a non-QWERTY layout (Bone) both strafes and exits fly.
-            .filter(|shortcut| shortcut.action != MenuAction::ToggleFly)
-            .filter(|shortcut| input.consume_key(shortcut.modifiers, shortcut.key))
-            .map(|shortcut| shortcut.action)
-            .collect()
+        let mut actions = Vec::new();
+        for action in InteractionAction::REMAPPABLE {
+            let Some(menu_action) = menu_action_for(action) else {
+                continue;
+            };
+            if !action.is_global() && text_edit_focused {
+                continue;
+            }
+            let Some(chord) = bindings.chord(action) else {
+                continue;
+            };
+            if modifiers.matches_exact(view_command::egui_modifiers(chord))
+                && input.consume_key(view_command::egui_modifiers(chord), chord.key)
+            {
+                actions.push(menu_action);
+            }
+        }
+        for shortcut in SHORTCUTS {
+            // Ticket 70: ToggleFly is handled on the physical key.
+            if shortcut.action == MenuAction::ToggleFly
+                || !shortcut_allowed(shortcut, text_edit_focused)
+            {
+                continue;
+            }
+            if modifiers.matches_exact(shortcut.modifiers)
+                && input.consume_key(shortcut.modifiers, shortcut.key)
+            {
+                actions.push(shortcut.action);
+            }
+        }
+        actions
     })
 }
 

@@ -708,7 +708,9 @@ execution guard.
 **Invariants.** Scalar mode pauses rather than deletes vector particle/trail/
 time state; the live and captured plot share one `PlotScene` Arc and the source
 viewport's frame aspect; Reset cancels tagged capture completions and releases
-plot targets before the next vector frame.
+plot targets before the next vector frame. The scalar viewport pinches/drags
+through `PlotCamera::apply_gesture` with its own plot scale semantics, so the
+vector `CameraFeel` multipliers and invert flags do not apply there.
 
 **Pinned by.** `tests/plot_app_test.rs`; `tests/plot_renderer_test.rs` covers
 the renderer configuration this module installs.
@@ -915,6 +917,10 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
 - Fly mode owns the camera directly (WASD/QE, drag/raw look, wheel speed); orbit
   mode feeds `viewmodel::apply_camera_input` through `drag_channel` and
   `two_finger_pan`.
+- Camera feel applies to the vector viewports only: 3D orbit, 2D pan/zoom and
+  fly look scale through `feel_orbit`/`feel_zoom`. The scalar plot viewport
+  keeps its own `PlotCamera` scale control and deliberately ignores camera
+  feel.
 - A two-finger gesture suppresses the pointer-drag orbit channel; pinch zoom is
   folded into `top_bar::wheel_zoom` by egui.
 - 3D builds the combined arrow+particle stream and sorts it far-to-near; 2D
@@ -3098,11 +3104,14 @@ link).
 pure keyboard, click-plan, and seed-shortcut rules.
 
 **Public API.** `KEY_ORBIT_STEP = 0.06`, `KEY_PAN_FRACTION = 0.05`,
-`KEY_PAN_FAST_MULTIPLIER = 3.0`, `KEY_ZOOM_FACTOR = 1.2`, `CAMERA_KEYS`;
+`KEY_PAN_FAST_MULTIPLIER = 3.0`, `KEY_ZOOM_FACTOR = 1.2`;
 `ViewContext`; `ViewCommand { Orbit, Pan, Zoom, Reset, Fit }`;
 `domain_center`, `domain_centre_delta`, `fit_distance`, `apply_view_command`,
-`apply_view_command_with_fly`, `command_for_key`, `view_key_commands`;
-`CLICK_HINT_*`, `ClickActionPlan`, `click_action_plan`, `seed_shortcut`,
+`apply_view_command_with_fly`; `chord_modifiers`, `egui_modifiers`,
+`bound_action`, `view_action_for_key`, `command_for_action`, `command_for_key`,
+`command_for_key_with_bindings`, `view_key_commands`,
+`view_key_commands_with_bindings`; `CLICK_HINT_*`, `ClickActionPlan`,
+`click_action_plan`, `seed_shortcut`, `seed_shortcut_with_bindings`,
 `shortcut_seed_point`.
 
 **Invariants.**
@@ -3112,16 +3121,22 @@ pure keyboard, click-plan, and seed-shortcut rules.
   keeps orientation and fits the domain's bounding sphere in the tighter FOV
   (2D fits the padded plane and only zooms out for a narrow viewport).
 - While flying, Reset/Fit leave fly first; orbit/pan/zoom commands are inert.
-- Camera keys are ignored with Ctrl/Cmd/Alt; arrows orbit in 3D (Shift pans) and
-  pan in 2D (Shift 3× faster); `+`/`=`, `-`, `R`, `F` map as documented.
+- View keys resolve through the active `Bindings`: arrows orbit in 3D (Shift
+  pans) and pan in 2D (Shift 3× faster); `+`/`=`, `-`, `R`, `F` are the default
+  chords. A remap moves the action, and the old chord no longer fires. Shift is
+  tolerated for the four view directions, ZoomIn and ZoomOut, so `Shift+=`
+  (plus) keeps `=` as `+`'s unshifted alias and `Shift+-` still zooms out.
+- Arrow-key orbit applies `CameraFeel::orbit_sensitivity` and its yaw/pitch
+  invert flags; the existing key step and camera clamps are unchanged.
 - `click_action_plan`: seed requires Streamlines; particles require the feature
   and `mode_3d`; each failure returns its pinned hint.
 - `seed_shortcut`: S is inert while flying (it is fly-backward); P is always
-  available; repeats and non-plain modifiers are ignored.
+  available; repeats are ignored. `seed_shortcut_with_bindings` resolves the
+  SeedStreamline/AddParticles chords from the active bindings.
 - `shortcut_seed_point` uses the pointer only inside the viewport, otherwise the
   centre.
 
-**Pinned by.** `tests/view_command_test.rs` (22 tests):
+**Pinned by.** `tests/view_command_test.rs` (23 tests):
 `fit_frames_square_and_rectangular_domains_deterministically`,
 `arrow_keys_orbit_in_3d_and_pan_with_shift`,
 `arrow_keys_pan_in_2d_and_shift_pans_faster`,
@@ -3129,7 +3144,8 @@ pure keyboard, click-plan, and seed-shortcut rules.
 `camera_keys_are_inert_while_a_text_field_has_focus`,
 `command_modifiers_never_drive_the_camera`,
 `reset_returns_the_default_framing_centred_on_the_domain`, and the undo/click
-tests. The S/P mapping is also pinned by `tests/shortcut_test.rs`.
+tests. The S/P mapping is also pinned by `tests/shortcut_test.rs`, and live
+binding routing/camera feel by `tests/interaction_routing_test.rs`.
 
 **Limitations.** Fit is sphere-based, so a very elongated box may be framed with
 more margin than a tight box fit. Keyboard orbit is a fixed step, not
@@ -3903,7 +3919,8 @@ profiles, saves the live bindings/feel under a typed name, deletes user
 profiles after a two-click confirm, restores the default bindings/feel and
 imports/exports the portable document. Every binding/feel edit commits straight
 to `VfApp::interaction`, and profile edits mutate
-`VfApp::interaction_profiles`; input routing is slice A3.
+`VfApp::interaction_profiles`. Slice A3 routes the live bindings and camera feel
+through input: menu/transport/tool/view chords and orbit, wheel and fly-look.
 
 **Public API.** `InteractionPanel` with `show(ui, live, profiles, compact)`,
 `begin_capture`, `cancel_capture`, `apply_capture`, `resolve_conflict`,
@@ -4253,13 +4270,15 @@ window.
 `INDUCTION_HELP_SECTION`, `INDUCTION_HELP_ROWS`, `ODE_HELP_SECTION`,
 `ODE_HELP_ROWS`, `scalar_help_rows`, `sources_help_rows`,
 `induction_help_rows`, `ode_help_rows`, `all_rows`, `sections_for`,
-`rows_for`, `FORMULA_HINT`, `show`, `help_window`.
+`rows_for`, `live_global_rows`, `LiveRow`, `FORMULA_HINT`, `show`, `help_window`.
 
 **Invariants.**
-- `HELP_SECTIONS` is the single source of strings; the overlay shows the active
-  view + Global, the window shows all three groups plus the Scalar plots,
-  Sources and Induction sections. A static, not a const, so both surfaces can be
-  proven to share the allocation.
+- `HELP_SECTIONS` holds the static 3D/2D view rows; the Global group's rows are
+  generated from the live `Bindings` by `live_global_rows`, so a remap is
+  visible in both help surfaces without a second static table. The overlay
+  shows the active view + Global, the window shows all three groups plus the
+  Scalar plots, Sources and Induction sections. `HELP_SECTIONS` is a static, not
+  a const, so both surfaces can be proven to share the allocation.
 - The Sources section covers formula/source separation, all eight editors,
   E/B/Both without summation, scene-wide softening, the default-off accuracy
   opt-in, hidden non-finite/unavailable results, and that streamlines,
@@ -4365,16 +4384,22 @@ are pinned by `tests/panel_rails_test.rs`.
 **Purpose.** Every menu item, shortcut, and the state/effect dispatch behind
 them.
 
-**Public API.** Shortcut label constants, `ABOUT_*`; `MenuAction` (25 variants,
-`ToggleCas` native-only) and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`;
-`Shortcut`; `SHORTCUTS`;
-`shortcut_for`, `shortcut_label`, `item_shortcut_label`, `shortcut_allowed`,
-`shortcut_actions`, `help_key_pressed`; `UiState`; `apply_action`.
+**Public API.** `FLY_SHORTCUT`, `UNDO_SHORTCUT`, `REDO_SHORTCUT`, `ABOUT_*`;
+`MenuAction` (25 variants, `ToggleCas` native-only) and `ALL`; `SideEffect`;
+`MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
+`interaction_action_for`, `menu_action_for`, `chord_shortcut_label`,
+`shortcut_for`, `shortcut_label(action, bindings)`,
+`item_shortcut_label(item, bindings)`, `shortcut_allowed`,
+`shortcut_actions(ctx, bindings)`, `help_key_pressed`; `UiState`;
+`apply_action`.
 
 **Invariants.**
 - Every `MenuAction` is reachable from a menu item or shortcut; no action has
   two menu homes. `MenuAction::ALL` is generated from the same macro as the
   enum, so the test cannot drift.
+- Remappable menu commands (panels, help, screenshot, copy formula, quit)
+  resolve their chord and label from the active `Bindings`; `SHORTCUTS` keeps
+  only the reserved Undo/Redo pair and the display-only fly hint.
 - Shortcut matching is exact: extra modifiers do not fire a plain shortcut.
 - All shortcuts except Ctrl+Q are inert while a text field has focus.
 - `MENUS`: File (screenshot, quit), Edit (undo, redo, copy formula, colour/
@@ -4382,10 +4407,10 @@ them.
   toggle presets, reset layout, reset camera, appearance, toggle/open
   interaction), Help (keyboard & mouse, about). Fly is toggled by C and the
   sidebar Camera section, not a menu item.
-- Shortcuts: Ctrl+B Controls, Ctrl+P Presets, Ctrl+Shift+A Appearance panel,
-  Ctrl+Q quit, Ctrl+Shift+S screenshot, Ctrl+Shift+C copy formula, C fly, F1
-  help. Ctrl+Shift+L is *displayed* beside View > Toggle Interaction only;
-  slice A3 adds it to the handled table.
+- Defaults: Ctrl+B Controls, Ctrl+P Presets, Ctrl+Shift+A Appearance panel,
+  Ctrl+Shift+L Interaction panel, Ctrl+Q quit, Ctrl+Shift+S screenshot,
+  Ctrl+Shift+C copy formula, C fly, F1 help. The labels are derived from the
+  bindings, so a remap is visible immediately.
 - `apply_action` mutates only `UiState`; app-only work is returned as a
   `SideEffect` (open popover, show help/about, screenshot, quit, copy, reset
   ids, and `ResetScope`).
@@ -4398,16 +4423,17 @@ them.
   the same `ResetScope` seam, never an inline duplicate.
 - `?` is a separate secondary help key; F1 remains the one table shortcut.
 
-**Pinned by.** `tests/menu_test.rs` (26):
+**Pinned by.** `tests/menu_test.rs` (28):
 `every_enum_variant_is_reachable_from_a_menu_item_or_shortcut`,
 `every_menu_item_is_backed_by_a_variant`,
 `no_action_has_more_than_one_menu_home`,
 `shortcuts_stay_out_of_text_fields_except_quit`,
 `extra_modifiers_do_not_fire_the_plain_shortcuts`,
 `reset_all_controls_returns_the_sidebar_knobs_without_touching_the_formula`,
-`the_help_menu_entry_opens_the_full_help_window`.
+`the_help_menu_entry_opens_the_full_help_window`; live labels and routing by
+`tests/interaction_routing_test.rs`.
 
-**Limitations.** No user-rebindable shortcuts; no undo for control resets.
+**Limitations.** No user-rebindable fly keys; fly stays physical (ticket 70).
 
 #### `src/ui/presets.rs` — field presets and saved camera views
 

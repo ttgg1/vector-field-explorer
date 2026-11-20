@@ -6,6 +6,7 @@ use eframe::egui;
 
 use crate::support;
 
+use vector_field_explorer::interaction::Bindings;
 use vector_field_explorer::screenshot::Screenshot;
 use vector_field_explorer::ui::branding;
 use vector_field_explorer::ui::menu::{
@@ -355,7 +356,7 @@ fn compact_hamburger_lists_every_wide_command_except_sheet_appearance() {
                 continue;
             }
             // Accesskit appends the shortcut text to a button's label.
-            let label = match item_shortcut_label(item) {
+            let label = match item_shortcut_label(item, &Bindings::default_bindings()) {
                 Some(shortcut) => format!("{} {shortcut}", item.label),
                 None => item.label.to_string(),
             };

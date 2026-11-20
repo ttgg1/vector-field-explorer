@@ -11,6 +11,7 @@
 
 use eframe::egui;
 
+use crate::interaction::{Bindings, InteractionAction};
 use crate::sim_clock::{MAX_SPEED, MIN_SPEED, SimClock, should_animate};
 use crate::viewmodel::State;
 
@@ -118,14 +119,30 @@ pub fn request_particle_repaint(ctx: &egui::Context, state: &State, clock: &SimC
     }
 }
 
-/// Consume a Space press as play/pause when the transport is visible and no
-/// text field owns the keyboard. Consuming the key also keeps a focused widget
-/// from activating it. Returns whether the clock was toggled.
+/// Consume the default Space press as play/pause. Retained for the existing
+/// transport tests; the app passes its live bindings through
+/// [`toggle_on_bindings`].
 pub fn toggle_on_space(ctx: &egui::Context, state: &State, clock: &mut SimClock) -> bool {
+    toggle_on_bindings(ctx, state, clock, &Bindings::default_bindings())
+}
+
+/// Consume the chord bound to PlayPause as play/pause when the transport is
+/// visible and no text field owns the keyboard. Consuming the key also keeps a
+/// focused widget from activating it. Returns whether the clock was toggled.
+pub fn toggle_on_bindings(
+    ctx: &egui::Context,
+    state: &State,
+    clock: &mut SimClock,
+    bindings: &Bindings,
+) -> bool {
     if !crate::sim_clock::transport_visible(state) || ctx.text_edit_focused() {
         return false;
     }
-    let pressed = ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+    let Some(chord) = bindings.chord(InteractionAction::PlayPause) else {
+        return false;
+    };
+    let modifiers = crate::view_command::egui_modifiers(chord);
+    let pressed = ctx.input_mut(|input| input.consume_key(modifiers, chord.key));
     if pressed {
         clock.toggle_playing();
     }

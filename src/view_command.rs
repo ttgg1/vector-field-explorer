@@ -14,6 +14,7 @@ use glam::Vec3;
 use crate::camera::OrbitCamera;
 use crate::domain::Domain;
 use crate::fly_camera::FlyCamera;
+use crate::interaction::{Bindings, CameraFeel, ChordModifiers, InteractionAction, KeyChord};
 use crate::viewmodel::{LeftClickAction, PLANE_MARGIN};
 
 /// Radians the view orbits per arrow-key press in 3D.
@@ -24,19 +25,6 @@ pub const KEY_PAN_FRACTION: f32 = 0.05;
 pub const KEY_PAN_FAST_MULTIPLIER: f32 = 3.0;
 /// Multiplicative zoom per `+`/`-` press (egui's convention: >1 gets closer).
 pub const KEY_ZOOM_FACTOR: f32 = 1.2;
-/// The keys the camera consumes. Listed in one place so the input loop and the
-/// tests cannot drift; menu shortcuts are a separate table.
-pub const CAMERA_KEYS: &[egui::Key] = &[
-    egui::Key::ArrowLeft,
-    egui::Key::ArrowRight,
-    egui::Key::ArrowUp,
-    egui::Key::ArrowDown,
-    egui::Key::Plus,
-    egui::Key::Equals,
-    egui::Key::Minus,
-    egui::Key::R,
-    egui::Key::F,
-];
 
 /// The view a command applies to: which projection is showing, which domain it
 /// should frame, and the viewport's aspect ratio (width / height) for Fit. A
@@ -232,64 +220,227 @@ pub fn apply_view_command_with_fly(
     apply_view_command(camera, view, command)
 }
 
-/// The command one camera key stands for, if any. `modifiers` must not carry
-/// Ctrl/Cmd/Alt: those keys belong to menus and the browser (`Ctrl+R` reload,
-/// `Ctrl+F` find). Shift is meaningful for arrows (3D: pan; 2D: pan faster)
-/// and for `+`.
+/// Convert egui's platform modifiers into the profile's logical chord set.
+/// `Mod` is egui's `command` (Command on macOS, Ctrl elsewhere).
+pub fn chord_modifiers(modifiers: egui::Modifiers) -> ChordModifiers {
+    let command = if cfg!(target_os = "macos") {
+        modifiers.command || modifiers.mac_cmd
+    } else {
+        // Some backends set `ctrl` without `command`; both mean Mod here.
+        modifiers.command || modifiers.ctrl
+    };
+    ChordModifiers {
+        command,
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+    }
+}
+
+/// Convert a profile chord into egui's exact modifier set.
+pub fn egui_modifiers(chord: KeyChord) -> egui::Modifiers {
+    let mut modifiers = egui::Modifiers::NONE;
+    if chord.modifiers.command {
+        modifiers = modifiers.plus(egui::Modifiers::COMMAND);
+    }
+    if chord.modifiers.shift {
+        modifiers = modifiers.plus(egui::Modifiers::SHIFT);
+    }
+    if chord.modifiers.alt {
+        modifiers = modifiers.plus(egui::Modifiers::ALT);
+    }
+    modifiers
+}
+
+/// The action exactly bound to this key and modifier set, if any. No aliases
+/// and no shift tolerance: menu, transport and tool chords are exact.
+pub fn bound_action(
+    bindings: &Bindings,
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Option<InteractionAction> {
+    bindings.owner_of(KeyChord {
+        key,
+        modifiers: chord_modifiers(modifiers),
+    })
+}
+
+/// Whether `action` keeps its meaning when Shift is held. View arrows use
+/// Shift for pan (3D) or faster pan (2D), and `+`/`-` arrive as Shift+Equals
+/// and Shift+Minus on many layouts, so those chords accept an extra Shift
+/// beyond their bound set.
+fn shift_tolerant(action: InteractionAction) -> bool {
+    matches!(
+        action,
+        InteractionAction::ZoomIn
+            | InteractionAction::ZoomOut
+            | InteractionAction::ViewLeft
+            | InteractionAction::ViewRight
+            | InteractionAction::ViewUp
+            | InteractionAction::ViewDown
+    )
+}
+
+/// Resolve a key press through the active bindings for the camera/view keys.
+/// Unlike [`bound_action`] this accepts an extra Shift for the view actions and
+/// treats `=` as the same physical key as `+` while ZoomIn still owns `+`.
+pub fn view_action_for_key(
+    bindings: &Bindings,
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Option<InteractionAction> {
+    let mut mods = chord_modifiers(modifiers);
+    if let Some(action) = bindings.owner_of(KeyChord {
+        key,
+        modifiers: mods,
+    }) {
+        return Some(action);
+    }
+
+    // `=` is the unshifted physical key for `+` on many layouts. Only accept
+    // the alias while ZoomIn still owns `Plus`, so remapping ZoomIn removes it.
+    if key == egui::Key::Equals
+        && let Some(action) = bindings.owner_of(KeyChord {
+            key: egui::Key::Plus,
+            modifiers: mods,
+        })
+        && action == InteractionAction::ZoomIn
+    {
+        return Some(action);
+    }
+
+    if mods.shift {
+        mods.shift = false;
+        if let Some(action) = bindings.owner_of(KeyChord {
+            key,
+            modifiers: mods,
+        }) && shift_tolerant(action)
+        {
+            return Some(action);
+        }
+        if key == egui::Key::Equals
+            && let Some(action) = bindings.owner_of(KeyChord {
+                key: egui::Key::Plus,
+                modifiers: mods,
+            })
+            && action == InteractionAction::ZoomIn
+        {
+            return Some(action);
+        }
+    }
+    None
+}
+
+/// The command one resolved view action stands for. `shift` is the frame's
+/// actual Shift state, not merely part of the bound chord.
+pub fn command_for_action(
+    action: InteractionAction,
+    camera: &OrbitCamera,
+    view: ViewContext,
+    shift: bool,
+    feel: CameraFeel,
+) -> Option<ViewCommand> {
+    let mut pan = visible_height(camera, view) * KEY_PAN_FRACTION;
+    if !view.mode_3d && shift {
+        pan *= KEY_PAN_FAST_MULTIPLIER;
+    }
+    let orbit = |dx: f32, dy: f32| {
+        let delta = crate::camera::feel_orbit(glam::Vec2::new(dx, dy), feel);
+        ViewCommand::Orbit {
+            dx: delta.x,
+            dy: delta.y,
+        }
+    };
+    match action {
+        InteractionAction::ResetView => Some(ViewCommand::Reset),
+        InteractionAction::FitView => Some(ViewCommand::Fit),
+        InteractionAction::ZoomIn => Some(ViewCommand::Zoom {
+            factor: KEY_ZOOM_FACTOR,
+        }),
+        InteractionAction::ZoomOut => Some(ViewCommand::Zoom {
+            factor: 1.0 / KEY_ZOOM_FACTOR,
+        }),
+        InteractionAction::ViewLeft => Some(if view.mode_3d && !shift {
+            orbit(-KEY_ORBIT_STEP, 0.0)
+        } else {
+            ViewCommand::Pan { dx: -pan, dy: 0.0 }
+        }),
+        InteractionAction::ViewRight => Some(if view.mode_3d && !shift {
+            orbit(KEY_ORBIT_STEP, 0.0)
+        } else {
+            ViewCommand::Pan { dx: pan, dy: 0.0 }
+        }),
+        InteractionAction::ViewUp => Some(if view.mode_3d && !shift {
+            orbit(0.0, KEY_ORBIT_STEP)
+        } else {
+            ViewCommand::Pan { dx: 0.0, dy: pan }
+        }),
+        InteractionAction::ViewDown => Some(if view.mode_3d && !shift {
+            orbit(0.0, -KEY_ORBIT_STEP)
+        } else {
+            ViewCommand::Pan { dx: 0.0, dy: -pan }
+        }),
+        _ => None,
+    }
+}
+
+/// The command one camera key stands for with the default bindings. Retained
+/// as the pure keyboard seam's default-profile entry point; the app passes the
+/// live bindings through [`command_for_key_with_bindings`].
 pub fn command_for_key(
     camera: &OrbitCamera,
     view: ViewContext,
     key: egui::Key,
     modifiers: egui::Modifiers,
 ) -> Option<ViewCommand> {
-    if modifiers.ctrl || modifiers.command || modifiers.alt || modifiers.mac_cmd {
-        return None;
-    }
-    let shift = modifiers.shift;
-    let mut pan = visible_height(camera, view) * KEY_PAN_FRACTION;
-    if !view.mode_3d && shift {
-        pan *= KEY_PAN_FAST_MULTIPLIER;
-    }
-    match key {
-        egui::Key::ArrowLeft => Some(if view.mode_3d && !shift {
-            ViewCommand::Orbit { dx: -KEY_ORBIT_STEP, dy: 0.0 }
-        } else {
-            ViewCommand::Pan { dx: -pan, dy: 0.0 }
-        }),
-        egui::Key::ArrowRight => Some(if view.mode_3d && !shift {
-            ViewCommand::Orbit { dx: KEY_ORBIT_STEP, dy: 0.0 }
-        } else {
-            ViewCommand::Pan { dx: pan, dy: 0.0 }
-        }),
-        egui::Key::ArrowUp => Some(if view.mode_3d && !shift {
-            ViewCommand::Orbit { dx: 0.0, dy: KEY_ORBIT_STEP }
-        } else {
-            ViewCommand::Pan { dx: 0.0, dy: pan }
-        }),
-        egui::Key::ArrowDown => Some(if view.mode_3d && !shift {
-            ViewCommand::Orbit { dx: 0.0, dy: -KEY_ORBIT_STEP }
-        } else {
-            ViewCommand::Pan { dx: 0.0, dy: -pan }
-        }),
-        // `+` reaches egui as Plus on some layouts and Shift+Equals on others;
-        // a bare `=` is accepted as zoom-in too.
-        egui::Key::Plus | egui::Key::Equals => Some(ViewCommand::Zoom { factor: KEY_ZOOM_FACTOR }),
-        egui::Key::Minus => Some(ViewCommand::Zoom { factor: 1.0 / KEY_ZOOM_FACTOR }),
-        egui::Key::R if !shift => Some(ViewCommand::Reset),
-        egui::Key::F if !shift => Some(ViewCommand::Fit),
-        _ => None,
-    }
+    command_for_key_with_bindings(
+        camera,
+        view,
+        &Bindings::default_bindings(),
+        CameraFeel::default(),
+        key,
+        modifiers,
+    )
+}
+
+/// The command one key press stands for under `bindings`.
+pub fn command_for_key_with_bindings(
+    camera: &OrbitCamera,
+    view: ViewContext,
+    bindings: &Bindings,
+    feel: CameraFeel,
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Option<ViewCommand> {
+    let action = view_action_for_key(bindings, key, modifiers)?;
+    command_for_action(action, camera, view, modifiers.shift, feel)
 }
 
 /// Consume this frame's camera keys and report the commands to apply, in
-/// [`CAMERA_KEYS`] order. Inert while a text field has focus, so typing in the
-/// formula bar keeps its arrows, letters and `+`/`-` (the menu's global
-/// shortcuts run in their own loop before this). Keys are consumed so no other
-/// widget sees a key the camera already handled.
+/// [`InteractionAction::REMAPPABLE`] order. Inert while a text field has focus,
+/// so typing in the formula bar keeps its arrows, letters and `+`/`-` (the
+/// menu's global shortcuts run in their own loop before this). Keys are
+/// consumed so no other widget sees a key the camera already handled.
 pub fn view_key_commands(
     ctx: &egui::Context,
     camera: &OrbitCamera,
     view: ViewContext,
+) -> Vec<ViewCommand> {
+    view_key_commands_with_bindings(
+        ctx,
+        camera,
+        view,
+        &Bindings::default_bindings(),
+        CameraFeel::default(),
+    )
+}
+
+/// Consume this frame's camera keys through the active bindings.
+pub fn view_key_commands_with_bindings(
+    ctx: &egui::Context,
+    camera: &OrbitCamera,
+    view: ViewContext,
+    bindings: &Bindings,
+    feel: CameraFeel,
 ) -> Vec<ViewCommand> {
     if ctx.text_edit_focused() {
         return Vec::new();
@@ -297,12 +448,38 @@ pub fn view_key_commands(
     let mut commands = Vec::new();
     ctx.input_mut(|input| {
         let modifiers = input.modifiers;
-        for key in CAMERA_KEYS {
-            if !input.key_pressed(*key) {
+        for action in [
+            InteractionAction::ResetView,
+            InteractionAction::FitView,
+            InteractionAction::ZoomIn,
+            InteractionAction::ZoomOut,
+            InteractionAction::ViewLeft,
+            InteractionAction::ViewRight,
+            InteractionAction::ViewUp,
+            InteractionAction::ViewDown,
+        ] {
+            let Some(chord) = bindings.chord(action) else {
                 continue;
+            };
+            let mut keys = [Some(chord.key), None];
+            if action == InteractionAction::ZoomIn && chord.key == egui::Key::Plus {
+                keys[1] = Some(egui::Key::Equals);
             }
-            if let Some(command) = command_for_key(camera, view, *key, modifiers) {
-                input.consume_key(modifiers, *key);
+            let mut matched = None;
+            for key in keys.into_iter().flatten() {
+                if input.key_pressed(key)
+                    && view_action_for_key(bindings, key, modifiers) == Some(action)
+                {
+                    matched = Some(key);
+                    break;
+                }
+            }
+            let Some(key) = matched else {
+                continue;
+            };
+            if let Some(command) = command_for_action(action, camera, view, modifiers.shift, feel)
+                && input.consume_key(modifiers, key)
+            {
                 commands.push(command);
             }
         }
@@ -376,12 +553,37 @@ pub fn seed_shortcut(
     text_edit_focused: bool,
     flying: bool,
 ) -> Option<LeftClickAction> {
-    if text_edit_focused || repeat || !modifiers.matches_exact(egui::Modifiers::NONE) {
+    seed_shortcut_with_bindings(
+        &Bindings::default_bindings(),
+        key,
+        modifiers,
+        repeat,
+        text_edit_focused,
+        flying,
+    )
+}
+
+/// [`seed_shortcut`] under the active bindings: whichever chord owns
+/// SeedStreamline or AddParticles runs that action. The gates stay the same;
+/// Seed is inert while flying when it is still on physical `S`, because that
+/// key belongs to the fly camera's backward movement (ticket 70).
+pub fn seed_shortcut_with_bindings(
+    bindings: &Bindings,
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    repeat: bool,
+    text_edit_focused: bool,
+    flying: bool,
+) -> Option<LeftClickAction> {
+    if text_edit_focused || repeat {
         return None;
     }
-    match key {
-        egui::Key::S if !flying => Some(LeftClickAction::SeedStreamline),
-        egui::Key::P => Some(LeftClickAction::AddParticles),
+    let action = bound_action(bindings, key, modifiers)?;
+    match action {
+        InteractionAction::SeedStreamline if !(flying && key == egui::Key::S) => {
+            Some(LeftClickAction::SeedStreamline)
+        }
+        InteractionAction::AddParticles => Some(LeftClickAction::AddParticles),
         _ => None,
     }
 }
