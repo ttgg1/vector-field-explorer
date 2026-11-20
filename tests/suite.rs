@@ -65,6 +65,7 @@ mod induction_bench_test;
 mod induction_export_test;
 mod induction_panel_test;
 mod induction_test;
+mod interaction_test;
 mod layer_style_test;
 mod layout_test;
 mod left_click_action_test;
