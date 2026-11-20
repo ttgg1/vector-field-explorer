@@ -54,6 +54,7 @@ impl eframe::App for VfApp {
             view: ViewRecord::capture(&self.state),
             parameters: self.state.parameters.clone(),
             viewport_style: self.state.viewport_style,
+            layer_styles: self.state.layer_styles,
             preset_ui: PresetUiRecord {
                 expanded: self.presets.expanded_state(),
             },

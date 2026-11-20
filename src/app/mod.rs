@@ -329,6 +329,9 @@ impl VfApp {
         // directly and does not dirty the scene on its own. `load` already
         // sanitized corrupt values.
         state.viewport_style = settings.viewport_style;
+        // The same direct startup assignment for layer styles: restoring them
+        // must not dirty the scene. `load` already repaired invalid values.
+        state.layer_styles = settings.layer_styles;
         // Ticket 47: a restored non-default domain must already be framed on
         // the first frame, not only after the first edit. This is the same
         // tested recentre helper the live domain editor uses; the default

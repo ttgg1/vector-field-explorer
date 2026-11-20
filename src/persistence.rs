@@ -19,6 +19,7 @@ use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::colormap::Colormap;
 use crate::induction::{InductionCase, InductionScene};
+use crate::layer_style::LayerStyles;
 use crate::material::{
     MaterialCase, MaterialError, MaterialScene, MaterialView, validate_material,
 };
@@ -65,6 +66,11 @@ pub struct AppSettings {
     /// are repaired by [`AppSettings::sanitized`].
     #[serde(default)]
     pub viewport_style: ViewportStyle,
+    /// Per-layer and per-family appearance overrides (issue #84 slice A1).
+    /// Missing on older envelopes, which load the neutral record; corrupt
+    /// values are repaired by [`AppSettings::sanitized`].
+    #[serde(default)]
+    pub layer_styles: LayerStyles,
     /// Persisted Presets-panel expansion (issue #90 slice B). Missing on older
     /// envelopes, which open every group; a corrupt record falls back to the
     /// all-expanded default without failing the envelope.
@@ -96,8 +102,15 @@ fn default_preset_expanded() -> [bool; 4] {
 
 impl AppSettings {
     /// Clamp corrupt numbers from storage into usable ranges: style into the
-    /// Settings slider bounds, layout widths into the draggable range.
+    /// Settings slider bounds, layout widths into the draggable range, and
+    /// layer-style overrides into their multiplier bounds.
     pub fn sanitized(mut self) -> Self {
+        // Repair the newest style record first: an older or hand-edited
+        // envelope must not fail on an out-of-range multiplier.
+        if let Err(error) = self.layer_styles.validate() {
+            log::warn!("persisted layer styles are invalid ({error}); repairing them");
+            self.layer_styles = self.layer_styles.sanitized();
+        }
         self.style = self.style.sanitized();
         self.layout = self.layout.sanitized();
         self.viewport_style = self.viewport_style.sanitized();

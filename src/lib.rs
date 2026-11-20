@@ -20,6 +20,7 @@ pub mod flow;
 pub mod fly_camera;
 pub mod fonts;
 pub mod induction;
+pub mod layer_style;
 pub mod material;
 pub mod maxwell;
 pub mod ode;
