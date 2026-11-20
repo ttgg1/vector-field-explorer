@@ -4,14 +4,16 @@
 // sidebar frame would change settings the user never touched (and the status
 // bar would count a scene the user never asked for).
 
+use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::sidebar::{
-    ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, apply, arrow_scale_enabled,
-    arrow_style_set, domain_axes, domain_summary, fixed_color_opaque, fixed_color_rgb,
-    head_control_enabled, magnitude_scale_enabled, particle_count_label,
+    ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, SEED_LAYOUT_DENSITY_INACTIVE_NOTE,
+    apply, arrow_scale_enabled, arrow_style_set, domain_axes, domain_summary, fixed_color_opaque,
+    fixed_color_rgb, head_control_enabled, magnitude_scale_enabled, particle_count_label,
     particle_fixed_color_enabled, particle_size_enabled, plane_control_mode,
-    proportional_exponent_enabled, seed_mode_enabled, sides_control_enabled,
-    stagnation_seconds_enabled, streamline_count_enabled, streamline_count_label,
-    trail_fade_enabled, trail_width_enabled,
+    proportional_exponent_enabled, seed_layout_count_label, seed_layout_visible, seed_mode_enabled,
+    sides_control_enabled, stagnation_seconds_enabled, streamline_count_enabled,
+    streamline_count_enabled_with_layout, streamline_count_label, trail_fade_enabled,
+    trail_width_enabled,
 };
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::colormap::Colormap;
@@ -25,6 +27,54 @@ use vector_field_explorer::viewmodel::{
     MIN_DOMAIN_EXTENT, MIN_PARTICLE_SIZE, domain_between,
 };
 use glam::Vec3;
+
+#[test]
+fn flow_section_controls_follow_the_explicit_layout_state() {
+    assert!(
+        seed_layout_visible(FieldMode::Formula, true, true),
+        "the Seed layout area belongs to a formula streamline view"
+    );
+    assert!(
+        !seed_layout_visible(FieldMode::Formula, false, true),
+        "Streamlines off hides the seed editor"
+    );
+    assert!(
+        !seed_layout_visible(FieldMode::Formula, true, false),
+        "plot mode has no vector seed editor"
+    );
+    for mode in [
+        FieldMode::Sources,
+        FieldMode::Induction,
+        FieldMode::Materials,
+        FieldMode::Maxwell,
+        FieldMode::Ode,
+    ] {
+        assert!(
+            !seed_layout_visible(mode, true, true),
+            "{mode:?} owns its own seeding and hides the layout editor"
+        );
+    }
+
+    assert!(
+        streamline_count_enabled_with_layout(true, StreamlineSeedMode::Auto, true),
+        "the automatic count applies while the layout is empty"
+    );
+    assert!(
+        !streamline_count_enabled_with_layout(true, StreamlineSeedMode::Auto, false),
+        "explicit seeds disable the automatic count control"
+    );
+    assert!(
+        !streamline_count_enabled_with_layout(true, StreamlineSeedMode::Click, true),
+        "Click-only seeding still has no automatic count"
+    );
+
+    assert_eq!(seed_layout_count_label(0), "No explicit seeds");
+    assert_eq!(seed_layout_count_label(3), "3 explicit seeds");
+    assert!(
+        SEED_LAYOUT_DENSITY_INACTIVE_NOTE.contains("inactive"),
+        "the note tells the user the count control is inactive"
+    );
+}
 
 #[test]
 fn reference_visibility_defaults_and_setters_are_independent() {

@@ -3,6 +3,13 @@
 
 use super::*;
 
+use glam::Vec4;
+
+use crate::seed_layout::{SeedAnchor, SeedPoint, clamp_seed_local};
+
+/// How close a viewport click must land to a seed to pick it, in points.
+const SEED_PICK_RADIUS: f32 = 12.0;
+
 impl VfApp {
     /// Frame phase: screenshot completions, menu shortcuts, the transport key,
     /// the clock, camera keys, and the help keys. Captures the domain before
@@ -559,8 +566,317 @@ impl VfApp {
     /// [`view_command::click_action_plan`] owns the feature gates and the
     /// one-line no-op hint; this wrapper owns the seed/burst side effects.
     pub(super) fn seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
+        // Issue #87 S2: an armed "Place seed" plants one document seed and
+        // disarms; it never also plants a runtime click burst.
+        if self.controls.place_seed && self.seeds_editable() {
+            self.place_explicit_seed(pos, rect, aspect);
+            self.last_click_seed = None;
+            return;
+        }
+        // A click on an existing explicit seed selects it instead of planting
+        // a runtime click seed; clicks that miss keep today's behaviour.
+        if self.seeds_editable() && !self.capture_active && self.select_seed_at(pos, rect, aspect) {
+            self.last_click_seed = None;
+            return;
+        }
         let action = self.state.left_click_action;
         self.apply_click_action(action, pos, rect, aspect, time);
+    }
+
+    /// Test seam: run the viewport click path without a wgpu frame. The
+    /// headless harness returns before the viewport body, so tests that need to
+    /// observe placement must call the same production entry directly.
+    #[doc(hidden)]
+    pub fn test_seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
+        self.seed_click(pos, rect, aspect, time);
+    }
+
+    /// Whether seeds are editable in the current field/view: the same gate the
+    /// Flow-section editor uses.
+    pub(super) fn seeds_editable(&self) -> bool {
+        self.state.is_vector_mode()
+            && self.state.streamlines
+            && self.state.field_mode == FieldMode::Formula
+    }
+
+    /// One viewport frame of explicit-seed pointer handling: begin a drag on a
+    /// seed press, move it while the primary button is down, and report whether
+    /// the camera must stay still for this gesture.
+    pub(super) fn seed_pointer_interaction(
+        &mut self,
+        resp: &egui::Response,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> bool {
+        let pointer_pos = resp.ctx.input(|input| input.pointer.interact_pos());
+        let primary_down = resp.ctx.input(|input| input.pointer.primary_down());
+        if self.seeds_editable()
+            && self.fly.is_none()
+            && !self.capture_active
+            && !self.controls.place_seed
+            && resp.hovered()
+            && resp
+                .ctx
+                .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary))
+            && let Some(pos) = pointer_pos
+        {
+            self.begin_seed_drag(pos, rect, aspect);
+        }
+        if self.controls.seed_drag.is_some() {
+            let dragged = resp.dragged_by(egui::PointerButton::Primary);
+            if dragged {
+                self.controls.seed_drag_moved = true;
+            }
+            if (dragged || (!primary_down && self.controls.seed_drag_moved))
+                && let Some(pos) = pointer_pos
+            {
+                self.update_seed_drag(pos, rect, aspect);
+            }
+        }
+        let suppress_camera = self.controls.seed_drag.is_some();
+        if suppress_camera && !primary_down {
+            self.controls.seed_drag = None;
+            self.controls.seed_drag_moved = false;
+        }
+        suppress_camera
+    }
+
+    /// Plant one explicit seed at a viewport pick on the active plane.
+    fn place_explicit_seed(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) {
+        let Some(position) = self.click_world_seed(pos, rect, aspect) else {
+            self.controls.seed_error = "Click inside the scene domain to place a seed".to_owned();
+            return;
+        };
+        match self.state.place_seed(position) {
+            Ok(()) => {
+                self.controls.place_seed = false;
+                self.controls.selected_seed = Some(self.state.seed_layout().len() - 1);
+                self.controls.seed_error.clear();
+            }
+            Err(error) => {
+                self.controls.seed_error = error.to_string();
+                restart_hint(
+                    &mut self.status.hint,
+                    &mut self.hint_elapsed,
+                    &format!("Seed not placed: {error}"),
+                );
+            }
+        }
+    }
+
+    /// Project a stored seed to screen coordinates for picking.
+    fn seed_screen_position(
+        &self,
+        position: Vec3,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> Option<egui::Pos2> {
+        let view_camera = match &self.fly {
+            Some(fly) => ViewCamera::Fly(fly),
+            None => ViewCamera::Orbit(&self.orbit),
+        };
+        let ortho = if self.state.mode_3d {
+            None
+        } else {
+            Some(self.state.plane_size())
+        };
+        let vp = view_camera.vp_matrix(aspect, ortho);
+        if !vp.is_finite() {
+            return None;
+        }
+        let clip = vp * position.extend(1.0);
+        if !clip.is_finite() || clip.w <= 0.0 {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if !(-1.0..=1.0).contains(&ndc.x) || !(-1.0..=1.0).contains(&ndc.y) {
+            return None;
+        }
+        Some(egui::pos2(
+            rect.left() + (ndc.x * 0.5 + 0.5) * rect.width(),
+            rect.top() + (0.5 - ndc.y * 0.5) * rect.height(),
+        ))
+    }
+
+    /// The seed nearest `pos` within [`SEED_PICK_RADIUS`], if any.
+    pub(super) fn pick_seed(
+        &self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> Option<usize> {
+        self.state
+            .seed_layout()
+            .seeds
+            .iter()
+            .enumerate()
+            .filter_map(|(index, seed)| {
+                let screen = self.seed_screen_position(seed.position, rect, aspect)?;
+                let distance = screen.distance(pos);
+                (distance <= SEED_PICK_RADIUS).then_some((distance, index))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, index)| index)
+    }
+
+    /// Select the seed nearest `pos`, clearing the selection when the click
+    /// misses. Returns whether a seed was selected.
+    pub(super) fn select_seed_at(
+        &mut self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> bool {
+        match self.pick_seed(pos, rect, aspect) {
+            Some(index) => {
+                self.controls.selected_seed = Some(index);
+                true
+            }
+            None => {
+                self.controls.selected_seed = None;
+                false
+            }
+        }
+    }
+
+    /// Begin a drag when the press lands on a seed. Returns whether the seed
+    /// now owns the gesture, so the camera must not also orbit.
+    pub(super) fn begin_seed_drag(
+        &mut self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> bool {
+        let Some(index) = self.pick_seed(pos, rect, aspect) else {
+            return false;
+        };
+        self.controls.selected_seed = Some(index);
+        self.controls.seed_drag = Some(index);
+        self.controls.seed_drag_moved = false;
+        true
+    }
+
+    /// Move the dragged seed on the active plane with live clamps. Rejections
+    /// leave the committed seed where it was and report why.
+    pub(super) fn update_seed_drag(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) {
+        let Some(index) = self.controls.seed_drag else {
+            return;
+        };
+        if index >= self.state.seed_layout().len() {
+            self.controls.seed_drag = None;
+            return;
+        }
+        if self.fly.is_some() || self.capture_active {
+            // Fly or pointer capture can start mid-drag. Re-check the same
+            // invariant the press path uses and end the gesture instead of
+            // continuing to write while the camera owns the pointer.
+            self.controls.seed_drag = None;
+            self.controls.seed_drag_moved = false;
+            return;
+        }
+        let Some((position, anchor)) = self.seed_drag_point(pos, rect, aspect) else {
+            restart_hint(
+                &mut self.status.hint,
+                &mut self.hint_elapsed,
+                "Seed move rejected: outside the editable plane",
+            );
+            return;
+        };
+        let mut layout = self.state.seed_layout().clone();
+        let next = SeedPoint { position, anchor };
+        if layout.seeds[index] == next {
+            return;
+        }
+        layout.seeds[index] = next;
+        if let Err(error) = self.state.commit_seed_layout(layout) {
+            self.controls.seed_error = format!("Seed move rejected: {error}");
+            restart_hint(
+                &mut self.status.hint,
+                &mut self.hint_elapsed,
+                &format!("Seed move rejected: {error}"),
+            );
+        } else {
+            self.controls.seed_error.clear();
+        }
+    }
+
+    /// Test seam: drive one move of the explicit-seed drag without a wgpu
+    /// viewport response.
+    #[doc(hidden)]
+    pub fn test_update_seed_drag(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) {
+        self.update_seed_drag(pos, rect, aspect);
+    }
+
+    /// Map a pointer position onto the active plane: a clamped local plane
+    /// hit when a plane slice is selected, otherwise the existing camera-plane
+    /// pick clamped into the scene domain.
+    fn seed_drag_point(
+        &self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> Option<(Vec3, Option<SeedAnchor>)> {
+        let width = rect.width().max(1.0);
+        let height = rect.height().max(1.0);
+        let ndc = Vec2::new(
+            (pos.x - rect.left()) / width * 2.0 - 1.0,
+            1.0 - (pos.y - rect.top()) / height * 2.0,
+        );
+        let view_camera = match &self.fly {
+            Some(fly) => ViewCamera::Fly(fly),
+            None => ViewCamera::Orbit(&self.orbit),
+        };
+        if let Some(frame) = self.state.plane_frame() {
+            let vp = view_camera.vp_matrix(aspect, Some(self.state.plane_size()));
+            let inverse = vp.inverse();
+            if !inverse.is_finite() {
+                return None;
+            }
+            let unproject = |z: f32| {
+                let p = inverse * Vec4::new(ndc.x, ndc.y, z, 1.0);
+                Vec3::new(p.x, p.y, p.z) / p.w
+            };
+            let near = unproject(-1.0);
+            let far = unproject(1.0);
+            let direction = far - near;
+            let denominator = direction.dot(frame.normal);
+            if !direction.is_finite() || !denominator.is_finite() || denominator.abs() < 1e-9 {
+                return None;
+            }
+            let hit = near + direction * ((frame.origin - near).dot(frame.normal) / denominator);
+            if !hit.is_finite() {
+                return None;
+            }
+            let local = clamp_seed_local(&frame, frame.to_local(hit));
+            let world = frame.to_world(local);
+            if !world.is_finite() {
+                return None;
+            }
+            let plane = self.state.plane.clamped(self.state.plane_grid());
+            return Some((
+                world,
+                Some(SeedAnchor {
+                    axis: frame.axis,
+                    index: plane.index,
+                    u: local.x,
+                    v: local.y,
+                }),
+            ));
+        }
+        let ortho = if self.state.mode_3d {
+            None
+        } else {
+            Some(self.state.plane_size())
+        };
+        let domain = self.state.scene_domain();
+        let position = click_seed(view_camera, &domain, aspect, ndc, ortho)?;
+        if !position.is_finite() {
+            return None;
+        }
+        if !position.cmpge(domain.min).all() || !position.cmple(domain.max).all() {
+            return None;
+        }
+        Some((position, None))
     }
 
     /// Apply one explicit click action at `pos`. Shared by the mouse and the

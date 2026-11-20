@@ -29,6 +29,31 @@ fn inside(d: &Domain, p: Vec3) -> bool {
 }
 
 #[test]
+fn automatic_seed_geometry_is_byte_identical_with_an_empty_layout() {
+    let mut state = State::new(false);
+    state.set_density(6);
+    state.set_streamlines(true);
+    let baseline = format!("{:?}", state.streamlines_snapshot(&[]));
+    assert!(!baseline.is_empty(), "the automatic grid paints lines");
+
+    state
+        .commit_seed_layout(vector_field_explorer::seed_layout::SeedLayout::default())
+        .expect("an empty layout is a validated no-op");
+    assert_eq!(
+        format!("{:?}", state.streamlines_snapshot(&[])),
+        baseline,
+        "an empty layout leaves the automatic grid byte-identical"
+    );
+
+    state.reset_seed_layout();
+    assert_eq!(
+        format!("{:?}", state.streamlines_snapshot(&[])),
+        baseline,
+        "clearing an empty layout leaves the automatic grid byte-identical"
+    );
+}
+
+#[test]
 fn constant_field_traces_straight() {
     let f = FieldExpr::parse("(2, 0)").expect("constant field parses");
     let d = Domain::new(Vec3::new(-10.0, -10.0, -1.0), Vec3::new(10.0, 10.0, 1.0));

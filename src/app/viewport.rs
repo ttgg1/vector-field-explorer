@@ -149,6 +149,10 @@ impl VfApp {
             // Everything else (orbit/pan/zoom gestures) is bypassed so the
             // orbit camera keeps the pose the exit will restore.
             let resp = ui.allocate_response(rect.size(), egui::Sense::click_and_drag());
+            let aspect = rect.width().max(1.0) / rect.height().max(1.0);
+            // Issue #87 S2: explicit seeds own a press that lands on one. The
+            // seed drag is one primary gesture; the camera must not also orbit.
+            let suppress_camera = self.seed_pointer_interaction(&resp, rect, aspect);
             let feel = self.interaction.camera_feel;
             if let Some(fly) = self.fly.as_mut() {
                 let captured = self.capture_active;
@@ -206,7 +210,7 @@ impl VfApp {
                 // suppressed so the first finger cannot also orbit. Pinch zoom
                 // stays on `top_bar::wheel_zoom` (egui folds the pinch into
                 // `zoom_delta`).
-                let viewport_active = resp.hovered() || resp.dragged();
+                let viewport_active = !suppress_camera && (resp.hovered() || resp.dragged());
                 let touch = if viewport_active {
                     ui.ctx().input(|input| {
                         input
@@ -231,9 +235,9 @@ impl VfApp {
                     Vec2::new(delta.x, delta.y)
                 };
                 let buttons = DragButtons {
-                    primary: resp.dragged_by(egui::PointerButton::Primary),
-                    secondary: resp.dragged_by(egui::PointerButton::Secondary),
-                    middle: resp.dragged_by(egui::PointerButton::Middle),
+                    primary: !suppress_camera && resp.dragged_by(egui::PointerButton::Primary),
+                    secondary: !suppress_camera && resp.dragged_by(egui::PointerButton::Secondary),
+                    middle: !suppress_camera && resp.dragged_by(egui::PointerButton::Middle),
                     shift: ui.ctx().input(|input| input.modifiers.shift),
                 };
                 let channel = if touch_pan.active {
@@ -282,8 +286,6 @@ impl VfApp {
                     ui.ctx().set_cursor_icon(icon);
                 }
             }
-
-            let aspect = rect.width().max(1.0) / rect.height().max(1.0);
 
             // Click-to-seed and double-click reset (ticket 18): a click only
             // seeds when the gesture never became a drag, and a double-click
