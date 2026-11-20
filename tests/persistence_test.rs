@@ -14,9 +14,10 @@ use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::induction::{InductionCase, InductionScene};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
-use vector_field_explorer::persistence::{AppSettings, ViewRecord, load, save};
+use vector_field_explorer::persistence::{AppSettings, PresetUiRecord, ViewRecord, load, save};
 use vector_field_explorer::plane::DIM_ALPHA;
 use vector_field_explorer::plot::PlotKind;
+use vector_field_explorer::preset_library::PresetGroup;
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
@@ -451,6 +452,7 @@ fn sample_settings() -> AppSettings {
         view: ViewRecord::capture(&state),
         parameters: ParameterSet::default(),
         viewport_style: ViewportStyle::white_paper(),
+        preset_ui: PresetUiRecord::default(),
     }
 }
 
@@ -2539,4 +2541,107 @@ fn corrupt_color_mapping_fields_fall_back_without_losing_the_record() {
         "the rest of the record survives"
     );
     assert_eq!(state.formula, "(x, y)");
+}
+
+// Issue #90 slice B: the library's group expansion persists with the other UI
+// preferences, defaults to all-expanded on old/corrupt records, and startup
+// applies it without reporting a layout change.
+
+#[test]
+fn preset_group_expansion_round_trips_through_storage() {
+    let expected = [true, false, true, false];
+    let settings = AppSettings {
+        preset_ui: PresetUiRecord { expanded: expected },
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.preset_ui.expanded, expected);
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert!(app.presets.expanded(PresetGroup::Classic));
+    assert!(!app.presets.expanded(PresetGroup::Physics));
+    assert!(app.presets.expanded(PresetGroup::Sources));
+    assert!(!app.presets.expanded(PresetGroup::Gallery));
+}
+
+#[test]
+fn old_settings_default_every_preset_group_to_expanded() {
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &legacy_settings(false));
+
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.preset_ui.expanded, [true; 4],
+        "older envelopes have no preset_ui record"
+    );
+}
+
+#[test]
+fn corrupt_preset_ui_records_fall_back_to_all_expanded() {
+    #[derive(serde::Serialize)]
+    struct WrongLength {
+        expanded: [bool; 2],
+    }
+    #[derive(serde::Serialize)]
+    struct WrongType {
+        expanded: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Envelope<T> {
+        style: AppStyle,
+        preset_ui: T,
+    }
+
+    let mut checked = 0;
+    macro_rules! check {
+        ($corrupt:expr) => {{
+            let mut storage = MemoryStorage::default();
+            eframe::set_value(&mut storage, eframe::APP_KEY, &$corrupt);
+            let loaded = load(Some(&storage));
+            assert_eq!(
+                loaded.preset_ui.expanded, [true; 4],
+                "a corrupt record must not fail the envelope or narrow the panel"
+            );
+            assert_eq!(loaded.style, AppStyle::default(), "style still loads");
+            checked += 1;
+        }};
+    }
+    check!(Envelope {
+        style: AppStyle::default(),
+        preset_ui: WrongLength {
+            expanded: [false, false],
+        },
+    });
+    check!(Envelope {
+        style: AppStyle::default(),
+        preset_ui: WrongType {
+            expanded: "not an array".to_string(),
+        },
+    });
+    assert_eq!(checked, 2);
+}
+
+#[test]
+fn startup_applies_preset_expansion_without_reporting_a_layout_change() {
+    let settings = AppSettings {
+        preset_ui: PresetUiRecord {
+            expanded: [false, true, false, true],
+        },
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let mut app = VfApp::new_with_storage(Some(&storage));
+    assert!(!app.presets.expanded(PresetGroup::Classic));
+    assert!(app.presets.expanded(PresetGroup::Physics));
+    assert!(!app.presets.expanded(PresetGroup::Sources));
+    assert!(app.presets.expanded(PresetGroup::Gallery));
+    assert!(
+        !app.presets.take_layout_changed(),
+        "restoring expansion must not look like a user layout edit"
+    );
 }

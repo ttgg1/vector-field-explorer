@@ -65,6 +65,33 @@ pub struct AppSettings {
     /// are repaired by [`AppSettings::sanitized`].
     #[serde(default)]
     pub viewport_style: ViewportStyle,
+    /// Persisted Presets-panel expansion (issue #90 slice B). Missing on older
+    /// envelopes, which open every group; a corrupt record falls back to the
+    /// all-expanded default without failing the envelope.
+    #[serde(default, deserialize_with = "deserialize_preset_ui")]
+    pub preset_ui: PresetUiRecord,
+}
+
+/// Persisted Presets-panel state. Only the per-group expansion is durable; the
+/// search text and filters stay session-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresetUiRecord {
+    /// Expansion of Classic, Physics, Sources and Gallery, in that order.
+    #[serde(default = "default_preset_expanded")]
+    pub expanded: [bool; 4],
+}
+
+impl Default for PresetUiRecord {
+    fn default() -> Self {
+        Self {
+            expanded: default_preset_expanded(),
+        }
+    }
+}
+
+/// Every group starts expanded, including every field of an older record.
+fn default_preset_expanded() -> [bool; 4] {
+    [true; 4]
 }
 
 impl AppSettings {
@@ -74,6 +101,8 @@ impl AppSettings {
         self.style = self.style.sanitized();
         self.layout = self.layout.sanitized();
         self.viewport_style = self.viewport_style.sanitized();
+        // `preset_ui` is four bools, so every persisted value is valid; the
+        // lenient decoder has already replaced a corrupt record.
         if let Err(error) = self.parameters.validate() {
             log::warn!(
                 "persisted parameters are invalid ({error}); falling back to the default set"
@@ -1125,6 +1154,26 @@ fn induction_case_label(case: InductionCase) -> &'static str {
         InductionCase::CurrentLoop => "current_loop",
         InductionCase::Solenoid => "solenoid",
     }
+}
+
+/// Decode the Presets-panel expansion leniently: a missing record keeps the
+/// all-expanded default, and a record of the wrong shape is swallowed instead
+/// of failing the whole settings envelope.
+fn deserialize_preset_ui<'de, D>(deserializer: D) -> Result<PresetUiRecord, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum RecordOrDefault {
+        Record(PresetUiRecord),
+        Invalid(serde::de::IgnoredAny),
+    }
+
+    Ok(match RecordOrDefault::deserialize(deserializer)? {
+        RecordOrDefault::Record(record) => record,
+        RecordOrDefault::Invalid(_) => PresetUiRecord::default(),
+    })
 }
 
 /// Decode the source list element by element so one wrong-typed or corrupt

@@ -659,6 +659,10 @@ impl VfApp {
     /// Apply what the Presets body reported this frame: a camera button picked
     /// inside the panel/sheet, then any applied preset record.
     fn finish_presets(&mut self, camera_request: Option<ViewCommand>) {
+        // Expansion persists through live state, not this report: `save`
+        // captures `expanded_state()` every save point. Draining the one-shot
+        // report here only keeps it from leaking into the next frame.
+        let _ = self.presets.take_layout_changed();
         if let Some(command) = camera_request {
             self.apply_view_command(command);
         }

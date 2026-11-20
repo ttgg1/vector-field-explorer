@@ -299,6 +299,7 @@ fn colormap_row_drives_state_scene_and_persistence() {
         view: record,
         parameters: Default::default(),
         viewport_style: Default::default(),
+        preset_ui: Default::default(),
     };
     let mut storage = MemoryStorage::default();
     vector_field_explorer::persistence::save(&mut storage, &settings);

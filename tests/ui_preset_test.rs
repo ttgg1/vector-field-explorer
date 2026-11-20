@@ -5,7 +5,12 @@
 // in `PresetPanel::show` route through them. These tests drive the actions the
 // way a button press would.
 
+use eframe::egui;
+
+use crate::support;
+
 use vector_field_explorer::export::{delete_preset, load_presets};
+use vector_field_explorer::preset_library::{PresetFilters, PresetGroup};
 use vector_field_explorer::presets::presets;
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::source_scene::{FieldMode, SourceKindTag};
@@ -439,4 +444,409 @@ fn classic_presets_return_to_formula_and_keep_the_source_scene() {
     assert_eq!(state.field_mode, FieldMode::Formula);
     assert_eq!(state.sources.entries.len(), 1);
     assert!(state.formula.len() > 3);
+}
+
+// Issue #90 slice B: the panel lists the merged preset library with search,
+// filters and collapsible groups. The widget assertions use the same headless
+// egui pass as the other panel tests; the accessors are exercised directly.
+
+fn render_context() -> egui::Context {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    ctx
+}
+
+fn run_panel(
+    ctx: &egui::Context,
+    panel: &mut PresetPanel,
+    state: &mut State,
+    camera: &mut Camera,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 1400.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = panel.show(ui, camera, state);
+                });
+            });
+        },
+    );
+    output.textures_delta.clear();
+    output
+}
+
+fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out
+}
+
+fn has_text(output: &egui::FullOutput, text: &str) -> bool {
+    painted_texts(output).iter().any(|painted| painted == text)
+}
+
+struct WidgetNode {
+    label: String,
+    rect: egui::Rect,
+}
+
+fn nodes(output: &egui::FullOutput) -> Vec<WidgetNode> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let bounds = node.bounds()?;
+            let label = node
+                .label()
+                .or_else(|| node.value())
+                .unwrap_or_default()
+                .to_owned();
+            Some(WidgetNode {
+                label,
+                rect: egui::Rect::from_min_max(
+                    egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                    egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                ),
+            })
+        })
+        .collect()
+}
+
+fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+
+fn click_label(
+    ctx: &egui::Context,
+    panel: &mut PresetPanel,
+    state: &mut State,
+    camera: &mut Camera,
+    label: &str,
+) {
+    let out = run_panel(ctx, panel, state, camera, Vec::new());
+    let rect = nodes(&out)
+        .into_iter()
+        .find(|node| node.label == label)
+        .unwrap_or_else(|| panic!("missing clickable {label}"))
+        .rect;
+    run_panel(ctx, panel, state, camera, pointer(rect.center(), true));
+    run_panel(ctx, panel, state, camera, pointer(rect.center(), false));
+}
+
+#[test]
+fn search_narrows_the_library_case_insensitively_and_clearing_restores_it() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    let all = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(has_text(&all, "Vortex"), "the catalogue lists Vortex");
+    assert!(
+        has_text(&all, "Dipole (2D approximation)"),
+        "the catalogue lists Dipole"
+    );
+
+    panel.set_query("VORTEX");
+    let upper = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&upper, "Vortex"),
+        "search is case-insensitive on names"
+    );
+    assert!(
+        !has_text(&upper, "Dipole (2D approximation)"),
+        "non-matching entries are hidden"
+    );
+
+    panel.set_query("formula.vortex");
+    let by_id = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(has_text(&by_id, "Vortex"), "search also matches the ID");
+
+    panel.set_query("");
+    let restored = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&restored, "Dipole (2D approximation)"),
+        "clearing the query restores the catalogue"
+    );
+}
+
+#[test]
+fn dimension_and_animated_filters_narrow_entries_and_combine_with_search() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    panel.set_filters(PresetFilters {
+        dimension: Some(3),
+        animated: false,
+    });
+    let three_d = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&three_d, "3D swirl (3D)"),
+        "the 3D filter keeps 3D formulas"
+    );
+    assert!(
+        !has_text(&three_d, "Vortex"),
+        "the 3D filter drops 2D formulas"
+    );
+
+    panel.set_filters(PresetFilters {
+        dimension: Some(2),
+        animated: false,
+    });
+    let two_d = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&two_d, "Vortex"),
+        "the 2D filter keeps 2D formulas"
+    );
+    assert!(
+        !has_text(&two_d, "3D swirl (3D)"),
+        "the 2D filter drops 3D formulas"
+    );
+
+    panel.set_query("dipole");
+    let combined = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&combined, "Dipole (2D approximation)"),
+        "search and filter combine: the 2D Dipole remains"
+    );
+    assert!(
+        !has_text(&combined, "3D Dipole (3D)"),
+        "search and filter combine: the 3D Dipole is filtered out"
+    );
+
+    panel.set_query("");
+    panel.set_filters(PresetFilters {
+        dimension: None,
+        animated: true,
+    });
+    let animated = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(has_text(&animated, "No presets match"));
+}
+
+#[test]
+fn a_query_with_no_matches_renders_the_explicit_empty_line() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    panel.set_query("no-such-preset-xyz");
+    let out = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&out, "No presets match"),
+        "an empty result must say so instead of leaving the panel blank"
+    );
+    assert!(!has_text(&out, "Vortex"), "no entries are painted");
+}
+
+#[test]
+fn search_matches_source_summaries_not_only_names() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    // "at the origin" appears only in Coulomb point's summary, never in a
+    // name or ID, so a hit proves the summary is searched.
+    panel.set_query("at the origin");
+    let out = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(
+        has_text(&out, "Coulomb point"),
+        "a source summary word must find its row"
+    );
+    assert!(
+        !has_text(&out, "Electric dipole"),
+        "non-matching source rows are hidden"
+    );
+    assert!(
+        !has_text(&out, "Vortex"),
+        "non-matching formula rows are hidden"
+    );
+}
+
+#[test]
+fn a_group_with_no_matching_entries_renders_no_header() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    // Only a Classic formula matches, so the Sources/Gallery groups are empty.
+    panel.set_query("formula.vortex");
+    let out = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    assert!(has_text(&out, "Vortex"), "the matching entry is shown");
+    let texts = painted_texts(&out);
+    assert!(
+        !texts.iter().any(|text| text.starts_with("Sources (")),
+        "an empty Sources group must not paint its header"
+    );
+    assert!(
+        !texts.iter().any(|text| text.starts_with("Gallery (")),
+        "an empty Gallery group must not paint its header"
+    );
+    assert!(
+        texts.iter().any(|text| text.starts_with("Classic (")),
+        "a non-empty group still paints its header"
+    );
+}
+
+#[test]
+fn clicking_library_entries_loads_through_the_existing_seams() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Vortex");
+    let vortex = presets()
+        .iter()
+        .find(|preset| preset.name == "Vortex")
+        .expect("Vortex is listed");
+    assert_eq!(state.formula, vortex.formula);
+    assert_eq!(state.mode_3d, vortex.dimension == 3);
+    assert_eq!(panel.active_field_name(), Some("Vortex"));
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Coulomb point");
+    assert_eq!(
+        state.field_mode,
+        FieldMode::Sources,
+        "a source entry loads the documented source scene"
+    );
+    assert_eq!(
+        panel.active_source_name(),
+        Some("Coulomb point"),
+        "the clicked source entry owns the highlight"
+    );
+}
+
+#[test]
+fn expansion_changes_are_reported_once_for_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    assert!(
+        !panel.take_layout_changed(),
+        "a fresh panel has no pending expansion change"
+    );
+
+    panel.set_expanded(PresetGroup::Physics, false);
+    assert!(!panel.expanded(PresetGroup::Physics));
+    assert!(
+        panel.take_layout_changed(),
+        "an expansion toggle is reported to the app"
+    );
+    assert!(
+        !panel.take_layout_changed(),
+        "the report is drained exactly once"
+    );
+
+    panel.set_expanded(PresetGroup::Physics, false);
+    assert!(
+        !panel.take_layout_changed(),
+        "setting the same value does not dirty the layout"
+    );
+}
+
+#[test]
+fn camera_presets_active_highlight_and_storage_note_still_render() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    panel.save_current("home", &cam_home()).expect("save");
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+
+    let out = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    for text in [
+        "Saved views",
+        "home",
+        "active",
+        "Save current view",
+        "Reset view",
+        "Fit domain",
+    ] {
+        assert!(has_text(&out, text), "the panel still renders {text}");
+    }
+}
+
+#[test]
+fn collapsing_a_group_header_is_a_layout_change_not_a_preset_load() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+    let formula_before = state.formula.clone();
+
+    let out = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
+    let rect = nodes(&out)
+        .into_iter()
+        .find(|node| node.label.starts_with("Classic ("))
+        .expect("Classic group header")
+        .rect;
+    run_panel(
+        &ctx,
+        &mut panel,
+        &mut state,
+        &mut camera,
+        pointer(rect.center(), true),
+    );
+    run_panel(
+        &ctx,
+        &mut panel,
+        &mut state,
+        &mut camera,
+        pointer(rect.center(), false),
+    );
+
+    assert!(!panel.expanded(PresetGroup::Classic));
+    assert!(
+        panel.take_layout_changed(),
+        "the header toggle must reach the app"
+    );
+    assert_eq!(
+        state.formula, formula_before,
+        "collapsing a group must not apply a preset"
+    );
 }

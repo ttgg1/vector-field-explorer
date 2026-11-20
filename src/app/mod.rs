@@ -13,7 +13,7 @@ use crate::fly_camera::{
     crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
     sync_fly, sync_fly_mirror,
 };
-use crate::persistence::{self, AppSettings, ViewRecord};
+use crate::persistence::{self, AppSettings, PresetUiRecord, ViewRecord};
 use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
 use crate::plot_camera::PlotCamera;
@@ -369,6 +369,10 @@ impl VfApp {
         } else {
             Some(orbit)
         };
+        // Restore the persisted group expansion before the first frame without
+        // reporting a layout edit; the panel's search and filters stay fresh.
+        let mut presets = PresetPanel::new();
+        presets.restore_expanded(settings.preset_ui.expanded);
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -391,7 +395,7 @@ impl VfApp {
             fly_keys: FlyKeys::default(),
             capture_active: false,
             suppress_capture_click: false,
-            presets: PresetPanel::new(),
+            presets,
             style: settings.style,
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,

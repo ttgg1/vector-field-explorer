@@ -11,11 +11,10 @@ use crate::export::{delete_preset, load_presets, save_preset};
 #[cfg(target_arch = "wasm32")]
 use crate::export::{load_wasm_presets, save_wasm_presets};
 use crate::plot::PlotKind;
-use crate::presets::{
-    Preset, PresetCategory, START_HERE, preset_approximation_label, presets, presets_in,
-};
+use crate::preset_library::{PresetEntry, PresetFilters, PresetGroup, PresetLibrary};
+use crate::presets::{Preset, START_HERE, preset_approximation_label, presets};
 use crate::render::Camera;
-use crate::source_presets::{source_preset, source_presets};
+use crate::source_presets::source_preset;
 use crate::source_scene::FieldMode;
 use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
@@ -41,6 +40,34 @@ pub const CAMERA_BUTTONS: &[(&str, ViewCommand)] = &[
     ("Fit domain", ViewCommand::Fit),
 ];
 
+/// The catalogue groups in display order. The library holds entries in
+/// catalogue order inside each group; the panel renders these headers in this
+/// same fixed order and skips a group with no visible entries.
+const PRESET_GROUPS: [PresetGroup; 4] = [
+    PresetGroup::Classic,
+    PresetGroup::Physics,
+    PresetGroup::Sources,
+    PresetGroup::Gallery,
+];
+
+/// Index of `group` in [`PRESET_GROUPS`]; also the persisted expansion slot.
+fn group_index(group: PresetGroup) -> usize {
+    PRESET_GROUPS
+        .iter()
+        .position(|candidate| *candidate == group)
+        .expect("every PresetGroup is listed")
+}
+
+/// Display heading for one catalogue group.
+fn group_title(group: PresetGroup) -> &'static str {
+    match group {
+        PresetGroup::Classic => "Classic",
+        PresetGroup::Physics => "Physics",
+        PresetGroup::Sources => "Sources",
+        PresetGroup::Gallery => "Gallery",
+    }
+}
+
 /// The row label for a built-in formula preset. A 3D preset says so; a legacy
 /// 2D physics formula carries the honest approximation note.
 fn field_preset_label(preset: &Preset) -> String {
@@ -50,6 +77,20 @@ fn field_preset_label(preset: &Preset) -> String {
     match preset_approximation_label(preset.name) {
         Some(note) => format!("{} ({note})", preset.name),
         None => preset.name.to_string(),
+    }
+}
+
+/// The label a library entry shows: formula rows keep their 3D/approximation
+/// annotation, source rows use the plain catalogue name (their summary follows
+/// inline).
+fn entry_label(entry: &PresetEntry) -> String {
+    match entry.group {
+        PresetGroup::Classic | PresetGroup::Physics => presets()
+            .iter()
+            .find(|preset| preset.name == entry.name)
+            .map(field_preset_label)
+            .unwrap_or_else(|| entry.name.to_string()),
+        PresetGroup::Sources | PresetGroup::Gallery => entry.name.to_string(),
     }
 }
 
@@ -83,6 +124,16 @@ pub struct PresetPanel {
     applied: Option<Camera>,
     /// One non-blocking note when browser storage cannot hold the list.
     pub storage_note: Option<String>,
+    /// The merged built-in formula/source catalogue, indexed once.
+    library: PresetLibrary,
+    /// Session-only search text; trimmed by the library's search.
+    query: String,
+    /// Session-only dimension/animated filters.
+    filters: PresetFilters,
+    /// Whether each group's body is expanded, in [`PRESET_GROUPS`] order.
+    expanded: [bool; 4],
+    /// A user expansion toggle since the app last drained it.
+    layout_changed: bool,
 }
 
 impl Default for PresetPanel {
@@ -122,6 +173,10 @@ impl PresetPanel {
     }
 
     fn from_parts(dir: PathBuf, presets: Vec<CameraPreset>, storage_note: Option<String>) -> Self {
+        let library = PresetLibrary::builtin().unwrap_or_else(|error| {
+            warn!("preset library could not be built: {error}");
+            PresetLibrary::from_entries(Vec::new()).expect("an empty library has no duplicate IDs")
+        });
         Self {
             dir,
             presets,
@@ -132,6 +187,11 @@ impl PresetPanel {
             pending_delete: None,
             applied: None,
             storage_note,
+            library,
+            query: String::new(),
+            filters: PresetFilters::default(),
+            expanded: [true; 4],
+            layout_changed: false,
         }
     }
 
@@ -200,6 +260,58 @@ impl PresetPanel {
     /// The non-blocking storage note, if browser/native storage failed.
     pub fn storage_note(&self) -> Option<&str> {
         self.storage_note.as_deref()
+    }
+
+    /// The current search text. Session-only: never persisted.
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Replace the search text. Applying a preset keeps it.
+    pub fn set_query(&mut self, query: impl Into<String>) {
+        self.query = query.into();
+    }
+
+    /// The active dimension/animated filter set. Session-only.
+    pub fn filters(&self) -> PresetFilters {
+        self.filters
+    }
+
+    /// Replace the filters. Applying a preset keeps them.
+    pub fn set_filters(&mut self, filters: PresetFilters) {
+        self.filters = filters;
+    }
+
+    /// Whether `group` is expanded in the panel.
+    pub fn expanded(&self, group: PresetGroup) -> bool {
+        self.expanded[group_index(group)]
+    }
+
+    /// Expand or collapse `group`, reporting a user layout change to the app.
+    /// Re-setting the current value is not a change.
+    pub fn set_expanded(&mut self, group: PresetGroup, expanded: bool) {
+        let slot = &mut self.expanded[group_index(group)];
+        if *slot != expanded {
+            *slot = expanded;
+            self.layout_changed = true;
+        }
+    }
+
+    /// The persisted expansion slots, in [`PRESET_GROUPS`] order.
+    pub fn expanded_state(&self) -> [bool; 4] {
+        self.expanded
+    }
+
+    /// Apply startup expansion without reporting a layout edit, so restoring
+    /// settings never dirties the scene.
+    pub fn restore_expanded(&mut self, expanded: [bool; 4]) {
+        self.expanded = expanded;
+    }
+
+    /// Drain the pending expansion-change report. `true` exactly once per
+    /// user toggle, so the app can mark the settings dirty.
+    pub fn take_layout_changed(&mut self) -> bool {
+        std::mem::take(&mut self.layout_changed)
     }
 
     /// The typed name currently in the "Save current view" field.
@@ -365,6 +477,55 @@ impl PresetPanel {
         }
     }
 
+    /// Draw one library row: its label keeps the formula annotations, its
+    /// summary follows inline, and a click applies through the existing
+    /// formula/source loader. Returns true when a source entry loaded, so the
+    /// caller can frame it. Expansion/search state is never touched here.
+    fn show_entry(&mut self, ui: &mut egui::Ui, entry: &PresetEntry, state: &mut State) -> bool {
+        let selected = match entry.group {
+            PresetGroup::Classic | PresetGroup::Physics => presets()
+                .iter()
+                .find(|preset| preset.name == entry.name)
+                .is_some_and(|preset| {
+                    self.active_field.as_deref() == Some(entry.name)
+                        && state.formula == preset.formula
+                        && state.mode_3d == (preset.dimension == 3)
+                }),
+            PresetGroup::Sources | PresetGroup::Gallery => {
+                state.field_mode == FieldMode::Sources
+                    && self.active_source.as_deref() == Some(entry.name)
+            }
+        };
+        let mut source_loaded = false;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .selectable_label(selected, entry_label(entry))
+                .on_hover_text(if entry.summary.is_empty() {
+                    entry.filters.dimension.map_or_else(
+                        || format!("Load the {} preset", entry.name),
+                        |dimension| format!("Load the {dimension}D {} preset", entry.name),
+                    )
+                } else {
+                    entry.summary.to_owned()
+                })
+                .clicked()
+            {
+                match entry.group {
+                    PresetGroup::Classic | PresetGroup::Physics => {
+                        self.load_field(entry.name, state);
+                    }
+                    PresetGroup::Sources | PresetGroup::Gallery => {
+                        source_loaded = self.load_source_field(entry.name, state);
+                    }
+                }
+            }
+            if !entry.summary.is_empty() {
+                ui.weak(entry.summary);
+            }
+        });
+        source_loaded
+    }
+
     /// Draw the panel. Returns the camera command a `Reset view` / `Fit
     /// domain` button asked for this frame (the app applies it through the
     /// view-command seam).
@@ -415,66 +576,70 @@ impl PresetPanel {
             }
         });
 
-        // Built-in field presets, grouped by category. The row highlight needs
-        // the clicked name (`active_field`) as well as the live formula and
-        // dimension, so duplicate formulas highlight one row and formula-bar
-        // edits clear the highlight.
-        ui.weak("Field presets");
-        ui.weak("Start here");
-        for name in START_HERE {
-            let preset = presets().iter().find(|preset| *preset.name == *name);
-            let (label, selected) = match preset {
-                Some(preset) => {
-                    let selected = self.active_field.as_deref() == Some(name)
-                        && state.formula == preset.formula
-                        && state.mode_3d == (preset.dimension == 3);
-                    let label = field_preset_label(preset);
-                    (label, selected)
-                }
-                None => (name.to_string(), false),
-            };
-            if ui
-                .selectable_label(selected, label)
-                .on_hover_text(format!("Load the {name} preset"))
-                .clicked()
-            {
-                self.load_field(name, state);
-            }
-        }
-        for category in PresetCategory::ALL {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(category.title()).strong())
-                .on_hover_text(category.description());
-            for preset in presets_in(category) {
-                let selected = self.active_field.as_deref() == Some(preset.name)
-                    && state.formula == preset.formula
-                    && state.mode_3d == (preset.dimension == 3);
-                let label = field_preset_label(preset);
-                if ui
-                    .selectable_label(selected, label)
-                    .on_hover_text(format!(
-                        "Load the {} preset ({}D field)",
-                        preset.name, preset.dimension
-                    ))
-                    .clicked()
-                {
-                    self.load_field(preset.name, state);
-                }
-            }
-        }
+        // Search and filters narrow the merged library for this frame; the
+        // query is session-only while the expansion below persists.
+        ui.add(
+            egui::TextEdit::singleline(&mut self.query)
+                .hint_text("Search presets")
+                .desired_width(200.0),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Dimension");
+            ui.selectable_value(&mut self.filters.dimension, None, "All");
+            ui.selectable_value(&mut self.filters.dimension, Some(2), "2D");
+            ui.selectable_value(&mut self.filters.dimension, Some(3), "3D");
+            ui.checkbox(&mut self.filters.animated, "Animated");
+        });
 
-        ui.separator();
-        ui.weak("Source presets");
-        for preset in source_presets() {
-            let selected = state.field_mode == FieldMode::Sources
-                && self.active_source.as_deref() == Some(preset.name);
-            if ui
-                .selectable_label(selected, preset.name)
-                .on_hover_text(preset.summary)
-                .clicked()
-                && self.load_source_field(preset.name, state)
-            {
-                requested = Some(ViewCommand::Fit);
+        let matches: Vec<PresetEntry> = self
+            .library
+            .search_filtered(&self.query, self.filters)
+            .into_iter()
+            .cloned()
+            .collect();
+        // Keep the old quick-start rows above the full catalogue. They follow
+        // the same search/filter and load through the same row method, so the
+        // panel still opens with the familiar three-row shortlist.
+        let start_here: Vec<&PresetEntry> = START_HERE
+            .iter()
+            .filter_map(|name| matches.iter().find(|entry| entry.name == *name))
+            .collect();
+        if !start_here.is_empty() {
+            ui.weak("Start here");
+            for entry in start_here {
+                if self.show_entry(ui, entry, state) {
+                    requested = Some(ViewCommand::Fit);
+                }
+            }
+            ui.add_space(4.0);
+        }
+        if matches.is_empty() {
+            ui.weak("No presets match");
+        } else {
+            for (index, group) in PRESET_GROUPS.into_iter().enumerate() {
+                let entries: Vec<&PresetEntry> = matches
+                    .iter()
+                    .filter(|entry| entry.group == group)
+                    .collect();
+                if entries.is_empty() {
+                    continue;
+                }
+                let title = format!("{} ({})", group_title(group), entries.len());
+                let response = egui::CollapsingHeader::new(title)
+                    .id_salt(("preset_group", index))
+                    .open(Some(self.expanded[index]))
+                    .show(ui, |ui| {
+                        for entry in entries {
+                            if self.show_entry(ui, entry, state) {
+                                requested = Some(ViewCommand::Fit);
+                            }
+                        }
+                    });
+                // A header click is a layout change, never a preset load.
+                if response.header_response.clicked() {
+                    self.expanded[index] = !self.expanded[index];
+                    self.layout_changed = true;
+                }
             }
         }
 
