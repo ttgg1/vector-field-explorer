@@ -1,23 +1,37 @@
 //! Sampling: field + domain grid + view options → arrow instance data.
+//!
+//! An optional [`ColorMapping`] (issue #83) overrides the legacy colormap and
+//! magnitude range. When present, the mapping receives stats built from the
+//! arrows actually drawn and colours each arrow with its selected quantity.
+//! Legacy-equivalent mappings are byte-identical to the old path. Plane
+//! sampling uses the projected local vector for direction and components,
+//! because that is the vector drawn on the slice.
 
 use glam::UVec3;
 
+use crate::color_mapping::{ColorMapping, ColorSample, ColorStats};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::field::FieldExpr;
 use crate::plane::PlaneFrame;
 
-/// How arrows are colored: either a fixed magnitude range, or auto-fit to
-/// the magnitudes actually sampled.
+/// How arrows are painted: either a fixed magnitude range, or auto-fit to
+/// the magnitudes actually sampled. `color_mapping` takes precedence when it
+/// is `Some`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewOptions {
     pub colormap: Colormap,
     pub color_range: Option<(f32, f32)>,
+    pub color_mapping: Option<ColorMapping>,
 }
 
 impl Default for ViewOptions {
     fn default() -> Self {
-        Self { colormap: Colormap::Viridis, color_range: None }
+        Self {
+            colormap: Colormap::Viridis,
+            color_range: None,
+            color_mapping: None,
+        }
     }
 }
 
@@ -64,22 +78,45 @@ pub fn sample_field_at(
         sampled.push((p, v / mag, mag));
     }
 
+    let colors = arrow_colors(&sampled, view);
+    sampled
+        .into_iter()
+        .zip(colors)
+        .map(|((position, dir, mag), color)| ArrowData {
+            position,
+            dir,
+            mag,
+            color,
+        })
+        .collect()
+}
+
+/// Colour every kept sample: through the active [`ColorMapping`] when one is
+/// present, otherwise the legacy colormap with the explicit or auto range.
+fn arrow_colors(sampled: &[(glam::Vec3, glam::Vec3, f32)], view: &ViewOptions) -> Vec<[u8; 3]> {
+    if let Some(mapping) = &view.color_mapping {
+        let samples: Vec<ColorSample> = sampled
+            .iter()
+            .map(|&(_, dir, magnitude)| ColorSample { magnitude, dir })
+            .collect();
+        let stats = ColorStats::from_samples(&samples);
+        return samples
+            .iter()
+            .map(|sample| mapping.sample(sample, &stats).rgb)
+            .collect();
+    }
+
     let (cmin, cmax) = view.color_range.unwrap_or_else(|| {
         let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
-        for &(_, _, m) in &sampled {
+        for &(_, _, m) in sampled {
             min = min.min(m);
             max = max.max(m);
         }
         (min, max)
     });
     sampled
-        .into_iter()
-        .map(|(position, dir, mag)| ArrowData {
-            position,
-            dir,
-            mag,
-            color: view.colormap.colormap(mag, cmin, cmax),
-        })
+        .iter()
+        .map(|&(_, _, mag)| view.colormap.colormap(mag, cmin, cmax))
         .collect()
 }
 
@@ -88,7 +125,9 @@ pub fn sample_field_at(
 /// world field vector is projected onto the frame before normalising. Arrows
 /// whose projection is non-finite or nearly zero (the field is purely normal
 /// to the slice) are dropped, like any other degenerate sample. Colour
-/// auto-ranging uses the projected magnitudes.
+/// auto-ranging uses the projected magnitudes, and an active colour mapping
+/// takes both its direction and component values from that same projected
+/// local vector — the one actually drawn.
 pub fn sample_plane_at(
     field: &FieldExpr,
     frame: &PlaneFrame,
@@ -109,21 +148,15 @@ pub fn sample_plane_at(
         sampled.push((local, projected / mag, mag));
     }
 
-    let (cmin, cmax) = view.color_range.unwrap_or_else(|| {
-        let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
-        for &(_, _, m) in &sampled {
-            min = min.min(m);
-            max = max.max(m);
-        }
-        (min, max)
-    });
+    let colors = arrow_colors(&sampled, view);
     sampled
         .into_iter()
-        .map(|(position, dir, mag)| ArrowData {
+        .zip(colors)
+        .map(|((position, dir, mag), color)| ArrowData {
             position,
             dir,
             mag,
-            color: view.colormap.colormap(mag, cmin, cmax),
+            color,
         })
         .collect()
 }

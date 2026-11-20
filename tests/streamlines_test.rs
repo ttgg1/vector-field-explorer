@@ -7,14 +7,16 @@
 
 use glam::{UVec3, Vec2, Vec3};
 use vector_field_explorer::camera::{OrbitCamera, ViewCamera};
+use vector_field_explorer::color_mapping::{ColorQuantity, ColorSample, ColorStats};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
-use vector_field_explorer::flow::PlaneFlow;
+use vector_field_explorer::flow::{Flow, PlaneFlow};
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::streamlines::{
     CLICK_BURST_REACH, CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, click_seed, ray_seed,
     seed_grid, trace, trace_at,
 };
+use vector_field_explorer::viewmodel::State;
 
 /// Inclusive axis-aligned containment (Domain has no `contains` method).
 fn inside(d: &Domain, p: Vec3) -> bool {
@@ -689,4 +691,100 @@ fn trace_equals_t_zero() {
     let a = trace(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts);
     let b = trace_at(&f, Vec3::new(0.0, 0.0, 0.0), &domain, &opts, 0.0);
     assert_eq!(a, b);
+}
+
+/// `LineInstanceGPU` stores colours as normalized floats; this mirrors the
+/// byte value the legacy colormap produced.
+fn instance_color(rgb: [u8; 3]) -> [f32; 3] {
+    [
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+    ]
+}
+
+#[test]
+fn legacy_streamline_segments_keep_the_colormap_bytes() {
+    let mut state = State::new(false);
+    assert!(state.set_formula("(-y, x)".to_string()), "vortex field");
+    assert!(state.set_streamlines(true));
+    let sampled = state.sample();
+    let (lo, hi) = state.color_range(&sampled);
+    let flow = state.scene_flow();
+    let lines = state.streamlines_snapshot(&sampled);
+    assert!(!lines.is_empty(), "the legacy path paints segments");
+
+    for line in &lines {
+        let pa = Vec3::new(line.a[0], line.a[1], line.a[2]);
+        let mag = match flow.eval(pa, state.time) {
+            Some(v) => v.length(),
+            None => 0.0,
+        };
+        let want = instance_color(state.colormap.colormap(mag, lo, hi));
+        assert_eq!(
+            [line.color[0], line.color[1], line.color[2]],
+            want,
+            "a legacy-equivalent mapping must not change the painted bytes"
+        );
+    }
+}
+
+#[test]
+fn streamline_segments_follow_the_selected_quantity() {
+    let mut magnitude = State::new(false);
+    assert!(magnitude.set_formula("(-y, x)".to_string()));
+    assert!(magnitude.set_streamlines(true));
+    let magnitude_sampled = magnitude.sample();
+    let magnitude_lines = magnitude.streamlines_snapshot(&magnitude_sampled);
+
+    let mut component = State::new(false);
+    assert!(component.set_formula("(-y, x)".to_string()));
+    assert!(component.set_streamlines(true));
+    assert!(component.set_color_quantity(ColorQuantity::ComponentX));
+    let sampled = component.sample();
+    let lines = component.streamlines_snapshot(&sampled);
+
+    assert_eq!(lines.len(), magnitude_lines.len(), "both quantities trace the same paths");
+    assert!(
+        lines
+            .iter()
+            .zip(&magnitude_lines)
+            .any(|(component, magnitude)| component.color != magnitude.color),
+        "ComponentX and Magnitude disagree on the vortex"
+    );
+
+    let stats = ColorStats::from_samples(
+        &sampled
+            .iter()
+            .map(|arrow| ColorSample {
+                magnitude: arrow.mag,
+                dir: arrow.dir,
+            })
+            .collect::<Vec<_>>(),
+    );
+    let mapping = component.color_mapping();
+    let flow = component.scene_flow();
+    for line in &lines {
+        let pa = Vec3::new(line.a[0], line.a[1], line.a[2]);
+        let want = match flow.eval(pa, component.time) {
+            Some(v) if v.length().is_finite() && v.length() != 0.0 => {
+                let mag = v.length();
+                mapping
+                    .sample(
+                        &ColorSample {
+                            magnitude: mag,
+                            dir: v / mag,
+                        },
+                        &stats,
+                    )
+                    .rgb
+            }
+            _ => [128, 128, 128],
+        };
+        assert_eq!(
+            [line.color[0], line.color[1], line.color[2]],
+            instance_color(want),
+            "each segment samples the mapping at its flow vector"
+        );
+    }
 }

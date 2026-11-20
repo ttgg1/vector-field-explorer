@@ -8,7 +8,7 @@
 
 use super::camera::OrbitCamera;
 use super::colormap::Colormap;
-use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorStats};
+use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats};
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use super::domain::Domain;
 use super::field::FieldExpr;
@@ -106,6 +106,11 @@ pub const STREAMLINE_WIDTH: f32 = 0.012;
 /// their length no longer follows a speed slider; the transport's clock speed
 /// only animates particles (ticket 26).
 pub const STREAMLINE_MAX_LEN: usize = 120;
+
+/// Fallback when a streamline segment cannot be colour-mapped (a zero or
+/// non-finite flow vector under an active [`ColorMapping`]).
+const STREAMLINE_MID_GRAY: [u8; 3] = [128, 128, 128];
+
 /// Seed jitter as a fraction of a seed-grid cell (`seed_grid` caps it below
 /// half a cell so lattice neighbours never swap).
 pub const STREAMLINE_JITTER: f32 = 0.45;
@@ -1855,6 +1860,12 @@ impl State {
     /// auto-fit on the range is `None` so the sampler fits the sampled
     /// magnitudes itself.
     pub fn view_options(self: &State) -> ViewOptions {
+        let color_mapping = self.color_mapping();
+        let color_mapping = if color_mapping.is_legacy_equivalent(self.colormap) {
+            None
+        } else {
+            Some(color_mapping)
+        };
         ViewOptions {
             colormap: self.colormap,
             color_range: if self.auto_fit {
@@ -1862,6 +1873,7 @@ impl State {
             } else {
                 Some((self.color_min, self.color_max))
             },
+            color_mapping,
         }
     }
 
@@ -2042,9 +2054,22 @@ impl State {
         };
         let opts = self.streamline_opts();
         let range = self.color_range(sampled);
+        let mapping = self.view_options().color_mapping;
+        let stats = mapping.as_ref().map(|_| {
+            ColorStats::from_samples(
+                &sampled
+                    .iter()
+                    .map(|arrow| ColorSample {
+                        magnitude: arrow.mag,
+                        dir: arrow.dir,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let coloring = mapping.as_ref().zip(stats.as_ref());
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for seed in seeds {
-            self.push_line(&mut lines, seed, &opts, range);
+            self.push_line(&mut lines, seed, &opts, range, coloring);
         }
         lines
     }
@@ -2063,16 +2088,19 @@ impl State {
 
     /// Trace one seed and push its coloured segments: one instance per segment,
     /// coloured at the segment's start by the same [`color_range`] the arrows
-    /// use. The trace and the colour magnitude both come from
+    /// use. The trace and the colour vector both come from
     /// [`scene_flow`](State::scene_flow), so a slice stays in its local frame
-    /// and colours by projected magnitude. Shared by the grid seeds and the
-    /// click bursts so both paint identically.
+    /// and colours by the projected vector. `coloring` carries the active
+    /// mapping and its arrow-derived stats; `None` keeps the legacy colormap
+    /// path byte-identical. Shared by the grid seeds and the click bursts so
+    /// both paint identically.
     fn push_line(
         self: &State,
         lines: &mut Vec<LineInstanceGPU>,
         seed: Vec3,
         opts: &StreamlineOpts,
         range: (f32, f32),
+        coloring: Option<(&ColorMapping, &ColorStats)>,
     ) {
         let (lo, hi) = range;
         let flow = self.scene_flow();
@@ -2080,11 +2108,31 @@ impl State {
         for i in 0..path.len().saturating_sub(1) {
             let pa = path[i];
             let pb = path[i + 1];
-            let mag = match flow.eval(pa, self.time) {
-                Some(v) => v.length(),
-                None => 0.0,
+            let vector = flow.eval(pa, self.time);
+            let rgb = match coloring {
+                Some((mapping, stats)) => match vector {
+                    Some(v) if v.length().is_finite() && v.length() != 0.0 => {
+                        let magnitude = v.length();
+                        mapping
+                            .sample(
+                                &ColorSample {
+                                    magnitude,
+                                    dir: v / magnitude,
+                                },
+                                stats,
+                            )
+                            .rgb
+                    }
+                    _ => STREAMLINE_MID_GRAY,
+                },
+                None => {
+                    let mag = match vector {
+                        Some(v) => v.length(),
+                        None => 0.0,
+                    };
+                    self.colormap.colormap(mag, lo, hi)
+                }
             };
-            let rgb = self.colormap.colormap(mag, lo, hi);
             lines.push(LineInstanceGPU {
                 a: [pa.x, pa.y, pa.z, 1.0],
                 b: [pb.x, pb.y, pb.z, STREAMLINE_WIDTH],
@@ -2118,10 +2166,26 @@ impl State {
         }
         let opts = self.streamline_opts();
         let dimension = if self.mode_3d { 3 } else { 2 };
+        let mapping = self.view_options().color_mapping;
+        // Clicks carry no sampled-arrow slice of their own; reuse the view's
+        // sampled arrows so both seed sources share one colour scale.
+        let stats = mapping.as_ref().map(|_| {
+            let sampled = self.sample();
+            ColorStats::from_samples(
+                &sampled
+                    .iter()
+                    .map(|arrow| ColorSample {
+                        magnitude: arrow.mag,
+                        dir: arrow.dir,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let coloring = mapping.as_ref().zip(stats.as_ref());
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for click in clicks {
             for seed in burst_seeds(*click, &self.scene_domain(), CLICK_BURST_SEEDS, dimension) {
-                self.push_line(&mut lines, seed, &opts, color_range);
+                self.push_line(&mut lines, seed, &opts, color_range, coloring);
             }
         }
         lines
