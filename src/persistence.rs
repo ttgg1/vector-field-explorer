@@ -37,6 +37,7 @@ use crate::particles::{
 use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::profile_library::MAX_USER_PROFILES;
+use crate::seed_layout::SeedLayout;
 use crate::source_scene::{
     FieldMode, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceRecord, SourceScene,
 };
@@ -332,6 +333,11 @@ pub struct ViewRecord {
     /// written before the count existed; the serde default loads them as Auto.
     #[serde(default)]
     pub streamline_count: u32,
+    /// The durable explicit streamline seed layout (issue #87 slice S1).
+    /// Missing on older records; the serde default is the empty layout, which
+    /// keeps the automatic grid.
+    #[serde(default)]
+    pub seed_layout: SeedLayout,
     /// What one explicit left click does (ticket 60). Older records did not
     /// carry it; they load as SeedStreamline. An unknown spelling also falls
     /// back to the default instead of failing the whole envelope.
@@ -546,6 +552,7 @@ impl ViewRecord {
             streamlines: state.streamlines,
             seed_mode: state.seed_mode,
             streamline_count: state.streamline_count,
+            seed_layout: state.seed_layout.clone(),
             left_click_action: state.left_click_action,
             particles: state.particles,
             particle_size: state.particle_size,
@@ -677,6 +684,20 @@ impl ViewRecord {
         controls.domain_min = Vec3::from_array(self.domain_min);
         controls.domain_max = Vec3::from_array(self.domain_max);
         sidebar::apply(state, controls);
+        // Explicit seeds are document state (issue #87 slice S1). Assign them
+        // directly so startup does not go through the dirtying commit seam; a
+        // corrupt stored layout is sanitised against the visible scene domain
+        // (`scene_domain`, the same authority `commit_seed_layout` validates
+        // against) and reported once, and the app keeps running.
+        let stored_seeds = self.seed_layout.seeds.len();
+        let seed_layout = self.seed_layout.clone().sanitized(&state.scene_domain());
+        if seed_layout.seeds.len() != stored_seeds {
+            log::warn!(
+                "persisted seed layout dropped {} invalid or excess seed(s)",
+                stored_seeds - seed_layout.seeds.len()
+            );
+        }
+        state.seed_layout = seed_layout;
         // Issue #83 colour mapping restores directly, not through the setters:
         // startup must not dirty per field, and corrupt values fall back
         // individually so the rest of the record still loads.

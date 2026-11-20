@@ -3,14 +3,17 @@
 //! Pins the strict, versioned JSON form for a whole scene (view, parameters and
 //! camera). Pure model only: no UI, storage, camera or app wiring.
 
+use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::persistence::ViewRecord;
+use vector_field_explorer::plane::PlaneAxis;
 use vector_field_explorer::scene_document::{
     MAX_SCENE_NAME_BYTES, SCENE_FORMAT_VERSION, SceneCamera, SceneDocument, export_scene,
     import_scene,
 };
+use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint};
 
 fn stop(position: f32, hex: &str) -> ColorStop {
     ColorStop {
@@ -298,4 +301,34 @@ fn validation_never_mutates_the_document() {
     let before = invalid.clone();
     assert!(invalid.validate().is_err());
     assert_eq!(invalid, before);
+}
+
+#[test]
+fn saved_scene_keeps_a_non_empty_seed_layout() {
+    let layout = SeedLayout {
+        seeds: vec![
+            SeedPoint {
+                position: Vec3::new(0.5, -0.25, 1.0),
+                anchor: Some(SeedAnchor {
+                    axis: PlaneAxis::X,
+                    index: 1,
+                    u: 0.5,
+                    v: -0.25,
+                }),
+            },
+            SeedPoint {
+                position: Vec3::new(-1.0, 0.0, 0.5),
+                anchor: None,
+            },
+        ],
+    };
+    let mut document = sample_document();
+    document.view.seed_layout = layout.clone();
+
+    let json = export_scene(&document).expect("a valid scene exports");
+    let restored = import_scene(&json).expect("a valid scene imports");
+    assert_eq!(
+        restored.view.seed_layout, layout,
+        "saved scenes keep the explicit seeds"
+    );
 }

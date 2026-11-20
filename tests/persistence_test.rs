@@ -22,11 +22,12 @@ use vector_field_explorer::layer_style::LayerStyles;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{AppSettings, PresetUiRecord, ViewRecord, load, save};
-use vector_field_explorer::plane::DIM_ALPHA;
+use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis};
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::preset_library::PresetGroup;
 use vector_field_explorer::profile_library::{MAX_USER_PROFILES, ProfileLibrary};
 use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint};
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
 };
@@ -3049,5 +3050,303 @@ fn user_interaction_profiles_round_trip_through_an_app_save() {
         loaded.interaction_profiles,
         vec![stored],
         "the save path writes the live interaction library"
+    );
+}
+
+// Issue #87 slice S1: the explicit seed layout is part of the view record.
+
+#[test]
+fn view_record_round_trips_the_seed_layout() {
+    let mut state = State::new(true);
+    let center = state.scene_domain().center();
+    let layout = SeedLayout {
+        seeds: vec![
+            SeedPoint {
+                position: center,
+                anchor: None,
+            },
+            SeedPoint {
+                position: center + Vec3::new(0.25, -0.5, 0.75),
+                anchor: Some(SeedAnchor {
+                    axis: PlaneAxis::Z,
+                    index: 3,
+                    u: 0.25,
+                    v: -0.5,
+                }),
+            },
+        ],
+    };
+    state
+        .commit_seed_layout(layout.clone())
+        .expect("the layout is inside the scene domain");
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.seed_layout, layout, "capture reads the state layout");
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: record,
+            ..Default::default()
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.view.seed_layout, layout,
+        "the envelope round-trips seeds"
+    );
+
+    let mut restored = State::new(false);
+    loaded.view.restore(&mut restored, &mut Controls::new());
+    assert_eq!(
+        restored.seed_layout, layout,
+        "restore assigns the stored layout"
+    );
+}
+
+#[test]
+fn older_records_without_a_seed_layout_load_empty() {
+    #[derive(serde::Serialize)]
+    struct PreSeedLayoutView {
+        formula: String,
+    }
+
+    #[derive(serde::Serialize)]
+    struct PreSeedLayoutSettings {
+        style: AppStyle,
+        view: PreSeedLayoutView,
+    }
+
+    let mut storage = MemoryStorage::default();
+    eframe::set_value(
+        &mut storage,
+        eframe::APP_KEY,
+        &PreSeedLayoutSettings {
+            style: AppStyle::default(),
+            view: PreSeedLayoutView {
+                formula: "(x, y)".to_string(),
+            },
+        },
+    );
+
+    let loaded = load(Some(&storage));
+    assert!(
+        loaded.view.seed_layout.is_empty(),
+        "an older record defaults to the empty layout"
+    );
+    let mut state = State::new(false);
+    loaded.view.restore(&mut state, &mut Controls::new());
+    assert!(
+        state.seed_layout.is_empty(),
+        "restore keeps the automatic grid"
+    );
+}
+
+#[test]
+fn corrupt_stored_seed_layout_is_sanitised_on_restore() {
+    let source = State::new(false);
+    let domain = source.scene_domain();
+    let center = domain.center();
+    let valid_free = SeedPoint {
+        position: center,
+        anchor: None,
+    };
+    let valid_anchored = SeedPoint {
+        // The default view is 2D, so its scene domain collapses z to the
+        // domain midpoint; keep the planted position on that plane.
+        position: center + Vec3::new(0.25, -0.5, 0.0),
+        anchor: Some(SeedAnchor {
+            axis: PlaneAxis::Z,
+            index: 1,
+            u: 0.25,
+            v: -0.5,
+        }),
+    };
+    let record = ViewRecord {
+        seed_layout: SeedLayout {
+            seeds: vec![
+                SeedPoint {
+                    position: Vec3::new(f32::NAN, center.y, center.z),
+                    anchor: None,
+                },
+                valid_free,
+                SeedPoint {
+                    position: Vec3::new(1.0e9, center.y, center.z),
+                    anchor: None,
+                },
+                SeedPoint {
+                    position: center,
+                    anchor: Some(SeedAnchor {
+                        axis: PlaneAxis::X,
+                        index: 0,
+                        u: f32::INFINITY,
+                        v: 0.0,
+                    }),
+                },
+                // Inside the 3D domain box but off the collapsed 2D scene
+                // plane: the scene domain is the authority, so this must drop.
+                SeedPoint {
+                    position: center + Vec3::new(-0.4, 0.3, 0.75),
+                    anchor: None,
+                },
+                valid_anchored,
+            ],
+        },
+        ..ViewRecord::capture(&source)
+    };
+    assert!(
+        record.seed_layout.validate(&domain).is_err(),
+        "the stored fixture is genuinely corrupt"
+    );
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: record,
+            ..Default::default()
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert!(
+        loaded.view.seed_layout.validate(&domain).is_err(),
+        "load does not repair the layout; restore owns sanitising"
+    );
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+
+    assert_eq!(
+        state.seed_layout.seeds,
+        vec![valid_free, valid_anchored],
+        "invalid seeds drop and the valid seeds survive in insertion order"
+    );
+    state
+        .seed_layout
+        .validate(&state.scene_domain())
+        .expect("the sanitised layout re-validates against the restored domain");
+    // This repo has no log-capture helper, so the assertion pins the
+    // contract-visible sanitised outcome. The restore does exercise the
+    // dropped-count warning; its text is not asserted.
+}
+
+#[test]
+fn restore_drops_seed_layout_seeds_outside_the_scene_domain_in_2d() {
+    let source = State::new(false);
+    let scene_domain = source.scene_domain();
+    let center = scene_domain.center();
+    let valid = SeedPoint {
+        position: center + Vec3::new(0.25, -0.5, 0.0),
+        anchor: None,
+    };
+    // The 2D scene domain collapses z to the domain midpoint; this seed is
+    // inside the 3D domain box but off the visible plane.
+    let off_plane = SeedPoint {
+        position: center + Vec3::new(-0.25, 0.5, 0.75),
+        anchor: None,
+    };
+    let settings = AppSettings {
+        view: ViewRecord {
+            seed_layout: SeedLayout {
+                seeds: vec![off_plane, valid],
+            },
+            ..ViewRecord::capture(&source)
+        },
+        ..Default::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    loaded.view.restore(&mut state, &mut controls);
+
+    assert_eq!(
+        state.seed_layout.seeds,
+        vec![valid],
+        "restore drops the off-plane seed and keeps the valid one"
+    );
+    state
+        .seed_layout
+        .validate(&state.scene_domain())
+        .expect("the restored layout re-validates against the 2D scene domain");
+    // `ViewRecord::restore` requests its documented single rebuild; consuming
+    // it must leave a clean scene with no seed-driven second rebuild.
+    assert!(state.dirty, "restore asks for its one scene rebuild");
+    assert!(state.snapshot_if_dirty().is_some());
+    assert!(!state.dirty, "the scene is clean after the startup rebuild");
+    assert!(
+        state.snapshot_if_dirty().is_none(),
+        "the restored seed layout does not re-dirty the scene"
+    );
+}
+
+#[test]
+fn startup_seed_layout_restore_is_non_dirtying() {
+    let source = State::new(false);
+    let center = source.scene_domain().center();
+    let stored = SeedLayout {
+        seeds: vec![
+            SeedPoint {
+                position: center,
+                anchor: None,
+            },
+            // One invalid seed proves the installed layout is the sanitised
+            // record, not merely an unchecked copy.
+            SeedPoint {
+                position: Vec3::new(1.0e9, center.y, center.z),
+                anchor: None,
+            },
+        ],
+    };
+    let settings = AppSettings {
+        view: ViewRecord {
+            seed_layout: stored,
+            ..ViewRecord::capture(&source)
+        },
+        ..Default::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    // Pin the startup seam: restoring a layout assigns it directly instead of
+    // going through `commit_seed_layout`, so a non-empty sanitised layout does
+    // not request a scene rebuild on its own.
+    let mut state = State::new(false);
+    state.dirty = false;
+    state.seed_layout = loaded
+        .view
+        .seed_layout
+        .clone()
+        .sanitized(&state.scene_domain());
+    assert_eq!(
+        state.seed_layout.seeds,
+        vec![SeedPoint {
+            position: center,
+            anchor: None
+        }],
+        "the startup restore installs the sanitised non-empty layout"
+    );
+    assert!(
+        !state.dirty,
+        "assigning the restored seed layout leaves dirty alone"
+    );
+
+    // The real constructor installs the same layout. The enclosing view
+    // restore requests its documented single rebuild; consuming it leaves the
+    // scene clean and the seed layout must not request a second one.
+    let mut app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(app.state.seed_layout, state.seed_layout);
+    assert!(
+        app.state.snapshot_if_dirty().is_some(),
+        "the view restore asks for its one scene rebuild"
+    );
+    assert!(!app.state.dirty, "the startup rebuild leaves a clean scene");
+    assert!(
+        app.state.snapshot_if_dirty().is_none(),
+        "the restored seed layout does not keep redirtying the scene"
     );
 }

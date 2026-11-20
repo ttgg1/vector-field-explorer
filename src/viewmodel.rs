@@ -38,6 +38,7 @@ use crate::maxwell::{
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
 use crate::reference::{sanitized_opacity, scaled_viewport_style};
+use crate::seed_layout::SeedLayout;
 use crate::viewport_style::ViewportStyle;
 use crate::particles::{
     DOT_SPACING_FRACTION, FlowLayerStyle, MAX_PARTICLES, ParticleAppearance,
@@ -320,6 +321,11 @@ pub struct State {
     pub seed_mode: StreamlineSeedMode,
     /// Explicit streamline seed count; `0` means Auto (density-derived).
     pub streamline_count: u32,
+    /// Durable explicit streamline seeds (issue #87 slice S1). Only
+    /// [`State::commit_seed_layout`] may replace it in response to an edit;
+    /// startup restores assign it directly. S2 wires generation to it; until
+    /// then the automatic grid still supplies the streamline seeds.
+    pub seed_layout: SeedLayout,
     /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
     /// it and always run their own action.
     pub left_click_action: LeftClickAction,
@@ -514,6 +520,38 @@ impl State {
         self.layer_styles = next;
         self.mark_dirty();
         Ok(())
+    }
+
+    /// The committed explicit streamline seed layout (issue #87 slice S1).
+    pub fn seed_layout(self: &State) -> &SeedLayout {
+        &self.seed_layout
+    }
+
+    /// Atomically replace the explicit seed layout after validating it against
+    /// the visible scene domain.
+    ///
+    /// A rejected layout leaves the previous seeds and the dirty flag
+    /// untouched; an accepted layout requests exactly one scene rebuild.
+    /// Committing a layout equal to the committed one is a validated no-op and
+    /// does not dirty the scene. S1 only stores the layout: streamline
+    /// generation still uses the automatic grid until slice S2 consumes it.
+    pub fn commit_seed_layout(self: &mut State, next: SeedLayout) -> Result<(), String> {
+        next.validate(&self.scene_domain())?;
+        if next == self.seed_layout {
+            return Ok(());
+        }
+        self.seed_layout = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Clear every explicit seed. Dirties the scene only when the layout was
+    /// non-empty.
+    pub fn reset_seed_layout(self: &mut State) {
+        if !self.seed_layout.is_empty() {
+            self.seed_layout = SeedLayout::default();
+            self.mark_dirty();
+        }
     }
 
     /// The Flow layer's resolved opacity and width multipliers (issue #84
@@ -715,6 +753,7 @@ impl State {
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             streamline_count: 0,
+            seed_layout: SeedLayout::default(),
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
