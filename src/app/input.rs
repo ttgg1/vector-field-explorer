@@ -553,7 +553,7 @@ impl VfApp {
                     .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
                 self.streamline_count = self.flow_lines.len() + self.click_lines.len();
                 if let Some(scene) = self.scene.as_vector_mut() {
-                    scene.lines = Arc::new(compose_lines_with_frame(
+                    scene.lines = Arc::new(compose_lines_with_frame_style(
                         &self.flow_lines,
                         &self.click_lines,
                         &self.state.scene_domain(),
@@ -561,6 +561,7 @@ impl VfApp {
                         self.state.plane_frame(),
                         self.state.show_grid,
                         self.state.show_coordinate_system,
+                        &self.state.reference_viewport_style(),
                     ));
                 }
                 log::trace!(
@@ -679,7 +680,7 @@ impl VfApp {
             .click_streamlines_snapshot(self.dots_range, &self.click_seeds);
         self.streamline_count = self.flow_lines.len() + self.click_lines.len();
         if let Some(scene) = self.scene.as_vector_mut() {
-            scene.lines = Arc::new(compose_lines_with_frame(
+            scene.lines = Arc::new(compose_lines_with_frame_style(
                 &self.flow_lines,
                 &self.click_lines,
                 &self.state.scene_domain(),
@@ -687,6 +688,7 @@ impl VfApp {
                 self.state.plane_frame(),
                 self.state.show_grid,
                 self.state.show_coordinate_system,
+                &self.state.reference_viewport_style(),
             ));
         }
     }

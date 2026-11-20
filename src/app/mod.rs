@@ -19,7 +19,7 @@ use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
 use crate::plot_camera::PlotCamera;
 use crate::plot_scene::{PlotScene, ViewportScene};
-use crate::reference::{reference_lines_visible, reference_plane_lines};
+use crate::reference::{reference_lines_visible_with, reference_plane_lines_with};
 use crate::render::Camera;
 use crate::renderer::{
     ArrowInstanceGPU, DrawCallback, DrawState, LineInstanceGPU, SceneGPU, combined_instances,
@@ -51,13 +51,14 @@ use crate::viewmodel::{
     State, ViewGesture, apply_camera_input, captured_click_outcome, click_outcome, drag_channel,
     two_finger_pan, undo_click_seed,
 };
+use crate::viewport_style::ViewportStyle;
 
 // Particle cloud (ticket 05 / plan task 10): the viewmodel owns the toggle,
 // the app owns the cloud and decides when to run these pure functions.
 use crate::particles::{
     AdvectSettings, CLICK_BURST_PARTICLES, ParticlePalette, Particles, advect, clear,
-    count as particle_count, dot_instances_at, retarget, spawn, spawn_at, speed_range,
-    trail_instances_at,
+    count as particle_count, dot_instances_styled_at, retarget, spawn, spawn_at, speed_range,
+    trail_instances_styled_at,
 };
 
 mod frame;
@@ -342,7 +343,7 @@ impl VfApp {
         } else {
             orbit.recentre_on_2d(&state.scene_domain());
         }
-        let backdrop = compose_lines_with_frame(
+        let backdrop = compose_lines_with_frame_style(
             &[],
             &[],
             &state.scene_domain(),
@@ -350,10 +351,11 @@ impl VfApp {
             state.plane_frame(),
             state.show_grid,
             state.show_coordinate_system,
+            &state.reference_viewport_style(),
         );
         let arrow_style = state.arrow_style;
         let arrow_style_2d = state.arrow_style_2d;
-        let arrow_params = state.arrow_params;
+        let arrow_params = state.effective_arrow_params();
         let mode_3d = state.mode_3d;
         let scene_frame = SceneFrameKey::of(&state);
         let particle_available = state.field.dimension == 3;
@@ -554,9 +556,42 @@ pub fn compose_lines_with_frame(
     show_grid: bool,
     show_coordinate_system: bool,
 ) -> Vec<LineInstanceGPU> {
+    compose_lines_with_frame_style(
+        flow,
+        clicks,
+        domain,
+        sampling_3d,
+        frame,
+        show_grid,
+        show_coordinate_system,
+        &ViewportStyle::default(),
+    )
+}
+
+/// [`compose_lines_with_frame`] with an explicit reference [`ViewportStyle`],
+/// so the app can fold in the Reference layer's width and opacity (issue #84
+/// A2a). Domain, frame and visibility signals behave exactly as before.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn compose_lines_with_frame_style(
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+    domain: &Domain,
+    sampling_3d: bool,
+    frame: Option<PlaneFrame>,
+    show_grid: bool,
+    show_coordinate_system: bool,
+    style: &ViewportStyle,
+) -> Vec<LineInstanceGPU> {
     let mut lines = match frame {
-        Some(frame) => reference_plane_lines(&frame, show_grid, show_coordinate_system),
-        None => reference_lines_visible(domain, sampling_3d, show_grid, show_coordinate_system),
+        Some(frame) => reference_plane_lines_with(&frame, show_grid, show_coordinate_system, style),
+        None => reference_lines_visible_with(
+            domain,
+            sampling_3d,
+            show_grid,
+            show_coordinate_system,
+            style,
+        ),
     };
     lines.extend_from_slice(flow);
     lines.extend_from_slice(clicks);
@@ -572,7 +607,7 @@ pub(crate) fn compose_vector_lines(
     flow: &[LineInstanceGPU],
     clicks: &[LineInstanceGPU],
 ) -> (Vec<LineInstanceGPU>, usize) {
-    let mut lines = compose_lines_with_frame(
+    let mut lines = compose_lines_with_frame_style(
         flow,
         clicks,
         &state.scene_domain(),
@@ -580,6 +615,7 @@ pub(crate) fn compose_vector_lines(
         state.plane_frame(),
         state.show_grid,
         state.show_coordinate_system,
+        &state.reference_viewport_style(),
     );
     let glyphs = match state.field_mode {
         FieldMode::Sources => {
@@ -727,7 +763,7 @@ pub(crate) fn particle_scene_instances(
         mapping: facts.mapping.as_ref(),
         stats: &facts.stats,
     };
-    let dots = Arc::new(dot_instances_at(
+    let dots = Arc::new(dot_instances_styled_at(
         particles,
         &flow,
         &domain,
@@ -735,14 +771,16 @@ pub(crate) fn particle_scene_instances(
         &appearance,
         state.particle_radius(spacing),
         state.time,
+        state.flow_layer_style(),
     ));
-    let trails = Arc::new(trail_instances_at(
+    let trails = Arc::new(trail_instances_styled_at(
         particles,
         &flow,
         &palette,
         &appearance,
         spacing,
         state.time,
+        state.flow_layer_style(),
     ));
     (dots, trails)
 }

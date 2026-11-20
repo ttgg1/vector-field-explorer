@@ -19,6 +19,7 @@ mod animation_scene_test;
 mod animation_test;
 mod arrow_alpha_test;
 mod arrow_geometry_test;
+mod arrow_layer_style_test;
 mod arrow_opacity_test;
 mod arrow_style_test;
 mod branding_assets_test;

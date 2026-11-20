@@ -472,7 +472,9 @@ Formula/particle snapshot, opens one headless session and streams every frame
 through `apply_export_banner` and a `FrameSink` (`gif_sink` or `video_sink`).
 Otherwise it prepares one scene, selects CPU SVG or offscreen RGBA8 + PNG
 encoding by output extension, and writes the explicit path with contextual
-errors. Neither constructs `VfApp`, uses storage, nor opens dialogs. No-argument
+errors. SVG uses the neutral blueprint (`prepare_scene_with_styles` with the
+default record) while PNG keeps the committed layer styles. Neither constructs
+`VfApp`, uses storage, nor opens dialogs. No-argument
 GUI and wasm startup are unchanged. `tests/cli_test.rs` exercises the actual
 executable with child-only environments; `scripts/test-cli-dispatch.sh`
 separately runs real displayless 2D/3D PNG decoding, non-background field checks
@@ -569,6 +571,9 @@ and the helpers that belong to no single frame phase.
 - `compose_lines_with_frame` prepends only the enabled reference groups (world
   or local slice) and then the cached flow and click segments; the status bar's
   streamline count is `flow_lines + click_lines`, not the full scene line count.
+  `compose_lines_with_frame_style` takes the same arguments plus the resolved
+  reference `ViewportStyle`; the legacy entry point delegates with the default
+  style, and live/capture/CLI paths pass `state.reference_viewport_style()`.
 - `scene` is a cache; `State` remains the source of truth.
 - `scene_color_facts` derives the shared range, colour stats, clip counts and
   active mapping from the same drawn arrows; `clips` is computed with
@@ -2047,10 +2052,10 @@ scene documents or profiles, so a neutral record renders exactly today's scene.
 `commit_marks_dirty_once_for_a_real_change`,
 `restored_layer_styles_reach_the_state_without_dirtying`.
 
-**Limitations.** No Appearance panel, renderer/drawable wiring, or
-scene/profile bundling in this slice; `State` holds the record, the settings
-envelope round-trips it, and startup assigns it directly without dirtying the
-scene.
+**Limitations.** A2a wires Arrows, Flow and Reference only; no Appearance
+panel, Sources/Induction/Teaching wiring, or scene/profile bundling yet. `State`
+holds the record, the settings envelope round-trips it, and startup assigns it
+directly without dirtying the scene.
 
 #### `src/palette_io.rs` — portable palette document
 
@@ -2155,6 +2160,24 @@ decisions that do not need a window.
   `layer_styles()` and `commit_layer_styles` (validate, equal-set no-op, assign,
   exactly one dirty request; a rejected record leaves the previous styles and
   dirty untouched).
+- Issue #84 slice A2a drawable seams: `effective_arrow_params()` scales only the
+  arrow girth (`head_width`, `shaft_radius`) by the Arrows width and leaves the
+  stored record untouched; `flow_layer_style()` resolves the Flow opacity/width
+  pair shared by streamlines, dots and trails; `reference_viewport_style()`
+  applies the Reference width and alpha to the committed `ViewportStyle` while
+  background and RGB pass through. The `*_for(&LayerStyles)` variants serve the
+  blueprint snapshot, and both width seams repair a directly written
+  non-finite/out-of-range multiplier (non-finite → `1.0`, finite clamped to
+  `0.05..=4.0`) instead of trusting the public field.
+- Issue #84 slice A2a blueprint split: `snapshot_blueprint()` is
+  `snapshot_with_styles(&LayerStyles::default())`; `snapshot()` passes the
+  committed record and `snapshot_if_dirty` still drives the live/raster cache.
+  SVG exports use the blueprint, so Arrows/Flow/Reference overrides never change
+  vector bytes or geometry. `src/app/viewport.rs` mirrors this with
+  `assemble_viewport_scene_with_styles` (SVG passes the neutral default) and
+  `src/cli.rs::run_export` routes SVG through
+  `prepare_scene_with_styles(..., &LayerStyles::default())` while PNG and
+  animation keep `prepare_scene`'s committed styles.
 - Source mode fields: `field_mode`, `sources`, `source_sampling` and
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
   `source_sampling` and `reset_sources`.
@@ -2173,7 +2196,7 @@ decisions that do not need a window.
   `view_options`, `sample`, `color_range`, `particle_radius`, `particle_target`,
   `accepts_click_seed`, `plane_active`, `arrow_instances`,
   `streamlines_snapshot`, `click_streamlines_snapshot`, `snapshot`,
-  `snapshot_if_dirty`.
+  `snapshot_blueprint`, `snapshot_if_dirty`.
 - Pure helpers: `domain_between`, `clamp_domain_extent`, `ORBIT_SENSITIVITY`,
   `ViewGesture`, `apply_camera_input`, `DragButtons`, `DragChannel`,
   `drag_channel`, `TouchPan`, `two_finger_pan`, `ClickOutcome`, `click_outcome`,
@@ -2795,10 +2818,15 @@ advection, and the dot/trail instance builders.
 test seams); `target_count`, `effective_particle_count`, `count`,
 `effective_trail_len`, `clear`, `spawn`, `resize`, `retarget`, `spawn_at`;
 `AdvectSettings`, `advect`, `advance_exact`, `speed_range`, `ParticlePalette`,
-`particle_rgb`, `dot_instances`, `trail_instances`, `DOT_QUAD_CORNERS`,
+`particle_rgb`, `dot_instances`, `trail_instances`, `FlowLayerStyle`,
+`dot_instances_styled_at`, `trail_instances_styled_at`, `DOT_QUAD_CORNERS`,
 `dot_billboard_corners`.
 
 **Invariants.**
+- The Flow layer style multiplies after [`ParticleAppearance`]: dot radius and
+  trail width scale by `width`, alpha is `appearance.opacity * opacity` clamped
+  to `0.0..=1.0`, and particle RGB is untouched. The neutral `1.0`/`1.0`
+  default matches the legacy `_at` entry points exactly.
 - The cloud has a constant size between target changes. A particle that leaves
   the domain, hits zero/non-finite flow, or becomes non-finite respawns inside
   the inset box; the count never drifts and never exceeds `MAX_PARTICLES`
@@ -2929,6 +2957,8 @@ flat 2D grid, with coloured axes.
 and `reference_plane_lines_with` take a validated
 [`ViewportStyle`](../src/viewport_style.rs) (issue #82 slice A), while the
 legacy entry points delegate to the default style and stay byte-identical.
+`scaled_viewport_style` applies the Reference layer's width and opacity over a
+`ResolvedLayerStyle` (issue #84 A2a), leaving background and RGB untouched.
 
 **Invariants.**
 - 3D draws the far-face grids first, then the 12 box edges, then the coloured

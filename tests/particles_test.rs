@@ -19,11 +19,12 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::flow::{Flow, PlaneFlow};
 use vector_field_explorer::particles::{
-    AdvectSettings, CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, DOT_SPACING_FRACTION, MAX_PARTICLES,
-    MAX_TRAIL_LEN, MAX_TRAIL_SEGMENTS, PARTICLES_PER_DENSITY, ParticleAppearance,
+    AdvectSettings, CLICK_BURST_PARTICLES, CLICK_SPAWN_REACH, DOT_SPACING_FRACTION, FlowLayerStyle,
+    MAX_PARTICLES, MAX_TRAIL_LEN, MAX_TRAIL_SEGMENTS, PARTICLES_PER_DENSITY, ParticleAppearance,
     ParticleColorMode, ParticlePalette, Particles, advect, clear, count, dot_instances,
-    effective_particle_count, effective_trail_len, particle_rgb, resize, retarget, spawn, spawn_at,
-    speed_range, target_count, trail_instances,
+    dot_instances_styled_at, effective_particle_count, effective_trail_len, particle_rgb, resize,
+    retarget, spawn, spawn_at, speed_range, target_count, trail_instances,
+    trail_instances_styled_at,
 };
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::viewmodel::State;
@@ -1518,4 +1519,83 @@ fn non_finite_particle_sample_falls_back_to_mid_grey() {
         rgb, [128.0 / 255.0; 3],
         "a non-finite sample keeps magnitude 0, and empty auto stats map it to mid grey",
     );
+}
+
+// --- Issue #84 A2a: Flow style composes after ParticleAppearance -----------
+
+#[test]
+fn flow_style_composes_with_particle_appearance() {
+    let (cloud, field, domain) = cloud_with_one_trail(4);
+    let appearance = ParticleAppearance {
+        opacity: 0.8,
+        trail_len: 4,
+        trail_fade: 0.5,
+        trail_width: 2.0,
+        ..ParticleAppearance::default()
+    };
+    let palette = legacy_palette(Colormap::Mono, (0.0, 1.0), speed_range(&cloud));
+    let neutral = FlowLayerStyle::default();
+    let styled = FlowLayerStyle {
+        opacity: 0.5,
+        width: 2.0,
+    };
+
+    let base_radius = 0.1;
+    let plain = dot_instances_styled_at(
+        &cloud,
+        &field,
+        &domain,
+        &palette,
+        &appearance,
+        base_radius,
+        0.0,
+        neutral,
+    );
+    let scaled = dot_instances_styled_at(
+        &cloud,
+        &field,
+        &domain,
+        &palette,
+        &appearance,
+        base_radius,
+        0.0,
+        styled,
+    );
+    assert_eq!(plain.len(), scaled.len());
+    assert!(!plain.is_empty());
+    for (plain, scaled) in plain.iter().zip(&scaled) {
+        assert_eq!(scaled.color[3], 0.8 * 0.5, "appearance x flow opacity");
+        assert_eq!(scaled.dir_len[3], base_radius * 2.0, "radius x flow width");
+        assert_eq!(
+            [scaled.color[0], scaled.color[1], scaled.color[2]],
+            [plain.color[0], plain.color[1], plain.color[2]],
+            "particle colour bytes are untouched"
+        );
+    }
+
+    let plain =
+        trail_instances_styled_at(&cloud, &field, &palette, &appearance, 1.0, 0.0, neutral);
+    let scaled =
+        trail_instances_styled_at(&cloud, &field, &palette, &appearance, 1.0, 0.0, styled);
+    assert_eq!(plain.len(), scaled.len());
+    assert_eq!(scaled.len(), 3, "one segment per consecutive pair");
+    assert_eq!(
+        scaled[2].color[3],
+        0.8 * 0.5,
+        "newest segment = appearance opacity x flow opacity"
+    );
+    assert_eq!(scaled[1].color[3], 0.8 * 0.5 * 0.5);
+    for (plain, scaled) in plain.iter().zip(&scaled) {
+        assert_eq!(
+            scaled.b[3],
+            2.0 * DOT_SPACING_FRACTION * 2.0,
+            "trail width x flow width"
+        );
+        assert_eq!(
+            [scaled.color[0], scaled.color[1], scaled.color[2]],
+            [plain.color[0], plain.color[1], plain.color[2]],
+            "trail colour bytes are untouched"
+        );
+        assert!((0.0..=1.0).contains(&scaled.color[3]));
+    }
 }

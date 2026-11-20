@@ -25,7 +25,7 @@ use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
 };
-use crate::layer_style::LayerStyles;
+use crate::layer_style::{LayerId, LayerStyles};
 use crate::material::{
     MaterialError, MaterialSampling, MaterialScene, material_outline, sample_materials,
     validate_material,
@@ -37,9 +37,11 @@ use crate::maxwell::{
 };
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
+use crate::reference::{sanitized_opacity, scaled_viewport_style};
 use crate::viewport_style::ViewportStyle;
 use crate::particles::{
-    DOT_SPACING_FRACTION, MAX_PARTICLES, ParticleAppearance, effective_particle_count,
+    DOT_SPACING_FRACTION, FlowLayerStyle, MAX_PARTICLES, ParticleAppearance,
+    effective_particle_count,
 };
 
 use std::sync::Arc;
@@ -470,6 +472,56 @@ impl State {
         self.layer_styles = next;
         self.mark_dirty();
         Ok(())
+    }
+
+    /// The Flow layer's resolved opacity and width multipliers (issue #84
+    /// A2a), shared by the streamline and particle drawables.
+    pub fn flow_layer_style(self: &State) -> FlowLayerStyle {
+        self.flow_layer_style_for(self.layer_styles())
+    }
+
+    /// [`State::flow_layer_style`] for an explicit style record. The blueprint
+    /// SVG path passes [`LayerStyles::default`].
+    pub(crate) fn flow_layer_style_for(self: &State, styles: &LayerStyles) -> FlowLayerStyle {
+        FlowLayerStyle::from_resolved(&styles.resolve(LayerId::Flow, None)).sanitized()
+    }
+
+    /// The committed viewport style after the Reference layer's width and
+    /// opacity overrides. Background and RGB are never touched.
+    pub fn reference_viewport_style(self: &State) -> ViewportStyle {
+        self.reference_viewport_style_for(self.layer_styles())
+    }
+
+    /// [`State::reference_viewport_style`] for an explicit style record.
+    pub(crate) fn reference_viewport_style_for(
+        self: &State,
+        styles: &LayerStyles,
+    ) -> ViewportStyle {
+        scaled_viewport_style(
+            &self.viewport_style,
+            &styles.resolve(LayerId::Reference, None),
+        )
+    }
+
+    /// The arrow parameters with the Arrows layer's girth multiplier applied
+    /// (issue #84 A2a). Head length and side count never move, and the stored
+    /// [`State::arrow_params`] record stays untouched.
+    pub fn effective_arrow_params(self: &State) -> ArrowParams {
+        self.effective_arrow_params_for(self.layer_styles())
+    }
+
+    /// [`State::effective_arrow_params`] for an explicit style record.
+    pub(crate) fn effective_arrow_params_for(
+        self: &State,
+        styles: &LayerStyles,
+    ) -> ArrowParams {
+        let params = self.arrow_params;
+        let width = sanitized_width_for_style(styles.resolve(LayerId::Arrows, None).width);
+        ArrowParams {
+            head_width: params.head_width * width,
+            shaft_radius: params.shaft_radius * width,
+            ..params
+        }
     }
 
     /// Queue a lazy re-solve only when the active Ode RHS actually changes.
@@ -1986,11 +2038,22 @@ impl State {
     /// Sampling still produced the whole cube, so stepping the plane only
     /// rebuilds these instances, never the field.
     pub fn arrow_instances(self: &State, arrows: &[ArrowData]) -> Vec<ArrowInstanceGPU> {
+        self.arrow_instances_with_styles(arrows, self.layer_styles())
+    }
+
+    /// [`State::arrow_instances`] for an explicit style record, so a blueprint
+    /// snapshot can ignore the committed Arrows overrides.
+    fn arrow_instances_with_styles(
+        self: &State,
+        arrows: &[ArrowData],
+        styles: &LayerStyles,
+    ) -> Vec<ArrowInstanceGPU> {
         let unit = self.arrow_scale * self.spacing();
         let max_mag = arrows.iter().fold(0.0_f32, |m, a| m.max(a.mag));
         let plane_active = self.plane_active();
         let grid = self.grid();
         let domain = self.domain;
+        let layer_opacity = sanitized_opacity(styles.resolve(LayerId::Arrows, None).opacity);
         arrows
             .iter()
             .map(|a| {
@@ -2018,10 +2081,14 @@ impl State {
                     if plane_active && !on_plane(a.position, &domain, grid, &self.plane) {
                         (
                             dim_color(a.color),
-                            self.arrow_opacity * self.plane_dim_opacity,
+                            (self.arrow_opacity * self.plane_dim_opacity * layer_opacity)
+                                .clamp(0.0, 1.0),
                         )
                     } else {
-                        (a.color, self.arrow_opacity)
+                        (
+                            a.color,
+                            (self.arrow_opacity * layer_opacity).clamp(0.0, 1.0),
+                        )
                     };
                 ArrowInstanceGPU {
                     origin: [a.position.x, a.position.y, a.position.z, 1.0],
@@ -2050,6 +2117,14 @@ impl State {
     /// so its lines run with the depth they cross. [`streamlines::ray_seed`]
     /// turns a click into a seed inside the domain for the orbit view's click-to-seed.
     pub fn streamlines_snapshot(self: &State, sampled: &[ArrowData]) -> Vec<LineInstanceGPU> {
+        self.streamlines_snapshot_with_styles(sampled, self.layer_styles())
+    }
+
+    fn streamlines_snapshot_with_styles(
+        self: &State,
+        sampled: &[ArrowData],
+        styles: &LayerStyles,
+    ) -> Vec<LineInstanceGPU> {
         // Source/induction draw arrows only and Ode draws its own
         // trajectories; formula streamlines never leak into any of them.
         if matches!(
@@ -2093,9 +2168,10 @@ impl State {
             )
         });
         let coloring = mapping.as_ref().zip(stats.as_ref());
+        let layer = self.flow_layer_style_for(styles);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for seed in seeds {
-            self.push_line(&mut lines, seed, &opts, range, coloring);
+            self.push_line(&mut lines, seed, &opts, range, coloring, layer);
         }
         lines
     }
@@ -2127,6 +2203,7 @@ impl State {
         opts: &StreamlineOpts,
         range: (f32, f32),
         coloring: Option<(&ColorMapping, &ColorStats)>,
+        layer: FlowLayerStyle,
     ) {
         let (lo, hi) = range;
         let flow = self.scene_flow();
@@ -2161,12 +2238,12 @@ impl State {
             };
             lines.push(LineInstanceGPU {
                 a: [pa.x, pa.y, pa.z, 1.0],
-                b: [pb.x, pb.y, pb.z, STREAMLINE_WIDTH],
+                b: [pb.x, pb.y, pb.z, STREAMLINE_WIDTH * layer.width],
                 color: [
                     rgb[0] as f32 / 255.0,
                     rgb[1] as f32 / 255.0,
                     rgb[2] as f32 / 255.0,
-                    1.0,
+                    sanitized_opacity(layer.opacity),
                 ],
             });
         }
@@ -2182,6 +2259,16 @@ impl State {
         self: &State,
         color_range: (f32, f32),
         clicks: &[Vec3],
+    ) -> Vec<LineInstanceGPU> {
+        self.click_streamlines_snapshot_with_styles(color_range, clicks, self.layer_styles())
+    }
+
+    /// [`State::click_streamlines_snapshot`] for an explicit style record.
+    pub(crate) fn click_streamlines_snapshot_with_styles(
+        self: &State,
+        color_range: (f32, f32),
+        clicks: &[Vec3],
+        styles: &LayerStyles,
     ) -> Vec<LineInstanceGPU> {
         if matches!(
             self.field_mode,
@@ -2208,10 +2295,11 @@ impl State {
             )
         });
         let coloring = mapping.as_ref().zip(stats.as_ref());
+        let layer = self.flow_layer_style_for(styles);
         let mut lines: Vec<LineInstanceGPU> = Vec::new();
         for click in clicks {
             for seed in burst_seeds(*click, &self.scene_domain(), CLICK_BURST_SEEDS, dimension) {
-                self.push_line(&mut lines, seed, &opts, color_range, coloring);
+                self.push_line(&mut lines, seed, &opts, color_range, coloring, layer);
             }
         }
         lines
@@ -2222,6 +2310,19 @@ impl State {
     /// the UI layer just stores the result; the field is sampled once and
     /// reused for the arrows and the streamline colour range.
     pub fn snapshot(self: &State) -> SceneGPU {
+        self.snapshot_with_styles(self.layer_styles())
+    }
+
+    /// The unstyled line blueprint used by SVG/vector exports: the same scene
+    /// geometry as [`State::snapshot`] but with every [`LayerStyles`] override
+    /// neutral. Raster output keeps the styled [`State::snapshot`].
+    pub fn snapshot_blueprint(self: &State) -> SceneGPU {
+        self.snapshot_with_styles(&LayerStyles::default())
+    }
+
+    /// Build the scene with an explicit layer-style record. `snapshot` passes
+    /// the committed styles; `snapshot_blueprint` passes the neutral default.
+    pub(crate) fn snapshot_with_styles(self: &State, styles: &LayerStyles) -> SceneGPU {
         if self.field_mode == FieldMode::Ode {
             // Ode owns precomputed trajectory lines and per-frame markers in
             // the app; the pure field snapshot never samples the formula.
@@ -2233,7 +2334,7 @@ impl State {
                 combined: Arc::new(Vec::new()),
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
-                arrow_params: self.arrow_params,
+                arrow_params: self.effective_arrow_params_for(styles),
                 mode_3d: self.mode_3d,
             };
         }
@@ -2242,7 +2343,7 @@ impl State {
             let arrows = if self.arrows {
                 self.induction_sampling
                     .as_ref()
-                    .map(|sampling| self.arrow_instances(&sampling.arrows))
+                    .map(|sampling| self.arrow_instances_with_styles(&sampling.arrows, styles))
                     .unwrap_or_default()
             } else {
                 Vec::new()
@@ -2255,14 +2356,14 @@ impl State {
                 combined: Arc::new(Vec::new()),
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
-                arrow_params: self.arrow_params,
+                arrow_params: self.effective_arrow_params_for(styles),
                 mode_3d: self.mode_3d,
             };
         }
         if self.field_mode == FieldMode::Sources {
             let arrows = if self.arrows {
                 match &self.source_sampling {
-                    Some(sampling) => self.arrow_instances(&sampling.arrows),
+                    Some(sampling) => self.arrow_instances_with_styles(&sampling.arrows, styles),
                     None => Vec::new(),
                 }
             } else {
@@ -2276,7 +2377,7 @@ impl State {
                 combined: Arc::new(Vec::new()),
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
-                arrow_params: self.arrow_params,
+                arrow_params: self.effective_arrow_params_for(styles),
                 mode_3d: self.mode_3d,
             };
         }
@@ -2286,7 +2387,7 @@ impl State {
             let arrows = if self.arrows {
                 self.maxwell_sampling
                     .as_ref()
-                    .map(|sampling| self.arrow_instances(&sampling.arrows))
+                    .map(|sampling| self.arrow_instances_with_styles(&sampling.arrows, styles))
                     .unwrap_or_default()
             } else {
                 Vec::new()
@@ -2317,7 +2418,7 @@ impl State {
                 combined: Arc::new(Vec::new()),
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
-                arrow_params: self.arrow_params,
+                arrow_params: self.effective_arrow_params_for(styles),
                 mode_3d: self.mode_3d,
             };
         }
@@ -2327,7 +2428,7 @@ impl State {
             let arrows = if self.arrows {
                 self.material_sampling
                     .as_ref()
-                    .map(|sampling| self.arrow_instances(&sampling.arrows))
+                    .map(|sampling| self.arrow_instances_with_styles(&sampling.arrows, styles))
                     .unwrap_or_default()
             } else {
                 Vec::new()
@@ -2354,19 +2455,19 @@ impl State {
                 combined: Arc::new(Vec::new()),
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
-                arrow_params: self.arrow_params,
+                arrow_params: self.effective_arrow_params_for(styles),
                 mode_3d: self.mode_3d,
             };
         }
         let sampled = self.sample();
         let arrows = if self.arrows {
-            self.arrow_instances(&sampled)
+            self.arrow_instances_with_styles(&sampled, styles)
         } else {
             Vec::new()
         };
         SceneGPU {
             arrows: Arc::new(arrows),
-            lines: Arc::new(self.streamlines_snapshot(&sampled)),
+            lines: Arc::new(self.streamlines_snapshot_with_styles(&sampled, styles)),
             // Ticket 48: trails come from the live cloud in the app's particle
             // block, never from this dirty-flag snapshot.
             trails: Arc::new(Vec::new()),
@@ -2377,7 +2478,7 @@ impl State {
             combined: Arc::new(Vec::new()),
             arrow_style: self.arrow_style,
             arrow_style_2d: self.arrow_style_2d,
-            arrow_params: self.arrow_params,
+            arrow_params: self.effective_arrow_params_for(styles),
             mode_3d: self.mode_3d,
         }
     }
@@ -2397,6 +2498,19 @@ impl State {
         }
         self.dirty = false;
         Some(self.snapshot())
+    }
+}
+
+/// Defensive width repair for the public style record: a non-finite value is
+/// neutral, a finite one clamps into the A1 bounds.
+fn sanitized_width_for_style(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(
+            crate::layer_style::MIN_WIDTH_MULTIPLIER,
+            crate::layer_style::MAX_WIDTH_MULTIPLIER,
+        )
+    } else {
+        1.0
     }
 }
 

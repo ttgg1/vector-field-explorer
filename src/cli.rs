@@ -8,6 +8,7 @@ use serde::Deserialize;
 mod scene;
 pub use scene::{
     OutputFrame, PreparedScene, output_frame, prepare_animation_snapshot, prepare_scene,
+    prepare_scene_with_styles,
 };
 
 #[path = "cli_svg.rs"]
@@ -426,11 +427,18 @@ pub fn run_export(options: CliOptions) -> Result<(), CliError> {
     if options.animation_format.is_some() {
         return run_animation_export(&options);
     }
-    let prepared = prepare_scene(&options, output_frame(&options)?)?;
+    let frame = output_frame(&options)?;
     if output_extension(&options.output)?.eq_ignore_ascii_case("svg") {
+        // SVG is the unstyled line blueprint; PNG keeps the styled scene.
+        let prepared = prepare_scene_with_styles(
+            &options,
+            frame,
+            &crate::layer_style::LayerStyles::default(),
+        )?;
         std::fs::write(&options.output, scene_to_cli_svg(&prepared)?)
             .map_err(|e| CliError::Write(format!("write SVG {}: {e}", options.output.display())))
     } else {
+        let prepared = prepare_scene(&options, frame)?;
         let pixels = render_offscreen(&prepared)?;
         image::save_buffer_with_format(
             &options.output,

@@ -3,6 +3,8 @@
 
 use glam::Mat4;
 
+use crate::layer_style::LayerStyles;
+
 use super::*;
 
 impl VfApp {
@@ -348,6 +350,10 @@ impl VfApp {
             // as well as in the menu: scalar kinds never fall through to the
             // vector exporter.
             if self.take_svg_export_route() == super::plot::SvgExportRoute::Allowed {
+                // SVG keeps the unstyled line blueprint (issue #84 contract):
+                // layer overrides belong to the live viewport and raster output.
+                let scene =
+                    self.assemble_viewport_scene_with_styles(&view, &LayerStyles::default());
                 #[cfg(not(target_arch = "wasm32"))]
                 let over_cap = screenshot::exceeds_svg_element_cap(&scene);
                 let element_count = screenshot::svg_element_count(&scene);
@@ -563,6 +569,18 @@ impl VfApp {
     /// particles and 2D plane-slice particles both produce them, while ordinary
     /// two-component 2D simply has an empty list.
     fn assemble_viewport_scene(&mut self, view: &Mat4) -> SceneGPU {
+        let styles = *self.state.layer_styles();
+        self.assemble_viewport_scene_with_styles(view, &styles)
+    }
+
+    /// [`Self::assemble_viewport_scene`] with an explicit layer-style record.
+    /// The live path passes the committed styles; SVG export passes the neutral
+    /// default so overrides never reach the vector output.
+    fn assemble_viewport_scene_with_styles(
+        &mut self,
+        view: &Mat4,
+        styles: &LayerStyles,
+    ) -> SceneGPU {
         // Ode markers are recomputed per frame and appended to copies: 2D uses
         // the cached dots vector, 3D the sorted combined stream. The cached
         // scene itself is never written.
@@ -571,8 +589,92 @@ impl VfApp {
         } else {
             Vec::new()
         };
-        let cached = self.scene.as_vector_mut().expect("vector branch");
-        assemble_vector_scene(&self.state, cached, &ode_markers, view)
+        if *styles == *self.state.layer_styles() {
+            let cached = self.scene.as_vector_mut().expect("vector branch");
+            return assemble_vector_scene(&self.state, cached, &ode_markers, view);
+        }
+        if self.state.field_mode == FieldMode::Ode {
+            // Ode's trajectory lines are already unstyled (they use the stored
+            // arrow params), so its cached geometry is the blueprint.
+            let cached = self.scene.as_vector_mut().expect("vector branch");
+            return assemble_vector_scene(&self.state, cached, &ode_markers, view);
+        }
+
+        // Rebuild the style-sensitive geometry from the state under the neutral
+        // record instead of reusing the styled cache.
+        let reference_style = self.state.reference_viewport_style_for(styles);
+        let mut blueprint = self.state.snapshot_with_styles(styles);
+        let click_lines = self.state.click_streamlines_snapshot_with_styles(
+            self.dots_range,
+            &self.click_seeds,
+            styles,
+        );
+        let mut lines = compose_lines_with_frame_style(
+            blueprint.lines.as_ref(),
+            &click_lines,
+            &self.state.scene_domain(),
+            self.state.is_3d(),
+            self.state.plane_frame(),
+            self.state.show_grid,
+            self.state.show_coordinate_system,
+            &reference_style,
+        );
+        // Source/induction glyphs are fixed-colour geometry and take no style.
+        // Reuse the app's own composition; it reports the glyph count, and the
+        // glyphs are the tail, so the neutral reference prefix is dropped
+        // without recomposing it.
+        let (composed, glyph_count) = compose_vector_lines(&self.state, &[], &[]);
+        let start = composed.len().saturating_sub(glyph_count);
+        if let Some(glyphs) = composed.get(start..) {
+            lines.extend_from_slice(glyphs);
+        }
+        blueprint.lines = Arc::new(lines);
+        let (dots, trails) = self.blueprint_particle_instances(styles);
+        blueprint.dots = dots;
+        blueprint.trails = trails;
+        blueprint.combined = Arc::new(Vec::new());
+        assemble_vector_scene(&self.state, &mut blueprint, &ode_markers, view)
+    }
+
+    /// Dot and trail instances rebuilt under `styles`, mirroring
+    /// [`super::particle_scene_instances`] without its committed-style lookup.
+    fn blueprint_particle_instances(
+        &self,
+        styles: &LayerStyles,
+    ) -> (Arc<Vec<ArrowInstanceGPU>>, Arc<Vec<LineInstanceGPU>>) {
+        let state = &self.state;
+        let appearance = state.particle_appearance.sanitized();
+        let spacing = state.spacing();
+        let flow = state.scene_flow();
+        let domain = state.scene_domain();
+        let palette = ParticlePalette {
+            colormap: state.colormap,
+            color_range: self.color_facts.range,
+            speed_range: speed_range(&self.particles),
+            mapping: self.color_facts.mapping.as_ref(),
+            stats: &self.color_facts.stats,
+        };
+        let layer = state.flow_layer_style_for(styles);
+        let dots = Arc::new(dot_instances_styled_at(
+            &self.particles,
+            &flow,
+            &domain,
+            &palette,
+            &appearance,
+            state.particle_radius(spacing),
+            state.time,
+            layer,
+        ));
+        let trails = Arc::new(trail_instances_styled_at(
+            &self.particles,
+            &flow,
+            &palette,
+            &appearance,
+            spacing,
+            state.time,
+            layer,
+        ));
+        (dots, trails)
     }
 
     /// Integration-test seam: assemble the scene exactly as `frame_viewport`
@@ -582,6 +684,16 @@ impl VfApp {
     pub fn test_assemble_viewport_scene(&mut self) -> SceneGPU {
         let view = self.orbit.view();
         self.assemble_viewport_scene(&view)
+    }
+
+    /// Integration-test seam for the neutral blueprint assembly.
+    #[doc(hidden)]
+    pub fn test_assemble_viewport_scene_with_styles(
+        &mut self,
+        styles: &LayerStyles,
+    ) -> SceneGPU {
+        let view = self.orbit.view();
+        self.assemble_viewport_scene_with_styles(&view, styles)
     }
 }
 
