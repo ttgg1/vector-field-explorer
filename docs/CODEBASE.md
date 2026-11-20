@@ -2252,6 +2252,74 @@ no file I/O.
 `VfApp::profiles` and persists it through `AppSettings`; the Appearance panel's
 `Profiles` section owns capture, apply, delete and portable import/export.
 
+#### `src/interaction.rs` — pure interaction profiles
+
+**Purpose.** Issue #88 slice A1: a named interaction profile bundling the
+one-chord-per-action binding table and the camera-feel multipliers. It is pure
+model code: no UI, input routing, persistence, `AppSettings`, `State`,
+renderer, camera constants or dependency changes.
+
+**Public API.** `INTERACTION_FORMAT_VERSION` (currently `1`),
+`MAX_PROFILE_NAME_BYTES = 48`, `MAX_USER_PROFILES = 16`, `MAX_BINDINGS = 19`,
+`MIN_CAMERA_MULTIPLIER = 0.25`, `MAX_CAMERA_MULTIPLIER = 4.0`,
+`DEFAULT_PROFILE_NAME = "Default"`; `ChordModifiers { command, shift, alt }`;
+`KeyChord { key, modifiers }` with `label` and `is_browser_reserved`;
+`InteractionAction` with `ALL` (22), `REMAPPABLE` (19), `label`, `is_reserved`
+and `is_global`; `Bindings` with `default_bindings`, `chord`, `owner_of`,
+`assign`, `replace`, `reset_action`, `reset_all` and `validate`; `BindError`
+(`Reserved`, `BrowserReserved`, `Conflict(owner)`, `Unknown`); `CameraFeel` and
+`InteractionProfile` with `validate` and `sanitized`; `ProfileDocument` with
+`to_json`/`from_json`; `ProfileLibrary` (`new`, `user`, `len`, `is_empty`,
+`upsert`, `remove`, `all`, `import_text`, `export_text`).
+
+**Contract.**
+- Defaults reproduce today's chords: controls `Mod+B`, presets `Mod+P`,
+  appearance `Mod+Shift+A`, interaction `Mod+Shift+L`, help `F1`, reset `R`,
+  fit `F`, zoom in `Plus` (wiring also accepts `=`, not a second chord), zoom
+  out `Minus`, view arrows, play/pause `Space`, seed `S`, particles `P`,
+  screenshot `Mod+Shift+S`, copy `Mod+Shift+C`, quit `Mod+Q`.
+- Fly toggle and fly movement are deliberately absent from the chord model and
+  stay on the ticket-70 physical-key path, so `MAX_BINDINGS` is 19. Reserved
+  actions `Dismiss`, `Undo` and `Redo` are read-only. Only `Quit` is `global`
+  (fires while text input has focus).
+- `assign` refuses reserved actions/chords, browser chords, and a chord owned
+  by another action (`Conflict(owner)`), leaving the table untouched.
+  `replace` swaps the target chord with the owner's in one step; a free chord is
+  assigned. `reset_action`/`reset_all` restore defaults.
+- Browser-owned chords are `Mod+W`, `Mod+T`, `Mod+N`, `Mod+Shift+W`,
+  `Mod+Shift+I`, `Mod+Shift+J`, `Mod+Shift+K`, `Mod+Shift+C` and `Mod+Q`. The
+  shipped `Mod+Q`, `Mod+Shift+C` and `Mod+Shift+S` defaults are grandfathered:
+  they stay bindable to Quit, Copy formula and Screenshot respectively, but are
+  refused for any other action.
+- `validate` proves all 19 actions are bound, no duplicate chord exists, and no
+  reserved or browser-owned chord is used. `sanitized` is total: trim/truncate
+  names to 48 bytes, clamp multipliers, reset non-finite values to `1.0`,
+  restore defaults for missing or invalid bindings and resolve duplicates; its
+  output always validates.
+- Documents are `deny_unknown_fields`, probe the version before parsing
+  profiles, reject duplicate names and emit compact pinned JSON. Bindings are a
+  stable action-id-keyed map. Imports are atomic on a library clone.
+- `ProfileLibrary` keeps the built-in `Default` apart from at most 16 user
+  profiles, rejects duplicate names case-sensitively, refuses overwriting or
+  removing the built-in, and exports only user profiles (an empty string when
+  there are none).
+
+**Pinned by.** `tests/interaction_test.rs`:
+`defaults_match_the_documented_bindings`,
+`assign_rejects_a_reserved_action_or_chord`,
+`assign_reports_the_conflicting_owner_and_changes_nothing`,
+`replace_swaps_chords_so_no_duplicate_exists`,
+`browser_reserved_chords_are_refused_with_a_reason`,
+`camera_feel_clamps_and_sanitizes`,
+`sanitized_profiles_always_validate`,
+`profile_document_rejects_newer_versions_and_unknown_fields`,
+`library_rejects_duplicates_and_the_cap`, `library_import_is_atomic`,
+`library_export_excludes_builtins_and_handles_empty`, and
+`profile_and_document_json_round_trip_is_stable`.
+
+**Limitations.** No panel UI, settings-envelope persistence or input routing in
+this slice; slices A2 and A3 own those.
+
 ### 3.3 Viewmodel and persistence
 
 #### `src/viewmodel.rs` — state, setters, snapshot, input decisions
