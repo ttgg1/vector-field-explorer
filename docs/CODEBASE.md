@@ -2003,6 +2003,40 @@ parity, non-finite mid grey, State mapping/setter/freeze behaviour, and
 wiring in this slice; streamlines only use the mapping when the state passes
 one, and the legacy streamlines path stays byte-identical.
 
+#### `src/palette_io.rs` — portable palette document
+
+**Purpose.** Issue #83 slice C1: a strict, versioned JSON form for a custom
+palette so users can copy a ramp between scenes and machines. Pure model only;
+nothing is wired into the UI, persistence or renderer.
+
+**Public API.** `PALETTE_FORMAT_VERSION` (currently `1`);
+`PaletteStop { position, color: String }`; `PaletteDocument { version, kind,
+reversed, stops }` with `from_ramp`, `to_ramp`, `to_json` and `from_json`;
+`export_ramp` and `import_ramp`.
+
+**Contract.**
+- `from_ramp` copies kind, reversal and every position, writing canonical
+  lowercase `#rrggbb` via `Rgb::to_hex` and the current version.
+- `to_ramp` rejects any other version first (naming the found and expected
+  versions), parses colours with `Rgb::from_hex` (uppercase and an optional
+  `#` are accepted; a failure names the stop index and offending text), then
+  returns the exact `ColorRamp::validate` error. Stops are never sanitised,
+  clamped or dropped.
+- Documents and stops reject unknown fields (`deny_unknown_fields`);
+  `from_json` maps every serde failure to `invalid palette JSON: {error}`.
+- `to_json` is compact serde output with stable field order: `version`,
+  `kind`, `reversed`, `stops`.
+- `export_ramp`/`import_ramp` compose those steps and never panic.
+
+**Pinned by.** `tests/palette_io_test.rs`: sequential/diverging/cyclic round
+trips, lowercase hex and current version, uppercase/bare hex imports, unknown
+document and stop fields, future-version rejection naming both versions, bad
+hex naming the stop index, validation failures (too few stops, duplicate
+positions), malformed JSON, builtin Viridis round trip, and pinned field order.
+
+**Limitations.** No file picker, clipboard UI, persistence or `State` wiring in
+this slice.
+
 #### `src/plane.rs` — plane-by-plane selection
 
 **Purpose.** Select one sampled slice of the 3D cube and dim the rest.
