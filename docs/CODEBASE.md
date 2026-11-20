@@ -150,8 +150,11 @@ Why the seam matters:
   so markers follow the same selected `plane_frame` as the samples and resolve
   the `Sources` layer with each glyph's family. In `FieldMode::Induction` it
   appends exactly the selected conductor's glyph, resolving the `Induction`
-  layer, and no streamline/click geometry; Formula mode preserves the durable
-  scene but appends none. In `FieldMode::Ode` the pure snapshot stays empty and
+  layer, and no streamline/click geometry. `FieldMode::Materials` and
+  `FieldMode::Maxwell` resolve one `(TeachingScene, family)` record for both the
+  mode's arrows and its outline segments, so an Arrows-layer override no longer
+  changes those teaching scenes; the SVG blueprint keeps the neutral default.
+  Formula mode preserves the durable scene but appends none. In `FieldMode::Ode` the pure snapshot stays empty and
   the app owns precomputed trajectory lines plus axes, rebuilt once per solved
   scene;
   per-frame current-time markers are appended to a copy of `dots` (2D) or the

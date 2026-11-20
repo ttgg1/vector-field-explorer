@@ -62,6 +62,28 @@ with layer overrides. Layer styling is a viewport and raster-export concern:
 SVG keeps its line-blueprint semantics and does not apply overrides, and
 provenance metadata is unaffected.
 
+## Teaching-scene detail (slice B)
+
+The **Teaching scenes** layer covers the Materials and Maxwell modes. In both
+modes every drawn arrow belongs to one physics family, so a single resolved
+`(TeachingScenes, family)` style applies to the arrows and to that family's
+outline:
+
+- arrows take the layer opacity and width multipliers, and the family colour
+  override where one is set, because their colours are fixed family colours
+  and never come from the #83 mapping;
+- outline segments take the same opacity (multiplied into the existing alpha),
+  width multiplier and colour override, keeping their base alpha;
+- the resolved style replaces the Arrows layer for that mode, so an Arrows-only
+  override no longer changes Materials or Maxwell geometry;
+- neutral styles stay byte-identical, and the SVG blueprint path stays
+  unstyled.
+
+Sources, Induction and formula arrows keep their own layers. In `Both` display
+the source arrows are sampled as one mixed set with fixed family colours; they
+stay under the Arrows layer in this slice, while their glyph lines already take
+family styling. Extending family colour to `Both` arrows is a later refinement.
+
 ## Persistence and scenes
 
 Overrides persist in the settings envelope (`layer_styles`, serde-defaulted,
