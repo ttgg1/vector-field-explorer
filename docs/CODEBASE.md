@@ -2310,6 +2310,55 @@ composition, pinned field order, and validation never mutating the document.
 capture or `State` wiring in this slice; later slices call
 `ViewRecord::capture` at the call site.
 
+#### `src/scene_store.rs` — saved-scene store
+
+**Purpose.** Issue #90 slice B2b: a validated, ordered collection of
+`SceneDocument`s plus the versioned envelope and storage seams that will back
+the saved-scenes UI in a later slice. This module picks no path and touches no
+UI or app state; native callers pass the directory (the app will pass
+`ui::presets::default_preset_dir()`).
+
+**Public API.** `SCENE_STORE_VERSION` (currently `1`), `SCENES_FILE`
+(`scenes.json`), `MAX_SCENES` (`64`), `SCENES_STORAGE_KEY`
+(`vector-field-explorer.saved-scenes`, wasm only); `SceneStore` with `new`,
+`from_documents`, `scenes`, `get`, `upsert`, `delete`, `to_json` and
+`from_json`; `export_store` and `import_store`; native `load_dir`/`save_dir`;
+wasm `load_wasm`/`save_wasm`; `storage_note`.
+
+**Contract.**
+- Order is insertion order. `from_documents`, `upsert` and `from_json` validate
+  every document through `SceneDocument::validate` and reject exact,
+  case-sensitive duplicate names and more than `MAX_SCENES`; errors name the
+  scene or the cap. A rejected insert leaves the store unchanged.
+- `upsert` replaces the same name in place and appends otherwise. `delete`
+  removes by name and reports whether anything was removed.
+- `to_json` is compact `{"version":1,"scenes":[...]}`, with the envelope's
+  `version` then `scenes` and each document's declaration order pinned; a serde
+  failure is an `Err`, never an empty string.
+- `from_json`/`import_store` use `deny_unknown_fields` on the envelope, require
+  the store version to equal `1` (naming the found and expected versions), then
+  validate every document. Any failure rejects the whole payload atomically: no
+  clamping, dropping or partial load.
+- Native `load_dir`: a missing `scenes.json` is an empty store with no note; an
+  unreadable, corrupt or invalid file is an empty store plus a note naming the
+  unusable file, logged with `log::warn!`. `save_dir` creates the directory,
+  serializes and writes the file.
+- Wasm: a missing key is an empty store with no note; corrupt or unavailable
+  storage is an empty store plus `storage_note()`, logged. `save_wasm` writes
+  through and returns the error text on failure.
+- Library code has no panic path: no `unwrap`, `expect` or indexing.
+
+**Pinned by.** `tests/scene_store_test.rs`: JSON round trip and order,
+duplicate-name and 64-scene cap rejection, future envelope and scene versions,
+atomic whole-payload rejection with an untouched target, in-place replacement,
+delete reporting, native missing/round-trip/corrupt-file behaviour, export and
+import composition with a failure, pinned compact field order, and rejected
+upserts leaving the store unchanged.
+
+**Limitations.** No saved-scenes UI, panel, app wiring, camera apply or
+persistence-envelope integration in this slice; the app supplies the directory
+and handles user-facing copy.
+
 #### `src/persistence.rs` — one settings envelope
 
 **Purpose.** Restore and save style, layout, parameter and view state under one
