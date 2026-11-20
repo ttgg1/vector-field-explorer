@@ -42,6 +42,7 @@ pub mod render;
 pub mod renderer;
 pub mod sampling;
 pub mod scalar;
+pub mod scene_document;
 pub mod screenshot;
 pub mod sim_clock;
 pub mod source_glyph;
