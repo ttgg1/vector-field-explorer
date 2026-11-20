@@ -788,3 +788,56 @@ fn streamline_segments_follow_the_selected_quantity() {
         );
     }
 }
+
+// --- Issue #84 A2a: the Flow layer multiplies streamline alpha and width ----
+
+#[test]
+fn flow_opacity_and_width_apply_to_streamlines() {
+    use vector_field_explorer::layer_style::{LayerId, LayerOverride};
+    use vector_field_explorer::viewmodel::STREAMLINE_WIDTH;
+
+    let mut state = State::new(false);
+    assert!(state.set_formula("(-y, x)".to_string()), "vortex field");
+    assert!(state.set_streamlines(true));
+    let sampled = state.sample();
+    let range = state.color_range(&sampled);
+    let baseline = state.streamlines_snapshot(&sampled);
+    assert!(!baseline.is_empty(), "the automatic grid paints segments");
+    let click_baseline = state.click_streamlines_snapshot(range, &[Vec3::new(0.2, 0.1, 0.0)]);
+    assert!(!click_baseline.is_empty(), "the click burst paints segments");
+
+    let mut styles = *state.layer_styles();
+    let flow = LayerId::ALL
+        .iter()
+        .position(|layer| *layer == LayerId::Flow)
+        .expect("Flow is listed");
+    styles.layers[flow] = LayerOverride {
+        opacity: Some(0.5),
+        width: Some(2.0),
+        color: None,
+    };
+    state
+        .commit_layer_styles(styles)
+        .expect("the flow style is valid");
+
+    let styled = state.streamlines_snapshot(&sampled);
+    assert_eq!(styled.len(), baseline.len(), "same segments, new paint");
+    for (before, after) in baseline.iter().zip(&styled) {
+        assert_eq!(after.b[3], 2.0 * STREAMLINE_WIDTH, "width x 2");
+        assert_eq!(after.color[3], 0.5, "alpha x 0.5");
+        assert_eq!(after.a, before.a, "geometry untouched");
+        assert_eq!(&after.b[..3], &before.b[..3], "geometry untouched");
+        assert_eq!(
+            [after.color[0], after.color[1], after.color[2]],
+            [before.color[0], before.color[1], before.color[2]],
+            "mapped RGB untouched"
+        );
+    }
+
+    let click_styled = state.click_streamlines_snapshot(range, &[Vec3::new(0.2, 0.1, 0.0)]);
+    assert_eq!(click_styled.len(), click_baseline.len());
+    for line in &click_styled {
+        assert_eq!(line.b[3], 2.0 * STREAMLINE_WIDTH, "click width x 2");
+        assert_eq!(line.color[3], 0.5, "click alpha x 0.5");
+    }
+}

@@ -6,9 +6,10 @@ use glam::{Mat4, Vec3};
 use super::{CameraKind, CliError, CliOptions, Mode, validate_effective};
 use crate::{
     animation_scene::AnimationSnapshot,
-    app::compose_lines_with_frame,
+    app::compose_lines_with_frame_style,
     camera::OrbitCamera,
     fly_camera::FlyCamera,
+    layer_style::LayerStyles,
     particles::{self, AdvectSettings, Particles},
     renderer::{SceneGPU, combined_instances, sort_lines_back_to_front, sort_scene_back_to_front},
     viewmodel::State,
@@ -37,15 +38,35 @@ pub struct PreparedScene {
 
 /// Prepare the renderer-ready final scene for either backend.
 pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<PreparedScene, CliError> {
+    prepare_scene_inner(options, frame, None)
+}
+
+/// Prepare the same scene as [`prepare_scene`] with an explicit layer-style
+/// record. SVG export passes [`LayerStyles::default`] so vector output keeps
+/// its unstyled blueprint; PNG and animation keep the styled path.
+pub fn prepare_scene_with_styles(
+    options: &CliOptions,
+    frame: OutputFrame,
+    styles: &LayerStyles,
+) -> Result<PreparedScene, CliError> {
+    prepare_scene_inner(options, frame, Some(styles))
+}
+
+fn prepare_scene_inner(
+    options: &CliOptions,
+    frame: OutputFrame,
+    styles: Option<&LayerStyles>,
+) -> Result<PreparedScene, CliError> {
     validate_effective(options)?;
     // Validate every interval before allocating or advancing a particle cloud.
     let (steps, endpoint) = simulation_schedule(options)?;
     let mut state = cli_state(options);
+    let styles = styles.copied().unwrap_or(*state.layer_styles());
     let cloud = particle_cloud(&mut state, options, &steps);
     state.time = endpoint;
     // Snapshot owns flow tracing. Compose references onto those lines exactly once.
-    let mut scene = state.snapshot();
-    scene.lines = Arc::new(compose_lines_with_frame(
+    let mut scene = state.snapshot_with_styles(&styles);
+    scene.lines = Arc::new(compose_lines_with_frame_style(
         scene.lines.as_ref(),
         &[],
         &state.scene_domain(),
@@ -53,6 +74,7 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         state.plane_frame(),
         state.show_grid,
         state.show_coordinate_system,
+        &state.reference_viewport_style_for(&styles),
     ));
     if let Some(cloud) = cloud {
         let facts = crate::app::scene_color_facts(&state);
@@ -67,7 +89,7 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
         let spacing = state.spacing();
         let domain = state.scene_domain();
         let flow = state.scene_flow();
-        scene.dots = Arc::new(particles::dot_instances_at(
+        scene.dots = Arc::new(particles::dot_instances_styled_at(
             &cloud,
             &flow,
             &domain,
@@ -75,14 +97,16 @@ pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<Prepare
             &state.particle_appearance,
             state.particle_radius(spacing),
             state.time,
+            state.flow_layer_style_for(&styles),
         ));
-        let mut trails = particles::trail_instances_at(
+        let mut trails = particles::trail_instances_styled_at(
             &cloud,
             &flow,
             &palette,
             &state.particle_appearance,
             spacing,
             state.time,
+            state.flow_layer_style_for(&styles),
         );
         sort_lines_back_to_front(&mut trails, &frame.view);
         scene.trails = Arc::new(trails);

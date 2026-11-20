@@ -5,9 +5,15 @@ use vector_field_explorer::{
     arrow_style::ArrowStyle2D,
     cli::{
         CliError, CliFlags, PreparedScene, output_frame, parse_config, prepare_scene,
-        resolve_config, scene_to_cli_svg,
+        prepare_scene_with_styles, resolve_config, scene_to_cli_svg,
     },
+    color_ramp::Rgb,
+    layer_style::{LayerId, LayerOverride, LayerStyles, MAX_WIDTH_MULTIPLIER, MIN_WIDTH_MULTIPLIER},
+    reference::scaled_viewport_style,
     renderer::{ArrowInstanceGPU, LineInstanceGPU},
+    screenshot,
+    viewport_style::ViewportStyle,
+    VfApp,
 };
 
 fn prepared(json: &str) -> PreparedScene {
@@ -288,4 +294,262 @@ fn rejects_3d_before_serializing_even_an_empty_scene() {
     let error = scene_to_cli_svg(&p).unwrap_err();
     assert!(matches!(error, CliError::Validation(_)));
     assert!(error.to_string().contains("3D SVG"));
+}
+
+fn slot(layer: LayerId) -> usize {
+    LayerId::ALL
+        .iter()
+        .position(|candidate| *candidate == layer)
+        .expect("every layer is in LayerId::ALL")
+}
+
+fn lines_differ(a: &[LineInstanceGPU], b: &[LineInstanceGPU]) -> bool {
+    a.len() != b.len()
+        || a.iter()
+            .zip(b)
+            .any(|(a, b)| a.a != b.a || a.b != b.b || a.color != b.color)
+}
+
+fn non_neutral_styles() -> LayerStyles {
+    let mut styles = LayerStyles::default();
+    styles.layers[slot(LayerId::Arrows)] = LayerOverride {
+        opacity: Some(0.25),
+        width: Some(2.5),
+        color: Some(Rgb([12, 34, 56])),
+    };
+    styles.layers[slot(LayerId::Flow)] = LayerOverride {
+        opacity: Some(0.35),
+        width: Some(3.0),
+        color: None,
+    };
+    styles.layers[slot(LayerId::Reference)] = LayerOverride {
+        opacity: Some(0.45),
+        width: Some(2.0),
+        color: Some(Rgb([90, 80, 70])),
+    };
+    styles
+}
+
+fn two_d_options(json: &str) -> vector_field_explorer::cli::CliOptions {
+    resolve_config(
+        Some(parse_config(json).unwrap()),
+        CliFlags {
+            output: Some("plot.svg".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn cli_svg_export_ignores_arrows_flow_and_reference_overrides() {
+    let options = two_d_options(
+        r#"{"width":160,"height":100,"density":4,"formula":"(-y, x)","streamlines":true,"references":{"grid_and_domain_box":true,"world_axes":true}}"#,
+    );
+    let frame = output_frame(&options).unwrap();
+
+    let mut styled = vector_field_explorer::viewmodel::State::new(false);
+    assert!(styled.set_formula("(-y, x)".into()));
+    styled.set_density(4);
+    styled.set_streamlines(true);
+    styled.layer_styles = non_neutral_styles();
+    let mut neutral = styled.clone();
+    neutral.layer_styles = LayerStyles::default();
+
+    let blueprint_svg = |state: &vector_field_explorer::viewmodel::State| {
+        let neutral_style = scaled_viewport_style(
+            &state.viewport_style,
+            &vector_field_explorer::layer_style::ResolvedLayerStyle {
+                opacity: 1.0,
+                width: 1.0,
+                color: None,
+            },
+        );
+        let mut scene = state.snapshot_blueprint();
+        scene.lines = Arc::new(vector_field_explorer::app::compose_lines_with_frame_style(
+            &scene.lines,
+            &[],
+            &state.scene_domain(),
+            state.is_3d(),
+            state.plane_frame(),
+            state.show_grid,
+            state.show_coordinate_system,
+            &neutral_style,
+        ));
+        scene_to_cli_svg(&PreparedScene { scene, frame }).unwrap()
+    };
+
+    assert_eq!(
+        blueprint_svg(&neutral),
+        blueprint_svg(&styled),
+        "SVG export must keep the unstyled blueprint"
+    );
+    // The styled raster scene really differs, so the equality above is not
+    // vacuous.
+    let styled_probe = prepare_scene_with_styles(&options, frame, &non_neutral_styles()).unwrap();
+    let neutral_probe = prepare_scene(&options, frame).unwrap();
+    assert_ne!(
+        neutral_probe.scene.arrow_params, styled_probe.scene.arrow_params,
+        "the Arrows override changes the styled scene"
+    );
+    assert!(
+        lines_differ(&neutral_probe.scene.lines, &styled_probe.scene.lines),
+        "the Flow/Reference overrides change the styled lines"
+    );
+    // The route the CLI uses for SVG (default styles) matches the neutral scene.
+    assert_eq!(
+        scene_to_cli_svg(&prepare_scene_with_styles(&options, frame, &LayerStyles::default()).unwrap())
+            .unwrap(),
+        scene_to_cli_svg(&neutral_probe).unwrap()
+    );
+}
+
+#[test]
+fn app_svg_entry_uses_the_neutral_blueprint_when_styles_are_committed() {
+    let mut styled = VfApp::new();
+    styled.state.set_mode(false);
+    styled
+        .state
+        .commit_layer_styles(non_neutral_styles())
+        .expect("test styles validate");
+    styled.test_harness().advance_simulation();
+    let styled_blueprint =
+        styled.test_assemble_viewport_scene_with_styles(&LayerStyles::default());
+
+    let mut neutral = VfApp::new();
+    neutral.state.set_mode(false);
+    neutral.test_harness().advance_simulation();
+    let neutral_scene = neutral.test_harness().test_assemble_viewport_scene();
+
+    let matrix = glam::Mat4::IDENTITY;
+    assert_eq!(
+        styled_blueprint.arrow_params, neutral_scene.arrow_params,
+        "blueprint arrow params"
+    );
+    assert_eq!(
+        styled_blueprint.arrows.len(),
+        neutral_scene.arrows.len(),
+        "arrow count"
+    );
+    assert_eq!(
+        styled_blueprint.lines.len(),
+        neutral_scene.lines.len(),
+        "line count"
+    );
+    assert_eq!(
+        styled_blueprint.dots.len(),
+        neutral_scene.dots.len(),
+        "dot count"
+    );
+    assert_eq!(
+        styled_blueprint.trails.len(),
+        neutral_scene.trails.len(),
+        "trail count"
+    );
+    let styled_svg = screenshot::scene_to_svg(&styled_blueprint, matrix, 120, 80, [0.0; 4]);
+    let neutral_svg = screenshot::scene_to_svg(&neutral_scene, matrix, 120, 80, [0.0; 4]);
+    if styled_svg != neutral_svg {
+        let at = styled_svg
+            .bytes()
+            .zip(neutral_svg.bytes())
+            .position(|(a, b)| a != b)
+            .unwrap_or(styled_svg.len().min(neutral_svg.len()));
+        // `at` is a byte offset and may land inside a multi-byte character, so
+        // build the diagnostic window from char boundaries instead of slicing.
+        let window = |text: &str| {
+            text.char_indices()
+                .skip_while(|(index, _)| *index < at.saturating_sub(40))
+                .take_while(|(index, _)| *index < at.saturating_add(80))
+                .map(|(_, ch)| ch)
+                .collect::<String>()
+        };
+        panic!(
+            "first difference at {at}: styled {:?} neutral {:?}",
+            window(&styled_svg),
+            window(&neutral_svg)
+        );
+    }
+    // The styled live assembly still keeps the committed style, so the
+    // blueprint equality above is not vacuous.
+    let styled_live = styled.test_harness().test_assemble_viewport_scene();
+    assert_ne!(
+        styled_live.arrow_params, styled_blueprint.arrow_params,
+        "live scene should keep the Arrows width override"
+    );
+}
+
+#[test]
+fn directly_written_out_of_range_width_is_defensively_clamped() {
+    for (written, expected) in [
+        (-2.0, MIN_WIDTH_MULTIPLIER),
+        (f32::INFINITY, 1.0),
+        (99.0, MAX_WIDTH_MULTIPLIER),
+    ] {
+        let mut state = vector_field_explorer::viewmodel::State::new(true);
+        let stored = state.arrow_params;
+        state.layer_styles.layers[slot(LayerId::Arrows)].width = Some(written);
+        let params = state.effective_arrow_params();
+        assert_eq!(
+            params.head_width,
+            stored.head_width * expected,
+            "arrow width {written} must resolve to {expected}"
+        );
+        assert_eq!(params.shaft_radius, stored.shaft_radius * expected);
+
+        state.layer_styles.layers[slot(LayerId::Reference)].width = Some(written);
+        let style = state.reference_viewport_style();
+        let base = ViewportStyle::default();
+        assert_eq!(
+            style.grid_width,
+            base.grid_width * expected,
+            "reference width {written} must resolve to {expected}"
+        );
+
+        let resolved = vector_field_explorer::layer_style::ResolvedLayerStyle {
+            opacity: 1.0,
+            width: written,
+            color: None,
+        };
+        let scaled = scaled_viewport_style(&base, &resolved);
+        assert_eq!(scaled.box_width, base.box_width * expected);
+        assert_eq!(scaled.axis_width, base.axis_width * expected);
+    }
+}
+
+#[test]
+fn directly_written_non_finite_opacity_is_defensively_neutral() {
+    for (written, expected) in [
+        (f32::NAN, 1.0),
+        (f32::INFINITY, 1.0),
+        (f32::NEG_INFINITY, 1.0),
+        (99.0, 1.0),
+        (-2.0, 0.0),
+    ] {
+        let mut state = vector_field_explorer::viewmodel::State::new(true);
+        state.layer_styles.layers[slot(LayerId::Arrows)].opacity = Some(written);
+        let arrows = state.snapshot().arrows;
+        assert!(!arrows.is_empty(), "fixture must sample arrows");
+        assert_eq!(
+            arrows[0].color[3],
+            (state.arrow_opacity * expected).clamp(0.0, 1.0),
+            "arrow opacity {written} must resolve to {expected}"
+        );
+
+        state.layer_styles.layers[slot(LayerId::Reference)].opacity = Some(written);
+        let style = state.reference_viewport_style();
+        let base = ViewportStyle::default();
+        for (actual, neutral) in [
+            (style.grid_color[3], base.grid_color[3]),
+            (style.box_color[3], base.box_color[3]),
+            (style.axis_x_color[3], base.axis_x_color[3]),
+            (style.axis_y_color[3], base.axis_y_color[3]),
+            (style.axis_z_color[3], base.axis_z_color[3]),
+        ] {
+            assert_eq!(
+                actual,
+                (neutral * expected).clamp(0.0, 1.0),
+                "reference opacity {written} must resolve to {expected}"
+            );
+        }
+    }
 }

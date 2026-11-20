@@ -27,6 +27,7 @@ use crate::color_mapping::{ColorMapping, ColorSample, ColorStats};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::flow::Flow;
+use crate::layer_style::{MAX_WIDTH_MULTIPLIER, MIN_WIDTH_MULTIPLIER, ResolvedLayerStyle};
 use crate::renderer::{ArrowInstanceGPU, LineInstanceGPU, PARTICLE_KIND};
 
 /// Hard cap on the particle cloud, whatever the density slider asks for.
@@ -923,6 +924,47 @@ pub fn particle_rgb<F: Flow + ?Sized>(
     }
 }
 
+/// The Flow layer's resolved opacity and width multipliers (issue #84 A2a).
+///
+/// Dot radius and trail width multiply the resolved width, alpha multiplies
+/// the resolved opacity after [`ParticleAppearance`], and the result is
+/// clamped so a composed alpha never exceeds `1.0`. The neutral default is
+/// `1.0`/`1.0`, so an unstyled scene is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlowLayerStyle {
+    pub opacity: f32,
+    pub width: f32,
+}
+
+impl Default for FlowLayerStyle {
+    fn default() -> Self {
+        Self {
+            opacity: 1.0,
+            width: 1.0,
+        }
+    }
+}
+
+impl FlowLayerStyle {
+    /// Take the multipliers from an already validated A1 resolution.
+    pub fn from_resolved(resolved: &ResolvedLayerStyle) -> Self {
+        Self {
+            opacity: resolved.opacity,
+            width: resolved.width,
+        }
+    }
+
+    /// Defensive repair: a non-finite multiplier becomes neutral, opacity
+    /// clamps to `0.0..=1.0` and width into the A1 bounds. Never panics.
+    pub fn sanitized(self) -> Self {
+        let finite_or_one = |value: f32| if value.is_finite() { value } else { 1.0 };
+        Self {
+            opacity: finite_or_one(self.opacity).clamp(0.0, 1.0),
+            width: finite_or_one(self.width).clamp(MIN_WIDTH_MULTIPLIER, MAX_WIDTH_MULTIPLIER),
+        }
+    }
+}
+
 /// Draw the cloud: one GPU dot instance per particle. RGB follows
 /// [`ParticleAppearance::color_mode`] (magnitude, speed or fixed) and alpha is
 /// the particle opacity; radius is `radius` world units. Dots reuse the arrow
@@ -938,13 +980,39 @@ pub fn dot_instances_at<F: Flow + ?Sized>(
     radius: f32,
     time: f32,
 ) -> Vec<ArrowInstanceGPU> {
+    dot_instances_styled_at(
+        particles,
+        flow,
+        domain,
+        palette,
+        appearance,
+        radius,
+        time,
+        FlowLayerStyle::default(),
+    )
+}
+
+/// [`dot_instances_at`] with the Flow layer's opacity/width applied after the
+/// [`ParticleAppearance`] values.
+#[allow(clippy::too_many_arguments)]
+pub fn dot_instances_styled_at<F: Flow + ?Sized>(
+    particles: &Particles,
+    flow: &F,
+    domain: &Domain,
+    palette: &ParticlePalette<'_>,
+    appearance: &ParticleAppearance,
+    radius: f32,
+    time: f32,
+    layer: FlowLayerStyle,
+) -> Vec<ArrowInstanceGPU> {
+    let layer = layer.sanitized();
     let appearance = appearance.sanitized();
-    let alpha = appearance.opacity;
+    let alpha = (appearance.opacity * layer.opacity).clamp(0.0, 1.0);
     let radius = if radius.is_finite() {
         radius.max(0.0)
     } else {
         0.0
-    };
+    } * layer.width;
     let mut dots = Vec::with_capacity(particles.pos.len().min(MAX_PARTICLES));
     for i in 0..particles.pos.len().min(MAX_PARTICLES) {
         let p = particles.pos[i];
@@ -998,6 +1066,30 @@ pub fn trail_instances_at<F: Flow + ?Sized>(
     spacing: f32,
     time: f32,
 ) -> Vec<LineInstanceGPU> {
+    trail_instances_styled_at(
+        particles,
+        flow,
+        palette,
+        appearance,
+        spacing,
+        time,
+        FlowLayerStyle::default(),
+    )
+}
+
+/// [`trail_instances_at`] with the Flow layer's opacity/width applied after the
+/// [`ParticleAppearance`] values.
+#[allow(clippy::too_many_arguments)]
+pub fn trail_instances_styled_at<F: Flow + ?Sized>(
+    particles: &Particles,
+    flow: &F,
+    palette: &ParticlePalette<'_>,
+    appearance: &ParticleAppearance,
+    spacing: f32,
+    time: f32,
+    layer: FlowLayerStyle,
+) -> Vec<LineInstanceGPU> {
+    let layer = layer.sanitized();
     let appearance = appearance.sanitized();
     let effective = effective_trail_len(particles.pos.len(), appearance.trail_len);
     if effective < 2 {
@@ -1008,8 +1100,8 @@ pub fn trail_instances_at<F: Flow + ?Sized>(
     } else {
         0.0
     };
-    let width = appearance.trail_width * DOT_SPACING_FRACTION * spacing;
-    let alpha = appearance.opacity.clamp(0.0, 1.0);
+    let width = appearance.trail_width * DOT_SPACING_FRACTION * spacing * layer.width;
+    let alpha = (appearance.opacity * layer.opacity).clamp(0.0, 1.0);
     let fade = appearance.trail_fade.clamp(0.0, 1.0);
     let mut trails = Vec::new();
     for i in 0..particles.pos.len().min(MAX_PARTICLES) {

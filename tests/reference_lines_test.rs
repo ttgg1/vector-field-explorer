@@ -7,7 +7,9 @@
 //! the flat grid sits on.
 
 use glam::{UVec3, Vec3};
-use vector_field_explorer::app::{compose_lines, compose_lines_with_frame};
+use vector_field_explorer::app::{
+    compose_lines, compose_lines_with_frame, compose_lines_with_frame_style,
+};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::reference::{
@@ -612,5 +614,71 @@ fn default_style_is_byte_identical_to_legacy() {
             &reference_plane_lines(&frame, true, true),
             &reference_plane_lines_with(&frame, true, true, &default),
         );
+    }
+}
+
+// --- Issue #84 A2a: the Reference layer scales widths and alpha ------------
+
+#[test]
+fn reference_width_and_opacity_apply() {
+    use vector_field_explorer::layer_style::{LayerId, LayerOverride};
+
+    let mut state = State::new(false);
+    let base = state.viewport_style;
+    let mut styles = *state.layer_styles();
+    let reference = LayerId::ALL
+        .iter()
+        .position(|layer| *layer == LayerId::Reference)
+        .expect("Reference is listed");
+    styles.layers[reference] = LayerOverride {
+        opacity: Some(0.5),
+        width: Some(2.0),
+        color: None,
+    };
+    state
+        .commit_layer_styles(styles)
+        .expect("the reference style is valid");
+
+    let style = state.reference_viewport_style();
+    assert_eq!(style.background, base.background, "background is never scaled");
+    assert_eq!(style.grid_width, base.grid_width * 2.0);
+    assert_eq!(style.box_width, base.box_width * 2.0);
+    assert_eq!(style.axis_width, base.axis_width * 2.0);
+    for color in [
+        style.grid_color,
+        style.box_color,
+        style.axis_x_color,
+        style.axis_y_color,
+        style.axis_z_color,
+    ] {
+        assert_eq!(color[3], 0.5, "every reference alpha is halved");
+    }
+    assert_eq!(style.grid_color[..3], base.grid_color[..3], "RGB untouched");
+
+    let lines = compose_lines_with_frame_style(
+        &[],
+        &[],
+        &state.scene_domain(),
+        false,
+        state.plane_frame(),
+        true,
+        true,
+        &style,
+    );
+    assert!(!lines.is_empty(), "the flat grid and axes are painted");
+    let grid = base.grid_width * 2.0;
+    let axis = base.axis_width * 2.0;
+    for line in &lines {
+        assert!(
+            close(line.b[3], grid) || close(line.b[3], axis),
+            "width is the scaled grid or axis width, got {}",
+            line.b[3]
+        );
+        assert!(close(line.color[3], 0.5), "emitted alpha is halved");
+    }
+
+    let neutral = reference_lines(&Domain::default(), false);
+    for line in &neutral {
+        assert_eq!(line.color[3], 1.0, "the legacy default stays opaque");
     }
 }

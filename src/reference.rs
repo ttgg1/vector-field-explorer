@@ -13,6 +13,7 @@
 use glam::Vec3;
 
 use crate::domain::Domain;
+use crate::layer_style::ResolvedLayerStyle;
 use crate::plane::PlaneFrame;
 use crate::renderer::LineInstanceGPU;
 use crate::viewport_style::ViewportStyle;
@@ -71,7 +72,7 @@ pub(crate) fn reference_lines_visible(
     )
 }
 
-fn reference_lines_visible_with(
+pub(crate) fn reference_lines_visible_with(
     domain: &Domain,
     sampling_3d: bool,
     show_grid: bool,
@@ -95,6 +96,55 @@ fn reference_lines_visible_with(
         }
     }
     lines
+}
+
+/// Defensive opacity repair for the public style record: a non-finite value is
+/// neutral, a finite one clamps into `0.0..=1.0`. Shared with the viewmodel's
+/// arrow and streamline paths so every alpha consumer applies one policy.
+pub(crate) fn sanitized_opacity(opacity: f32) -> f32 {
+    if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+/// Apply the Reference layer's resolved width and opacity (issue #84 A2a):
+/// every width multiplies by `resolved.width`, every reference colour's alpha
+/// multiplies by `resolved.opacity` and clamps to `0.0..=1.0`. RGB values and
+/// [`ViewportStyle::background`] pass through untouched. A neutral resolution
+/// returns the style unchanged.
+pub fn scaled_viewport_style(
+    style: &ViewportStyle,
+    resolved: &ResolvedLayerStyle,
+) -> ViewportStyle {
+    let opacity = sanitized_opacity(resolved.opacity);
+    let width = if resolved.width.is_finite() {
+        resolved
+            .width
+            .clamp(crate::layer_style::MIN_WIDTH_MULTIPLIER, crate::layer_style::MAX_WIDTH_MULTIPLIER)
+    } else {
+        1.0
+    };
+    let alpha = |color: [f32; 4]| {
+        [
+            color[0],
+            color[1],
+            color[2],
+            (color[3] * opacity).clamp(0.0, 1.0),
+        ]
+    };
+    ViewportStyle {
+        background: style.background,
+        grid_color: alpha(style.grid_color),
+        box_color: alpha(style.box_color),
+        axis_x_color: alpha(style.axis_x_color),
+        axis_y_color: alpha(style.axis_y_color),
+        axis_z_color: alpha(style.axis_z_color),
+        grid_width: style.grid_width * width,
+        box_width: style.box_width * width,
+        axis_width: style.axis_width * width,
+    }
 }
 
 /// Reference lines for one selected slice, in the frame's local `(u, v, 0)`

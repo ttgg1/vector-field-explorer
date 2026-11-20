@@ -224,3 +224,42 @@ fn scene_color_facts_collects_stats_from_drawn_arrows() {
     assert_eq!(range, vector_field_explorer::sampling::magnitude_range(&sampled));
     assert!(mapping.is_none(), "the default mapping is legacy");
 }
+
+// --- Issue #84 A2a: capture uses the live effective arrow girth ------------
+
+#[test]
+fn capture_uses_the_same_effective_arrow_params() {
+    use vector_field_explorer::layer_style::{LayerId, LayerOverride};
+
+    let mut state = State::new(true);
+    let stored = state.arrow_params;
+    let mut styles = *state.layer_styles();
+    let arrows = LayerId::ALL
+        .iter()
+        .position(|layer| *layer == LayerId::Arrows)
+        .expect("Arrows is listed");
+    styles.layers[arrows] = LayerOverride {
+        opacity: None,
+        width: Some(2.0),
+        color: None,
+    };
+    state
+        .commit_layer_styles(styles)
+        .expect("the arrow style is valid");
+    let live = state.effective_arrow_params();
+    assert_eq!(live.head_width, stored.head_width * 2.0);
+    assert_ne!(live.head_width, stored.head_width, "the style really applies");
+    let live_snapshot = state.snapshot();
+    assert_eq!(live_snapshot.arrow_params, live, "the live cache carries it");
+
+    let mut snapshot = snapshot(state, Particles::default());
+    let frame = snapshot
+        .frame_at(0.0, 0.1, 1.0, true)
+        .expect("the first captured frame");
+    assert_eq!(
+        frame.scene.arrow_params, live,
+        "the captured frame uses the same effective params"
+    );
+    assert_eq!(frame.scene.arrow_params.head_length, stored.head_length);
+    assert_eq!(frame.scene.arrow_params.sides, stored.sides);
+}
