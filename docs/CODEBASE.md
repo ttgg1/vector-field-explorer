@@ -2245,9 +2245,9 @@ no file I/O.
 `library_export_round_trips_through_import`, and
 `library_all_lists_builtins_before_user_profiles`.
 
-**Limitations.** No panel UI and no `State` apply in this slice. The app stores
-the library in `VfApp::profiles` and persists it through `AppSettings`; slice
-A2b owns the Appearance-panel section and profile application.
+**Limitations.** The library itself remains UI-free. The app stores it in
+`VfApp::profiles` and persists it through `AppSettings`; the Appearance panel's
+`Profiles` section owns capture, apply, delete and portable import/export.
 
 ### 3.3 Viewmodel and persistence
 
@@ -3579,13 +3579,18 @@ so it is not compiled. Do not add UI code to it expecting it to run.
 **Purpose.** Issue #84 slice A2b: edit the six per-layer and two per-family
 `LayerStyles` overrides. Each row exposes bounded opacity (`0.0..=1.0`) and
 width (`0.05..=4.0`) sliders with an explicit `Default` escape that clears the
-field, plus family colour and a global `Reset all`. The header notes that
-styling affects the live/raster view only; SVG exports keep the unstyled
+field, plus family colour and a global `Reset all`. Issue #85 slice A2b adds a
+`Profiles` section above the layers: apply a shipped or user profile, save the
+current appearance under a name, delete a user profile after a two-click
+confirm, and import/export the user library as portable text. The header notes
+that styling affects the live/raster view only; SVG exports keep the unstyled
 blueprint.
 
 **Public API.** `AppearanceEdit` (`LayerOpacity`, `LayerWidth`, `FamilyOpacity`,
 `FamilyWidth`, `FamilyColor`); `apply_edit`, `reset_all`; `AppearancePanelState`
-with `show(ui, state, compact)` and an inline `error`.
+with `show(ui, state, profiles, compact)`, `apply_profile`, an inline `error` and
+a weak-coloured success `message`. Session drafts (`profile_name`, `import_text`,
+`export_text`, `pending_delete`) are never persisted.
 
 **Invariants.**
 - Every edit copies the committed record, changes exactly one field and calls
@@ -3595,12 +3600,29 @@ with `show(ui, state, compact)` and an inline `error`.
   an invalid record.
 - `reset_all` commits `LayerStyles::default()`; resetting this panel never
   touches particle or viewport controls.
+- Applying a profile mutates `State` only through `AppearanceProfile::apply`;
+  saving captures the live appearance and upserts it, rejecting empty and
+  built-in names before the library is touched. A successful save clears any
+  armed delete; applying clears it only on success. Imports use the library's
+  atomic merge, so a malformed, duplicate, invalid or over-cap document leaves
+  the library unchanged, and the success message reports the number of new
+  profiles added (a pure replacement says no new profiles were imported, while
+  an empty document says nothing was imported).
+  Errors share the inline error label; successes use the weak message field.
+- The cached export text is recomputed from the library by one helper after
+  every user-library mutation and when `Export text` is clicked. There are no
+  revision counters; an empty user library yields an empty buffer, so `Copy`
+  stays disabled.
 
-**Pinned by.** `tests/appearance_panel_test.rs` (13): panel toggle/width
+**Pinned by.** `tests/appearance_panel_test.rs` (29): panel toggle/width
 round trip and clamp, single compact sheet, compact Appearance tab opening,
 layer/family commit and resolution, layer-over-family precedence and the
 family-only fallback, default escape, inline error display/clearing, invalid
-write rejection, reset, and the rendered six-layer/two-family body.
+write rejection, reset, the rendered six-layer/two-family body, profile apply
+and its rejected-record path, save/replace/built-in/empty-name handling,
+two-click delete, the armed-delete-cleared-by-save case, the user-profile cap,
+atomic import with its added-profile delta, replacement-only import, empty
+import document, empty export/Copy, and the compact profile section.
 
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
