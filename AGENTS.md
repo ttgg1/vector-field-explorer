@@ -38,6 +38,8 @@ keep dependencies compatible.
 - Select `/develop-openai` or `/develop-opencode-go` explicitly; never silently
   change workflow mode or provider. New task roles start at configured lowest
   effort.
+- Index every fresh worktree with `codegraph init` (each worktree has its own
+  `.codegraph/`) before dispatching subagents, so they can use codegraph.
 - Load only applicable skills and task-relevant references. Use
   `writing-for-agents` when changing agent-facing instructions.
 
