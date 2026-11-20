@@ -12,8 +12,9 @@ use eframe::egui;
 use crate::support;
 
 use vector_field_explorer::color_mapping::{ClipCounts, ColorQuantity, ColorStats};
-use vector_field_explorer::color_ramp::ScaleMode;
+use vector_field_explorer::color_ramp::{ColorRamp, RampKind, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::palette_io::{PaletteDocument, export_ramp, import_ramp};
 use vector_field_explorer::persistence::{AppSettings, ViewRecord};
 use vector_field_explorer::source_scene::{FieldMode, SourceDisplay};
 use vector_field_explorer::ui::layout::LayoutState;
@@ -62,7 +63,7 @@ impl Sidebar {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
-                egui::vec2(600.0, 1200.0),
+                egui::vec2(600.0, 3000.0),
             )),
             time: Some(self.time),
             predicted_dt: 1.0 / 60.0,
@@ -446,6 +447,77 @@ fn select_button(s: &mut Sidebar, label: &str) {
     s.idle();
 }
 
+/// Click a real button and return the frame after the click has been applied.
+fn click_button(s: &mut Sidebar, label: &str) -> egui::FullOutput {
+    let out = s.idle();
+    let rows = nodes(&out);
+    let button =
+        labelled(&rows, egui::Role::Button, label).unwrap_or_else(|| panic!("the {label} button"));
+    s.click(button.center());
+    s.idle()
+}
+
+fn button_count(rows: &[Node], label: &str) -> usize {
+    rows.iter()
+        .filter(|node| node.role == egui::Role::Button && node.label.as_deref() == Some(label))
+        .count()
+}
+
+fn buttons<'a>(rows: &'a [Node], label: &str) -> Vec<&'a Node> {
+    rows.iter()
+        .filter(|node| node.role == egui::Role::Button && node.label.as_deref() == Some(label))
+        .collect()
+}
+
+/// Expand the nested "Custom palette" collapser inside Coloring. The header
+/// label is exposed like every other section label; its collapser sits to its
+/// left on the same row.
+fn open_custom_palette(s: &mut Sidebar) -> egui::FullOutput {
+    let out = s.idle();
+    let rows = nodes(&out);
+    let header = rows
+        .iter()
+        .find(|node| {
+            (node.role == egui::Role::Label && node.value.as_deref() == Some("Custom palette"))
+                || node.label.as_deref() == Some("Custom palette")
+        })
+        .expect("the Custom palette header is exposed");
+    s.click(header.center());
+    for _ in 0..20 {
+        s.idle();
+    }
+    s.idle()
+}
+
+/// The first hex text field in the custom palette editor.
+fn hex_field(rows: &[Node]) -> &Node {
+    rows.iter()
+        .find(|node| {
+            node.value
+                .as_deref()
+                .is_some_and(|value| value.starts_with('#'))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "a hex text field; values: {:?}",
+                rows.iter()
+                    .filter_map(|node| node.value.as_deref())
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+fn remove_one(s: &mut Sidebar) {
+    let out = s.idle();
+    let rows = nodes(&out);
+    let remove = buttons(&rows, "Remove")
+        .into_iter()
+        .find(|node| !node.disabled)
+        .expect("an enabled Remove button");
+    s.click(remove.center());
+    s.idle();
+}
+
 #[test]
 fn quantity_selector_applies_component_colouring() {
     let mut s = Sidebar::new();
@@ -760,6 +832,365 @@ fn reset_coloring_restores_quantity_scale_and_auto_fit() {
     assert!(!s.controls.freeze_requested);
     assert_eq!(s.controls.color_stats, ColorStats::default());
     assert_eq!(s.controls.color_clips, ClipCounts::default());
+}
+
+fn custom_palette_working(s: &Sidebar) -> &ColorRamp {
+    s.controls
+        .palette_working
+        .as_ref()
+        .expect("the custom palette draft is open")
+}
+
+#[test]
+fn editing_a_builtin_seeds_the_nine_stop_approximation() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    click_button(&mut s, "Viridis");
+    let out = open_custom_palette(&mut s);
+    let rows = nodes(&out);
+    assert!(labelled(&rows, egui::Role::Button, "Edit current palette").is_some());
+    assert!(has_label(&rows, "Built-in: Viridis"));
+    assert_eq!(
+        s.controls.palette_text, "",
+        "the portable buffer starts empty"
+    );
+
+    let out = click_button(&mut s, "Edit current palette");
+    let rows = nodes(&out);
+    assert_eq!(
+        button_count(&rows, "Remove"),
+        9,
+        "Viridis seeds the nine-stop approximation"
+    );
+    assert_eq!(custom_palette_working(&s).stops.len(), 9);
+
+    let out = click_button(&mut s, "Apply palette");
+    let _ = out;
+    assert_eq!(
+        s.state.color_ramp,
+        Some(ColorRamp::builtin(Colormap::Viridis)),
+        "apply installs the seeded approximation"
+    );
+    assert!(s.state.dirty, "the applied palette dirties the scene");
+}
+
+#[test]
+fn removing_stops_bottoms_out_at_two() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    assert_eq!(custom_palette_working(&s).stops.len(), 9);
+
+    for _ in 0..7 {
+        remove_one(&mut s);
+    }
+    assert_eq!(custom_palette_working(&s).stops.len(), 2);
+
+    let out = s.idle();
+    let rows = nodes(&out);
+    let removes = buttons(&rows, "Remove");
+    assert_eq!(removes.len(), 2);
+    assert!(
+        removes.iter().all(|node| node.disabled),
+        "Remove is disabled at the two-stop minimum"
+    );
+    // A disabled click cannot drop below the minimum.
+    s.click(removes[0].center());
+    s.idle();
+    assert_eq!(custom_palette_working(&s).stops.len(), 2);
+}
+
+#[test]
+fn adding_stops_is_bounded_and_keeps_positions_increasing() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+
+    for _ in 0..7 {
+        click_button(&mut s, "Add stop");
+    }
+    assert_eq!(custom_palette_working(&s).stops.len(), ColorRamp::MAX_STOPS);
+    let out = s.idle();
+    let rows = nodes(&out);
+    let add = labelled(&rows, egui::Role::Button, "Add stop").expect("the Add stop button");
+    assert!(add.disabled, "Add stop is disabled at the maximum");
+    let stops = &custom_palette_working(&s).stops;
+    assert!(
+        stops
+            .windows(2)
+            .all(|pair| pair[0].position < pair[1].position),
+        "positions stay strictly increasing: {stops:?}"
+    );
+    // A disabled click cannot exceed the maximum.
+    s.click(add.center());
+    s.idle();
+    assert_eq!(custom_palette_working(&s).stops.len(), ColorRamp::MAX_STOPS);
+}
+
+#[test]
+fn invalid_hex_does_not_change_the_stop() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    let out = open_custom_palette(&mut s);
+    let _ = out;
+    let out = click_button(&mut s, "Edit current palette");
+    let rows = nodes(&out);
+    let field = hex_field(&rows);
+    let before = custom_palette_working(&s).stops[0].color;
+
+    s.click(field.center());
+    let out = s.frame(vec![egui::Event::Text("#zzzzzz".to_owned())]);
+    let rows = nodes(&out);
+
+    assert_eq!(
+        custom_palette_working(&s).stops[0].color,
+        before,
+        "unparseable hex must not touch the stop colour"
+    );
+    assert!(
+        has_label(&rows, "invalid hex"),
+        "the row reports invalid hex inline"
+    );
+    assert!(
+        hex_field(&rows)
+            .value
+            .as_deref()
+            .is_some_and(|value| value.contains("#zzzzzz")),
+        "the field keeps the invalid text so the user can fix it"
+    );
+}
+
+#[test]
+fn invalid_ramp_disables_apply_and_shows_the_reason() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    // Drop the 0.5 stop, then a diverging ramp is missing its required centre.
+    let out = s.idle();
+    let rows = nodes(&out);
+    let mut removes = buttons(&rows, "Remove");
+    removes.sort_by(|a, b| a.rect.min.y.total_cmp(&b.rect.min.y));
+    assert_eq!(removes.len(), 9);
+    s.click(removes[4].center());
+    s.idle();
+    let out = click_button(&mut s, "Diverging");
+    assert_eq!(custom_palette_working(&s).kind, RampKind::Diverging);
+    let validation = custom_palette_working(&s).validate();
+    assert!(validation.is_err(), "the draft is invalid: {validation:?}");
+    let rows = nodes(&out);
+
+    let apply = labelled(&rows, egui::Role::Button, "Apply palette").expect("Apply palette");
+    assert!(apply.disabled, "an invalid ramp cannot be applied");
+    assert!(
+        has_label(&rows, "diverging ramps need a stop at exactly 0.5"),
+        "the validation reason is shown"
+    );
+    assert_eq!(custom_palette_working(&s).kind, RampKind::Diverging);
+    assert!(
+        s.state.color_ramp.is_none(),
+        "the invalid draft is not applied"
+    );
+}
+
+#[test]
+fn applying_a_palette_overrides_the_builtin_and_choosing_a_builtin_clears_it() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    click_button(&mut s, "Apply palette");
+    assert!(
+        s.state.color_ramp.is_some(),
+        "the custom palette overrides the builtin"
+    );
+
+    // Later frames must not clobber the override by re-applying the builtin
+    // selection.
+    s.idle();
+    assert!(
+        s.state.color_ramp.is_some(),
+        "the override survives idle frames"
+    );
+
+    // Clicking the *same* built-in still clears the override through the
+    // one-shot revert request, even though the selection value does not move.
+    click_button(&mut s, "Viridis");
+    s.idle();
+    assert_eq!(s.state.colormap, Colormap::Viridis);
+    assert!(
+        s.state.color_ramp.is_none(),
+        "re-selecting the same builtin clears the custom override"
+    );
+
+    // A different built-in clears the override through `set_colormap`.
+    click_button(&mut s, "Edit current palette");
+    click_button(&mut s, "Apply palette");
+    assert!(s.state.color_ramp.is_some());
+    click_button(&mut s, "Turbo");
+    s.idle();
+    assert_eq!(s.state.colormap, Colormap::Turbo);
+    assert!(
+        s.state.color_ramp.is_none(),
+        "choosing a builtin clears the custom override"
+    );
+}
+
+#[test]
+fn export_text_round_trips_through_apply_text() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    click_button(&mut s, "Export text");
+    let exported_text = s.controls.palette_text.clone();
+    let exported = import_ramp(&exported_text).expect("the export parses back");
+    assert_eq!(exported, ColorRamp::builtin(Colormap::Viridis));
+
+    // Change the draft after exporting; applying the text must restore it.
+    let out = s.idle();
+    let rows = nodes(&out);
+    let reversed = labelled(&rows, egui::Role::CheckBox, "Reversed").expect("Reversed checkbox");
+    s.click(reversed.center());
+    s.idle();
+    assert!(custom_palette_working(&s).reversed);
+
+    click_button(&mut s, "Apply text");
+    assert_eq!(
+        s.state.color_ramp.as_ref(),
+        Some(&exported),
+        "Apply text installs the exported ramp"
+    );
+    assert_eq!(
+        custom_palette_working(&s),
+        &exported,
+        "Apply text replaces the draft too"
+    );
+}
+
+#[test]
+fn malformed_or_future_text_is_rejected_atomically() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    let draft = custom_palette_working(&s).clone();
+
+    s.controls.palette_text = "not json".to_owned();
+    click_button(&mut s, "Apply text");
+    assert!(
+        s.controls.palette_message.contains("invalid palette JSON"),
+        "a malformed document is named: {:?}",
+        s.controls.palette_message
+    );
+    assert_eq!(custom_palette_working(&s), &draft, "the draft is untouched");
+    assert!(s.state.color_ramp.is_none(), "the state is untouched");
+
+    let mut future = PaletteDocument::from_ramp(&draft);
+    future.version = 99;
+    s.controls.palette_text = future.to_json();
+    click_button(&mut s, "Apply text");
+    assert!(
+        s.controls.palette_message.contains("99")
+            && s.controls.palette_message.contains("not supported"),
+        "a future version is rejected with a message: {:?}",
+        s.controls.palette_message
+    );
+    assert_eq!(custom_palette_working(&s), &draft, "the draft is untouched");
+    assert!(s.state.color_ramp.is_none(), "the state is untouched");
+}
+
+#[test]
+fn copy_text_is_available_only_with_a_buffer() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    open_custom_palette(&mut s);
+    assert_eq!(s.controls.palette_text, "");
+
+    let out = s.idle();
+    let rows = nodes(&out);
+    let copy = labelled(&rows, egui::Role::Button, "Copy text").expect("Copy text");
+    assert!(copy.disabled, "an empty buffer cannot be copied");
+
+    click_button(&mut s, "Export text");
+    let out = s.idle();
+    let rows = nodes(&out);
+    let copy = labelled(&rows, egui::Role::Button, "Copy text").expect("Copy text");
+    assert_eq!(
+        s.controls.palette_text,
+        export_ramp(&ColorRamp::builtin(Colormap::Viridis))
+    );
+    assert!(!copy.disabled, "a non-empty buffer can be copied");
+}
+
+#[test]
+fn reset_coloring_clears_the_palette_draft_and_keeps_the_override_when_the_builtin_is_unchanged() {
+    let mut s = Sidebar::new();
+    let out = open_coloring(&mut s);
+    let _ = out;
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    click_button(&mut s, "Apply palette");
+    click_button(&mut s, "Export text");
+    s.controls.palette_message = "stale message".to_owned();
+    let active = s.state.color_ramp.clone();
+    assert!(active.is_some());
+
+    let out = s.idle();
+    let rows = nodes(&out);
+    let viridis = labelled(&rows, egui::Role::Button, "Viridis").expect("Viridis");
+    let reset = coloring_reset(&rows, viridis);
+    s.click(reset.center());
+    s.idle();
+
+    assert_eq!(s.controls.colormap, Colormap::Viridis);
+    assert_eq!(s.controls.color_quantity, ColorQuantity::Magnitude);
+    assert_eq!(s.controls.color_mode, ScaleMode::Linear);
+    assert!(s.controls.auto_fit);
+    assert!(s.controls.palette_working.is_none(), "the draft clears");
+    assert_eq!(s.controls.palette_text, "", "the portable buffer clears");
+    assert_eq!(s.controls.palette_message, "", "the message clears");
+    assert!(!s.controls.palette_apply_requested);
+    assert_eq!(
+        s.state.color_ramp, active,
+        "the override survives because the built-in was already viridis"
+    );
+}
+
+#[test]
+fn reset_coloring_clears_the_override_when_it_also_resets_the_builtin() {
+    let mut s = Sidebar::new();
+    open_coloring(&mut s);
+    click_button(&mut s, "Turbo");
+    assert_eq!(s.state.colormap, Colormap::Turbo);
+
+    open_custom_palette(&mut s);
+    click_button(&mut s, "Edit current palette");
+    click_button(&mut s, "Apply palette");
+    assert!(
+        s.state.color_ramp.is_some(),
+        "the custom palette overrides turbo"
+    );
+
+    let out = s.idle();
+    let rows = nodes(&out);
+    let viridis = labelled(&rows, egui::Role::Button, "Viridis").expect("Viridis");
+    let reset = coloring_reset(&rows, viridis);
+    s.click(reset.center());
+    s.idle();
+
+    assert_eq!(s.controls.colormap, Colormap::Viridis);
+    assert_eq!(
+        s.state.colormap,
+        Colormap::Viridis,
+        "apply moves the built-in back to viridis"
+    );
+    assert!(
+        s.state.color_ramp.is_none(),
+        "resetting a non-viridis built-in discards the override"
+    );
 }
 
 /// In-memory stand-in for eframe's disk-backed storage (the persistence test

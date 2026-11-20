@@ -3780,16 +3780,37 @@ with a local mirror and a single `apply` handoff.
   off, z row for a two-component field, Direction quantity in 3D (with a
   visible explanation).
 - Coloring keeps the palette row first, then Quantity, Scale, freeze and the
-  legend, then auto-fit and the manual range. Direction is disabled in 3D.
-  Signed log uses a validated, clamped half-width and shows the mapping's
-  fallback explanation when the range does not span zero. Freeze is a one-shot
-  request applied after the colour setters and before the mirror.
+  legend, then auto-fit and the manual range, then the collapsed "Custom
+  palette" editor. Direction is disabled in 3D. Signed log uses a validated,
+  clamped half-width and shows the mapping's fallback explanation when the range
+  does not span zero. Freeze is a one-shot request applied after the colour
+  setters and before the mirror.
+- The Custom palette editor is session-only: `Controls` keeps the draft
+  (`palette_working`), the portable JSON buffer (`palette_text`), the last
+  message and a one-shot `palette_apply_requested`. Editing seeds from the
+  active override or the built-in's `ColorRamp::builtin` approximation; stop
+  positions stay in `0.0..=1.0`, removal bottoms out at `MIN_STOPS`, and adding
+  inserts at the widest gap's midpoint up to `MAX_STOPS`. Hex text that does not
+  parse is reported inline and never changes the stop. `Apply palette` is
+  disabled while `ColorRamp::validate` fails; `apply` consumes the request once,
+  after the palette source and range setters and before freeze. Import/export
+  text is versioned palette-only JSON: a parse or version failure writes
+  `palette_message` and leaves both the draft and `State` untouched.
+- A custom override survives later frames: `apply` calls `set_colormap` only
+  when the built-in selection moved (or no override is active), because that
+  setter always clears the override. Choosing a built-in therefore still clears
+  a custom palette, including a same-value click, which raises a one-shot revert
+  request in the colormap row. `reset_coloring` also resets the built-in to
+  Viridis, so it clears an active override on the next `apply` whenever the
+  built-in actually changed; an override survives the reset only when the
+  built-in was already Viridis and the selection does not move.
 - The legend paints 64 palette slices and reports the effective range, ticks,
   `<min`/`>max` caps and the app-supplied clip counts. Its stats and clips are
   cached `SceneColorFacts` copied into `Controls` before each wide or compact
   sidebar call.
 - In Sources + Both the Coloring section shows `BOTH_COLORING_NOTE` and none of
-  the palette, quantity, scale, freeze, legend or range controls.
+  the palette, quantity, scale, freeze, legend, range or custom-palette
+  controls.
 - Domain extents are clamped before `set_domain`; NaN keeps the previous value;
   reversed pairs swap in the seam and mirror back.
 - Plane index commits on toggle/axis/click or slider release, not during a live
@@ -3817,7 +3838,18 @@ with a local mirror and a single `apply` handoff.
 `freeze_button_commits_the_effective_range_and_turns_off_auto_fit`,
 `legend_shows_effective_range_ticks_and_clip_counts`,
 `both_display_keeps_the_fixed_family_note_without_advanced_controls`,
-`reset_coloring_restores_quantity_scale_and_auto_fit`).
+`reset_coloring_restores_quantity_scale_and_auto_fit`,
+`editing_a_builtin_seeds_the_nine_stop_approximation`,
+`removing_stops_bottoms_out_at_two`,
+`adding_stops_is_bounded_and_keeps_positions_increasing`,
+`invalid_hex_does_not_change_the_stop`,
+`invalid_ramp_disables_apply_and_shows_the_reason`,
+`applying_a_palette_overrides_the_builtin_and_choosing_a_builtin_clears_it`,
+`export_text_round_trips_through_apply_text`,
+`malformed_or_future_text_is_rejected_atomically`,
+`copy_text_is_available_only_with_a_buffer`,
+`reset_coloring_clears_the_palette_draft_and_keeps_the_override_when_the_builtin_is_unchanged`,
+`reset_coloring_clears_the_override_when_it_also_resets_the_builtin`).
 
 **Limitations.** The panel is long; it relies on collapsing sections rather than
 a second settings page. There is no search/filter. `Controls` is a hand-written
