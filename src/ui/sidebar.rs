@@ -29,7 +29,7 @@ use crate::arrow_style::{
     MAX_SIDES, MIN_HEAD_LENGTH, MIN_HEAD_WIDTH, MIN_SHAFT_RADIUS, MIN_SIDES,
 };
 use crate::color_mapping::{ClipCounts, ColorMapping, ColorQuantity, ColorStats};
-use crate::color_ramp::ScaleMode;
+use crate::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb, ScaleMode};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
 use crate::particles::{
@@ -448,6 +448,242 @@ fn color_legend(ui: &mut egui::Ui, mapping: &ColorMapping, stats: &ColorStats, c
     }
 }
 
+/// A hex field's in-progress text, kept in egui's temporary data so an
+/// unparseable edit stays visible instead of snapping back to the stop colour.
+#[derive(Clone)]
+struct PaletteHexDraft {
+    text: String,
+    /// The stop colour this text was seeded from; a different stop colour means
+    /// the ramp was reseeded and the draft must follow it.
+    color: Rgb,
+}
+
+/// Draw one editable hex field bound to `stop`, reporting whether the current
+/// text is unparseable. Invalid text never changes the stop.
+fn palette_hex_field(ui: &mut egui::Ui, index: usize, stop: &mut ColorStop) -> bool {
+    let id = ui.make_persistent_id(("palette_stop_hex", index));
+    let mut draft = ui
+        .data_mut(|data| data.get_temp::<PaletteHexDraft>(id))
+        .unwrap_or_else(|| PaletteHexDraft {
+            text: stop.color.to_hex(),
+            color: stop.color,
+        });
+    if draft.color != stop.color {
+        draft = PaletteHexDraft {
+            text: stop.color.to_hex(),
+            color: stop.color,
+        };
+    }
+    ui.add(
+        egui::TextEdit::singleline(&mut draft.text)
+            .id(id)
+            .desired_width(76.0)
+            .char_limit(20),
+    )
+    .on_hover_text("Stop colour as #rrggbb");
+    if let Some(color) = Rgb::from_hex(&draft.text) {
+        if color != stop.color {
+            stop.color = color;
+        }
+        draft.color = color;
+    }
+    let invalid = Rgb::from_hex(&draft.text).is_none();
+    ui.data_mut(|data| data.insert_temp(id, draft));
+    invalid
+}
+
+/// Insert a stop at the midpoint of the widest existing gap, sampling the
+/// interval's colour so positions stay strictly increasing.
+fn palette_add_stop(ramp: &mut ColorRamp) {
+    let mut best = 0;
+    let mut widest = f32::NEG_INFINITY;
+    for (index, pair) in ramp.stops.windows(2).enumerate() {
+        let gap = pair[1].position - pair[0].position;
+        if gap > widest {
+            widest = gap;
+            best = index;
+        }
+    }
+    let left = ramp.stops[best];
+    debug_assert!(ramp.stops.len() >= 2);
+    let right = ramp.stops[best + 1];
+    let position = 0.5 * (left.position + right.position);
+    // `ColorRamp::sample` honours `reversed`, but stop positions are always
+    // specified in ramp order, so sample the interval unreversed.
+    let color = ColorRamp {
+        stops: vec![left, right],
+        reversed: false,
+        kind: ramp.kind,
+    }
+    .sample(position);
+    ramp.stops.insert(best + 1, ColorStop { position, color });
+}
+
+/// The collapsed custom-palette editor inside Coloring: stop rows, reversal,
+/// kind and the portable text buffer. `effective` is the ramp editing starts
+/// from and the fallback for exporting when no draft exists.
+fn custom_palette_controls(
+    ui: &mut egui::Ui,
+    controls: &mut Controls,
+    effective: &ColorRamp,
+    custom_active: bool,
+    builtin_label: &str,
+) {
+    egui::CollapsingHeader::new("Custom palette")
+        .id_salt("custom_palette")
+        .default_open(false)
+        .show(ui, |ui| {
+            if controls.palette_working.is_some() {
+                let mut remove_index = None;
+                let mut add_requested = false;
+                {
+                    let ramp = controls
+                        .palette_working
+                        .as_mut()
+                        .expect("the working ramp was checked above");
+                    let count = ramp.stops.len();
+                    for (index, stop) in ramp.stops.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut stop.position)
+                                    .speed(0.001)
+                                    .range(0.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .on_hover_text("Stop position in 0.0..=1.0");
+                            let invalid = palette_hex_field(ui, index, stop);
+                            if invalid {
+                                ui.label("invalid hex");
+                            }
+                            if ui
+                                .add_enabled(
+                                    count > ColorRamp::MIN_STOPS,
+                                    egui::Button::new("Remove"),
+                                )
+                                .on_disabled_hover_text("A ramp needs at least two stops")
+                                .clicked()
+                            {
+                                remove_index = Some(index);
+                            }
+                        });
+                    }
+                    if let Some(index) = remove_index {
+                        ramp.stops.remove(index);
+                    }
+                    if ui
+                        .add_enabled(
+                            ramp.stops.len() < ColorRamp::MAX_STOPS,
+                            egui::Button::new("Add stop"),
+                        )
+                        .on_hover_text("Insert a stop in the widest gap")
+                        .on_disabled_hover_text("A ramp accepts at most 16 stops")
+                        .clicked()
+                    {
+                        add_requested = true;
+                    }
+                    if add_requested {
+                        palette_add_stop(ramp);
+                    }
+                    ui.checkbox(&mut ramp.reversed, "Reversed")
+                        .on_hover_text("Read the ramp back to front");
+                    button_row(ui, |ui| {
+                        ui.label("Kind");
+                        for kind in RampKind::ALL {
+                            ui.selectable_value(&mut ramp.kind, kind, kind.label())
+                                .on_hover_text("How the ramp is meant to be read");
+                        }
+                    });
+                }
+                let validation = controls
+                    .palette_working
+                    .as_ref()
+                    .expect("the working ramp was checked above")
+                    .validate();
+                if let Err(reason) = &validation {
+                    let error_color = ui.visuals().error_fg_color;
+                    ui.colored_label(error_color, reason);
+                }
+                if ui
+                    .add_enabled(validation.is_ok(), egui::Button::new("Apply palette"))
+                    .on_disabled_hover_text("Fix the palette error before applying")
+                    .clicked()
+                {
+                    controls.palette_apply_requested = true;
+                }
+                if ui
+                    .button("Revert to built-in")
+                    .on_hover_text("Discard the custom palette and use the built-in colormap")
+                    .clicked()
+                {
+                    controls.palette_working = None;
+                    controls.palette_apply_requested = true;
+                }
+            } else {
+                let edit_label = if custom_active {
+                    "Edit custom palette"
+                } else {
+                    "Edit current palette"
+                };
+                if ui
+                    .button(edit_label)
+                    .on_hover_text("Start from the palette currently in use")
+                    .clicked()
+                {
+                    controls.palette_working = Some(effective.clone());
+                }
+                ui.label(if custom_active {
+                    "Custom palette".to_owned()
+                } else {
+                    format!("Built-in: {builtin_label}")
+                });
+            }
+
+            if ui
+                .button("Export text")
+                .on_hover_text("Write the draft (or active palette) as versioned JSON")
+                .clicked()
+            {
+                let ramp = controls.palette_working.as_ref().unwrap_or(effective);
+                controls.palette_text = crate::palette_io::export_ramp(ramp);
+            }
+            ui.add(
+                egui::TextEdit::multiline(&mut controls.palette_text)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            )
+            .on_hover_text("Portable palette JSON; paste one here to import it");
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Apply text")
+                    .on_hover_text("Parse the text and make it the draft")
+                    .clicked()
+                {
+                    match crate::palette_io::import_ramp(&controls.palette_text) {
+                        Ok(ramp) => {
+                            controls.palette_working = Some(ramp);
+                            controls.palette_apply_requested = true;
+                        }
+                        Err(error) => controls.palette_message = error,
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        !controls.palette_text.is_empty(),
+                        egui::Button::new("Copy text"),
+                    )
+                    .on_hover_text("Copy the palette JSON to the clipboard")
+                    .on_disabled_hover_text("Export or paste a palette first")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(controls.palette_text.clone());
+                }
+            });
+            if !controls.palette_message.is_empty() {
+                ui.label(&controls.palette_message);
+            }
+        });
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -493,6 +729,16 @@ pub struct Controls {
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
+    /// Session-only custom palette draft (issue #83 slice C2). `None` until
+    /// the user starts editing the current effective ramp.
+    pub palette_working: Option<ColorRamp>,
+    /// Portable versioned-JSON buffer for palette import/export.
+    pub palette_text: String,
+    /// Last palette success/error text shown under the editor.
+    pub palette_message: String,
+    /// One-shot request consumed by [`apply`] to install the draft (or clear
+    /// the override when the draft is `None`).
+    pub palette_apply_requested: bool,
     pub streamlines: bool,
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
@@ -554,6 +800,10 @@ impl Controls {
             auto_fit: true,
             color_min: 0.0,
             color_max: 1.0,
+            palette_working: None,
+            palette_text: String::new(),
+            palette_message: String::new(),
+            palette_apply_requested: false,
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             streamline_count: 0,
@@ -610,6 +860,12 @@ impl Controls {
 
     /// Restore the Coloring section's defaults (viridis, magnitude, linear,
     /// auto-fit, 0..1, cleared cached/one-shot state).
+    ///
+    /// Resetting the built-in to viridis also clears an active custom palette
+    /// on the next [`apply`] whenever the built-in actually changed: `apply`
+    /// calls `set_colormap`, which discards the override. An override survives
+    /// the reset only when the built-in was already viridis, so the selection
+    /// does not move.
     pub fn reset_coloring(&mut self) {
         let defaults = Controls::new();
         self.colormap = defaults.colormap;
@@ -623,6 +879,10 @@ impl Controls {
         self.auto_fit = defaults.auto_fit;
         self.color_min = defaults.color_min;
         self.color_max = defaults.color_max;
+        self.palette_working = defaults.palette_working;
+        self.palette_text = defaults.palette_text;
+        self.palette_message = defaults.palette_message;
+        self.palette_apply_requested = defaults.palette_apply_requested;
     }
 
     /// Restore the Domain section's defaults (the unit cube).
@@ -714,6 +974,12 @@ fn show_inner(
     let color_mapping = state.color_mapping();
     let color_explanation = color_mapping.explanation(&controls.color_stats);
     let freeze_range = color_mapping.effective_range(&controls.color_stats);
+    let palette_effective = state
+        .color_ramp
+        .clone()
+        .unwrap_or_else(|| ColorRamp::builtin(state.colormap));
+    let palette_custom_active = state.color_ramp.is_some();
+    let palette_builtin_label = state.colormap.label();
 
     // The plane mirror follows the seam (which clamps/recentres it on grid
     // changes) except while its slider is mid-drag: the in-flight value has to
@@ -1194,8 +1460,17 @@ fn show_inner(
                 button_row(ui, |ui| {
                     ui.label("Colormap");
                     for colormap in Colormap::ALL {
-                        ui.selectable_value(&mut controls.colormap, colormap, colormap.label())
-                            .on_hover_text("Color map for field magnitude");
+                        let response =
+                            ui.selectable_value(&mut controls.colormap, colormap, colormap.label());
+                        // Choosing a built-in clears any custom override. The
+                        // request covers the same-colormap click, where the
+                        // value does not change and `set_colormap` would be
+                        // skipped to preserve the override.
+                        if response.clicked() && palette_custom_active {
+                            controls.palette_working = None;
+                            controls.palette_apply_requested = true;
+                        }
+                        response.on_hover_text("Color map for field magnitude");
                     }
                 });
                 button_row(ui, |ui| {
@@ -1275,6 +1550,13 @@ fn show_inner(
                             .on_hover_text("Magnitude at the color ramp's high end");
                     });
                 }
+                custom_palette_controls(
+                    ui,
+                    controls,
+                    &palette_effective,
+                    palette_custom_active,
+                    palette_builtin_label,
+                );
             });
         });
     }
@@ -1595,9 +1877,34 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
     } else {
         state.set_color_mode(mode);
     }
-    state.set_colormap(controls.colormap);
+    // A custom override survives frames where the built-in selection is
+    // unchanged: `set_colormap` unconditionally clears the override, so it is
+    // only called when the selection actually moved (or when no override is
+    // active). Choosing a built-in that differs from the current selection
+    // therefore still clears the override.
+    if controls.colormap != state.colormap || state.color_ramp.is_none() {
+        state.set_colormap(controls.colormap);
+    }
     state.set_auto_fit(controls.auto_fit);
     state.set_color_range(controls.color_min, controls.color_max);
+    if controls.palette_apply_requested {
+        controls.palette_apply_requested = false;
+        match controls.palette_working.clone() {
+            Some(ramp) => match ramp.validate() {
+                Ok(()) => {
+                    state.set_color_ramp(Some(ramp.clone()));
+                    controls.palette_working = Some(ramp);
+                    controls.palette_message = "Custom palette applied".to_owned();
+                }
+                Err(reason) => controls.palette_message = reason,
+            },
+            None => {
+                state.set_color_ramp(None);
+                controls.palette_message =
+                    format!("Reverted to built-in {}", state.colormap.label());
+            }
+        }
+    }
     if controls.freeze_requested {
         state.freeze_color_range(&controls.color_stats);
         controls.freeze_requested = false;
