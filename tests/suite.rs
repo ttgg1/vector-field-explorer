@@ -111,6 +111,7 @@ mod plot_state_test;
 mod plot_surface_test;
 mod plot_ui_test;
 mod pointer_lock_test;
+mod preset_library_test;
 mod preset_test;
 mod presets_test;
 mod reference_lines_test;

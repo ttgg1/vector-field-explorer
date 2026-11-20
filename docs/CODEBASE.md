@@ -1811,6 +1811,55 @@ and the category/limit tests.
 not normalised). The preset formulas themselves are static spatial snapshots;
 formulas may still reference `t` when the user edits them.
 
+#### `src/preset_library.rs` — indexed preset catalogue
+
+**Purpose.** A pure, searchable index over the existing formula presets
+([`presets()`](../src/presets.rs)) and source presets
+([`source_presets()`](../src/source_presets.rs)). It owns no physics and no UI;
+later panel work consumes the stable IDs and metadata.
+
+**Public API.** `PresetId` with `new(&str)`/`as_str`; `PresetIdError`;
+`PresetGroup { Classic, Physics, Sources, Gallery }`;
+`PresetFilters { dimension, animated }`;
+`PresetEntry { id, name, summary, group, filters, assumptions, parameters,
+exploration_prompt }`; `PresetLibrary::builtin`, `from_entries`, `entries`,
+`len`, `is_empty`, `search`, `filtered`, `search_filtered`, `get`;
+`PresetLibraryError`.
+
+**Invariants.**
+- IDs match `[a-z0-9][a-z0-9_.-]*`, ASCII, 1..=64 bytes; malformed candidates
+  return a descriptive error and never panic.
+- Formula IDs are `formula.<slug>` (lowercased name with each non-`[a-z0-9]`
+  run replaced by `_`); source IDs are `source.<slug>`. IDs are unique across
+  the whole catalogue and construction rejects duplicates.
+- Catalogue order is `presets()` order, then `source_presets()` order. Formula
+  groups map `Classic` to `Classic` and the three physics categories to
+  `Physics`; source entries are `Sources` except the named last gallery, which
+  is `Gallery`.
+- Formula entries carry `Preset::dimension` and are never animated; source
+  entries are dimension-agnostic (`None`). `assumptions` reuses
+  `preset_approximation_label`, so only the documented 2D approximations carry
+  one. `parameters` and `exploration_prompt` stay empty until a preset defines
+  them.
+- `search` is trimmed, case-insensitive substring over name, summary and ID,
+  with a blank query returning all entries in catalogue order. `filtered` keeps
+  sources under every dimension and only animated entries when `animated` is
+  true. `search_filtered` is the manual intersection of both.
+
+**Pinned by.** [tests/preset_library_test.rs](../tests/preset_library_test.rs):
+`ids_are_unique_and_stable`, `accepts_valid_ids_and_rejects_malformed`,
+`formula_entries_keep_catalogue_order_and_groups`,
+`source_entries_use_the_source_group_and_gallery_last`,
+`search_is_trimmed_case_insensitive_and_ordered`,
+`dimension_filter_keeps_sources_and_matching_dimension`,
+`animated_filter_is_honest_for_an_all_static_catalogue`,
+`combined_search_and_filter_matches_manual_intersection`,
+`get_returns_the_entry_or_none`, and `duplicate_ids_are_rejected`.
+
+**Limitations.** Formula presets have no summary in their source catalogue, so
+their `summary` is empty. No preset is animated or parameterised yet, and no
+entry supplies an exploration prompt.
+
 #### `src/colormap.rs` — scalar-to-RGB ramps
 
 **Purpose.** Map a magnitude to a colour for arrows, streamlines, and
