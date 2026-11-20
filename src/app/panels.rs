@@ -3,6 +3,9 @@
 
 use super::*;
 
+use crate::scene_document::{SceneCamera, SceneDocument};
+use crate::ui::presets::SceneAction;
+
 impl VfApp {
     /// Frame phase: the top menu bar, formula bar, fly-input sync, both side
     /// panels, the domain recentre and the capture transition, in frame order.
@@ -663,8 +666,9 @@ impl VfApp {
     }
 
     /// Apply what the Presets body reported this frame: a camera button picked
-    /// inside the panel/sheet, then any applied preset record.
-    fn finish_presets(&mut self, camera_request: Option<ViewCommand>) {
+    /// inside the panel/sheet, then any applied preset record, then a whole
+    /// scene save or load.
+    pub(super) fn finish_presets(&mut self, camera_request: Option<ViewCommand>) {
         // Expansion persists through live state, not this report: `save`
         // captures `expanded_state()` every save point. Draining the one-shot
         // report here only keeps it from leaking into the next frame.
@@ -678,6 +682,89 @@ impl VfApp {
             // components ignored (review M-3).
             apply_camera_record(&applied, &mut self.orbit, &mut self.fly);
         }
+        if let Some(action) = self.presets.take_scene_action() {
+            match action {
+                SceneAction::Save => self.save_scene(),
+                SceneAction::Load(name) => self.load_scene(&name),
+            }
+        }
+    }
+
+    /// Capture the live view as a [`SceneCamera`]. The 2D record mirrors the
+    /// orbit target and ortho zoom, exactly like the existing camera-preset
+    /// handoff.
+    fn scene_camera(&self) -> SceneCamera {
+        SceneCamera {
+            position: [self.camera.position[0], self.camera.position[1]],
+            scale: self.camera.scale,
+            yaw: self.orbit.yaw,
+            pitch: self.orbit.pitch,
+            distance: self.orbit.distance,
+            target: self.orbit.target.to_array(),
+            fov_y: self.orbit.fov_y,
+            ortho_zoom: self.orbit.ortho_zoom,
+        }
+    }
+
+    /// Save the live scene under the panel's typed name. The panel validates
+    /// the document, rejects duplicates and persists it.
+    fn save_scene(&mut self) {
+        let document = SceneDocument::capture(
+            self.presets.scene_name().to_string(),
+            ViewRecord::capture(&self.state),
+            self.state.parameters.clone(),
+            self.scene_camera(),
+        );
+        if let Err(error) = self.presets.insert_scene(document) {
+            self.presets.set_scene_message(Some(error));
+        }
+    }
+
+    /// Load the named scene: view first, then parameters, then the camera.
+    /// Every step stops on its own error, and no UI preference record is
+    /// touched.
+    fn load_scene(&mut self, name: &str) {
+        let Some(document) = self.presets.scenes().get(name).cloned() else {
+            self.presets
+                .set_scene_message(Some(format!("Scene {name:?} is no longer available.")));
+            return;
+        };
+        if let Err(error) = document.validate() {
+            self.presets
+                .set_scene_message(Some(format!("Scene {name:?} is invalid: {error}")));
+            return;
+        }
+        document.view.restore(&mut self.state, &mut self.controls);
+        if let Err(error) = self.state.commit_parameters(document.parameters.clone()) {
+            self.presets.set_scene_message(Some(format!(
+                "Scene {name:?} parameters are invalid: {error}"
+            )));
+            return;
+        }
+        self.apply_scene_camera(&document.camera);
+        self.presets
+            .set_scene_message(Some(format!("Loaded scene {name:?}.")));
+    }
+
+    /// Apply a saved pose to the live cameras, clamping to the orbit camera's
+    /// live limits so a hand-edited document cannot poison the view. Fly mode
+    /// is left: a scene is an orbit view.
+    fn apply_scene_camera(&mut self, camera: &SceneCamera) {
+        self.orbit.yaw = camera.yaw;
+        // Deliberately mirrors the live `OrbitCamera::orbit` / `PlotCamera::orbit`
+        // pitch clamp; no shared constant exists yet.
+        self.orbit.pitch = camera.pitch.clamp(-1.55, 1.55);
+        self.orbit.distance = camera
+            .distance
+            .clamp(OrbitCamera::MIN_DISTANCE, OrbitCamera::MAX_DISTANCE);
+        self.orbit.target = Vec3::from_array(camera.target);
+        self.orbit.fov_y = camera
+            .fov_y
+            .clamp(1.0_f32.to_radians(), 179.0_f32.to_radians());
+        self.orbit.ortho_zoom = camera.ortho_zoom;
+        self.fly = None;
+        self.camera.position = [self.orbit.target.x, self.orbit.target.y];
+        self.camera.scale = self.orbit.ortho_zoom;
     }
 
     fn show_presets_panel(&mut self, ui: &mut egui::Ui) {

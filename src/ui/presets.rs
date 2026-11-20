@@ -14,10 +14,23 @@ use crate::plot::PlotKind;
 use crate::preset_library::{PresetEntry, PresetFilters, PresetGroup, PresetLibrary};
 use crate::presets::{Preset, START_HERE, preset_approximation_label, presets};
 use crate::render::Camera;
+use crate::scene_document::SceneDocument;
+use crate::scene_store::{self, SceneStore};
 use crate::source_presets::source_preset;
 use crate::source_scene::FieldMode;
 use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
+
+/// A whole-scene action the My-presets section selected this frame. The app
+/// captures or applies the scene through the merged [`SceneDocument`] and
+/// [`SceneStore`] seams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SceneAction {
+    /// Capture the current view, parameters and camera under the typed name.
+    Save,
+    /// Apply the named saved scene.
+    Load(String),
+}
 
 /// Directory where presets.json lives by default: XDG_CONFIG_HOME if set,
 /// otherwise ~/.config/vector-field-explorer.
@@ -134,6 +147,18 @@ pub struct PresetPanel {
     expanded: [bool; 4],
     /// A user expansion toggle since the app last drained it.
     layout_changed: bool,
+    /// Saved whole scenes, loaded from the panel's directory / browser key.
+    scenes: SceneStore,
+    /// Pending name in the "Save current scene" field.
+    scene_name: String,
+    /// The last scene result or error, cleared by the next successful action.
+    scene_message: Option<String>,
+    /// Saved scene awaiting the delete confirmation.
+    pending_scene_delete: Option<String>,
+    /// A scene action selected this frame, drained by the app.
+    scene_action: Option<SceneAction>,
+    /// Portable collection text buffer.
+    scene_text: String,
 }
 
 impl Default for PresetPanel {
@@ -163,20 +188,37 @@ impl PresetPanel {
                     Vec::new()
                 }
             };
-            Self::from_parts(dir, presets, None)
+            let (scenes, scene_note) = scene_store::load_dir(&dir);
+            Self::from_parts(dir, presets, None, scenes, scene_note)
         }
         #[cfg(target_arch = "wasm32")]
         {
             let (presets, storage_note) = load_wasm_presets();
-            Self::from_parts(PathBuf::new(), presets, storage_note)
+            let (scenes, scene_note) = scene_store::load_wasm();
+            Self::from_parts(PathBuf::new(), presets, storage_note, scenes, scene_note)
         }
     }
 
-    fn from_parts(dir: PathBuf, presets: Vec<CameraPreset>, storage_note: Option<String>) -> Self {
+    fn from_parts(
+        dir: PathBuf,
+        presets: Vec<CameraPreset>,
+        storage_note: Option<String>,
+        scenes: SceneStore,
+        scene_note: Option<String>,
+    ) -> Self {
         let library = PresetLibrary::builtin().unwrap_or_else(|error| {
             warn!("preset library could not be built: {error}");
             PresetLibrary::from_entries(Vec::new()).expect("an empty library has no duplicate IDs")
         });
+        // Surface both notes when the two stores independently fail: the
+        // camera note leads, the scene note follows, and an identical message
+        // is shown once.
+        let storage_note = match (storage_note, scene_note) {
+            (None, None) => None,
+            (Some(note), None) | (None, Some(note)) => Some(note),
+            (Some(camera), Some(scene)) if camera == scene => Some(camera),
+            (Some(camera), Some(scene)) => Some(format!("{camera} {scene}")),
+        };
         Self {
             dir,
             presets,
@@ -192,6 +234,12 @@ impl PresetPanel {
             filters: PresetFilters::default(),
             expanded: [true; 4],
             layout_changed: false,
+            scenes,
+            scene_name: String::new(),
+            scene_message: None,
+            pending_scene_delete: None,
+            scene_action: None,
+            scene_text: String::new(),
         }
     }
 
@@ -211,7 +259,8 @@ impl PresetPanel {
                 Vec::new()
             }
         };
-        Ok(Self::from_parts(dir, presets, None))
+        let (scenes, scene_note) = scene_store::load_dir(&dir);
+        Ok(Self::from_parts(dir, presets, None, scenes, scene_note))
     }
 
     /// Write the browser list through to localStorage; a storage failure
@@ -312,6 +361,123 @@ impl PresetPanel {
     /// user toggle, so the app can mark the settings dirty.
     pub fn take_layout_changed(&mut self) -> bool {
         std::mem::take(&mut self.layout_changed)
+    }
+
+    /// Saved whole scenes currently listed in the panel.
+    pub fn scenes(&self) -> &SceneStore {
+        &self.scenes
+    }
+
+    /// The typed name in the "Save current scene" field.
+    pub fn scene_name(&self) -> &str {
+        &self.scene_name
+    }
+
+    /// Replace the typed name in the "Save current scene" field.
+    pub fn set_scene_name(&mut self, name: impl Into<String>) {
+        self.scene_name = name.into();
+    }
+
+    /// The scene action selected this frame, taken once so one click applies
+    /// exactly one save or load.
+    pub fn take_scene_action(&mut self) -> Option<SceneAction> {
+        self.scene_action.take()
+    }
+
+    /// Validate, store and persist `document` at the current format version.
+    ///
+    /// A duplicate name, an invalid document or a failed write leaves the
+    /// in-memory store unchanged and reports the reason in [`Self::scene_message`].
+    pub fn insert_scene(&mut self, document: SceneDocument) -> Result<(), String> {
+        let name = document.name.clone();
+        if self.scenes.get(&name).is_some() {
+            let message = format!("A scene named {name:?} already exists.");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        let mut next = self.scenes.clone();
+        if let Err(error) = next.upsert(document) {
+            let message = format!("Scene could not be saved: {error}");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        if let Err(error) = self.persist_scenes(&next) {
+            let message = format!("Scene could not be saved: {error}");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        self.scenes = next;
+        self.scene_message = Some(format!("Saved scene {name:?}."));
+        Ok(())
+    }
+
+    /// Remove the named scene, persist the result and report whether one was
+    /// removed. A failed write keeps the store and the confirmation pending.
+    pub fn delete_scene(&mut self, name: &str) -> bool {
+        let mut next = self.scenes.clone();
+        if !next.delete(name) {
+            return false;
+        }
+        if let Err(error) = self.persist_scenes(&next) {
+            self.scene_message = Some(format!("Scene could not be deleted: {error}"));
+            return false;
+        }
+        self.scenes = next;
+        if self.pending_scene_delete.as_deref() == Some(name) {
+            self.pending_scene_delete = None;
+        }
+        self.scene_message = Some(format!("Deleted scene {name:?}."));
+        true
+    }
+
+    /// The last scene result or error, if any.
+    pub fn scene_message(&self) -> Option<&str> {
+        self.scene_message.as_deref()
+    }
+
+    /// Replace the scene result line (`None` clears it).
+    pub fn set_scene_message(&mut self, message: Option<String>) {
+        self.scene_message = message;
+    }
+
+    /// The portable collection text buffer.
+    pub fn scene_text(&self) -> &str {
+        &self.scene_text
+    }
+
+    /// Replace the portable collection text buffer.
+    pub fn set_scene_text(&mut self, text: impl Into<String>) {
+        self.scene_text = text.into();
+    }
+
+    /// Persist `store` at the panel's directory or browser key.
+    fn persist_scenes(&self, store: &SceneStore) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            scene_store::save_dir(&self.dir, store)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            scene_store::save_wasm(store)
+        }
+    }
+
+    /// Parse the portable text and replace the store only on success.
+    fn apply_scene_text(&mut self) {
+        let next = match scene_store::import_store(&self.scene_text) {
+            Ok(next) => next,
+            Err(error) => {
+                self.scene_message = Some(format!("Scene text is invalid: {error}"));
+                return;
+            }
+        };
+        if let Err(error) = self.persist_scenes(&next) {
+            self.scene_message = Some(format!("Scene collection could not be saved: {error}"));
+            return;
+        }
+        self.scenes = next;
+        self.pending_scene_delete = None;
+        self.scene_message = Some("Applied scene collection.".to_string());
     }
 
     /// The typed name currently in the "Save current view" field.
@@ -477,6 +643,122 @@ impl PresetPanel {
         }
     }
 
+    /// Draw the My-presets section: scene save/load/delete and the portable
+    /// collection text. Every mutation persists immediately and reports through
+    /// [`Self::scene_message`]; a load is reported to the app as one action.
+    fn show_scene_section(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("My presets")
+            .id_salt("my_presets")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.scene_name)
+                            .hint_text("Scene name")
+                            .desired_width(140.0),
+                    );
+                    let has_name = !self.scene_name.trim().is_empty();
+                    if ui
+                        .add_enabled(has_name, egui::Button::new("Save current scene"))
+                        .on_hover_text("Save the whole scene: view, parameters and camera")
+                        .clicked()
+                    {
+                        self.scene_action = Some(SceneAction::Save);
+                    }
+                });
+
+                if self.scenes.scenes().is_empty() {
+                    ui.weak("No saved scenes yet");
+                }
+                // Clone the names so the store can be mutated from the rows.
+                let names: Vec<String> = self
+                    .scenes
+                    .scenes()
+                    .iter()
+                    .map(|scene| scene.name.clone())
+                    .collect();
+                for name in &names {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(name);
+                        if ui
+                            .button("Load")
+                            .on_hover_text("Load this scene without touching UI preferences")
+                            .clicked()
+                        {
+                            self.pending_scene_delete = None;
+                            self.scene_action = Some(SceneAction::Load(name.clone()));
+                        }
+                        if ui
+                            .button("Delete")
+                            .on_hover_text("Delete this scene (asks for confirmation)")
+                            .clicked()
+                        {
+                            self.pending_scene_delete = Some(name.clone());
+                        }
+                    });
+                    if self.pending_scene_delete.as_deref() == Some(name.as_str()) {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(230, 70, 70),
+                                format!("Delete scene \"{name}\"?"),
+                            );
+                            if ui.button("Delete scene").clicked() {
+                                self.delete_scene(name);
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.pending_scene_delete = None;
+                            }
+                        });
+                    }
+                }
+
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button("Export text")
+                        .on_hover_text("Fill the text below with every saved scene")
+                        .clicked()
+                    {
+                        match scene_store::export_store(&self.scenes) {
+                            Ok(text) => {
+                                self.scene_text = text;
+                                self.scene_message =
+                                    Some("Exported the scene collection.".to_string());
+                            }
+                            Err(error) => {
+                                self.scene_message =
+                                    Some(format!("Scenes could not be exported: {error}"));
+                            }
+                        }
+                    }
+                    if ui
+                        .add_enabled(!self.scene_text.is_empty(), egui::Button::new("Copy"))
+                        .on_hover_text("Copy the portable scene text")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(self.scene_text.clone());
+                    }
+                });
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.scene_text)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Portable scene collection text"),
+                );
+                if ui
+                    .button("Apply text")
+                    .on_hover_text("Replace the saved scenes with this text")
+                    .clicked()
+                {
+                    self.apply_scene_text();
+                }
+
+                if let Some(message) = &self.scene_message {
+                    ui.add(egui::Label::new(message).wrap());
+                }
+            });
+    }
+
     /// Draw one library row: its label keeps the formula annotations, its
     /// summary follows inline, and a click applies through the existing
     /// formula/source loader. Returns true when a source entry loaded, so the
@@ -590,6 +872,10 @@ impl PresetPanel {
             ui.selectable_value(&mut self.filters.dimension, Some(3), "3D");
             ui.checkbox(&mut self.filters.animated, "Animated");
         });
+
+        // Whole scenes saved from this app: save, load atomically, delete with
+        // confirmation, and round-trip the collection as portable text.
+        self.show_scene_section(ui);
 
         let matches: Vec<PresetEntry> = self
             .library

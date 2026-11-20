@@ -2313,9 +2313,9 @@ capture or `State` wiring in this slice; later slices call
 #### `src/scene_store.rs` — saved-scene store
 
 **Purpose.** Issue #90 slice B2b: a validated, ordered collection of
-`SceneDocument`s plus the versioned envelope and storage seams that will back
-the saved-scenes UI in a later slice. This module picks no path and touches no
-UI or app state; native callers pass the directory (the app will pass
+`SceneDocument`s plus the versioned envelope and storage seams behind the
+My-presets section of the Presets panel. This module picks no path and touches
+no UI or app state; native callers pass the directory (the panel passes
 `ui::presets::default_preset_dir()`).
 
 **Public API.** `SCENE_STORE_VERSION` (currently `1`), `SCENES_FILE`
@@ -2355,9 +2355,9 @@ delete reporting, native missing/round-trip/corrupt-file behaviour, export and
 import composition with a failure, pinned compact field order, and rejected
 upserts leaving the store unchanged.
 
-**Limitations.** No saved-scenes UI, panel, app wiring, camera apply or
-persistence-envelope integration in this slice; the app supplies the directory
-and handles user-facing copy.
+**Limitations.** The collection is replaced or edited only through the
+My-presets section; there is no per-scene rename or reordering, and the app
+supplies the directory and user-facing copy.
 
 #### `src/persistence.rs` — one settings envelope
 
@@ -3790,14 +3790,17 @@ and `ALL`; `SideEffect`; `MenuItem`; `Menu`; `MENUS`; `Shortcut`; `SHORTCUTS`;
 #### `src/ui/presets.rs` — field presets and saved camera views
 
 **Purpose.** The right Presets panel: built-in field presets grouped by
-category, a `Source presets` section, camera Reset/Fit buttons, and saved view
-management.
+category, a `Source presets` section, camera Reset/Fit buttons, saved view
+management, and the My-presets whole-scene section (issue #90 slice B2c).
 
-**Public API.** `default_preset_dir` (native); `CAMERA_BUTTONS`; `PresetPanel`
-with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
-`active_field_name`, `active_source_name`, `pending_delete`, `take_applied`,
-`clear_active`, `save_current`, `load`, `request_delete`, `cancel_delete`,
-`delete`, `load_field`, `load_source_field`, `show`.
+**Public API.** `default_preset_dir` (native); `CAMERA_BUTTONS`; `SceneAction`
+(`Save`, `Load(String)`); `PresetPanel` with `new`, `new_with_dir` (native),
+`dir`, `presets`, `active_name`, `active_field_name`, `active_source_name`,
+`pending_delete`, `take_applied`, `clear_active`, `save_current`, `load`,
+`request_delete`, `cancel_delete`, `delete`, `load_field`, `load_source_field`,
+`show`, plus `scenes`, `scene_name`, `set_scene_name`, `take_scene_action`,
+`insert_scene`, `delete_scene`, `scene_message`, `set_scene_message`,
+`scene_text`, `set_scene_text`.
 
 **Invariants.**
 - Built-in field presets return to Formula first, then load formula and
@@ -3817,8 +3820,25 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 - A missing preset name changes nothing and returns false.
 - Native `new` logs a load failure and starts empty; wasm storage failure shows
   one note but keeps the in-memory list usable.
+- My presets loads `SceneStore` from the same directory/key on construction; a
+  corrupt file yields an empty store and the storage note.
+- `Save current scene` is disabled while the trimmed name is empty; one click
+  posts `SceneAction::Save` and the app captures `ViewRecord::capture`, the
+  committed parameters and the live 2D/orbit camera. The panel rejects a
+  duplicate name or invalid document and reports it through `scene_message`;
+  every successful mutation persists immediately, and a failed write keeps the
+  in-memory store unchanged.
+- `Load` posts `SceneAction::Load(name)`; the app restores the view, then commits
+  the parameters, then applies the camera clamped to the live orbit limits and
+  drops fly. Style, layout, preset-expansion and viewport-style records are
+  never touched.
+- `Delete` takes the existing two-click confirmation (`Delete scene` confirms).
+- `Export text` fills `scene_text`; `Apply text` parses the whole collection
+  with `import_store` and replaces the store only on success, persisting it;
+  invalid or future-version text keeps the old store and shows the parser error.
+  `Copy` uses `ui.ctx().copy_text`.
 
-**Pinned by.** `tests/ui_preset_test.rs` (17):
+**Pinned by.** `tests/ui_preset_test.rs` (36), including
 `every_built_in_field_preset_loads_through_the_panel`,
 `loading_a_field_preset_sets_its_formula_and_dimension`,
 `classic_presets_return_to_formula_and_keep_the_source_scene`,
@@ -3826,11 +3846,23 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 `saving_highlights_the_row_and_a_duplicate_replaces_it`,
 `deleting_waits_for_confirmation_then_clears_the_highlight`,
 `a_load_hands_the_camera_to_the_live_view_exactly_once`,
-`test_presets_survive_restart`;
+`test_presets_survive_restart`, and the scene battery
+`saving_a_scene_captures_view_parameters_and_camera`,
+`duplicate_scene_names_are_rejected_with_a_message`,
+`loading_a_scene_applies_view_and_parameters_without_touching_ui_preferences`,
+`loading_a_scene_clamps_the_camera_to_live_limits`,
+`deleting_a_scene_needs_a_confirmation_click`,
+`portable_scene_text_round_trips_through_apply_text`,
+`invalid_portable_text_leaves_the_saved_scenes_untouched`,
+`scene_name_rules_are_enforced_by_the_panel`,
+`saved_scenes_load_from_the_preset_directory`,
+`save_failures_surface_without_panicking`;
 `tests/config_test.rs::test_data_dir_honors_xdg_override`.
 
 **Limitations.** Saved views are 2D camera records only; no 3D orbit presets.
-No rename; name field is free text.
+No rename; name field is free text. Saved scenes have no per-row rename and the
+camera clamps to the live orbit limits rather than reproducing out-of-range
+hand-edited values.
 
 #### `src/ui/sidebar.rs` — the Controls panel
 
