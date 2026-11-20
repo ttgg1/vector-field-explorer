@@ -146,12 +146,14 @@ Why the seam matters:
   `compose_lines_with_frame` consumes the active `scene_domain`/`plane_frame`, so
   a 2D slice never gets world-cube references; the snapshot's `lines` holds
   grid-seeded streamlines only. In `FieldMode::Sources` the app also appends the
-  active scene's `source_glyph_lines` after the reference/flow/click lines, so
-  markers follow the same selected `plane_frame` as the samples. In
-  `FieldMode::Induction` it appends exactly the selected conductor's glyph and
-  no streamline/click geometry; Formula mode preserves the durable scene but
-  appends none. In `FieldMode::Ode` the pure snapshot stays empty and the app
-  owns precomputed trajectory lines plus axes, rebuilt once per solved scene;
+  active scene's styled source glyph lines after the reference/flow/click lines,
+  so markers follow the same selected `plane_frame` as the samples and resolve
+  the `Sources` layer with each glyph's family. In `FieldMode::Induction` it
+  appends exactly the selected conductor's glyph, resolving the `Induction`
+  layer, and no streamline/click geometry; Formula mode preserves the durable
+  scene but appends none. In `FieldMode::Ode` the pure snapshot stays empty and
+  the app owns precomputed trajectory lines plus axes, rebuilt once per solved
+  scene;
   per-frame current-time markers are appended to a copy of `dots` (2D) or the
   sorted `combined` stream (3D). The resulting `SceneGPU.lines` is shared by
   both viewport modes, CLI export and screenshot capture.
@@ -1384,26 +1386,47 @@ right-hand current-loop chevrons and a capped solenoid helix, plus a two-stroke
 positive or one-stroke negative sign marker.
 
 **Public API.** `GlyphSign`, `SourceGlyph`, `source_glyphs(scene, domain,
-plane)` and `source_glyph_lines(glyphs, domain)`.
+plane)`, `source_glyph_lines(glyphs, domain)`,
+`source_glyph_lines_with(glyphs, domain, styles)` and
+`source_glyph_lines_with_layer(glyphs, domain, styles, layer)`. The legacy
+`source_glyph_lines` delegates with neutral [`LayerStyles`](../src/layer_style.rs);
+`source_glyph_lines_with` fixes the layer to `Sources`, and the induction
+conductor calls the layer-aware entry point with `Induction`.
 
 **Invariants.** Electric kinds appear only for `Electric`/`Both` and magnetic
 kinds only for `Magnetic`/`Both`; disabled entries emit nothing. Family colours
-are fixed E amber and B cyan, independent of the colormap. On-slice/3D lines use
-alpha `0.9` and `0.005 ×` scene extent; off-slice lines use alpha `0.45`,
-`0.0035 ×` extent and `4/3 × domain_scale` on/off dashes. With a `PlaneFrame`
-the centre and axis are converted to local plane coordinates, `center.z` is
-zero, and an out-of-plane source is flagged `off_slice` when its normal
-distance exceeds `16 × f32::EPSILON × max(extent, 1.0)`. Marker geometry is
-sized from `domain_scale = 0.05 × max(extent, 1e-6)` so a degenerate domain
-still produces finite segments. Glyphs are contextual overlays, not
-depth-tested surfaces.
+are fixed E amber and B cyan, independent of the colormap, unless that family's
+resolved colour override is set. A non-neutral layer/family record multiplies
+the base alpha and width and may replace the fixed family RGB; mapped colours
+are never touched. Alpha is the on-slice `0.9` or off-slice `0.45` times the
+resolved opacity, clamped to `0.0..=1.0`; `reference::sanitized_opacity` repairs
+the opacity *multiplier* before the multiply (non-finite becomes `1.0`), so a
+corrupt value keeps the neutral base alpha instead of brightening to fully
+opaque. Width is `0.005 ×` or `0.0035 ×` scene extent
+multiplied by the resolved width multiplier, clamped to `0.05..=4.0` with a
+non-finite multiplier read as `1.0`. Off-slice lines keep their `4/3 ×
+domain_scale` on/off dashes. A neutral record is byte-identical to the legacy
+output. With a `PlaneFrame` the centre and axis are converted to local plane
+coordinates, `center.z` is zero, and an out-of-plane source is flagged
+`off_slice` when its normal distance exceeds `16 × f32::EPSILON × max(extent,
+1.0)`. Marker geometry is sized from `domain_scale = 0.05 × max(extent, 1e-6)`
+so a degenerate domain still produces finite segments. Glyphs are contextual
+overlays, not depth-tested surfaces.
 
 **Pinned by.** [tests/source_glyph_test.rs](../tests/source_glyph_test.rs):
 `glyphs_cover_every_kind_with_family_colour_and_sign`,
 `negative_strengths_choose_the_minus_marker`,
 `glyph_center_and_axis_follow_the_source`,
-`family_selection_and_disabled_entries_filter_glyphs`, and
-`off_slice_glyphs_project_and_are_visually_distinct`.
+`family_selection_and_disabled_entries_filter_glyphs`,
+`off_slice_glyphs_project_and_are_visually_distinct`,
+`neutral_glyph_styles_are_byte_identical`,
+`source_layer_opacity_multiplies_glyph_alpha`,
+`source_layer_width_multiplies_glyph_width`,
+`family_colour_overrides_replace_the_fixed_family_colour`,
+`induction_layer_applies_to_the_conductor_glyph`,
+`layer_beats_family_per_attribute`,
+`out_of_range_or_non_finite_glyph_styles_are_defensively_repaired`, and
+`off_slice_alpha_still_multiplies`.
 
 #### `src/sources/` — validated source model and bounded quadrature
 

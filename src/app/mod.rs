@@ -14,6 +14,7 @@ use crate::fly_camera::{
     crosshair_segments, crosshair_visible, exit_on_focus_loss, frame_look, is_command_chord,
     sync_fly, sync_fly_mirror,
 };
+use crate::layer_style::LayerId;
 use crate::persistence::{self, AppSettings, PresetUiRecord, ViewRecord};
 use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
@@ -632,7 +633,11 @@ pub(crate) fn compose_vector_lines(
                 &state.scene_domain(),
                 state.plane_frame().as_ref(),
             );
-            crate::source_glyph::source_glyph_lines(&glyphs, &state.scene_domain())
+            crate::source_glyph::source_glyph_lines_with(
+                &glyphs,
+                &state.scene_domain(),
+                state.layer_styles(),
+            )
         }
         FieldMode::Induction => {
             let mut scene = crate::source_scene::SourceScene::default();
@@ -645,7 +650,12 @@ pub(crate) fn compose_vector_lines(
                 &state.scene_domain(),
                 state.plane_frame().as_ref(),
             );
-            crate::source_glyph::source_glyph_lines(&glyphs, &state.scene_domain())
+            crate::source_glyph::source_glyph_lines_with_layer(
+                &glyphs,
+                &state.scene_domain(),
+                state.layer_styles(),
+                LayerId::Induction,
+            )
         }
         FieldMode::Formula | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
             Vec::new()
