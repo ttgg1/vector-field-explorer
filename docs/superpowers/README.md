@@ -41,6 +41,7 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 | [Markdown-first agent workflow design](specs/2026-11-16-markdown-first-agent-workflow-design.md) | Owner-approved retirement of Python orchestration; native OpenCode Markdown roles and Python metrics only. |
 | [Markdown-first agent workflow plan](plans/2026-11-16-markdown-first-agent-workflow.md) | Native OpenCode modes, metrics-only Python, and runtime retirement tasks. |
 | [Object renderer design](specs/2026-11-20-object-renderer-design.md) | GitHub #106 accepted design for a depth-enabled instanced object pass, slice budgets and capture parity. |
+| [Flow bake and GPU advection design](specs/2026-11-21-flow-bake-gpu-advection-design.md) | Proposed P3 staged design (deterministic CPU bake, optional compute advection with CPU readback); ADR [0005](../../adr/0005-flow-bake-gpu-advection.md). |
 | [Layer style contract](specs/2026-11-20-layer-style-contract.md) | GitHub #84 owner-accepted layer/family appearance overrides, precedence, persistence and appearance-panel boundaries; A1/A2/B slices need their own claims. |
 | [Interaction profile contract](specs/2026-11-18-interaction-profile-contract.md) | GitHub #88 owner-accepted action bindings, conflict/reserved rules, camera feel, named profiles and the A1/A2/A3 boundaries. |
 | [Edit history contract](specs/2026-11-18-edit-history-contract.md) | GitHub #86 accepted snapshot scope, bounded in-memory transactions, drag coalescing, redo invalidation and scoped resets; A1 model and A2 wiring need their own claims. |
