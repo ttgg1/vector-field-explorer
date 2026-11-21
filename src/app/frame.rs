@@ -60,6 +60,7 @@ impl eframe::App for VfApp {
             appearance_profiles: self.profiles.user().to_vec(),
             interaction: self.interaction.clone(),
             interaction_profiles: self.interaction_profiles.user().to_vec(),
+            seed_layouts: self.seed_layouts.user().to_vec(),
             preset_ui: PresetUiRecord {
                 expanded: self.presets.expanded_state(),
             },

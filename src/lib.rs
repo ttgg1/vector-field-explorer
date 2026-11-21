@@ -51,6 +51,7 @@ pub mod scene_document;
 pub mod scene_store;
 pub mod screenshot;
 pub mod seed_layout;
+pub mod seed_layout_library;
 pub mod sim_clock;
 pub mod source_glyph;
 pub mod source_presets;

@@ -576,7 +576,8 @@ and the helpers that belong to no single frame phase.
   profile nor dirties the scene. The active interaction record builds
   `VfApp::interaction`, and the persisted user interaction profiles build
   `VfApp::interaction_profiles`; neither restore applies a profile or dirties
-  the scene. A restored
+  the scene. The persisted named seed layouts build `VfApp::seed_layouts`
+  without applying a layout or dirtying the scene. A restored
   non-default domain is recentred on the correct
   camera (`recentre_on` in 3D, `recentre_on_2d` in 2D). It passes the restored
   reference flags into `compose_lines_with_frame` for the initial private scene;
@@ -729,8 +730,9 @@ persistence write.
 - Phase order is input → chrome → simulation → status → viewport → overlays.
 - `save` writes exactly `AppSettings { style, layout, view:
   ViewRecord::capture(&state) }` plus the durable parameter, viewport-style,
-  layer-style, user-profile and interaction records; user profile libraries come
-  from `VfApp::profiles.user()` and `VfApp::interaction_profiles.user()`.
+  layer-style, user-profile, interaction and named-seed-layout records; the
+  user profile libraries come from `VfApp::profiles.user()`,
+  `VfApp::interaction_profiles.user()` and `VfApp::seed_layouts.user()`.
   Cameras and fly state are intentionally absent.
 
 **Pinned by.** `tests/persistence_test.rs::settings_round_trip_through_eframe_storage`,
@@ -2770,6 +2772,65 @@ named layout libraries and portable text are S3. Seed positions are validated
 against the visible `scene_domain`, so a non-Z plane slice in 2D still uses the
 S1 authority even though the stored position is documented as world.
 
+#### `src/seed_layout_library.rs` — named seed-layout library
+
+**Purpose.** Issue #87 slice S3a: validated, versioned user seed layouts kept
+beside the built-in empty `Default`, with a documented cap, case-sensitive name
+uniqueness and an atomic portable import/export format. Pure model only; no UI,
+no `State` application and no history wiring.
+
+**Public API.** `SEED_LAYOUT_FORMAT_VERSION = 1`,
+`MAX_LAYOUT_NAME_BYTES = 48`, `MAX_USER_LAYOUTS = 16`,
+`DEFAULT_LAYOUT_NAME = "Default"`; `SeedLayoutProfile { name, seeds }` with
+`validate(&Domain)` and `sanitized(self, &Domain)`;
+`SeedLayoutDocument { version, layouts }` with `validate(&Domain)`, `to_json`
+and `from_json`; `SeedLayoutLibrary` (`Default`, `new`, `user`, `len`,
+`is_empty`, `upsert`, `remove`, `all`, `import_text`, `export_text`).
+
+**Contract.**
+- A profile name must be non-empty, trimmed, at most 48 bytes and never
+  `Default`; `validate` also delegates to `SeedLayout::validate(domain)`.
+- `sanitized` is total: it trims the name, truncates on a UTF-8 character
+  boundary, resets an unusable name (empty or the built-in) to the stable
+  placeholder `"Layout"`, and runs `SeedLayout::sanitized(domain)`. Its output
+  always validates.
+- Documents are `deny_unknown_fields`, check the version first, then every
+  profile and then case-sensitive name uniqueness. `to_json` emits compact
+  pinned JSON (`version`, `layouts`; per layout `name`, `seeds`; per seed
+  `position`, `anchor`; per anchor `axis`, `index`, `u`, `v`); `from_json`
+  probes the version before the body. Structural failures use the
+  `invalid seed layouts: ` prefix, serde failures `invalid seed layout JSON: `.
+  Seed positions are domain-dependent, so `validate(&Domain)` (which
+  `import_text` runs) owns that check.
+- `SeedLayoutLibrary::new` validates every profile against the supplied domain,
+  rejects duplicate names case-sensitively, refuses the built-in name and
+  enforces `MAX_USER_LAYOUTS`.
+- `upsert` validates, replaces a same-named entry in place (order preserved) or
+  appends within the cap; a rejected upsert changes nothing. `remove` never
+  removes the built-in. `all` creates the empty `Default` on demand first, then
+  the user layouts; the built-in is never stored, exported or deleted.
+- `import_text` parses, validates every seed against the domain and merges
+  through a candidate clone, so any error leaves the library untouched; it
+  returns the post-merge user count. `export_text` is user-only compact JSON, or
+  an empty string when the library has no user layouts.
+
+**Pinned by.** `tests/seed_layout_library_test.rs`:
+`layouts_round_trip_through_a_versioned_document`,
+`documents_reject_unknown_fields_future_versions_and_duplicate_names`,
+`library_rejects_duplicates_the_builtin_name_and_the_cap`,
+`library_import_merges_atomically_and_reports_the_user_count`,
+`library_export_is_user_only_compact_and_empty_when_unset`,
+`built_in_default_is_always_first_and_never_stored`,
+`sanitized_repairs_names_and_drops_invalid_seeds_total` and
+`saving_a_layout_replaces_in_place_and_preserves_order`. The envelope is pinned
+by `tests/persistence_test.rs`:
+`seed_layout_profiles_round_trip_through_the_envelope`,
+`startup_restore_of_seed_layouts_is_non_applying_and_non_dirtying` and
+`corrupt_seed_layout_profiles_are_sanitised_on_load`.
+
+**Limitations.** No Flow-section panel UI, apply/save-current action, startup
+apply or history entry in this slice; those are S3b.
+
 #### `src/edit_history.rs` — bounded edit history and reset scopes
 
 **Purpose.** Issue #86 slice A1: a pure, in-memory undo/redo model for the
@@ -2864,12 +2925,12 @@ supplies the directory and user-facing copy.
 #### `src/persistence.rs` — one settings envelope
 
 **Purpose.** Restore and save style, layout, parameter, appearance, interaction
-profile and view state under one eframe storage key, with migration and
-corruption tolerance.
+profile, named seed layout and view state under one eframe storage key, with
+migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-preset_ui }`, `AppSettings::sanitized`;
+seed_layouts, preset_ui }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
 helpers.
@@ -2886,6 +2947,7 @@ helpers.
 | `appearance_profiles: Vec<AppearanceProfile>` | user profile records (`name`, `viewport`, `layer_styles`, `color`) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 32` are dropped with a warning |
 | `interaction: InteractionProfile` | active bindings (`name`, one chord per remappable action) and camera feel (`orbit_sensitivity`, `zoom_speed`, three invert flags) | `#[serde(default)]`; an absent key loads `InteractionProfile::default()` (today's chords, neutral feel); an invalid record is repaired by `InteractionProfile::sanitized` with a warning and resets to the default if it still fails validation |
 | `interaction_profiles: Vec<InteractionProfile>` | user interaction profiles only (the built-in `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry named `DEFAULT_PROFILE_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 16` are dropped with a warning |
+| `seed_layouts: Vec<SeedLayoutProfile>` | user named seed layouts only (the built-in empty `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized against the restored view domain, an entry whose trimmed name is empty or `DEFAULT_LAYOUT_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_LAYOUTS = 16` are dropped with a warning |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -2977,6 +3039,15 @@ helpers.
     empty rather than failing startup. Save writes the live active record and
     `interaction_profiles.user()`, so a save cannot silently discard loaded
     profiles.
+18. An absent `seed_layouts` list loads empty. Each stored profile is
+    sanitized against the domain the stored view record restores to (the
+    repaired 2D plane collapse or plane-slice local domain); an entry whose
+    trimmed name is empty or `DEFAULT_LAYOUT_NAME` is dropped, the first of a
+    case-sensitive duplicate survives, and entries beyond
+    `MAX_USER_LAYOUTS = 16` are dropped. A library that still fails
+    `SeedLayoutLibrary::new` logs a warning and starts empty rather than
+    failing startup. Startup never applies a layout or dirties the scene, and
+    save writes `seed_layouts.user()`.
 
 **Tested by.** `tests/persistence_test.rs` (81 tests):
 `settings_round_trip_through_eframe_storage`,
@@ -3012,6 +3083,10 @@ envelope is pinned by
 `sanitizing_drops_builtin_duplicate_and_excess_user_interaction_profiles`,
 `new_with_storage_restores_interaction_settings_without_dirtying_or_applying`
 and `user_interaction_profiles_round_trip_through_an_app_save`. The
+named seed-layout envelope is pinned by
+`seed_layout_profiles_round_trip_through_the_envelope`,
+`startup_restore_of_seed_layouts_is_non_applying_and_non_dirtying` and
+`corrupt_seed_layout_profiles_are_sanitised_on_load`. The
 layer-style record is pinned by
 [tests/layer_style_test.rs](../tests/layer_style_test.rs): neutral resolution,
 per-attribute precedence, validation and sanitising, envelope round-trip,
