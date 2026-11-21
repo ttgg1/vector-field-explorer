@@ -7,7 +7,7 @@ use glam::Vec3;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
-use vector_field_explorer::persistence::ViewRecord;
+use vector_field_explorer::persistence::{ProbeLoopRecord, ProbeSurfaceRecord, ViewRecord};
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame};
 use vector_field_explorer::scalar_analysis::{
     ComparisonSeries, ComparisonSet, GradientSpec, SeriesId, SeriesRole, SeriesStyle,
@@ -80,9 +80,31 @@ fn sample_gradient() -> GradientSpec {
     }
 }
 
+fn sample_probe_surfaces() -> Vec<ProbeSurfaceRecord> {
+    vec![ProbeSurfaceRecord {
+        kind: "sphere".to_string(),
+        center: [0.25, -0.5, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        size: [1.5, 1.5, 1.5],
+        segments: 16,
+    }]
+}
+
+fn sample_probe_loops() -> Vec<ProbeLoopRecord> {
+    vec![ProbeLoopRecord {
+        kind: "rectangle".to_string(),
+        center: [0.0, 0.0, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        size: [2.0, 1.0, 1.0],
+        segments: 12,
+    }]
+}
+
 fn sample_view() -> ViewRecord {
     ViewRecord {
         formula: "x + y".to_string(),
+        probe_surfaces: sample_probe_surfaces(),
+        probe_loops: sample_probe_loops(),
         comparison_series: sample_comparison_series(),
         gradient: Some(sample_gradient()),
         color_ramp: Some(ColorRamp {

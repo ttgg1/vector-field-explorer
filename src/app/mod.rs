@@ -731,7 +731,8 @@ pub fn compose_lines_with_frame_style(
 /// does: reference grid/axes, the formula or click streamlines, then the
 /// mode-owned source/induction glyphs. Returns the glyph count so the app can
 /// keep its live status readout.
-pub(crate) fn compose_vector_lines(
+#[doc(hidden)]
+pub fn compose_vector_lines(
     state: &State,
     flow: &[LineInstanceGPU],
     clicks: &[LineInstanceGPU],
@@ -783,6 +784,11 @@ pub(crate) fn compose_vector_lines(
     };
     let count = glyphs.len();
     lines.extend(glyphs);
+    // Issue #95 slice B: probe wireframes ride the normal line collection, so
+    // PNG, animation and SVG captures include them without a new pass. They
+    // follow the mode glyphs so the styled-viewport tail recomposition keeps
+    // them without widening the reported glyph count.
+    lines.extend(state.probe_overlay_lines(state.layer_styles()));
     (lines, count)
 }
 
