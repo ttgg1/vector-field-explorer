@@ -6,11 +6,13 @@
 
 use std::collections::HashSet;
 
+use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::preset_library::{
     PresetEntry, PresetFilters, PresetGroup, PresetId, PresetLibrary, PresetLibraryError,
     PresetValidity,
 };
 use vector_field_explorer::presets::{PresetCategory, presets};
+use vector_field_explorer::scalar::{ScalarContext, ScalarExpr};
 use vector_field_explorer::source_presets::source_presets;
 
 fn builtin() -> PresetLibrary {
@@ -37,6 +39,26 @@ const ANIMATED_FORMULAS: [&str; 6] = [
     "Rotating uniform field",
     "3D plane wave",
 ];
+
+/// Ticket-91 slice C scalar entries, in catalogue order.
+const SCALAR_PRESET_NAMES: [&str; 5] = [
+    "Scalar saddle",
+    "Scalar anisotropic well",
+    "Softened dipole potential",
+    "Scalar moving Gaussian packet",
+    "Interfering waves",
+];
+
+/// The scalar entries that read the shared clock.
+const ANIMATED_SCALARS: [&str; 2] = ["Scalar moving Gaussian packet", "Interfering waves"];
+
+fn scalar_entries(library: &PresetLibrary) -> Vec<&PresetEntry> {
+    library
+        .entries()
+        .iter()
+        .filter(|entry| entry.scalar.is_some())
+        .collect()
+}
 
 #[test]
 fn ids_are_unique_and_stable() {
@@ -105,11 +127,18 @@ fn formula_entries_keep_catalogue_order_and_groups() {
     let formula: Vec<&PresetEntry> = library
         .entries()
         .iter()
-        .filter(|entry| matches!(entry.group, PresetGroup::Classic | PresetGroup::Physics))
+        .filter(|entry| {
+            entry.scalar.is_none()
+                && matches!(entry.group, PresetGroup::Classic | PresetGroup::Physics)
+        })
         .collect();
 
     let expected: Vec<&str> = presets().iter().map(|preset| preset.name).collect();
-    assert_eq!(names(&formula), expected, "formula order follows presets()");
+    assert_eq!(
+        names(&formula),
+        expected,
+        "vector formula order follows presets()"
+    );
 
     for (entry, preset) in formula.iter().zip(presets()) {
         let expected_group = match preset.category {
@@ -212,6 +241,12 @@ fn dimension_filter_keeps_sources_and_matching_dimension() {
             .filter(|preset| preset.dimension == dimension)
             .map(|preset| preset.name)
             .collect();
+        expected.extend(
+            scalar_entries(&library)
+                .into_iter()
+                .filter(|entry| entry.filters.dimension == Some(dimension))
+                .map(|entry| entry.name),
+        );
         expected.extend(source_presets().iter().map(|preset| preset.name));
 
         assert_eq!(names(&filtered), expected, "dimension {dimension}");
@@ -248,9 +283,11 @@ fn animated_filter_returns_exactly_the_clock_driven_entries() {
         dimension: None,
         animated: true,
     });
+    let mut expected = ANIMATED_FORMULAS.to_vec();
+    expected.extend(ANIMATED_SCALARS);
     assert_eq!(
         names(&animated_only),
-        ANIMATED_FORMULAS,
+        expected,
         "animated entries are exactly the clock-driven teaching presets"
     );
 }
@@ -543,6 +580,264 @@ fn get_returns_the_entry_or_none() {
 
     let missing = PresetId::new("formula.missing").unwrap();
     assert!(library.get(&missing).is_none());
+}
+
+#[test]
+fn scalar_presets_are_indexed_with_surface_expressions() {
+    let library = builtin();
+    let entries = scalar_entries(&library);
+
+    assert_eq!(
+        names(&entries),
+        SCALAR_PRESET_NAMES,
+        "scalar catalogue order"
+    );
+    let unique: HashSet<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+    assert_eq!(unique.len(), entries.len(), "scalar ids must be unique");
+    for entry in &entries {
+        let spec = entry.scalar.expect("every scalar entry carries a spec");
+        assert_eq!(
+            entry.group,
+            PresetGroup::Physics,
+            "group for `{}`",
+            entry.name
+        );
+        assert!(!entry.summary.is_empty(), "summary for `{}`", entry.name);
+        assert!(
+            !entry.assumptions.is_empty(),
+            "assumptions for `{}`",
+            entry.name
+        );
+        assert!(
+            !entry.exploration_prompt.is_empty(),
+            "exploration prompt for `{}`",
+            entry.name
+        );
+        assert!(
+            !spec.expr.is_empty(),
+            "surface expression for `{}`",
+            entry.name
+        );
+        assert_eq!(
+            spec.kind,
+            PlotKind::Surface3D,
+            "shipped surface scalar kind for `{}`",
+            entry.name
+        );
+        assert!(
+            (1..=16).contains(&spec.contour_levels),
+            "contour levels in range for `{}`",
+            entry.name
+        );
+        assert!(entry.validity.is_some(), "validity for `{}`", entry.name);
+        assert_eq!(
+            entry.filters.dimension,
+            Some(2),
+            "surface scalar dimension for `{}`",
+            entry.name
+        );
+    }
+}
+
+#[test]
+fn every_scalar_preset_expression_parses_in_surface_context() {
+    let library = builtin();
+    for entry in scalar_entries(&library) {
+        let spec = entry.scalar.expect("scalar spec");
+        let expr = ScalarExpr::parse(spec.expr, ScalarContext::Surface).unwrap_or_else(|error| {
+            panic!("`{}` must parse in Surface context: {error}", entry.name)
+        });
+        for x in [-2.0, -0.75, 0.0, 0.75, 2.0] {
+            for y in [-2.0, 0.0, 2.0] {
+                for t in [0.0, 0.5, 1.5] {
+                    assert!(
+                        expr.eval_at(x, y, t).is_some(),
+                        "`{}` must stay finite at ({x}, {y}, t={t})",
+                        entry.name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn interfering_waves_is_animated_and_evaluates_finitely() {
+    let library = builtin();
+    let entry = library
+        .entries()
+        .iter()
+        .find(|entry| entry.name == "Interfering waves")
+        .expect("Interfering waves is indexed");
+    assert!(entry.filters.animated, "interfering waves follow the clock");
+    let spec = entry.scalar.expect("scalar spec");
+    let expr = ScalarExpr::parse(spec.expr, ScalarContext::Surface)
+        .expect("interfering waves parse in Surface context");
+    assert!(expr.is_time_dependent(), "interfering waves depend on t");
+
+    let at_zero = expr.eval_at(0.5, 0.0, 0.0).expect("finite at t = 0");
+    let at_half = expr.eval_at(0.5, 0.0, 0.5).expect("finite at t = 0.5");
+    assert!(
+        (at_zero - at_half).abs() > 1e-6,
+        "the interference pattern must change with time"
+    );
+    for x in [-2.0, 0.0, 0.5, 2.0] {
+        for t in [0.0, 0.5, 1.5, 4.0] {
+            assert!(
+                expr.eval_at(x, 0.0, t).is_some(),
+                "finite interference sample at ({x}, t={t})"
+            );
+        }
+    }
+}
+
+#[test]
+fn exploration_prompts_are_attached_to_the_gauss_ampere_shielding_and_image_charge_rows() {
+    let library = builtin();
+    let prompt = |name: &str| {
+        library
+            .entries()
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("`{name}` must be indexed"))
+            .exploration_prompt
+            .to_lowercase()
+    };
+
+    assert!(
+        prompt("Uniform field").contains("gauss"),
+        "Gauss/flux prompt"
+    );
+    assert!(
+        prompt("Infinite wire").contains("ampere"),
+        "Ampere loop prompt"
+    );
+    assert!(
+        prompt("Sphere inside and out").contains("shield"),
+        "shielding/conductor-boundary prompt"
+    );
+    assert!(
+        prompt("Electric dipole").contains("image"),
+        "image-charge prompt"
+    );
+}
+
+#[test]
+fn builtin_scalar_entries_leave_the_vector_and_source_catalogue_unchanged() {
+    let library = builtin();
+    let vector_names: Vec<&str> = presets().iter().map(|preset| preset.name).collect();
+    let scalar_names = names(&scalar_entries(&library));
+    for name in &scalar_names {
+        assert!(
+            !vector_names.contains(name),
+            "scalar row `{name}` must not shadow a vector row"
+        );
+    }
+
+    // Every existing vector row keeps its formula and gains no scalar spec.
+    for preset in presets() {
+        let entry = library
+            .entries()
+            .iter()
+            .find(|entry| entry.name == preset.name && entry.scalar.is_none())
+            .unwrap_or_else(|| panic!("vector row `{}` is unchanged", preset.name));
+        assert_eq!(entry.filters.dimension, Some(preset.dimension));
+    }
+    assert_eq!(
+        library
+            .entries()
+            .iter()
+            .filter(|entry| entry.scalar.is_none())
+            .count(),
+        presets().len() + source_presets().len(),
+        "the vector and source catalogue is unchanged by the scalar table"
+    );
+
+    // Scalar rows reuse only the shipped Surface3D kind; no new enum variant.
+    for entry in scalar_entries(&library) {
+        let spec = entry.scalar.expect("scalar spec");
+        assert_eq!(
+            spec.kind,
+            PlotKind::Surface3D,
+            "`{}` reuses the shipped surface scalar kind",
+            entry.name
+        );
+    }
+}
+
+#[test]
+fn softened_dipole_potential_is_a_pair_potential_in_the_plane() {
+    let library = builtin();
+    let entry = library
+        .entries()
+        .iter()
+        .find(|entry| entry.name == "Softened dipole potential")
+        .expect("Softened dipole potential is indexed");
+    assert_eq!(
+        entry.validity,
+        Some(PresetValidity::PhysicallyValidRegularized),
+        "the softened pair stays a regularized physical model"
+    );
+    let spec = entry.scalar.expect("scalar spec");
+    let expr = ScalarExpr::parse(spec.expr, ScalarContext::Surface)
+        .expect("the softened dipole parses in Surface context");
+
+    let at_charge = expr
+        .eval_at(0.75, 0.0, 0.0)
+        .expect("finite at the positive charge centre");
+    let above_charge = expr
+        .eval_at(0.75, 1.0, 0.0)
+        .expect("finite one unit above the positive charge");
+    assert!(
+        (at_charge - above_charge).abs() > 1e-6,
+        "the in-plane softened pair potential must vary along y, got {at_charge} at y = 0 \
+         and {above_charge} at y = 1"
+    );
+    assert!(
+        expr.eval_at(-0.75, 0.0, 0.0).is_some(),
+        "the negative charge centre stays finite"
+    );
+}
+
+#[test]
+fn scalar_saddle_gradient_is_the_shipped_saddle_field() {
+    let library = builtin();
+    let entry = library
+        .entries()
+        .iter()
+        .find(|entry| entry.name == "Scalar saddle")
+        .expect("Scalar saddle is indexed");
+    let spec = entry.scalar.expect("scalar spec");
+    let expr = ScalarExpr::parse(spec.expr, ScalarContext::Surface)
+        .expect("the scalar saddle parses in Surface context");
+
+    // The shipped `Saddle potential` field is (x, -y); the scalar height must
+    // be its potential so grad(height) == (x, -y).
+    let saddle = presets()
+        .iter()
+        .find(|preset| preset.name == "Saddle potential")
+        .expect("Saddle potential is a shipped formula preset");
+    assert_eq!(saddle.formula, "(x, -y)");
+
+    let step = 1e-4;
+    let gradient = |x: f64, y: f64| {
+        let dx = (expr.eval_at(x + step, y, 0.0).expect("finite x+")
+            - expr.eval_at(x - step, y, 0.0).expect("finite x-"))
+            / (2.0 * step);
+        let dy = (expr.eval_at(x, y + step, 0.0).expect("finite y+")
+            - expr.eval_at(x, y - step, 0.0).expect("finite y-"))
+            / (2.0 * step);
+        (dx, dy)
+    };
+    let (dx, dy) = gradient(1.0, 2.0);
+    assert!(
+        (dx - 1.0).abs() < 1e-4,
+        "gradient x at (1, 2) should be 1, got {dx}"
+    );
+    assert!(
+        (dy + 2.0).abs() < 1e-4,
+        "gradient y at (1, 2) should be -2, got {dy}"
+    );
 }
 
 #[test]

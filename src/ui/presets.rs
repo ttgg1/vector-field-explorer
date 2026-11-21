@@ -11,9 +11,12 @@ use crate::export::{delete_preset, load_presets, save_preset};
 #[cfg(target_arch = "wasm32")]
 use crate::export::{load_wasm_presets, save_wasm_presets};
 use crate::plot::PlotKind;
-use crate::preset_library::{PresetEntry, PresetFilters, PresetGroup, PresetLibrary};
+use crate::preset_library::{
+    PresetEntry, PresetFilters, PresetGroup, PresetLibrary, ScalarPresetSpec,
+};
 use crate::presets::{Preset, START_HERE, preset_approximation_label, presets};
 use crate::render::Camera;
+use crate::scalar::ScalarContext;
 use crate::scene_document::SceneDocument;
 use crate::scene_store::{self, SceneStore};
 use crate::source_presets::source_preset;
@@ -597,6 +600,15 @@ impl PresetPanel {
     /// matching 2D/3D mode. Returns false — leaving the state untouched — when
     /// no preset carries that name. Camera preset rows are unaffected.
     pub fn load_field(&mut self, name: &str, state: &mut State) -> bool {
+        let scalar = self
+            .library
+            .entries()
+            .iter()
+            .find(|entry| entry.name == name)
+            .and_then(|entry| entry.scalar);
+        if let Some(spec) = scalar {
+            return self.load_scalar_preset(name, spec, state);
+        }
         match presets().iter().find(|preset| preset.name == name) {
             Some(preset) => {
                 // A field preset is always a vector formula: return to Formula
@@ -619,6 +631,36 @@ impl PresetPanel {
                 false
             }
         }
+    }
+
+    /// Load a scalar catalogue row into the shipped surface workbench. The
+    /// vector formula and source scene are left untouched, so switching back to
+    /// a vector row is non-destructive. Returns false without mutating the
+    /// state when the static row asks for an unsupported contour count.
+    fn load_scalar_preset(
+        &mut self,
+        name: &str,
+        spec: ScalarPresetSpec,
+        state: &mut State,
+    ) -> bool {
+        // Check the static row's contour count before any setter runs: unlike
+        // `set_scalar_contour_levels`, a rejected row must leave the whole
+        // state untouched rather than commit the earlier setters and then fail.
+        if spec.contour_levels as usize > crate::scalar_view::MAX_CONTOUR_LEVELS {
+            warn!("scalar preset load failed: {name} requests unsupported contour levels");
+            return false;
+        }
+        state.set_field_mode(FieldMode::Formula);
+        state.set_plot_kind(spec.kind);
+        state.set_scalar_source(ScalarContext::Surface, spec.expr.to_string());
+        state.set_show_scalar_heatmap(spec.show_heatmap);
+        state
+            .set_scalar_contour_levels(spec.contour_levels)
+            .expect("the bounds pre-check above already accepted the contour count");
+        self.active_field = Some(name.to_owned());
+        self.active_source = None;
+        debug!("scalar preset loaded: {name}");
+        true
     }
 
     /// Load one built-in source preset through the ordinary source-scene
@@ -765,14 +807,22 @@ impl PresetPanel {
     /// caller can frame it. Expansion/search state is never touched here.
     fn show_entry(&mut self, ui: &mut egui::Ui, entry: &PresetEntry, state: &mut State) -> bool {
         let selected = match entry.group {
-            PresetGroup::Classic | PresetGroup::Physics => presets()
-                .iter()
-                .find(|preset| preset.name == entry.name)
-                .is_some_and(|preset| {
-                    self.active_field.as_deref() == Some(entry.name)
-                        && state.formula == preset.formula
-                        && state.mode_3d == (preset.dimension == 3)
-                }),
+            PresetGroup::Classic | PresetGroup::Physics => match entry.scalar {
+                Some(spec) => {
+                    state.field_mode == FieldMode::Formula
+                        && self.active_field.as_deref() == Some(entry.name)
+                        && state.plot.kind == spec.kind
+                        && state.plot.surface.source == spec.expr
+                }
+                None => presets()
+                    .iter()
+                    .find(|preset| preset.name == entry.name)
+                    .is_some_and(|preset| {
+                        self.active_field.as_deref() == Some(entry.name)
+                            && state.formula == preset.formula
+                            && state.mode_3d == (preset.dimension == 3)
+                    }),
+            },
             PresetGroup::Sources | PresetGroup::Gallery => {
                 state.field_mode == FieldMode::Sources
                     && self.active_source.as_deref() == Some(entry.name)
