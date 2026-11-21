@@ -18,6 +18,7 @@ pub mod cli;
 pub mod color_mapping;
 pub mod color_ramp;
 pub mod colormap;
+pub mod custom_density;
 pub mod domain;
 pub mod edit_history;
 pub mod export;

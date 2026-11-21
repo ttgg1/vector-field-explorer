@@ -3138,6 +3138,73 @@ existing bounds. Errors name the parameter and the failed rule.
 **Pinned by.** `tests/parameters_test.rs` (reserved/duplicate/malformed names,
 bounds, cap, atomic `State::commit_parameters`).
 
+#### `src/custom_density.rs` — bounded custom density model and diagnostics
+
+**Purpose.** Issue #96 slice A: the pure, bounded custom charge/steady-current
+model and its diagnostics. No editing UI, persistence, scene document, renderer
+or new field solver; later slices wire it in.
+
+**Public API.** `MAX_DENSITY_SAMPLES = 110_592`, `MIN_SAMPLES = 8`,
+`MAX_SAMPLES = 48`, `MAX_NAME_BYTES = 48`, `CONTINUITY_TOLERANCE = 0.05`;
+`SupportKind {Sphere, Box, Cylinder}`,
+`DensitySupport {kind, center, axis, size}` with `validate`, `contains` and
+`volume`; `DensityFamily {VolumeCharge, SurfaceCharge, SteadyCurrent}`;
+`DensitySpec {name, family, support, formula, samples, softening}` with
+`validate(&ParameterSet)`; `DiagnosticsStatus {Estimate {error}, Unresolved
+{reason}, Violation {reason}}`; `ChargeReport`; `ContinuityReport`;
+`charge_report` and `continuity_report`.
+
+**Contract.**
+- `size` holds full extents. A sphere uses `size.x` as its diameter, a box uses
+  all three extents, and a cylinder uses `size.x` as its length along `axis` and
+  `size.y` as its diameter. All supports are closed. `axis` must be
+  non-degenerate only for a cylinder. Because `worst_point` is an f32 `Vec3`,
+  validation also rejects a support whose centre plus any half-extent exceeds
+  the finite f32 range.
+- Names are trimmed, non-empty, at most 48 UTF-8 bytes and free of control
+  characters; scene uniqueness is the caller's responsibility. Softening is
+  finite in `0..=1`. The lattice side is `8..=48`, and `samples^3` may not exceed
+  `MAX_DENSITY_SAMPLES` (48^3 is exactly the budget).
+- Charge formulas are one scalar `rho(x,y,z,t)`; steady currents are three
+  comma-separated components `Jx,Jy,Jz`. Both use `FieldExpr`'s shared grammar
+  and `ParameterSet` substitution. Validation evaluates every accepted interior
+  lattice point at `t = 0`; any non-finite point is rejected with its position,
+  never clamped or replaced by zero.
+- Sampling is `samples^3` deterministic jittered cell centres over the support's
+  axis-aligned bounding box, keyed by a splitmix64 salt over the frozen support
+  geometry and lattice index (the streamline seed scheme). Jitter is at most
+  0.45 cell. Points outside the support are excluded; density outside a support
+  is identically zero.
+- `charge_report` is only a volume-charge total: midpoint weights times the
+  analytic lattice cell volume, interior-only min/max, and `sign_changes` over
+  adjacent interior lattice pairs (a zero never counts as a change). `Estimate
+  {error}` requires full and half passes; `error = |full - half|`. Any other
+  family, or an unevaluable interior, is `Unresolved` with non-finite readouts.
+  `SurfaceCharge` is a slice-A placeholder: it is validated as a scalar `rho`
+  with the same interior rule and has no surface integration yet, so
+  `charge_report` refuses it as `Unresolved`.
+- `continuity_report` accepts only `SteadyCurrent` (other families are an
+  error string naming steady currents). It uses central differences at jittered
+  interior lattice points. The stencil evaluates one cell outside the support
+  interior, so a field singular just outside may make the report `Unresolved`.
+  `|div J|` larger than `CONTINUITY_TOLERANCE` times the
+  largest sampled `|J|` is `Violation`; a bounded near-zero result is `Estimate`
+  with the full/half-pass difference as `error`; an unevaluable interior is
+  `Unresolved`. `worst_point` is the position of the largest `|div J|`.
+- Normalized teaching units (`eps0 = mu0 = 1`); no SI claim, and electric and
+  magnetic results are never combined.
+
+**Pinned by.** [tests/custom_density_test.rs](../tests/custom_density_test.rs):
+name/geometry/budget validation (including the f32 report bound), non-finite-
+inside-support rejection, the analytic uniform-sphere total, sign-change counting
+(including the zero-exclusion rule), zero and divergent steady currents,
+`Unresolved` instead of fabricated zeros, parameter re-evaluation, and
+deterministic bounded sampling.
+
+**Limitations.** Validation samples the declared lattice, not the continuum; a
+singularity between accepted points is not detected. This slice is not wired to
+`State`, persistence or the UI.
+
 #### `src/scene_document.rs` — versioned scene document
 
 **Purpose.** Issue #90 slice B2a: a strict, versioned JSON form for a whole
