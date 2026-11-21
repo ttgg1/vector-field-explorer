@@ -40,6 +40,8 @@ mod cas_panel_test;
 mod cas_rails_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod cas_tex_test;
 #[cfg(unix)]
 mod clean_test_artifacts_test;
 #[cfg(not(target_arch = "wasm32"))]
@@ -85,6 +87,8 @@ mod material_export_test;
 mod material_panel_test;
 mod material_persistence_test;
 mod material_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod math_view_test;
 mod maxwell_app_test;
 mod maxwell_bem_test;
 mod maxwell_bench_test;

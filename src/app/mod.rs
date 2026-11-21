@@ -359,7 +359,27 @@ impl VfApp {
     /// App wired to eframe's persistent storage: the settings envelope
     /// (style + layout + view state) is restored from it — absent, corrupt or
     /// older records fall back to sensible defaults — and written back on save.
+    ///
+    /// Native callers that own the egui context should use
+    /// [`Self::new_with_storage_and_context`] so the KaTeX faces are registered
+    /// before the first frame.
     pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
+        Self::build_with_storage(storage)
+    }
+
+    /// Native construction path: register the typeset faces on the real egui
+    /// context before any widget lays text out, then build the app normally.
+    /// Registration is idempotent, so this cannot duplicate font data.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_with_storage_and_context(
+        storage: Option<&dyn eframe::Storage>,
+        ctx: &eframe::egui::Context,
+    ) -> Self {
+        crate::ui::math_view::install_math_fonts(ctx);
+        Self::build_with_storage(storage)
+    }
+
+    fn build_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
         let settings = persistence::load(storage);
         let mut state = State::new(false);
         let mut controls = Controls::new();
@@ -459,6 +479,14 @@ impl VfApp {
                 log::warn!("persisted seed layouts could not be loaded: {error}");
                 SeedLayoutLibrary::default()
             });
+        // Issue #171: restore the CAS result-display preference directly. This
+        // is a display setting and never dirties the scene.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut cas = crate::ui::cas_panel::CasPanelState::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            cas.typeset_output = settings.view.typeset_output;
+        }
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -473,7 +501,7 @@ impl VfApp {
             wide_interaction_width: layout::DEFAULT_INTERACTION_WIDTH,
             interaction_panel: InteractionPanel::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            cas: crate::ui::cas_panel::CasPanelState::default(),
+            cas,
             status: StatusBarState::default(),
             fps_meter: FpsMeter::default(),
             hint_elapsed: 0.0,

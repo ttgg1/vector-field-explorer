@@ -61,6 +61,8 @@ rfd = "0.15"
 exmex = { version = "0.21.0", features = ["partial"] }
 clap = { version = "4", features = ["derive"] }
 pollster = "0.4"
+katex-rs = "0.3.0"
+katex-native = "0.1.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

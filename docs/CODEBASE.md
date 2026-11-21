@@ -2062,6 +2062,26 @@ context binding.
 **Limitations.** Only the explicitly approved grammar is supported; this is not
 a general-purpose CAS, and it makes no global domain-preservation guarantee.
 
+#### `src/cas_tex.rs` — bounded linear-to-TeX display printer
+
+**Purpose.** Issue #171: turn a CAS linear display string into TeX for the
+optional typeset preview without changing the canonical string, grammar, or
+evaluation.
+
+**Public API.** Native-only `linear_to_tex(&str) -> Option<String>` and
+`MAX_INPUT_BYTES` behavior.
+
+**Invariants.** Total and non-panicking. Accepts only numbers, `x/y/z/t`,
+`pi`/`e`, `+ - * / ^`, parentheses, and the one-argument functions `sin cos tan
+asin acos atan sinh cosh tanh sqrt exp ln log abs`. Whitespace is ignored.
+`*` becomes `\cdot`; a top-level parenthesised numerator over a parenthesised
+denominator becomes `\frac`; every other `/` stays linear. `=`, `|`, brackets,
+braces, commas, unknown identifiers, bare function names, empty input and
+inputs over 512 bytes return `None`, which makes the panel keep the linear
+result. Copy always uses the linear formula.
+
+**Pinned by.** `tests/cas_tex_test.rs`.
+
 #### `src/cas_backend.rs` — CAS backend bridge, detection and process bounds
 
 **Purpose.** One `CasBackend` seam over the optional external CAS binaries
@@ -3341,7 +3361,7 @@ helpers.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, explicit seed layout, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, explicit seed layout, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `typeset_output`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy; `typeset_output` defaults to true |
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 | `LayerStyles` | `layers: [LayerOverride; 6]` in `LayerId::ALL` order, `families: [LayerOverride; 2]` in `PhysicsFamily::ALL` order; each override has optional `opacity`, `width`, `color` | `#[serde(default)]`; an absent key loads the neutral record; an invalid record is repaired by `sanitized` with a warning and never fails the envelope |
 | `appearance_profiles: Vec<AppearanceProfile>` | user profile records (`name`, `viewport`, `layer_styles`, `color`) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 32` are dropped with a warning |
@@ -4375,10 +4395,11 @@ thread.
 
 #### `src/ui/mod.rs` — UI module list
 
-Declares `appearance_panel`, `branding`, native-only `cas_panel`, `formula_bar`,
-`help_overlay`, `induction_panel`, `interaction_panel`, `layout`, `material_panel`,
-`maxwell_panel`, `menu`, `ode_panel`, `panel_rails`, `plot_panel`, `presets`,
-`sidebar`, `sources_panel`, `status_bar`, `style_panel`, `top_bar`, `transport`.
+Declares `appearance_panel`, `branding`, native-only `cas_panel` and
+`math_view`, `formula_bar`, `help_overlay`, `induction_panel`,
+`interaction_panel`, `layout`, `material_panel`, `maxwell_panel`, `menu`,
+`ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
+`status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -4522,7 +4543,49 @@ rule: a previewed `formula` or `scalar` action is shown in Sources mode but
 `VfApp::apply_cas_action` refuses it on Apply with the same explanation and no
 mutation. The preview dimension reads
 `State::active_dimension()` in Sources mode without changing formula-mode
-semantics.
+semantics. Issue #171 adds the `Typeset result` checkbox and a persisted
+`ViewRecord.typeset_output` (serde default true). With it on, the preview is
+painted through `ui/math_view`; if the printer returns `None`, `katex-native`
+fails to lay the document out, or a display item cannot be painted exactly,
+the panel falls back to the linear editor and the weak note
+`Showing linear result`. Copy still copies the canonical linear formula, and
+structured errors are shown verbatim, never typeset.
+
+#### `src/ui/math_view.rs` — native typeset display-list adapter
+
+**Purpose.** Issue #171: paint `katex-native` display lists with egui without a
+browser or JavaScript engine.
+
+**Public API.** `shared_context() -> &'static KatexContext`;
+`install_math_fonts(ctx)` (idempotent startup registration);
+`layout_math(ui, tex, context) -> Option<MathLayout>`;
+`MathLayout::{is_empty, size, paint}`;
+`paint_tex_or_linear(ui, tex, linear) -> bool`; `show_linear(ui, linear)`;
+and the `#[doc(hidden)] math_layout_from_items` finiteness test seam.
+
+**Invariants.** Total and non-panicking: parse/layout errors, a layout panic,
+non-finite display-list coordinates, missing font fallback, and unsupported
+display items all return `None`, so the caller keeps the linear result.
+`KatexContext::default()` is built once in a `OnceLock`, never per frame. KaTeX
+faces are registered as named egui families through `Context::add_font`, once
+at native app startup (before the first frame) and idempotently per item. Only
+text, rectangles, line segments, and convex paths wholly inside their clip are
+emitted; radicals and other non-convex or clipped paths fall back to linear. A
+layout wider or taller than the available space falls back to linear instead of
+painting a clipped fragment. Dimensions use the body text size and the layout's
+baseline/depth. `Layout.tag` and `equation_numbers` are ignored because the
+settings never enable numbering and the printer never emits `\tag`.
+
+**wasm evidence.** Both KaTeX crates live in
+`[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`; `cas_tex` and
+`math_view` are native-only. On 2026-11-21,
+`cargo tree --target wasm32-unknown-unknown -e normal -i katex-rs` and
+`... -i katex-native` both printed `warning: nothing to print.` (exit 0), and
+the full wasm tree contained zero `katex` lines (`grep -ci katex` exited 1).
+`cargo check --target wasm32-unknown-unknown --lib` exited 0. Trunk is not
+installed on this host, so no wasm artifact size is claimed.
+
+**Pinned by.** `tests/math_view_test.rs` and the CAS panel typeset tests.
 
 #### `src/ui/arrows.rs` — unused placeholder (not compiled)
 

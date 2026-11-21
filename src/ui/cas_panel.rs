@@ -89,6 +89,9 @@ pub struct CasPanelState {
     pub action_message: Option<String>,
     /// Rejection from applying a parsed action (shown until the input edits).
     pub action_rejection: Option<String>,
+    /// Show a typeset rendering of the preview when possible (issue #171).
+    /// The canonical linear string is always kept for Copy and Apply.
+    pub typeset_output: bool,
     last_request: Option<Request>,
     /// The input text the apply result belongs to, so a new edit clears it.
     last_action_input: Option<String>,
@@ -105,6 +108,7 @@ impl Default for CasPanelState {
             action_error: None,
             action_message: None,
             action_rejection: None,
+            typeset_output: true,
             last_request: None,
             last_action_input: None,
         }
@@ -371,7 +375,6 @@ fn show_enabled(
     let sources_mode = state.field_mode == FieldMode::Sources;
     let dimension = cas_dimension(state);
     panel.refresh(dimension);
-    let content_width = ui.available_width();
     let reset = ui
         .button("Reset")
         .on_hover_text("Clear CAS scratch state without changing the plotted field")
@@ -459,13 +462,14 @@ fn show_enabled(
             }
         ))
         .on_hover_text("Result kind is determined by the operation, not component count");
-        let mut result = p.formula.clone();
-        ui.add(
-            egui::TextEdit::multiline(&mut result)
-                .desired_width(content_width)
-                .desired_rows(2)
-                .interactive(false),
-        );
+        ui.checkbox(&mut panel.typeset_output, "Typeset result")
+            .on_hover_text("Show this result as typeset math when the expression is supported");
+        if panel.typeset_output {
+            let tex = crate::cas_tex::linear_to_tex(&p.formula);
+            crate::ui::math_view::paint_tex_or_linear(ui, tex.as_deref(), &p.formula);
+        } else {
+            crate::ui::math_view::show_linear(ui, &p.formula);
+        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button("Copy")
