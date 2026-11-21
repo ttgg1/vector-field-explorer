@@ -53,9 +53,7 @@ impl VfApp {
 
         self.recentre_domain(domain_before);
         if plan.presets_panel {
-            self.show_presets_panel(ui);
-            self.show_appearance_panel(ui);
-            self.show_interaction_panel(ui);
+            self.show_right_panels(ui);
         } else {
             // The sheet draws after the status bar; mirror the camera now so
             // "Save current view" captures the recentred view.
@@ -311,16 +309,7 @@ impl VfApp {
         if self.layout.interaction_expanded {
             requests.push(self.layout.interaction_width);
         }
-        let mut right_rail = 0.0;
-        if !self.layout.presets_expanded {
-            right_rail += layout::RAIL_WIDTH;
-        }
-        if !self.layout.appearance_expanded {
-            right_rail += layout::RAIL_WIDTH;
-        }
-        if !self.layout.interaction_expanded {
-            right_rail += layout::RAIL_WIDTH;
-        }
+        let right_rail = layout::RAIL_WIDTH;
         let widths = fit_panel_widths(
             &requests,
             ui.available_width() - right_rail - 100.0 - layout::VIEWPORT_CHROME_ALLOWANCE,
@@ -564,6 +553,56 @@ impl VfApp {
         if let Some(action) = plot_action {
             self.apply_plot_panel_action(action);
         }
+    }
+
+    /// Show the right side as ONE rail column stacked exactly like the left
+    /// strip, then the expanded panel bodies inside it. The strip is drawn
+    /// first so it stays the outermost right column whether or not a body is
+    /// expanded.
+    fn show_right_panels(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::panel_rails::{RailEntry, show_rail_strip};
+        let presets_shortcut =
+            menu::shortcut_label(MenuAction::TogglePresets, &self.interaction.bindings)
+                .unwrap_or_default();
+        let appearance_shortcut = menu::shortcut_label(
+            MenuAction::ToggleAppearancePanel,
+            &self.interaction.bindings,
+        )
+        .unwrap_or_default();
+        let interaction_shortcut = menu::shortcut_label(
+            MenuAction::ToggleInteractionPanel,
+            &self.interaction.bindings,
+        )
+        .unwrap_or_default();
+        let mut entries = vec![
+            RailEntry {
+                id: "presets",
+                label: "Presets",
+                shortcut: Some(presets_shortcut.as_str()),
+                expanded: &mut self.layout.presets_expanded,
+            },
+            RailEntry {
+                id: "appearance",
+                label: "Appearance",
+                shortcut: Some(appearance_shortcut.as_str()),
+                expanded: &mut self.layout.appearance_expanded,
+            },
+            RailEntry {
+                id: "interaction",
+                label: "Interaction",
+                shortcut: Some(interaction_shortcut.as_str()),
+                expanded: &mut self.layout.interaction_expanded,
+            },
+        ];
+        show_rail_strip(
+            ui,
+            ("right_panel_rails", self.panel_generation),
+            layout::RailSide::Right,
+            &mut entries,
+        );
+        self.show_presets_panel(ui);
+        self.show_appearance_panel(ui);
+        self.show_interaction_panel(ui);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -828,16 +867,6 @@ impl VfApp {
             if collapse {
                 self.layout.presets_expanded = false;
             }
-        } else if layout::rail_panel(
-            ui,
-            ("presets_rail", self.panel_generation),
-            layout::RailSide::Right,
-            "Presets",
-            shortcut.as_str(),
-        )
-        .clicked
-        {
-            self.layout.presets_expanded = true;
         }
         self.finish_presets(camera_request);
     }
@@ -874,16 +903,6 @@ impl VfApp {
             if collapse {
                 self.layout.appearance_expanded = false;
             }
-        } else if layout::rail_panel(
-            ui,
-            ("appearance_rail", self.panel_generation),
-            layout::RailSide::Right,
-            "Appearance",
-            shortcut.as_str(),
-        )
-        .clicked
-        {
-            self.layout.appearance_expanded = true;
         }
     }
 
@@ -925,20 +944,9 @@ impl VfApp {
                 self.layout.interaction_expanded = false;
             }
         } else {
-            // The body is not drawn (collapsed to the rail): an armed capture
-            // must not stay latched with nothing on screen.
+            // The body is not drawn (collapsed to the rail strip): an armed
+            // capture must not stay latched with nothing on screen.
             self.interaction_panel.cancel_capture();
-            if layout::rail_panel(
-                ui,
-                ("interaction_rail", self.panel_generation),
-                layout::RailSide::Right,
-                "Interaction",
-                shortcut.as_str(),
-            )
-            .clicked
-            {
-                self.layout.interaction_expanded = true;
-            }
         }
     }
 
