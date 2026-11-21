@@ -128,6 +128,7 @@ mod profile_library_test;
 mod reference_lines_test;
 mod responsive_test;
 mod sampling_test;
+mod scalar_analysis_test;
 mod scalar_animation_app_test;
 mod scalar_animation_test;
 mod scalar_clock_test;

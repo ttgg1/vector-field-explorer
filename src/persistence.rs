@@ -37,6 +37,7 @@ use crate::particles::{
 use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::profile_library::MAX_USER_PROFILES;
+use crate::scalar_analysis::{ComparisonSet, GradientSpec};
 use crate::scalar_view::ProbeSet;
 use crate::seed_layout::SeedLayout;
 use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, MAX_USER_LAYOUTS, SeedLayoutProfile};
@@ -412,6 +413,14 @@ pub struct ViewRecord {
     /// Only positions and anchors are stored; sampled values are runtime.
     #[serde(default)]
     pub probes: ProbeSet,
+    /// Display-only comparison series (issue #93 slice A). Missing on older
+    /// records, which restore as no series with no extra dirtying.
+    #[serde(default)]
+    pub comparison_series: ComparisonSet,
+    /// The validated potential-gradient request (issue #93 slice A). Missing
+    /// on older records, which restore as no gradient.
+    #[serde(default)]
+    pub gradient: Option<GradientSpec>,
     /// What one explicit left click does (ticket 60). Older records did not
     /// carry it; they load as SeedStreamline. An unknown spelling also falls
     /// back to the default instead of failing the whole envelope.
@@ -628,6 +637,8 @@ impl ViewRecord {
             streamline_count: state.streamline_count,
             seed_layout: state.seed_layout.clone(),
             probes: state.probes.clone(),
+            comparison_series: state.comparison_series.clone(),
+            gradient: state.gradient.clone(),
             left_click_action: state.left_click_action,
             particles: state.particles,
             particle_size: state.particle_size,
@@ -785,6 +796,30 @@ impl ViewRecord {
             );
         }
         state.probes = probes;
+        // Issue #93 slice A: comparison series and the gradient request are
+        // document state assigned directly at the startup seam, so they never
+        // dirty per field. Corrupt stored data is repaired once (series) or
+        // dropped (gradient) instead of failing the envelope.
+        let stored_series = self.comparison_series.clone();
+        let series = stored_series.clone().sanitized();
+        if series != stored_series {
+            log::warn!(
+                "persisted comparison series were repaired or dropped ({} -> {} entries)",
+                stored_series.len(),
+                series.len()
+            );
+        }
+        state.comparison_series = series;
+        state.gradient = match &self.gradient {
+            Some(spec) => match spec.validate() {
+                Ok(()) => Some(spec.clone()),
+                Err(error) => {
+                    log::warn!("ignoring invalid persisted gradient: {error}");
+                    None
+                }
+            },
+            None => None,
+        };
         // Issue #83 colour mapping restores directly, not through the setters:
         // startup must not dirty per field, and corrupt values fall back
         // individually so the rest of the record still loads.
