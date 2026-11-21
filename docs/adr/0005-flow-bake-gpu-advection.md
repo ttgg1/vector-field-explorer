@@ -33,8 +33,8 @@ are approved:
 ## Why not alternatives
 
 - **Compute the formula directly on the GPU.** Formulas are parsed by `meval`
-  into an AST at runtime; WGSL cannot consume it without a compiler and a
-  numeric-accuracy audit.
+  into its internal token/RPN form at runtime; WGSL cannot consume it without a
+  compiler and a numeric-accuracy audit.
 - **GPU-only advection with no CPU reference.** It would break deterministic
   animation export, CLI output and the existing tests that compare exact
   positions, and would leave browsers without compute unusable.
@@ -64,7 +64,8 @@ are approved:
 - Native verification uses an env-gated GPU probe on the RX 9070 XT reference
   host, comparing a simple analytic field against the CPU reference within a
   stated tolerance, plus a capability-skip probe.
-- Budgets: baked lattice ≤ 64³ (2D ≤ 256²), ≤ ~1.5 MiB, ≤ 4,000 particles,
+- Budgets: baked lattice ≤ 64³ (2D ≤ 256²), at most 3,145,728 B of f32
+  lattice storage (≈ 3.2 MiB at 64³), ≤ 4,000 particles,
   one compute dispatch per substep, and a bounded readback. Exceeding a budget
   falls back to CPU with a reason.
 

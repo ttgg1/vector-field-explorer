@@ -73,7 +73,9 @@ They would require a new painter/ordering and capture contract.
 
 - No new dependency, no change to the simulation clock or step semantics, no
   change to the particle document schema, no solver or source-model change.
-- No floor or CI performance threshold; the P2 measurement decides whether the
-  bake is worth its accuracy cost in practice.
+- No floor or CI performance threshold; the bake slice records its own
+  before/after on the P1 harness scenes, and the P1 grid-cache measurements
+  (default-2D 562.9 → 4.25 µs, dipole-3D 9,543.0 → 15.2 µs) are the
+  reference for what repeated evaluation costs.
 - Visual verification remains owner-waived; wasm compute stays unverified and
   must be described that way.
