@@ -36,6 +36,7 @@ mod cas_backend_test;
 mod cas_intent_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_panel_test;
+mod cas_preview_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_rails_test;
 #[cfg(not(target_arch = "wasm32"))]

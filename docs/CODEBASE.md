@@ -4873,8 +4873,9 @@ thread.
 
 #### `src/ui/mod.rs` — UI module list
 
-Declares `appearance_panel`, `branding`, native-only `cas_panel` and
-`math_view`, `formula_bar`, `help_overlay`, `induction_panel`,
+Declares `appearance_panel`, `branding`, `cas_preview` (compiled on both
+targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`
+and `math_view`, `formula_bar`, `help_overlay`, `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
@@ -5001,6 +5002,36 @@ defaults from a damaged record, import/export delta wording, the compact
 Interaction tab and single-sheet switch, layout defaults/clamping and the
 display-only menu shortcut.
 
+#### `src/ui/cas_preview.rs` — bounded in-panel scalar result preview
+
+**Purpose.** Issue #169: build a small CPU heatmap for a scalar CAS result and
+cache its upload, without a graphics device, wgpu readback, or platform split.
+The GPU plot and export paths stay untouched.
+
+**Public API.** `PREVIEW_MAX_EDGE`, `PREVIEW_SPAN`, `PreviewPlane`
+(`Xy`/`Xz`/`Yz`), `PreviewImage { width, height, rgba }`,
+`scalar_heatmap(expr, plane, range, palette)`, `preview_key(expr, range,
+palette)`, and `PreviewCache` with `sync(ctx, image, key)` and `texture()`.
+
+**Invariants.** Both axes are capped at `PREVIEW_MAX_EDGE` (160) texels. The
+expression is parsed through the existing `meval` scalar environment and binds
+`x`, `y`, `z`, `t`; a non-finite sample is fully transparent and never a NaN
+colour. Finite values map through `Colormap::from_unit` after clamping to the
+caller-supplied range. `preview_key` hashes only expression, range, and palette.
+`PreviewCache` uploads one `egui::TextureHandle` and ignores an unchanged key,
+so the panel neither resamples nor allocates a texture per frame.
+
+**Pinned by.** `tests/cas_preview_test.rs`:
+`test_preview_heatmap_is_bounded_and_finite`,
+`test_preview_matches_palette_endpoints`,
+`test_preview_key_changes_with_expression_range_and_palette`,
+`test_non_finite_samples_are_transparent`,
+`test_cache_does_not_rebuild_for_an_unchanged_key`.
+
+**Limitations.** Normalized teaching thumbnail only, not an SI-scaled plot; one
+fixed XY plane and a fixed `[-1, 1]` palette window in the panel; no vector or
+error preview, no export, persistence, or GPU resource.
+
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
 Native-only independent panel for transient scalar/vector formula input,
@@ -5013,7 +5044,13 @@ rejection) and an `Apply action` button, and returns the parsed action to
 rail/body independently of Controls, and Compact reuses the single sheet.
 `tests/cas_rails_test.rs` exercises actual rail/menu/tab/Apply and resize paths.
 Preview identity includes input, operation, variable, and the current app mode;
-CAS scratch, action messages and rejections are not persisted. Formula mode
+CAS scratch, action messages and rejections are not persisted. Issue #169 paints
+a bounded `ui/cas_preview` heatmap under a scalar result, with the caption
+`Normalized teaching preview — not SI`; vector results and structured errors
+keep the text-only output. The image and texture are reused until the
+expression, palette, or fixed range changes. Pinned by
+`tests/cas_panel_test.rs::test_cas_panel_shows_a_preview_for_a_scalar_result`
+and `test_cas_panel_hides_the_preview_for_a_vector_result`. Formula mode
 keeps its historical authoritative 2D/3D app-mode dimension (not the field's
 arity). Sources mode has no formula editor: `apply` refuses it before
 dimension/vector checks, and `show` disables Apply with the exact explanation

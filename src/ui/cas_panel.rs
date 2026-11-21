@@ -2,6 +2,7 @@
 use eframe::egui;
 
 use crate::cas_actions::{self, CasAction, CasActionError};
+use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage, PreviewPlane};
 use crate::{cas, field::FieldExpr, source_scene::FieldMode, viewmodel::State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -95,6 +96,11 @@ pub struct CasPanelState {
     last_request: Option<Request>,
     /// The input text the apply result belongs to, so a new edit clears it.
     last_action_input: Option<String>,
+    /// The last bounded scalar heatmap; resampled only when its key changes.
+    preview_image: Option<PreviewImage>,
+    preview_image_key: Option<u64>,
+    /// The texture cached from [`Self::preview_image`].
+    preview_cache: PreviewCache,
 }
 impl Default for CasPanelState {
     fn default() -> Self {
@@ -111,6 +117,9 @@ impl Default for CasPanelState {
             typeset_output: true,
             last_request: None,
             last_action_input: None,
+            preview_image: None,
+            preview_image_key: None,
+            preview_cache: PreviewCache::default(),
         }
     }
 }
@@ -173,6 +182,11 @@ impl CasPanelState {
     }
     pub fn copy_text(&self) -> Option<&str> {
         self.preview.as_ref().map(|p| p.formula.as_str())
+    }
+    /// The cached result-preview texture, if a scalar result has been painted.
+    #[doc(hidden)]
+    pub fn preview_texture(&self) -> Option<&egui::TextureHandle> {
+        self.preview_cache.texture()
     }
     pub fn can_apply(&self, dimension: usize) -> bool {
         self.preview.as_ref().is_some_and(|p| {
@@ -355,6 +369,33 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
     Ok(output)
 }
 
+/// Palette window for the teaching thumbnail. It is deliberately fixed: the
+/// caption says the preview is normalized, not an SI-scaled plot.
+const PREVIEW_RANGE: [f64; 2] = [-1.0, 1.0];
+
+/// Paint the scalar heatmap under the result, resampling only on a key change.
+///
+/// A heatmap build failure is intentionally silent: the scalar result text still
+/// conveys the answer, and storing no image keeps a stale texture off screen.
+fn show_scalar_preview(ui: &mut egui::Ui, state: &State, panel: &mut CasPanelState, formula: &str) {
+    let key = cas_preview::preview_key(formula, PREVIEW_RANGE, state.colormap);
+    if panel.preview_image_key != Some(key) {
+        panel.preview_image_key = Some(key);
+        // Silent on failure: the result text is the answer and `None` drops stale texels.
+        panel.preview_image =
+            cas_preview::scalar_heatmap(formula, PreviewPlane::Xy, PREVIEW_RANGE, state.colormap)
+                .ok();
+    }
+    panel
+        .preview_cache
+        .sync(ui.ctx(), panel.preview_image.as_ref(), key);
+    if let Some(texture) = panel.preview_cache.texture() {
+        let side = ui.available_width().clamp(1.0, PREVIEW_MAX_EDGE as f32);
+        ui.add(egui::Image::new((texture.id(), egui::vec2(side, side))));
+        ui.label("Normalized teaching preview — not SI");
+    }
+}
+
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) -> Option<CasAction> {
     let disabled_mode = matches!(
         state.field_mode,
@@ -498,6 +539,20 @@ fn show_enabled(
                 }
             }
         });
+        if p.kind == ResultKind::Scalar {
+            show_scalar_preview(ui, state, panel, &p.formula);
+        }
+    }
+    // Vector results and structured errors keep the text-only output; drop any
+    // texture left by a previous scalar preview.
+    if !panel
+        .preview
+        .as_ref()
+        .is_some_and(|p| p.kind == ResultKind::Scalar)
+    {
+        panel.preview_image = None;
+        panel.preview_image_key = None;
+        panel.preview_cache.clear();
     }
     if sources_mode {
         ui.label("CAS edits the formula field; switch to Formula.");

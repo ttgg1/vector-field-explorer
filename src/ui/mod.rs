@@ -3,6 +3,7 @@ pub mod appearance_panel;
 pub mod branding;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cas_panel;
+pub mod cas_preview;
 pub mod formula_bar;
 pub mod help_overlay;
 pub mod induction_panel;
