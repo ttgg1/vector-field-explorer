@@ -353,6 +353,63 @@ pub struct ScalarViewRecord {
     pub contours: Vec<ContourSegment>,
 }
 
+/// The cache identity of a scalar view without its previewed contour values.
+///
+/// The explicit levels depend on a bounded preview of the field, so building a
+/// full [`ScalarViewKey`] costs a sample. A collapsed panel still needs to know
+/// whether its retained record describes the current state; this identity
+/// carries the user-visible inputs (formula, parameters, frame, domain,
+/// quantised clock, grid side and requested level count) without that preview.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScalarViewIdentity {
+    source: String,
+    parameters: ParameterSet,
+    frame: PlaneFrame,
+    domain: Domain,
+    quantized_time: i64,
+    grid_side: u32,
+    level_count: usize,
+}
+
+impl ScalarViewIdentity {
+    /// Build the identity from raw state. `time` is quantised exactly as
+    /// [`ScalarViewRequest::key`] quantises it; `level_count` is the number of
+    /// contour levels requested, not the previewed values.
+    pub fn new(
+        source: &str,
+        parameters: &ParameterSet,
+        frame: PlaneFrame,
+        domain: Domain,
+        time: f64,
+        grid_side: u32,
+        level_count: usize,
+    ) -> Self {
+        Self {
+            source: source.to_owned(),
+            parameters: parameters.clone(),
+            frame,
+            domain,
+            quantized_time: quantized_time(time),
+            grid_side,
+            level_count,
+        }
+    }
+}
+
+impl ScalarViewKey {
+    /// Whether this key and `identity` describe the same view apart from the
+    /// previewed level values.
+    fn matches_identity(&self, identity: &ScalarViewIdentity) -> bool {
+        self.source == identity.source
+            && self.parameters == identity.parameters
+            && self.frame == identity.frame
+            && self.domain == identity.domain
+            && self.quantized_time == identity.quantized_time
+            && self.grid_side == identity.grid_side
+            && self.levels.len() == identity.level_count
+    }
+}
+
 /// A one-entry, bounded cache for scalar view records.
 ///
 /// Hidden panels never sample: [`ScalarViewCache::refresh`] returns the last
@@ -400,6 +457,19 @@ impl ScalarViewCache {
     /// The last successfully rebuilt record.
     pub fn record(&self) -> Option<&ScalarViewRecord> {
         self.record.as_ref()
+    }
+
+    /// Whether the retained record still describes `identity`'s formula,
+    /// parameters, frame, domain, quantised clock, grid side and requested
+    /// contour-level count. Concrete level values are excluded because they
+    /// depend on the previewed value range; a collapsed panel uses this check
+    /// without paying for that preview.
+    pub fn record_matches(&self, identity: &ScalarViewIdentity) -> bool {
+        self.record.is_some()
+            && self
+                .key
+                .as_ref()
+                .is_some_and(|key| key.matches_identity(identity))
     }
 
     /// The reason the last rebuild failed, if it did.

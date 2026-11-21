@@ -16,6 +16,8 @@ use vector_field_explorer::parameters::{PARAMETER_VERSION, Parameter, ParameterS
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView};
 use vector_field_explorer::plot::PlotKind;
+use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::scalar_view::UNSUPPORTED_Z_REASON;
 use vector_field_explorer::seed_layout::{SeedLayout, SeedPoint};
 use vector_field_explorer::seed_layout_library::{
     DEFAULT_LAYOUT_NAME, SEED_LAYOUT_FORMAT_VERSION, SeedLayoutDocument, SeedLayoutLibrary,
@@ -2723,5 +2725,142 @@ fn committing_an_unchanged_set_is_a_rebuild_no_op() {
     assert!(
         h.state.snapshot_if_dirty().is_none(),
         "an unchanged set requests no rebuild"
+    );
+}
+
+#[test]
+fn scalar_section_hides_until_the_formula_can_be_sampled() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.state.set_field_mode(FieldMode::Sources);
+    let out = h.idle();
+    assert!(
+        !painted(&out).contains("Scalar view"),
+        "the Scalar view section is hidden outside the formula field"
+    );
+
+    h.state.set_field_mode(FieldMode::Formula);
+    let out = h.idle();
+    assert!(
+        painted(&out).contains("Scalar view"),
+        "the Scalar view section appears for the formula field"
+    );
+}
+
+#[test]
+fn unsupported_z_formula_shows_the_reason_instead_of_controls() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.state
+        .set_scalar_source(ScalarContext::Surface, "z + x".into());
+    h.open_header("Scalar view");
+
+    let out = h.idle();
+    let text = painted(&out);
+    assert!(
+        text.contains(UNSUPPORTED_Z_REASON),
+        "the section reports the model's unsupported reason: {text}"
+    );
+    assert!(
+        !text.contains("Grid resolution") && !text.contains("Contour levels"),
+        "no scalar controls are offered for a z formula"
+    );
+}
+
+#[test]
+fn grid_and_contour_controls_commit_bounded_values() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    assert_eq!(h.state.scalar_grid_side(), 64, "the default grid side");
+    assert_eq!(
+        h.state.scalar_contour_levels(),
+        8,
+        "the default level count"
+    );
+
+    assert!(h.state.set_scalar_grid_side(8).is_err(), "below the floor");
+    assert!(
+        h.state.set_scalar_grid_side(168).is_err(),
+        "above the ceiling"
+    );
+    assert!(h.state.set_scalar_grid_side(40).is_ok());
+    assert_eq!(h.state.scalar_view_request().grid_side, 40);
+
+    assert!(
+        h.state.set_scalar_contour_levels(17).is_err(),
+        "more levels than the cap"
+    );
+    assert!(h.state.set_scalar_contour_levels(0).is_ok());
+    assert!(
+        h.state.scalar_view_request().levels.is_empty(),
+        "zero levels hides contours"
+    );
+    assert!(h.state.set_scalar_contour_levels(16).is_ok());
+    assert!(!h.state.scalar_view_request().levels.is_empty());
+
+    // The sidebar mirror commits through the same validated setters.
+    h.controls.scalar_grid_side = 32;
+    h.controls.scalar_contour_levels = 4;
+    let _ = h.idle();
+    assert_eq!(h.state.scalar_grid_side(), 32);
+    assert_eq!(h.state.scalar_contour_levels(), 4);
+    assert_eq!(h.controls.scalar_grid_side, 32, "the mirror is re-synced");
+}
+
+#[test]
+fn a_successful_scalar_control_commit_clears_a_stale_message() {
+    let mut c = Controls::new();
+    let mut s = State::new(false);
+    c.scalar_message = "Click inside the scene domain to place a probe".to_owned();
+    c.scalar_grid_side = 32;
+
+    apply(&mut s, &mut c);
+
+    assert_eq!(s.scalar_grid_side(), 32, "the new side commits");
+    assert!(
+        c.scalar_message.is_empty(),
+        "a successful commit clears the stale rejection: {:?}",
+        c.scalar_message
+    );
+
+    // A rejected mirror value still reports and leaves the commit untouched.
+    c.scalar_grid_side = 8;
+    apply(&mut s, &mut c);
+    assert_eq!(s.scalar_grid_side(), 32, "the rejection keeps the commit");
+    assert!(
+        c.scalar_message.contains("grid side") || c.scalar_message.contains("8"),
+        "the rejection is still reported: {:?}",
+        c.scalar_message
+    );
+}
+
+#[test]
+fn hidden_section_keeps_the_cache_without_resampling() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.state
+        .set_scalar_source(ScalarContext::Surface, "x + t".into());
+    h.open_header("Scalar view");
+    let _ = h.idle();
+    let resamples = h.state.scalar_view_cache().resamples();
+    assert_eq!(resamples, 1, "opening the section samples once");
+    assert!(h.state.scalar_view_cache().record().is_some());
+
+    // Collapse the section through its real header toggle.
+    let out = h.idle();
+    let header = label_rect(&out, "Scalar view").expect("the header is exposed");
+    h.click(header.center());
+    for _ in 0..5 {
+        h.idle();
+    }
+
+    h.state.set_time(0.4);
+    for _ in 0..3 {
+        h.idle();
+    }
+    assert_eq!(
+        h.state.scalar_view_cache().resamples(),
+        resamples,
+        "a collapsed section performs no sampling"
+    );
+    assert!(
+        h.state.scalar_view_cache().record().is_some(),
+        "the last record is retained"
     );
 }

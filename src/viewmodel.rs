@@ -8,8 +8,6 @@
 
 use super::camera::OrbitCamera;
 use super::colormap::Colormap;
-use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats};
-use crate::color_ramp::{ColorRamp, ScaleMode};
 use super::domain::Domain;
 use super::field::FieldExpr;
 use super::flow::{Flow, SceneFlow};
@@ -21,6 +19,8 @@ use super::streamlines::{
     CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
 };
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
+use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats};
+use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::induction::{
     InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
     induction_key, prepare_induction, sample_induction,
@@ -37,18 +37,20 @@ use crate::maxwell::{
 };
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
+use crate::particles::{
+    DOT_SPACING_FRACTION, FlowLayerStyle, MAX_PARTICLES, ParticleAppearance,
+    effective_particle_count,
+};
 use crate::reference::{sanitized_opacity, scaled_viewport_style};
 use crate::scalar_view::{
-    MAX_GRID_SIDE, MIN_GRID_SIDE, ProbeSet, ScalarViewCache, ScalarViewRecord, ScalarViewRequest,
+    MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MIN_GRID_SIDE, PointProbe, ProbeSet,
+    SCALAR_RESAMPLE_INTERVAL, ScalarViewCache, ScalarViewError, ScalarViewIdentity,
+    ScalarViewRecord, ScalarViewRequest, sample_grid, scalar_view_expr,
 };
 use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedError, SeedLayout, SeedPoint,
 };
 use crate::viewport_style::ViewportStyle;
-use crate::particles::{
-    DOT_SPACING_FRACTION, FlowLayerStyle, MAX_PARTICLES, ParticleAppearance,
-    effective_particle_count,
-};
 
 use std::sync::Arc;
 
@@ -71,6 +73,16 @@ pub const MATERIAL_MAX_DENSITY_3D: u32 = 40;
 pub const MATERIAL_MAX_DENSITY_2D: u32 = 200;
 /// The smallest density the sidebar offers.
 pub const MIN_DENSITY: u32 = 4;
+/// Default scalar-view grid side (issue #92 slice B1).
+pub const DEFAULT_SCALAR_GRID_SIDE: u32 = 64;
+/// Default explicit contour-level count (issue #92 slice B1).
+pub const DEFAULT_SCALAR_CONTOUR_LEVELS: u32 = 8;
+/// Smallest grid side the Scalar view section offers (step 8 up to
+/// [`MAX_GRID_SIDE`]).
+pub const MIN_SCALAR_GRID_SIDE: u32 = 16;
+/// Fallback text colour for scalar overlay lines before the UI first syncs the
+/// active theme's text colour.
+pub const DEFAULT_SCALAR_TEXT_COLOR: [f32; 4] = [0.72, 0.72, 0.72, 1.0];
 /// Bounds and default of the particle dot size (ticket 30): a multiplier on
 /// [`DOT_SPACING_FRACTION`], so `1.0` keeps the historical radius and the
 /// fraction itself never moves.
@@ -335,10 +347,24 @@ pub struct State {
     /// restore and the committed probe edits replace it; sampled values are
     /// runtime state and are never persisted.
     pub probes: ProbeSet,
+    /// The Scalar view section's grid side (issue #92 slice B1). Runtime
+    /// configuration, not document state; the request key invalidates the
+    /// cached records when it changes.
+    scalar_grid_side: u32,
+    /// The explicit contour-level count the panel generates (issue #92 slice
+    /// B1). `0` hides contours.
+    scalar_contour_levels: u32,
+    /// The active theme's text colour, mirrored by the sidebar each frame so
+    /// contour and probe lines match the panel text in captures.
+    scalar_text_color: [f32; 4],
     /// One-entry bounded scalar-view cache (issue #92 slice A). Runtime only;
     /// only [`State::refresh_scalar_view`] touches it, and only while the
     /// scalar panel is visible.
     scalar_view_cache: ScalarViewCache,
+    /// Memoised explicit contour levels for the bounded preview (issue #92
+    /// slice B1). Keyed by the state identity without level values, so a
+    /// visible but idle frame does not re-evaluate the 32² preview.
+    scalar_preview_levels: Option<(ScalarViewIdentity, Vec<f32>)>,
     /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
     /// it and always run their own action.
     pub left_click_action: LeftClickAction,
@@ -695,10 +721,7 @@ impl State {
     }
 
     /// [`State::effective_arrow_params`] for an explicit style record.
-    pub(crate) fn effective_arrow_params_for(
-        self: &State,
-        styles: &LayerStyles,
-    ) -> ArrowParams {
+    pub(crate) fn effective_arrow_params_for(self: &State, styles: &LayerStyles) -> ArrowParams {
         let params = self.arrow_params;
         let width = sanitized_width_for_style(self.arrow_layer_resolution(styles).width);
         ArrowParams {
@@ -859,7 +882,11 @@ impl State {
             streamline_count: 0,
             seed_layout: SeedLayout::default(),
             probes: ProbeSet::default(),
+            scalar_grid_side: DEFAULT_SCALAR_GRID_SIDE,
+            scalar_contour_levels: DEFAULT_SCALAR_CONTOUR_LEVELS,
+            scalar_text_color: DEFAULT_SCALAR_TEXT_COLOR,
             scalar_view_cache: ScalarViewCache::default(),
+            scalar_preview_levels: None,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -1682,10 +1709,7 @@ impl State {
     /// Replaces the custom ramp override. `None` returns to the builtin
     /// colormap. An invalid ramp is rejected without touching the state.
     pub fn set_color_ramp(self: &mut State, ramp: Option<ColorRamp>) -> bool {
-        if ramp
-            .as_ref()
-            .is_some_and(|ramp| ramp.validate().is_err())
-        {
+        if ramp.as_ref().is_some_and(|ramp| ramp.validate().is_err()) {
             return false;
         }
         if self.color_ramp == ramp {
@@ -2070,38 +2094,316 @@ impl State {
         })
     }
 
+    /// Whether the scalar overlay applies to the current scene: a formula
+    /// vector view whose surface expression the bounded sampler can evaluate.
+    /// This is the single gate for both the Scalar section's unsupported reason
+    /// and overlay composition, so the controls and painted geometry cannot
+    /// drift apart (issue #92 slice B1).
+    pub fn scalar_view_applicable(self: &State) -> bool {
+        self.is_vector_mode()
+            && self.field_mode == FieldMode::Formula
+            && scalar_view_expr(&self.plot.surface.source, &self.parameters).is_ok()
+    }
+
+    /// The cache identity of the current scalar view without evaluating the
+    /// bounded contour preview. The collapsed panel compares it with the
+    /// retained record so geometry from a formula, plane, domain or clock that
+    /// no longer applies is not composited.
+    fn scalar_view_identity(self: &State) -> ScalarViewIdentity {
+        self.scalar_view_identity_for(self.scalar_view_frame(), self.scalar_level_count())
+    }
+
+    /// [`Self::scalar_view_identity`] for an explicit frame and level count.
+    fn scalar_view_identity_for(
+        self: &State,
+        frame: PlaneFrame,
+        level_count: usize,
+    ) -> ScalarViewIdentity {
+        ScalarViewIdentity::new(
+            &self.plot.surface.source,
+            &self.parameters,
+            frame,
+            frame.local_domain(),
+            f64::from(self.time),
+            self.scalar_grid_side.clamp(MIN_GRID_SIDE, MAX_GRID_SIDE),
+            level_count,
+        )
+    }
+
+    /// The clamped explicit contour-level count.
+    fn scalar_level_count(self: &State) -> usize {
+        self.scalar_contour_levels.min(MAX_CONTOUR_LEVELS as u32) as usize
+    }
+
     /// The request the scalar panel builds: the surface formula, committed
     /// parameters, current plane frame, domain and simulated time.
     ///
-    /// The grid side follows the surface resolution but is clamped into the
-    /// scalar-view bounds. No panel state exists in slice A, so the explicit
-    /// contour level list is empty.
-    pub fn scalar_view_request(self: &State) -> ScalarViewRequest {
+    /// The grid side follows the Scalar view control (bounded by the model) and
+    /// the explicit contour list is generated evenly inside the finite value
+    /// range of a bounded preview sample. `0` levels hides contours. An
+    /// unsupported formula yields no levels; the cache stores the reason.
+    pub fn scalar_view_request(self: &mut State) -> ScalarViewRequest {
         let frame = self.scalar_view_frame();
+        let levels = self.scalar_preview_levels(&frame);
         ScalarViewRequest {
             source: self.plot.surface.source.clone(),
             parameters: self.parameters.clone(),
             frame,
             domain: frame.local_domain(),
             time: f64::from(self.time),
-            grid_side: self
-                .plot
-                .settings
-                .surface_resolution
-                .clamp(MIN_GRID_SIDE, MAX_GRID_SIDE),
-            levels: Vec::new(),
+            grid_side: self.scalar_grid_side.clamp(MIN_GRID_SIDE, MAX_GRID_SIDE),
+            levels,
         }
+    }
+
+    /// Explicit, strictly increasing contour levels inside the sampled value
+    /// range. A tiny bounded preview (at most 32²) supplies the range without a
+    /// second full-grid rebuild. A constant or unsupported field has none.
+    ///
+    /// The result is memoised under the same non-previewed identity the cache
+    /// uses, so a visible but idle section does not re-evaluate the preview.
+    fn scalar_preview_levels(self: &mut State, frame: &PlaneFrame) -> Vec<f32> {
+        let count = self.scalar_level_count();
+        if count == 0 {
+            return Vec::new();
+        }
+        let identity = self.scalar_view_identity_for(*frame, count);
+        if let Some((cached, levels)) = &self.scalar_preview_levels
+            && cached == &identity
+        {
+            return levels.clone();
+        }
+        let levels = self.compute_scalar_preview_levels(frame, count);
+        self.scalar_preview_levels = Some((identity, levels.clone()));
+        levels
+    }
+
+    /// Evaluate the bounded preview and build the levels from its finite range.
+    fn compute_scalar_preview_levels(self: &State, frame: &PlaneFrame, count: usize) -> Vec<f32> {
+        let Ok(expr) = scalar_view_expr(&self.plot.surface.source, &self.parameters) else {
+            return Vec::new();
+        };
+        let side = self
+            .scalar_grid_side
+            .clamp(MIN_GRID_SIDE, MAX_GRID_SIDE)
+            .min(32);
+        // The preview is part of the cache key through `levels`, so evaluate it
+        // on the same 100 ms-quantised clock the key uses; otherwise an
+        // animated formula would change the levels every frame and defeat the
+        // throttle.
+        let time = f64::from(self.time);
+        let preview_time = if time.is_finite() {
+            (time / SCALAR_RESAMPLE_INTERVAL).floor() * SCALAR_RESAMPLE_INTERVAL
+        } else {
+            0.0
+        };
+        let Ok(grid) = sample_grid(&expr, *frame, side, side, preview_time) else {
+            return Vec::new();
+        };
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for sample in &grid.samples {
+            if let Some(value) = sample.value {
+                min = min.min(value);
+                max = max.max(value);
+            }
+        }
+        if !min.is_finite() || !max.is_finite() {
+            return Vec::new();
+        }
+        if min >= max {
+            return Vec::new();
+        }
+        (1..=count)
+            .map(|index| min + (max - min) * index as f32 / (count + 1) as f32)
+            .collect()
+    }
+
+    /// The Scalar view section's grid side (issue #92 slice B1).
+    pub fn scalar_grid_side(self: &State) -> u32 {
+        self.scalar_grid_side
+    }
+
+    /// The Scalar view section's explicit contour-level count.
+    pub fn scalar_contour_levels(self: &State) -> u32 {
+        self.scalar_contour_levels
+    }
+
+    /// Validate and commit the Scalar view grid side. A rejected value leaves
+    /// the committed side untouched; the layout key picks the change up on the
+    /// next visible refresh.
+    pub fn set_scalar_grid_side(self: &mut State, side: u32) -> Result<(), ScalarViewError> {
+        if !(MIN_SCALAR_GRID_SIDE..=MAX_GRID_SIDE).contains(&side) {
+            return Err(ScalarViewError::GridSize {
+                min: MIN_SCALAR_GRID_SIDE,
+                max: MAX_GRID_SIDE,
+                got: side,
+            });
+        }
+        self.scalar_grid_side = side;
+        Ok(())
+    }
+
+    /// Validate and commit the explicit contour-level count (`0..=MAX_CONTOUR_LEVELS`).
+    pub fn set_scalar_contour_levels(self: &mut State, levels: u32) -> Result<(), ScalarViewError> {
+        if levels as usize > MAX_CONTOUR_LEVELS {
+            return Err(ScalarViewError::ContourLevels {
+                reason: format!("at most {MAX_CONTOUR_LEVELS} levels are allowed"),
+            });
+        }
+        self.scalar_contour_levels = levels;
+        Ok(())
+    }
+
+    /// The theme text colour the scalar overlay lines use (mirrored by the
+    /// sidebar so captures match the panel text).
+    pub fn scalar_text_color(self: &State) -> [f32; 4] {
+        self.scalar_text_color
+    }
+
+    /// Mirror the active theme's text colour into the scene overlay lines.
+    /// Only a real change dirties the scene, so a theme switch while the
+    /// section is open reaches the next snapshot.
+    pub fn set_scalar_text_color(self: &mut State, color: [f32; 4]) {
+        if color.iter().all(|component| component.is_finite()) && self.scalar_text_color != color {
+            self.scalar_text_color = color;
+            self.mark_dirty();
+        }
+    }
+
+    /// Append one point probe through the shared cap and validation seam. The
+    /// edit dirties the document; sampled values stay runtime state.
+    pub fn add_point_probe(
+        self: &mut State,
+        position: Vec3,
+        anchor: Option<SeedAnchor>,
+    ) -> Result<usize, ScalarViewError> {
+        let probe = PointProbe::new(position, anchor)?;
+        self.probes.push_point(probe)?;
+        let index = self.probes.points.len().saturating_sub(1);
+        if let Ok(expr) = scalar_view_expr(&self.plot.surface.source, &self.parameters) {
+            let frame = self.scalar_view_frame();
+            if let Some(probe) = self.probes.points.get_mut(index) {
+                probe.evaluate(&expr, &frame, f64::from(self.time));
+            }
+        }
+        self.mark_dirty();
+        Ok(index)
+    }
+
+    /// Remove one point probe by index. An out-of-range index is a no-op; a
+    /// real removal is one dirty document edit.
+    pub fn remove_point_probe(self: &mut State, index: usize) -> bool {
+        if index >= self.probes.points.len() {
+            return false;
+        }
+        self.probes.points.remove(index);
+        self.mark_dirty();
+        true
+    }
+
+    /// Contour and point-probe line instances for the scene. Contours use the
+    /// cached record's plane frame and the established reference edge width;
+    /// each probe is a small on-slice cross. Geometry is composed only while
+    /// the record still matches the current non-previewed identity, so a
+    /// collapsed section cannot paint contours or crosses from a formula,
+    /// plane, domain or clock that has since changed. Non-finite geometry is
+    /// skipped.
+    pub fn scalar_overlay_lines(self: &State) -> Vec<LineInstanceGPU> {
+        if !self.scalar_view_applicable() {
+            return Vec::new();
+        }
+        let color = self.scalar_text_color;
+        let width = crate::reference::EDGE_WIDTH;
+        let stale = self.scalar_view_cache.record().is_some()
+            && !self
+                .scalar_view_cache
+                .record_matches(&self.scalar_view_identity());
+        if stale {
+            return Vec::new();
+        }
+        let mut lines = Vec::new();
+        if let Some(record) = self.scalar_view_cache.record() {
+            let frame = record.grid.frame;
+            for segment in &record.contours {
+                if !segment.start.is_finite() || !segment.end.is_finite() {
+                    continue;
+                }
+                let a = frame.to_world(Vec3::new(segment.start.x, segment.start.y, 0.0));
+                let b = frame.to_world(Vec3::new(segment.end.x, segment.end.y, 0.0));
+                if !a.is_finite() || !b.is_finite() {
+                    continue;
+                }
+                lines.push(LineInstanceGPU {
+                    a: [a.x, a.y, a.z, 1.0],
+                    b: [b.x, b.y, b.z, width],
+                    color,
+                });
+            }
+        }
+
+        let frame = self.scalar_view_frame();
+        let extent = frame.half_u.max(frame.half_v) * 2.0;
+        let half = (extent * 0.015).max(0.001);
+        for probe in &self.probes.points {
+            let position = probe.position;
+            if !position.is_finite() {
+                continue;
+            }
+            let right = frame.right * half;
+            let up = frame.up * half;
+            for delta in [right, up] {
+                lines.push(LineInstanceGPU {
+                    a: [
+                        position.x - delta.x,
+                        position.y - delta.y,
+                        position.z - delta.z,
+                        1.0,
+                    ],
+                    b: [
+                        position.x + delta.x,
+                        position.y + delta.y,
+                        position.z + delta.z,
+                        width,
+                    ],
+                    color,
+                });
+            }
+        }
+        lines
     }
 
     /// Refresh the scalar-view cache while the panel is visible.
     ///
-    /// Hidden panels do no sampling. A changed key (formula, parameters, frame,
-    /// domain, grid side, levels or the 100 ms-quantised clock) causes exactly
-    /// one rebuild; an unchanged key is a cache hit. This is a pure model seam
-    /// and is deliberately not called from any per-frame path.
+    /// Hidden panels do no sampling: the last record is returned untouched. A
+    /// visible refresh also re-evaluates every point probe's runtime value. A
+    /// changed key (formula, parameters, frame, domain, grid side, levels or the
+    /// 100 ms-quantised clock) causes exactly one rebuild and marks the scene
+    /// dirty so contour/probe geometry reaches the next snapshot. An unchanged
+    /// key is a cache hit and does not dirty.
     pub fn refresh_scalar_view(self: &mut State, visible: bool) -> Option<&ScalarViewRecord> {
+        if !visible {
+            return self.scalar_view_cache.record();
+        }
         let request = self.scalar_view_request();
-        self.scalar_view_cache.refresh(&request, visible)
+        match scalar_view_expr(&request.source, &request.parameters) {
+            Ok(expr) => {
+                for probe in &mut self.probes.points {
+                    probe.evaluate(&expr, &request.frame, request.time);
+                }
+            }
+            Err(_) => {
+                for probe in &mut self.probes.points {
+                    probe.value = None;
+                }
+            }
+        }
+        let before = self.scalar_view_cache.resamples();
+        let _ = self.scalar_view_cache.refresh(&request, true);
+        if self.scalar_view_cache.resamples() != before {
+            self.mark_dirty();
+        }
+        self.scalar_view_cache.record()
     }
 
     /// The runtime scalar-view cache (records, failure reason, resample count).
@@ -2757,9 +3059,14 @@ impl State {
         } else {
             Vec::new()
         };
+        let mut lines = self.streamlines_snapshot_with_styles(&sampled, styles);
+        // Issue #92 slice B1: contour segments and point-probe crosses ride the
+        // normal line collection, so PNG/SVG/animation captures include them
+        // without a new capture path.
+        lines.extend(self.scalar_overlay_lines());
         SceneGPU {
             arrows: Arc::new(arrows),
-            lines: Arc::new(self.streamlines_snapshot_with_styles(&sampled, styles)),
+            lines: Arc::new(lines),
             // Ticket 48: trails come from the live cloud in the app's particle
             // block, never from this dirty-flag snapshot.
             trails: Arc::new(Vec::new()),

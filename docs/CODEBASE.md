@@ -1752,6 +1752,34 @@ sampled values/points remain runtime-only and unpersisted.
 `z_formula_reports_the_scalar_unsupported_reason`; probe persistence in
 `tests/persistence_test.rs` and `tests/scene_document_test.rs`.
 
+**Slice B1 UI/render seam.** `State::scalar_grid_side`/`scalar_contour_levels`
+(default 64/8) commit only through `set_scalar_grid_side` (16..=160) and
+`set_scalar_contour_levels` (0..=16). `scalar_view_request` generates explicit
+evenly spaced levels from a bounded 32² preview on the quantised clock, so an
+animated formula keeps the 100 ms throttle; the preview levels are memoised
+under the scalar identity, so a visible but idle section does not re-sample
+them. `add_point_probe`/`remove_point_probe` are the only probe edits (cap
+`MAX_PROBES=8`, one dirty document edit each); the sidebar owns the collapsed
+"Scalar view" section after Coloring. `refresh_scalar_view` samples only while
+that body is open, re-evaluates point-probe values, and marks the scene dirty
+only on a real rebuild. `scalar_overlay_lines` converts cached contour segments
+to plane-world `LineInstanceGPU`s (reference edge width, theme text colour) and
+each point probe to an on-slice cross; it composes only while the record still
+matches the current formula/parameters/plane/domain/clock/grid identity, so a
+collapsed section cannot paint stale contours or crosses. `snapshot_with_styles`
+appends them after the flow lines, so PNG/SVG/animation captures include them
+without new capture code. `app/input.rs` maps an armed "Place probe" click
+through the active `PlaneFrame`, rejects picks outside the scene domain or past
+the cap, and disarms with a message when the probe path disappears.
+
+**B1 tests.** `contours_are_composed_as_scene_lines_for_a_linear_field`,
+`contours_do_not_cross_invalid_samples`,
+`contour_and_probe_lines_survive_scene_assembly_for_capture` and
+`collapsed_scalar_view_does_not_composite_stale_geometry` in
+`tests/scalar_view_test.rs`; the section/reason/bounds/cache/message tests in
+`tests/sidebar_controls_test.rs`; the history, row and mode-switch tests in
+`tests/edit_history_app_test.rs`.
+
 #### `src/plot.rs` — pure bounded scalar geometry and plot types
 
 **Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable
