@@ -8,10 +8,14 @@ use std::f64::consts::PI;
 
 use glam::Vec3;
 use vector_field_explorer::custom_density::{
-    DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus, MAX_DENSITY_SAMPLES,
-    MAX_SAMPLES, MIN_SAMPLES, SupportKind, charge_report, continuity_report, count_sign_changes,
+    ContinuityStatus, DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus,
+    MAX_ANGULAR_FREQUENCY, MAX_DENSITY_SAMPLES, MAX_SAMPLES, MIN_SAMPLES, SupportKind, TimeLaw,
+    charge_report, continuity_report, count_sign_changes, validate_time_law_combination,
 };
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::persistence::{DensitySpecRecord, TimeLawRecord, ViewRecord};
+use vector_field_explorer::ui::sidebar::Controls;
+use vector_field_explorer::viewmodel::State;
 
 fn params() -> ParameterSet {
     ParameterSet::default()
@@ -61,6 +65,8 @@ fn spec(
         formula: formula.to_string(),
         samples,
         softening: 0.0,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
     }
 }
 
@@ -276,7 +282,7 @@ fn uniform_steady_current_has_zero_divergence() {
     let report = continuity_report(&current, &params(), 0.0).unwrap();
     assert!(matches!(
         report.status,
-        DiagnosticsStatus::Estimate { error } if error.is_finite()
+        ContinuityStatus::Estimate { error, .. } if error.is_finite()
     ));
     assert!(report.div_j_min.abs() < 1e-12, "{:?}", report);
     assert!(report.div_j_max.abs() < 1e-12, "{:?}", report);
@@ -289,7 +295,7 @@ fn divergent_steady_current_is_reported_as_a_violation() {
     current.validate(&params()).unwrap();
 
     let report = continuity_report(&current, &params(), 0.0).unwrap();
-    assert!(matches!(report.status, DiagnosticsStatus::Violation { .. }));
+    assert!(matches!(report.status, ContinuityStatus::Violation { .. }));
     assert!(report.div_j_max >= 0.99, "{:?}", report);
     assert!(report.worst_point.is_some());
     assert!(report.div_j_min.is_finite() && report.div_j_max.is_finite());
@@ -333,10 +339,7 @@ fn unsupported_or_unevaluable_interiors_are_unresolved_not_zero() {
     );
     transient_current.validate(&params()).unwrap();
     let report = continuity_report(&transient_current, &params(), 1.0).unwrap();
-    assert!(matches!(
-        report.status,
-        DiagnosticsStatus::Unresolved { .. }
-    ));
+    assert!(matches!(report.status, ContinuityStatus::Unresolved { .. }));
     assert!(report.div_j_min.is_nan() && report.div_j_max.is_nan());
 }
 
@@ -369,5 +372,507 @@ fn sampling_is_deterministic_and_bounded() {
     assert!(
         u64::from(first.samples) <= u64::from(MAX_DENSITY_SAMPLES),
         "the interior sample count never exceeds the lattice budget"
+    );
+}
+
+// --- Issue #98 slice A: supported time-dependent distributions -------------
+
+fn harmonic(omega: f64, phase: f64) -> TimeLaw {
+    TimeLaw::Harmonic { omega, phase }
+}
+
+fn harmonic_spec(
+    family: DensityFamily,
+    support: DensitySupport,
+    formula: &str,
+    samples: u32,
+    law: TimeLaw,
+) -> DensitySpec {
+    DensitySpec {
+        time_law: law,
+        ..spec(family, support, formula, samples)
+    }
+}
+
+#[test]
+fn steady_time_law_keeps_existing_documents_byte_identical() {
+    let steady = spec(DensityFamily::VolumeCharge, box_support(), "1", 8);
+    assert_eq!(steady.time_law, TimeLaw::Steady);
+
+    let record = DensitySpecRecord::from_spec(&steady);
+    assert_eq!(
+        record.time_law, None,
+        "a steady law writes no law key at all, so older documents stay byte-identical"
+    );
+
+    let mut state = State::new(true);
+    state
+        .commit_densities(vec![steady])
+        .expect("the steady fixture is valid");
+    let document = serde_json::to_value(ViewRecord::capture(&state)).expect("a record serializes");
+    let as_text = document.to_string();
+    assert!(
+        !as_text.contains("time_law"),
+        "the existing document shape must not gain a field: {as_text}"
+    );
+
+    // An older document with no law key restores the default without changing
+    // anything else.
+    let mut legacy: ViewRecord = serde_json::from_value(document).expect("the legacy shape parses");
+    legacy.densities[0].time_law = None;
+    let mut restored = State::new(true);
+    legacy.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.densities()[0].time_law, TimeLaw::Steady);
+}
+
+#[test]
+fn harmonic_time_law_round_trips_through_the_envelope() {
+    let law = harmonic(2.5, -0.25);
+    let density = harmonic_spec(DensityFamily::VolumeCharge, box_support(), "1 + x", 10, law);
+    let mut source = State::new(true);
+    source
+        .commit_densities(vec![density.clone()])
+        .expect("the harmonic fixture is valid");
+
+    let document = ViewRecord::capture(&source);
+    assert_eq!(
+        document.densities[0].time_law,
+        Some(TimeLawRecord {
+            kind: "harmonic".to_string(),
+            omega: 2.5,
+            phase: -0.25,
+        }),
+        "the mirror stores plain tokens and numbers"
+    );
+
+    let encoded = serde_json::to_string(&document).expect("the envelope serializes");
+    let decoded: ViewRecord = serde_json::from_str(&encoded).expect("the envelope parses");
+    let mut restored = State::new(true);
+    decoded.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.densities(), [density].as_slice());
+    assert_eq!(restored.densities()[0].time_law, law);
+}
+
+#[test]
+fn charge_formula_round_trips_and_an_invalid_one_is_dropped_on_restore() {
+    let mut density = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x,0,0",
+        10,
+        harmonic(0.5, 0.0),
+    );
+    density.charge_formula = Some("-2*sin(0.5*t)".to_string());
+    let mut source = State::new(true);
+    source
+        .commit_densities(vec![density.clone()])
+        .expect("the paired fixture is valid");
+
+    let document = ViewRecord::capture(&source);
+    assert_eq!(
+        document.densities[0].charge_formula.as_deref(),
+        Some("-2*sin(0.5*t)"),
+        "the mirror stores the paired charge formula"
+    );
+    let encoded = serde_json::to_string(&document).expect("the envelope serializes");
+    let decoded: ViewRecord = serde_json::from_str(&encoded).expect("the envelope parses");
+    let mut restored = State::new(true);
+    decoded.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.densities(), [density].as_slice());
+
+    // An unparseable stored formula drops only the pairing: the spatial current
+    // and its harmonic law survive, and the restore adds no dirtying.
+    let spatial = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x,0,0",
+        10,
+        harmonic(0.5, 0.0),
+    );
+    let mut bad_pair = DensitySpecRecord::from_spec(&spatial);
+    bad_pair.charge_formula = Some("(".to_string());
+    let clean = ViewRecord::capture(&State::new(true));
+    let payload = ViewRecord {
+        densities: vec![bad_pair],
+        ..clean.clone()
+    };
+
+    let mut baseline = State::new(true);
+    baseline.dirty = false;
+    clean.restore(&mut baseline, &mut Controls::new());
+
+    let mut state = State::new(true);
+    state.dirty = false;
+    payload.restore(&mut state, &mut Controls::new());
+    assert_eq!(state.densities().len(), 1, "the spatial density is kept");
+    assert_eq!(state.densities()[0].formula, "x,0,0");
+    assert_eq!(
+        state.densities()[0].charge_formula,
+        None,
+        "only the invalid pairing is dropped"
+    );
+    assert!(
+        state.densities()[0].time_law.is_harmonic(),
+        "the valid law survives the pairing loss"
+    );
+    assert_eq!(
+        state.dirty, baseline.dirty,
+        "dropping a pairing adds no dirtying beyond the enclosing restore"
+    );
+
+    // A charge family may never carry a paired formula; a stored one is
+    // dropped alone and the scalar rho density survives.
+    let charge = spec(DensityFamily::VolumeCharge, box_support(), "3", 8);
+    let mut bad_family = DensitySpecRecord::from_spec(&charge);
+    bad_family.charge_formula = Some("1".to_string());
+    let payload = ViewRecord {
+        densities: vec![bad_family],
+        ..clean
+    };
+    let mut state = State::new(true);
+    state.dirty = false;
+    payload.restore(&mut state, &mut Controls::new());
+    assert_eq!(state.densities().len(), 1);
+    assert_eq!(state.densities()[0].formula, "3");
+    assert_eq!(state.densities()[0].charge_formula, None);
+}
+
+#[test]
+fn invalid_harmonic_law_is_rejected_and_a_stored_one_is_dropped_on_restore() {
+    for law in [
+        harmonic(0.0, 0.0),
+        harmonic(-1.0, 0.0),
+        harmonic(MAX_ANGULAR_FREQUENCY + 1.0, 0.0),
+        harmonic(f64::NAN, 0.0),
+        harmonic(f64::INFINITY, 0.0),
+        harmonic(1.5, f64::NAN),
+        harmonic(1.5, f64::INFINITY),
+    ] {
+        let bad = harmonic_spec(DensityFamily::VolumeCharge, box_support(), "1", 8, law);
+        assert!(
+            bad.validate(&params()).is_err(),
+            "the law {law:?} must be rejected, not coerced"
+        );
+    }
+
+    let spatial = spec(DensityFamily::VolumeCharge, box_support(), "3", 8);
+    let mut record = DensitySpecRecord::from_spec(&spatial);
+    record.time_law = Some(TimeLawRecord {
+        kind: "harmonic".to_string(),
+        omega: 0.0,
+        phase: 0.0,
+    });
+    let clean = ViewRecord::capture(&State::new(true));
+    let document = ViewRecord {
+        densities: vec![record],
+        ..clean.clone()
+    };
+
+    let mut baseline = State::new(true);
+    baseline.dirty = false;
+    clean.restore(&mut baseline, &mut Controls::new());
+
+    let mut state = State::new(true);
+    state.dirty = false;
+    document.restore(&mut state, &mut Controls::new());
+    assert_eq!(
+        state.densities().len(),
+        1,
+        "an invalid stored law drops only the law, keeping the spatial density"
+    );
+    assert_eq!(state.densities()[0].formula, "3");
+    assert_eq!(state.densities()[0].time_law, TimeLaw::Steady);
+    assert_eq!(
+        state.dirty, baseline.dirty,
+        "dropping an invalid law adds no dirtying beyond the enclosing restore"
+    );
+}
+
+#[test]
+fn harmonic_density_samples_follow_the_clock() {
+    let density = harmonic_spec(
+        DensityFamily::VolumeCharge,
+        box_support(),
+        "2",
+        12,
+        harmonic(1.0, 0.0),
+    );
+    density.validate(&params()).unwrap();
+
+    let at_zero = charge_report(&density, &params(), 0.0)
+        .expect("the report is defined")
+        .total;
+    let at_pi = charge_report(&density, &params(), PI)
+        .expect("the report is defined")
+        .total;
+    let at_half_pi = charge_report(&density, &params(), PI / 2.0)
+        .expect("the report is defined")
+        .total;
+
+    let expected = 2.0 * box_support().volume();
+    assert!(
+        (at_zero - expected).abs() <= 1e-9 * expected.abs(),
+        "cos(0) keeps the spatial total: {at_zero} vs {expected}"
+    );
+    assert!(
+        (at_pi + expected).abs() <= 1e-9 * expected.abs(),
+        "cos(pi) flips the spatial total: {} vs {}",
+        at_pi,
+        -expected
+    );
+    assert!(
+        at_half_pi.abs() <= 1e-9 * expected.abs(),
+        "cos(pi/2) is the zero crossing: {at_half_pi}"
+    );
+}
+
+#[test]
+fn harmonic_charge_density_satisfies_continuity_within_tolerance() {
+    // J(t) = J0 cos(omega t + phase) with J0 = (x,0,0), so div J = cos(...).
+    // The independent paired charge is rho = -(div J0 / omega) sin(...), whose
+    // finite-difference -d rho/dt is the same cos(...). The check must compare
+    // the sampled divergence with that independent formula.
+    let mut current = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x,0,0",
+        12,
+        harmonic(0.25, PI / 4.0),
+    );
+    current.charge_formula = Some(format!("-4*sin(0.25*t + {})", PI / 4.0));
+    current.validate(&params()).unwrap();
+
+    let report = continuity_report(&current, &params(), 0.0).expect("the report is defined");
+    match report.status {
+        ContinuityStatus::Estimate { value, error } => {
+            assert!(
+                value < 1e-2,
+                "a consistent finite-difference pair has a small residual: {report:?}"
+            );
+            assert!(error.is_finite(), "the estimate carries a finite error");
+        }
+        other => panic!("expected a bounded estimate, got {other:?}"),
+    }
+}
+
+#[test]
+fn inconsistent_harmonic_charge_pair_reports_a_violation() {
+    // The same current against a charge formula that is twice the consistent
+    // amplitude. The old self-derived check ignored the declared charge and
+    // passed; a genuine independent comparison must see the mismatch.
+    let mut current = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x,0,0",
+        12,
+        harmonic(0.25, PI / 4.0),
+    );
+    current.charge_formula = Some(format!("-8*sin(0.25*t + {})", PI / 4.0));
+    current.validate(&params()).unwrap();
+
+    let report = continuity_report(&current, &params(), 0.0).expect("the report is defined");
+    match report.status {
+        ContinuityStatus::Violation {
+            residual,
+            tolerance,
+        } => {
+            assert!(
+                residual > tolerance,
+                "the mismatched charge pair must violate: {report:?}"
+            );
+            assert!(
+                residual > 0.1,
+                "the factor-of-two mismatch is large: {report:?}"
+            );
+        }
+        other => panic!("expected a violation from the inconsistent pair, got {other:?}"),
+    }
+}
+
+#[test]
+fn harmonic_current_without_paired_charge_is_unresolved() {
+    let current = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x,0,0",
+        12,
+        harmonic(0.25, PI / 4.0),
+    );
+    current.validate(&params()).unwrap();
+
+    let report = continuity_report(&current, &params(), 0.0).expect("the report is defined");
+    match report.status {
+        ContinuityStatus::Unresolved { ref reason } => {
+            let lower = reason.to_lowercase();
+            assert!(
+                lower.contains("charge") && lower.contains("pair"),
+                "the reason names the missing paired charge density: {reason}"
+            );
+        }
+        other => panic!("expected an unresolved report, got {other:?}"),
+    }
+    assert!(
+        report.div_j_min.is_nan() && report.div_j_max.is_nan(),
+        "an unresolved report fabricates no numbers: {report:?}"
+    );
+}
+
+#[test]
+fn harmonic_charge_density_reports_continuity_unresolved() {
+    let charge = harmonic_spec(
+        DensityFamily::VolumeCharge,
+        box_support(),
+        "1",
+        12,
+        harmonic(1.0, 0.0),
+    );
+    charge.validate(&params()).unwrap();
+
+    let report = continuity_report(&charge, &params(), 0.0).expect("the report is defined");
+    match report.status {
+        ContinuityStatus::Unresolved { ref reason } => {
+            let lower = reason.to_lowercase();
+            assert!(
+                lower.contains("induced current") && lower.contains("not model"),
+                "the reason says the induced current is not modelled: {reason}"
+            );
+        }
+        other => panic!("a harmonic charge must not fabricate a continuity estimate: {other:?}"),
+    }
+    assert!(
+        report.div_j_min.is_nan() && report.div_j_max.is_nan(),
+        "no self-derived current is reported: {report:?}"
+    );
+}
+
+#[test]
+fn charge_formula_is_validated_and_forbidden_on_charge_families() {
+    let mut current = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x,0,0",
+        8,
+        harmonic(1.0, 0.0),
+    );
+    current.charge_formula = Some("(".to_string());
+    let error = current
+        .validate(&params())
+        .expect_err("a malformed paired charge formula is rejected");
+    assert!(
+        error.contains("paired charge formula"),
+        "the error names the paired formula: {error}"
+    );
+
+    let mut empty = current.clone();
+    empty.charge_formula = Some("   ".to_string());
+    assert!(
+        empty.validate(&params()).is_err(),
+        "an empty paired charge formula is rejected"
+    );
+
+    let mut charge = spec(DensityFamily::VolumeCharge, box_support(), "1", 8);
+    charge.charge_formula = Some("1".to_string());
+    let error = charge
+        .validate(&params())
+        .expect_err("a charge family's own formula is already rho");
+    assert!(
+        error.contains("charge_formula must be absent"),
+        "the rejection is explicit: {error}"
+    );
+
+    let mut good = current;
+    good.charge_formula = Some("-sin(t)".to_string());
+    good.validate(&params())
+        .expect("a well-formed paired charge formula is accepted");
+}
+
+#[test]
+fn discontinuous_charge_flow_reports_a_violation_with_the_residual() {
+    // A near-step current has a large central-difference divergence while the
+    // steady law declares a zero time derivative; the report must carry the
+    // measured residual rather than pass silently.
+    let current = spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "x/(abs(x)+1e-12),0,0",
+        12,
+    );
+    current.validate(&params()).unwrap();
+
+    let report = continuity_report(&current, &params(), 0.0).expect("the report is defined");
+    match report.status {
+        ContinuityStatus::Violation {
+            residual,
+            tolerance,
+        } => {
+            assert!(residual.is_finite() && tolerance.is_finite());
+            assert!(
+                residual > tolerance,
+                "the reported residual {residual} exceeds {tolerance}: {report:?}"
+            );
+            assert!(residual > 1.0, "the jump is large: {report:?}");
+        }
+        other => panic!("expected a violation with its residual, got {other:?}"),
+    }
+}
+
+#[test]
+fn steady_current_with_harmonic_charge_density_is_rejected() {
+    let steady_current = spec(DensityFamily::SteadyCurrent, box_support(), "0,0,1", 8);
+    let harmonic_charge = harmonic_spec(
+        DensityFamily::VolumeCharge,
+        box_support(),
+        "1",
+        8,
+        harmonic(1.0, 0.0),
+    );
+
+    let error = validate_time_law_combination(&[steady_current.clone(), harmonic_charge.clone()])
+        .expect_err("a steady current cannot balance a harmonic charge density");
+    let lower = error.to_lowercase();
+    assert!(
+        lower.contains("steady current") && lower.contains("harmonic"),
+        "the rejection names both terms explicitly: {error}"
+    );
+
+    // The same list is accepted once the current declares its own harmonic law.
+    let harmonic_current = harmonic_spec(
+        DensityFamily::SteadyCurrent,
+        box_support(),
+        "0,0,1",
+        8,
+        harmonic(1.0, 0.0),
+    );
+    validate_time_law_combination(&[harmonic_current, harmonic_charge.clone()])
+        .expect("a harmonic current may carry a harmonic charge density");
+
+    // The real atomic commit path enforces the same rule.
+    let mut state = State::new(true);
+    assert!(
+        state
+            .commit_densities(vec![steady_current, harmonic_charge])
+            .is_err(),
+        "the document commit rejects the inconsistent pair"
+    );
+    assert!(state.densities().is_empty());
+}
+
+#[test]
+fn time_law_sampling_stays_within_the_existing_sample_budget() {
+    let density = harmonic_spec(
+        DensityFamily::VolumeCharge,
+        sphere_support(),
+        "1",
+        MAX_SAMPLES,
+        harmonic(MAX_ANGULAR_FREQUENCY, 0.5),
+    );
+    density.validate(&params()).unwrap();
+    let report = charge_report(&density, &params(), 0.25).expect("the report is defined");
+    assert!(report.samples > 0);
+    assert!(
+        u64::from(report.samples) <= u64::from(MAX_DENSITY_SAMPLES),
+        "the time law adds no samples: {} > {}",
+        report.samples,
+        MAX_DENSITY_SAMPLES
     );
 }

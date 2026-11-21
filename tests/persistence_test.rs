@@ -13,7 +13,7 @@ use vector_field_explorer::color_mapping::ColorQuantity;
 use vector_field_explorer::color_ramp::{ColorRamp, RampKind, Rgb, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::custom_density::{
-    DensityFamily, DensitySpec, DensitySupport, SupportKind,
+    DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw,
 };
 use vector_field_explorer::field_probe::{
     CirculationLoop, GaussianSurface, IntegralStatus, LoopKind, MAX_LOOPS, MAX_SURFACES,
@@ -4282,6 +4282,8 @@ fn density_spec(name: &str, family: DensityFamily, formula: &str) -> DensitySpec
         formula: formula.to_string(),
         samples: 8,
         softening: 0.25,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
     }
 }
 
@@ -4333,6 +4335,8 @@ fn density_round_trip_preserves_order_and_fields() {
             formula: "x + 2*y".to_string(),
             samples: 11,
             softening: 0.125,
+            time_law: TimeLaw::Steady,
+            charge_formula: None,
         },
         density_spec("wire", DensityFamily::SteadyCurrent, "0,0,1"),
     ];

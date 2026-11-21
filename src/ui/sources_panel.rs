@@ -10,8 +10,8 @@ use eframe::egui;
 use glam::DVec3;
 
 use crate::custom_density::{
-    ChargeReport, ContinuityReport, DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus,
-    MAX_SAMPLES, MIN_SAMPLES, SupportKind,
+    ChargeReport, ContinuityReport, ContinuityStatus, DensityFamily, DensitySpec, DensitySupport,
+    DiagnosticsStatus, MAX_SAMPLES, MIN_SAMPLES, SupportKind, TimeLaw,
 };
 use crate::object_scene::ObjectStyle;
 use crate::source_scene::{
@@ -185,6 +185,10 @@ impl DensityDraft {
             formula: self.formula.clone(),
             samples: self.samples,
             softening: self.softening,
+            // Slice A has no clock editor; an existing law survives an edit of
+            // the other fields until slice B adds the controls.
+            time_law: self.committed.time_law,
+            charge_formula: self.committed.charge_formula.clone(),
         }
     }
 }
@@ -922,6 +926,8 @@ fn default_density(name: String) -> DensitySpec {
         formula: "1".to_string(),
         samples: 12,
         softening: 0.0,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
     }
 }
 
@@ -949,12 +955,15 @@ fn charge_line(report: &ChargeReport) -> String {
 
 fn continuity_line(report: &ContinuityReport) -> String {
     match &report.status {
-        DiagnosticsStatus::Estimate { error } => format!(
-            "Estimate: div J in [{:.6e}, {:.6e}], error = {:.6e}",
-            report.div_j_min, report.div_j_max, error
+        ContinuityStatus::Estimate { value, error } => format!(
+            "Estimate: div J in [{:.6e}, {:.6e}], residual = {value:.6e}, error = {error:.6e}",
+            report.div_j_min, report.div_j_max
         ),
-        DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
-        DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
+        ContinuityStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+        ContinuityStatus::Violation {
+            residual,
+            tolerance,
+        } => format!("Violation: residual = {residual:.6e}, tolerance = {tolerance:.6e}"),
     }
 }
 

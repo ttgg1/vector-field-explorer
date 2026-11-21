@@ -30,8 +30,8 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats};
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::custom_density::{
-    ChargeReport, ContinuityReport, DensityFamily, DensitySpec, DiagnosticsStatus, charge_report,
-    continuity_report,
+    ChargeReport, ContinuityReport, ContinuityStatus, DensityFamily, DensitySpec,
+    DiagnosticsStatus, charge_report, continuity_report, validate_time_law_combination,
 };
 use crate::induction::{
     InductionPrepared, InductionSampling, InductionScene, MAX_INDUCTION_DENSITY_2D,
@@ -1007,6 +1007,7 @@ impl State {
                 ));
             }
         }
+        validate_time_law_combination(&next)?;
         if next == self.densities {
             return Ok(());
         }
@@ -1085,7 +1086,7 @@ impl State {
                                 div_j_min: f64::NAN,
                                 div_j_max: f64::NAN,
                                 worst_point: None,
-                                status: DiagnosticsStatus::Unresolved { reason },
+                                status: ContinuityStatus::Unresolved { reason },
                             }
                         }),
                     );
