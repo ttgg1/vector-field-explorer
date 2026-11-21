@@ -10,6 +10,10 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
+use super::field_probe::{
+    CirculationLoop, CirculationReport, FluxReport, GaussianSurface, IntegralStatus, LoopKind,
+    ProbeField, SurfaceKind, circulation, flux,
+};
 use super::flow::{Flow, SceneFlow};
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{
@@ -24,18 +28,19 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats};
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::induction::{
-    InductionPrepared, InductionSampling, MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D,
-    induction_key, prepare_induction, sample_induction,
+    InductionPrepared, InductionSampling, InductionScene, MAX_INDUCTION_DENSITY_2D,
+    MAX_INDUCTION_DENSITY_3D, induction_key, prepare_induction, sample_induction,
 };
 use crate::layer_style::{LayerId, LayerStyles, PhysicsFamily, ResolvedLayerStyle};
+
 use crate::material::{
     MaterialError, MaterialFamily, MaterialSampling, MaterialScene, material_family,
-    material_outline, sample_materials, validate_material,
+    material_field, material_outline, sample_materials, validate_material,
 };
 use crate::maxwell::{
     BemSolution, MAXWELL_DENSITY_CAP_WARNING, MAXWELL_MAX_DENSITY_2D, MAXWELL_MAX_DENSITY_3D,
-    MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family, maxwell_outline,
-    sample_maxwell_with_bem, solve_bem, validate_maxwell,
+    MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family,
+    maxwell_field_with_bem, maxwell_outline, sample_maxwell_with_bem, solve_bem, validate_maxwell,
 };
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
@@ -57,8 +62,10 @@ use crate::scalar_view::{
 use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedError, SeedLayout, SeedPoint,
 };
+use crate::sources::{EvalOptions, Evaluator, FamilyResult, FieldFamily, SourceSet, WorkLimits};
 use crate::viewport_style::ViewportStyle;
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 mod plot;
@@ -90,6 +97,13 @@ pub const MIN_SCALAR_GRID_SIDE: u32 = 16;
 /// Fallback text colour for scalar overlay lines before the UI first syncs the
 /// active theme's text colour.
 pub const DEFAULT_SCALAR_TEXT_COLOR: [f32; 4] = [0.72, 0.72, 0.72, 1.0];
+/// Quantum of the visibility-gated probe report clock (issue #95 slice B).
+/// Reports refresh at most once per 100 ms while the section is open.
+pub const REPORT_REFRESH_SECONDS: f64 = 0.1;
+/// Wireframe alpha multiplier for probe surfaces and loops.
+const PROBE_WIREFRAME_ALPHA: f32 = 0.6;
+/// Segments in one probe wireframe ring.
+const PROBE_WIREFRAME_SEGMENTS: usize = 32;
 /// Bounds and default of the particle dot size (ticket 30): a multiplier on
 /// [`DOT_SPACING_FRACTION`], so `1.0` keeps the historical radius and the
 /// fraction itself never moves.
@@ -283,6 +297,108 @@ impl LeftClickAction {
     }
 }
 
+/// Document identity shared by every probe report: mode, active inputs, family,
+/// domain and the 100 ms-quantised clock. Geometry is stored per report.
+#[derive(Debug, Clone, PartialEq)]
+struct ProbeFieldIdentity {
+    mode: FieldMode,
+    formula: String,
+    parameters: ParameterSet,
+    sources: SourceScene,
+    induction: InductionScene,
+    material: MaterialScene,
+    maxwell: MaxwellScene,
+    maxwell_bem_solves: u64,
+    domain: Domain,
+    family: FieldFamily,
+    clock: i64,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSurfaceReport {
+    geometry: GaussianSurface,
+    epoch: u64,
+    report: FluxReport,
+}
+
+#[derive(Debug, Clone)]
+struct CachedLoopReport {
+    geometry: CirculationLoop,
+    epoch: u64,
+    report: CirculationReport,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProbeReportsCache {
+    surfaces: Vec<CachedSurfaceReport>,
+    loops: Vec<CachedLoopReport>,
+    identity: Option<ProbeFieldIdentity>,
+    epoch: u64,
+    generation: u64,
+}
+
+/// A read-only field adapter built for one probe check. It is never stored.
+struct ProbeAdapter {
+    family: FieldFamily,
+    kind: ProbeAdapterKind,
+}
+
+enum ProbeAdapterKind {
+    Sources(RefCell<Evaluator>),
+    Induction {
+        scene: Box<InductionScene>,
+        softening: f64,
+        derivative: f64,
+    },
+    Maxwell {
+        scene: Box<MaxwellScene>,
+        bem: Option<Arc<BemSolution>>,
+    },
+    Materials(Box<MaterialScene>),
+}
+
+impl ProbeField for ProbeAdapter {
+    fn eval(&self, point: Vec3, _time: f64) -> Option<Vec3> {
+        match &self.kind {
+            ProbeAdapterKind::Sources(evaluator) => {
+                let sample = evaluator.borrow_mut().evaluate(point.as_dvec3(), &|| false);
+                let result = match self.family {
+                    FieldFamily::Electric => sample.electric,
+                    FieldFamily::Magnetic => sample.magnetic,
+                };
+                match result {
+                    // An accuracy-not-met estimate is refused rather than
+                    // reported as if it met the target.
+                    FamilyResult::TargetMet(estimate) => Some(estimate.value.as_vec3()),
+                    FamilyResult::AccuracyNotMet(_, _) | FamilyResult::Unavailable(_) => None,
+                }
+            }
+            ProbeAdapterKind::Induction {
+                scene,
+                softening,
+                derivative,
+            } => {
+                let point = point.as_dvec3();
+                let potential = scene.unit_vector_potential(point, *softening).ok()?;
+                let offset = point - scene.center;
+                let z = offset.dot(scene.axis);
+                let radial = offset - scene.axis * z;
+                let radius = radial.length();
+                if radius == 0.0 {
+                    return Some(Vec3::ZERO);
+                }
+                let basis = scene.axis.cross(radial / radius);
+                let value = -potential * basis * *derivative;
+                value.is_finite().then(|| value.as_vec3())
+            }
+            ProbeAdapterKind::Maxwell { scene, bem } => {
+                maxwell_field_with_bem(scene, point, bem.as_deref()).ok()
+            }
+            ProbeAdapterKind::Materials(scene) => material_field(scene, point).ok(),
+        }
+    }
+}
+
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
 #[derive(Clone)]
@@ -354,6 +470,20 @@ pub struct State {
     /// restore and the committed probe edits replace it; sampled values are
     /// runtime state and are never persisted.
     pub probes: ProbeSet,
+    /// Durable Gaussian surfaces (issue #95 slice B), bounded by
+    /// [`crate::field_probe::MAX_SURFACES`]. Only the add/update/remove setters
+    /// and the startup restore replace the list.
+    pub probe_surfaces: Vec<GaussianSurface>,
+    /// Durable circulation loops (issue #95 slice B), bounded by
+    /// [`crate::field_probe::MAX_LOOPS`].
+    pub probe_loops: Vec<CirculationLoop>,
+    /// The explicit probe family. One family applies to every check; electric
+    /// and magnetic results are never combined.
+    probe_family: FieldFamily,
+    /// Runtime reports and their per-probe cache keys. Only
+    /// [`State::refresh_probe_reports`] touches it, and only while the section
+    /// is open.
+    probe_reports: ProbeReportsCache,
     /// Durable display-only comparison series (issue #93 slice A). Only
     /// [`State::set_comparison_series`] replaces them in response to an edit;
     /// startup restore assigns directly. They never reach arrows, colour
@@ -1150,6 +1280,10 @@ impl State {
             streamline_count: 0,
             seed_layout: SeedLayout::default(),
             probes: ProbeSet::default(),
+            probe_surfaces: Vec::new(),
+            probe_loops: Vec::new(),
+            probe_family: FieldFamily::Electric,
+            probe_reports: ProbeReportsCache::default(),
             comparison_series: ComparisonSet::default(),
             gradient: None,
             scalar_grid_side: DEFAULT_SCALAR_GRID_SIDE,
@@ -2677,6 +2811,398 @@ impl State {
         true
     }
 
+    /// Wireframe line instances for every stored surface and loop.
+    ///
+    /// Only [`LineInstanceGPU`] geometry is emitted, so PNG, animation and SVG
+    /// captures include the probes without a new `SceneGPU` pass. Colours are
+    /// the existing electric/magnetic constants with alpha
+    /// [`PROBE_WIREFRAME_ALPHA`]; the `Sources` layer's family and layer
+    /// overrides apply through the shared sanitising helpers.
+    pub fn probe_overlay_lines(self: &State, styles: &LayerStyles) -> Vec<LineInstanceGPU> {
+        let (color, width) = probe_wireframe_style(styles, self.probe_family);
+        let mut lines = Vec::new();
+        for surface in &self.probe_surfaces {
+            emit_surface_wireframe(&mut lines, surface, color, width);
+        }
+        for loop_ in &self.probe_loops {
+            emit_loop_wireframe(&mut lines, loop_, color, width);
+        }
+        lines
+    }
+
+    /// The committed probe surfaces, in document order.
+    pub fn probe_surfaces(self: &State) -> &[GaussianSurface] {
+        &self.probe_surfaces
+    }
+
+    /// The committed circulation loops, in document order.
+    pub fn probe_loops(self: &State) -> &[CirculationLoop] {
+        &self.probe_loops
+    }
+
+    /// The explicit family every probe check uses.
+    pub fn probe_family(self: &State) -> FieldFamily {
+        self.probe_family
+    }
+
+    /// Select the probe family. A real change is one dirty document edit,
+    /// because the wireframe colour follows the family; an identical request
+    /// never dirties.
+    pub fn set_probe_family(self: &mut State, family: FieldFamily) -> bool {
+        if self.probe_family == family {
+            return false;
+        }
+        self.probe_family = family;
+        self.mark_dirty();
+        true
+    }
+
+    /// Restore the saved probe family at the startup/document seam without
+    /// dirtying. The persisted caller sanitises invalid or unavailable tokens
+    /// before handing them here.
+    pub(crate) fn restore_probe_family(self: &mut State, family: FieldFamily) {
+        self.probe_family = family;
+    }
+
+    /// Append one Gaussian surface through the shared cap and validation seam.
+    /// An accepted add is one dirty document edit; a rejection returns the
+    /// model's message and leaves the list and dirty flag untouched.
+    pub fn add_probe_surface(self: &mut State, surface: GaussianSurface) -> Result<usize, String> {
+        surface.validate()?;
+        if self.probe_surfaces.len() >= crate::field_probe::MAX_SURFACES {
+            return Err(format!(
+                "at most {} surfaces are supported",
+                crate::field_probe::MAX_SURFACES
+            ));
+        }
+        self.probe_surfaces.push(surface);
+        self.mark_dirty();
+        Ok(self.probe_surfaces.len() - 1)
+    }
+
+    /// Replace one surface after validating the candidate. An identical edit is
+    /// a no-op; a real edit dirties once; a rejection leaves the stored value.
+    pub fn update_probe_surface(
+        self: &mut State,
+        index: usize,
+        surface: GaussianSurface,
+    ) -> Result<(), String> {
+        surface.validate()?;
+        let Some(stored) = self.probe_surfaces.get_mut(index) else {
+            return Err(format!("surface index {index} is out of range"));
+        };
+        if *stored == surface {
+            return Ok(());
+        }
+        *stored = surface;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Remove one surface by index. An out-of-range index is a no-op; a real
+    /// removal is one dirty document edit.
+    pub fn remove_probe_surface(self: &mut State, index: usize) -> bool {
+        if index >= self.probe_surfaces.len() {
+            return false;
+        }
+        self.probe_surfaces.remove(index);
+        self.mark_dirty();
+        true
+    }
+
+    /// Append one circulation loop through the shared cap and validation seam.
+    pub fn add_probe_loop(self: &mut State, loop_: CirculationLoop) -> Result<usize, String> {
+        loop_.validate()?;
+        if self.probe_loops.len() >= crate::field_probe::MAX_LOOPS {
+            return Err(format!(
+                "at most {} loops are supported",
+                crate::field_probe::MAX_LOOPS
+            ));
+        }
+        self.probe_loops.push(loop_);
+        self.mark_dirty();
+        Ok(self.probe_loops.len() - 1)
+    }
+
+    /// Replace one loop after validating the candidate.
+    pub fn update_probe_loop(
+        self: &mut State,
+        index: usize,
+        loop_: CirculationLoop,
+    ) -> Result<(), String> {
+        loop_.validate()?;
+        let Some(stored) = self.probe_loops.get_mut(index) else {
+            return Err(format!("loop index {index} is out of range"));
+        };
+        if *stored == loop_ {
+            return Ok(());
+        }
+        *stored = loop_;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Remove one loop by index. An out-of-range index is a no-op.
+    pub fn remove_probe_loop(self: &mut State, index: usize) -> bool {
+        if index >= self.probe_loops.len() {
+            return false;
+        }
+        self.probe_loops.remove(index);
+        self.mark_dirty();
+        true
+    }
+
+    /// Why the active view cannot supply a probe field, or `None` when it can.
+    /// The text names the unsupported mode for the disabled section.
+    pub fn probe_mode_unsupported_reason(self: &State) -> Option<String> {
+        if !self.is_vector_mode() {
+            return Some(
+                "The Plot view has no vector field, so probe checks are unavailable.".to_string(),
+            );
+        }
+        match self.field_mode {
+            FieldMode::Formula => {
+                Some("Formula mode cannot supply a probe field for probe checks.".to_string())
+            }
+            FieldMode::Ode => {
+                Some("Ode mode cannot supply a probe field for probe checks.".to_string())
+            }
+            FieldMode::Sources
+            | FieldMode::Induction
+            | FieldMode::Materials
+            | FieldMode::Maxwell => None,
+        }
+    }
+
+    /// The last cached flux report for one surface, if the visible section has
+    /// refreshed since the geometry appeared.
+    pub fn probe_surface_report(self: &State, index: usize) -> Option<&FluxReport> {
+        self.probe_reports
+            .surfaces
+            .get(index)
+            .map(|cached| &cached.report)
+    }
+
+    /// The last cached circulation report for one loop.
+    pub fn probe_loop_report(self: &State, index: usize) -> Option<&CirculationReport> {
+        self.probe_reports
+            .loops
+            .get(index)
+            .map(|cached| &cached.report)
+    }
+
+    /// Count of visible refreshes that actually recomputed at least one report.
+    /// The UI test seam pins the visibility-gated cache with it.
+    pub fn probe_report_generation(self: &State) -> u64 {
+        self.probe_reports.generation
+    }
+
+    /// Refresh probe reports while the section is visible.
+    ///
+    /// A collapsed section performs no sampling and keeps its last reports. A
+    /// visible refresh reuses each probe whose geometry and shared field
+    /// identity (mode, case or formula, parameters, family, domain and the
+    /// 100 ms-quantised clock) are unchanged. Unsupported or refused checks
+    /// store honest status text instead of a number. Reports never dirty the
+    /// scene: only the document geometry and family do.
+    pub fn refresh_probe_reports(self: &mut State, visible: bool) {
+        if !visible {
+            return;
+        }
+        let identity = self.probe_field_identity();
+        if self.probe_reports.identity.as_ref() != Some(&identity) {
+            self.probe_reports.identity = Some(identity);
+            self.probe_reports.epoch = self.probe_reports.epoch.wrapping_add(1);
+        }
+        let epoch = self.probe_reports.epoch;
+        let time = f64::from(self.time);
+        let family = self.probe_family;
+        let surfaces = self.probe_surfaces.clone();
+        let loops = self.probe_loops.clone();
+        let previous_surfaces = std::mem::take(&mut self.probe_reports.surfaces);
+        let previous_loops = std::mem::take(&mut self.probe_reports.loops);
+        let mut recomputed = false;
+
+        let mut next_surfaces = Vec::with_capacity(surfaces.len());
+        for (index, surface) in surfaces.into_iter().enumerate() {
+            let cached = previous_surfaces
+                .get(index)
+                .filter(|cached| cached.epoch == epoch && cached.geometry == surface);
+            if let Some(cached) = cached {
+                next_surfaces.push(cached.clone());
+                continue;
+            }
+            recomputed = true;
+            let report = match self.probe_field() {
+                Ok(field) => flux(&field, &surface, family, time),
+                Err(reason) => FluxReport {
+                    surface,
+                    family,
+                    status: IntegralStatus::Unresolved { reason },
+                    samples: 0,
+                    failed_patches: 0,
+                },
+            };
+            next_surfaces.push(CachedSurfaceReport {
+                geometry: surface,
+                epoch,
+                report,
+            });
+        }
+
+        let mut next_loops = Vec::with_capacity(loops.len());
+        for (index, loop_) in loops.into_iter().enumerate() {
+            let cached = previous_loops
+                .get(index)
+                .filter(|cached| cached.epoch == epoch && cached.geometry == loop_);
+            if let Some(cached) = cached {
+                next_loops.push(cached.clone());
+                continue;
+            }
+            recomputed = true;
+            let report = match self.probe_field() {
+                Ok(field) => circulation(&field, &loop_, family, time),
+                Err(reason) => CirculationReport {
+                    loop_,
+                    family,
+                    status: IntegralStatus::Unresolved { reason },
+                    samples: 0,
+                    failed_segments: 0,
+                    one_sided: false,
+                },
+            };
+            next_loops.push(CachedLoopReport {
+                geometry: loop_,
+                epoch,
+                report,
+            });
+        }
+
+        self.probe_reports.surfaces = next_surfaces;
+        self.probe_reports.loops = next_loops;
+        if recomputed {
+            self.probe_reports.generation = self.probe_reports.generation.wrapping_add(1);
+        }
+    }
+
+    /// Build the shared identity for the current probe report cache.
+    fn probe_field_identity(self: &State) -> ProbeFieldIdentity {
+        let clock = if self.time.is_finite() {
+            (f64::from(self.time) / REPORT_REFRESH_SECONDS).floor() as i64
+        } else {
+            0
+        };
+        ProbeFieldIdentity {
+            mode: self.field_mode,
+            formula: self.formula.clone(),
+            parameters: self.parameters.clone(),
+            sources: self.sources.clone(),
+            induction: self.induction.clone(),
+            material: self.material.clone(),
+            maxwell: self.maxwell.clone(),
+            maxwell_bem_solves: self.maxwell_bem_solves,
+            domain: self.scene_domain(),
+            family: self.probe_family,
+            clock,
+        }
+    }
+
+    /// Build the one read-only field adapter for a single probe check.
+    fn probe_field(self: &State) -> Result<ProbeAdapter, String> {
+        if !self.is_vector_mode() {
+            return Err(
+                "The Plot view has no vector field, so probe checks are unavailable.".to_string(),
+            );
+        }
+        match self.field_mode {
+            FieldMode::Formula => {
+                Err("Formula mode cannot supply a probe field for probe checks.".to_string())
+            }
+            FieldMode::Ode => {
+                Err("Ode mode cannot supply a probe field for probe checks.".to_string())
+            }
+            FieldMode::Sources => {
+                let sources: Vec<_> = self.sources.enabled_sources().copied().collect();
+                if sources.is_empty() {
+                    return Err(
+                        "The Sources scene is empty; add a source before checking probes."
+                            .to_string(),
+                    );
+                }
+                let set = SourceSet::new(&sources, &WorkLimits::default(), &|| false)
+                    .map_err(|error| format!("Sources scene is invalid: {error}"))?;
+                let options = EvalOptions {
+                    softening: self.sources.softening,
+                    ..EvalOptions::default()
+                };
+                let evaluator = Evaluator::new(&set, options, &|| false)
+                    .map_err(|error| format!("Sources evaluator is unavailable: {error}"))?;
+                Ok(ProbeAdapter {
+                    family: self.probe_family,
+                    kind: ProbeAdapterKind::Sources(RefCell::new(evaluator)),
+                })
+            }
+            FieldMode::Induction => {
+                if self.probe_family == FieldFamily::Magnetic {
+                    return Err(
+                        "Induction mode supplies the induced electric field only; a magnetic probe is unsupported."
+                            .to_string(),
+                    );
+                }
+                self.induction
+                    .validate()
+                    .map_err(|error| format!("Induction scene is invalid: {error}"))?;
+                Ok(ProbeAdapter {
+                    family: self.probe_family,
+                    kind: ProbeAdapterKind::Induction {
+                        scene: Box::new(self.induction.clone()),
+                        softening: self.sources.softening,
+                        derivative: self.induction.current_derivative(self.time),
+                    },
+                })
+            }
+            FieldMode::Materials => {
+                let family = match material_family(self.material.case) {
+                    MaterialFamily::Electric => FieldFamily::Electric,
+                    MaterialFamily::Magnetic => FieldFamily::Magnetic,
+                };
+                if family != self.probe_family {
+                    return Err(format!(
+                        "The active Materials case supplies {} only.",
+                        field_family_label(family)
+                    ));
+                }
+                validate_material(&self.material)
+                    .map_err(|error| format!("Materials scene is invalid: {error:?}"))?;
+                Ok(ProbeAdapter {
+                    family: self.probe_family,
+                    kind: ProbeAdapterKind::Materials(Box::new(self.material.clone())),
+                })
+            }
+            FieldMode::Maxwell => {
+                let family = match maxwell_family(self.maxwell.case) {
+                    MaxwellFamily::Electric => FieldFamily::Electric,
+                    MaxwellFamily::Magnetic => FieldFamily::Magnetic,
+                };
+                if family != self.probe_family {
+                    return Err(format!(
+                        "The active Maxwell case supplies {} only.",
+                        field_family_label(family)
+                    ));
+                }
+                validate_maxwell(&self.maxwell)
+                    .map_err(|error| format!("Maxwell scene is invalid: {error:?}"))?;
+                Ok(ProbeAdapter {
+                    family: self.probe_family,
+                    kind: ProbeAdapterKind::Maxwell {
+                        scene: Box::new(self.maxwell.clone()),
+                        bem: self.maxwell_bem.clone(),
+                    },
+                })
+            }
+        }
+    }
+
     /// Contour and point-probe line instances for the scene. Contours use the
     /// cached record's plane frame and the established reference edge width;
     /// each probe is a small on-slice cross. Geometry is composed only while
@@ -3982,5 +4508,270 @@ pub fn undo_click_seed(
         seeds,
         removed: true,
         particles: rollback,
+    }
+}
+
+fn field_family_label(family: FieldFamily) -> &'static str {
+    match family {
+        FieldFamily::Electric => "electric",
+        FieldFamily::Magnetic => "magnetic",
+    }
+}
+
+/// Resolve the fixed family wireframe colour and width through the `Sources`
+/// layer and family overrides, using the shared opacity sanitiser.
+fn probe_wireframe_style(styles: &LayerStyles, family: FieldFamily) -> ([f32; 4], f32) {
+    let physics = match family {
+        FieldFamily::Electric => PhysicsFamily::Electric,
+        FieldFamily::Magnetic => PhysicsFamily::Magnetic,
+    };
+    let resolved = styles.resolve(LayerId::Sources, Some(physics));
+    let default = match family {
+        FieldFamily::Electric => crate::source_scene::ELECTRIC_COLOR,
+        FieldFamily::Magnetic => crate::source_scene::MAGNETIC_COLOR,
+    };
+    let [red, green, blue] = resolved.color.map(|color| color.0).unwrap_or(default);
+    let opacity = crate::reference::sanitized_opacity(resolved.opacity);
+    let width_multiplier = if resolved.width.is_finite() {
+        resolved.width.clamp(
+            crate::layer_style::MIN_WIDTH_MULTIPLIER,
+            crate::layer_style::MAX_WIDTH_MULTIPLIER,
+        )
+    } else {
+        1.0
+    };
+    (
+        [
+            red as f32 / 255.0,
+            green as f32 / 255.0,
+            blue as f32 / 255.0,
+            (PROBE_WIREFRAME_ALPHA * opacity).clamp(0.0, 1.0),
+        ],
+        crate::reference::EDGE_WIDTH * width_multiplier,
+    )
+}
+
+fn probe_basis(axis: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
+    if !axis.is_finite() {
+        return None;
+    }
+    let length = axis.length();
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    let w = axis / length;
+    let helper = if w.z.abs() < 0.9 { Vec3::Z } else { Vec3::Y };
+    let u = helper.cross(w).normalize();
+    let v = w.cross(u);
+    (u.is_finite() && v.is_finite() && w.is_finite()).then_some((u, v, w))
+}
+
+fn wire_point(center: Vec3, u: Vec3, v: Vec3, w: Vec3, local: Vec3) -> Vec3 {
+    center + u * local.x + v * local.y + w * local.z
+}
+
+fn push_probe_segment(
+    lines: &mut Vec<LineInstanceGPU>,
+    a: Vec3,
+    b: Vec3,
+    color: [f32; 4],
+    width: f32,
+) {
+    if a.is_finite() && b.is_finite() {
+        lines.push(LineInstanceGPU {
+            a: [a.x, a.y, a.z, 1.0],
+            b: [b.x, b.y, b.z, width],
+            color,
+        });
+    }
+}
+
+/// One closed ring in the local `xy` plane at local height `z`.
+#[allow(clippy::too_many_arguments)]
+fn emit_probe_ring(
+    lines: &mut Vec<LineInstanceGPU>,
+    center: Vec3,
+    u: Vec3,
+    v: Vec3,
+    w: Vec3,
+    radius: f32,
+    z: f32,
+    color: [f32; 4],
+    width: f32,
+) {
+    if !radius.is_finite() || radius <= 0.0 {
+        return;
+    }
+    let mut previous = None;
+    for step in 0..=PROBE_WIREFRAME_SEGMENTS {
+        let angle = std::f32::consts::TAU * step as f32 / PROBE_WIREFRAME_SEGMENTS as f32;
+        let point = wire_point(
+            center,
+            u,
+            v,
+            w,
+            Vec3::new(radius * angle.cos(), radius * angle.sin(), z),
+        );
+        if let Some(previous) = previous {
+            push_probe_segment(lines, previous, point, color, width);
+        }
+        previous = Some(point);
+    }
+}
+
+fn emit_surface_wireframe(
+    lines: &mut Vec<LineInstanceGPU>,
+    surface: &GaussianSurface,
+    color: [f32; 4],
+    width: f32,
+) {
+    if surface.validate().is_err() {
+        return;
+    }
+    let Some((u, v, w)) = probe_basis(surface.axis) else {
+        return;
+    };
+    match surface.kind {
+        SurfaceKind::Sphere => {
+            let radius = surface.size.x * 0.5;
+            // Latitude rings, excluding the degenerate poles.
+            for ring in 1..=4 {
+                let theta = std::f32::consts::PI * ring as f32 / 5.0;
+                emit_probe_ring(
+                    lines,
+                    surface.center,
+                    u,
+                    v,
+                    w,
+                    radius * theta.sin(),
+                    radius * theta.cos(),
+                    color,
+                    width,
+                );
+            }
+            // Longitude meridians through the poles.
+            for meridian in 0..4 {
+                let phi = std::f32::consts::PI * meridian as f32 / 4.0;
+                let mut previous = None;
+                for step in 0..=PROBE_WIREFRAME_SEGMENTS / 2 {
+                    let theta =
+                        std::f32::consts::PI * step as f32 / (PROBE_WIREFRAME_SEGMENTS / 2) as f32;
+                    let point = wire_point(
+                        surface.center,
+                        u,
+                        v,
+                        w,
+                        Vec3::new(
+                            radius * theta.sin() * phi.cos(),
+                            radius * theta.sin() * phi.sin(),
+                            radius * theta.cos(),
+                        ),
+                    );
+                    if let Some(previous) = previous {
+                        push_probe_segment(lines, previous, point, color, width);
+                    }
+                    previous = Some(point);
+                }
+            }
+        }
+        SurfaceKind::Box => {
+            let half = surface.size * 0.5;
+            let corners = [
+                Vec3::new(-half.x, -half.y, -half.z),
+                Vec3::new(half.x, -half.y, -half.z),
+                Vec3::new(half.x, half.y, -half.z),
+                Vec3::new(-half.x, half.y, -half.z),
+                Vec3::new(-half.x, -half.y, half.z),
+                Vec3::new(half.x, -half.y, half.z),
+                Vec3::new(half.x, half.y, half.z),
+                Vec3::new(-half.x, half.y, half.z),
+            ]
+            .map(|local| wire_point(surface.center, u, v, w, local));
+            for (a, b) in [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 0),
+                (4, 5),
+                (5, 6),
+                (6, 7),
+                (7, 4),
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7),
+            ] {
+                push_probe_segment(lines, corners[a], corners[b], color, width);
+            }
+        }
+        SurfaceKind::Cylinder => {
+            let radius = surface.size.x * 0.5;
+            let half_height = surface.size.y * 0.5;
+            emit_probe_ring(
+                lines,
+                surface.center,
+                u,
+                v,
+                w,
+                radius,
+                half_height,
+                color,
+                width,
+            );
+            emit_probe_ring(
+                lines,
+                surface.center,
+                u,
+                v,
+                w,
+                radius,
+                -half_height,
+                color,
+                width,
+            );
+        }
+    }
+}
+
+fn emit_loop_wireframe(
+    lines: &mut Vec<LineInstanceGPU>,
+    loop_: &CirculationLoop,
+    color: [f32; 4],
+    width: f32,
+) {
+    if loop_.validate().is_err() {
+        return;
+    }
+    let Some((u, v, w)) = probe_basis(loop_.axis) else {
+        return;
+    };
+    match loop_.kind {
+        LoopKind::Circle => {
+            emit_probe_ring(
+                lines,
+                loop_.center,
+                u,
+                v,
+                w,
+                loop_.size.x * 0.5,
+                0.0,
+                color,
+                width,
+            );
+        }
+        LoopKind::Rectangle => {
+            let half_x = loop_.size.x * 0.5;
+            let half_y = loop_.size.y * 0.5;
+            let corners = [
+                Vec3::new(-half_x, -half_y, 0.0),
+                Vec3::new(half_x, -half_y, 0.0),
+                Vec3::new(half_x, half_y, 0.0),
+                Vec3::new(-half_x, half_y, 0.0),
+            ]
+            .map(|local| wire_point(loop_.center, u, v, w, local));
+            for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
+                push_probe_segment(lines, corners[a], corners[b], color, width);
+            }
+        }
     }
 }

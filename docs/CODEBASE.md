@@ -912,8 +912,9 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   untouched. On `Some`, it copies style/mode, arrows, trails, dots, combined,
   and recomputes `dots_range`. Grid streamlines are unwrapped from the snapshot;
   click bursts are retraced against the new domain/formula and then composed
-  with the backdrop by `app::compose_vector_lines`, which also appends
-  mode-owned glyphs and reports their count. The Formula branch appends none.
+  with the backdrop by `app::compose_vector_lines`, which also appends the
+  probe wireframes and then the mode-owned glyphs and reports only the glyph
+  count. The Formula branch appends no glyphs but still paints stored probes.
   `source_glyph_line_count` and `viewport_line_count` expose the result to the
   doc-hidden integration harness.
 - `advance_particles` calls `retarget` only with the current target. A changed
@@ -1821,9 +1822,69 @@ height); local `z` follows the explicit axis.
 
 **Limitations.** Midpoint quadrature is a teaching estimate for the sampled
 field, not a Maxwell solver or a certified enclosure. The error is a
-resolution-spread indicator. Placement/UI, persistence, rendering and app
-wiring belong to the later slice. Wasm/browser and manual visual checks remain
-waived, not passed.
+resolution-spread indicator. Induction probe reports are **not**
+accuracy-gated: `InductionScene::unit_vector_potential` returns the fine value
+and discards its kernel uncertainty, so an Induction report's error is only the
+half/full segment spread of the flux or circulation integration. A
+roundoff-limited kernel can therefore be presented as an `Estimate` even though
+the underlying potential carries a larger uncertainty. Wasm/browser and manual
+visual checks remain waived, not passed.
+
+**Slice B (document state, reports, panel and wireframes).** `State` owns the
+bounded surface and loop lists; `add_probe_surface`/`update_probe_surface`/
+`remove_probe_surface` (and the loop equivalents) validate first, treat an
+identical edit as a no-op and dirty exactly once on an accepted real change,
+while a rejected or out-of-range edit leaves both the list and the dirty flag
+untouched. `set_probe_family` selects one explicit `FieldFamily`; E and B are
+never combined. `ViewRecord.probe_surfaces`/`probe_loops` store serde-friendly
+records (`ProbeSurfaceRecord`, `ProbeLoopRecord`) with `#[serde(default)]`, so
+they join `EditSnapshot` undo/redo and scene documents; restore drops unknown
+kinds, invalid geometry and excess entries, logs once and never dirties.
+`ViewRecord.probe_family` stores the stable token `electric` or `magnetic`
+with `#[serde(default)]`; restore assigns it after the mode is known, falls
+back to `electric` (with one warning only when a stored non-empty token is
+corrupt or unavailable in that mode) and never dirties beyond the enclosing
+restore. Sources supply both families; Induction supplies only `electric`;
+Materials and Maxwell supply the family of their active case; Formula and Ode
+supply neither.
+
+`State::probe_field` builds one read-only adapter per check: the Sources
+`Evaluator` from the active source set (only target-met samples count),
+Induction's induced electric field only, Materials by case family, and Maxwell
+through `maxwell_field_with_bem` with any matching BEM solution. Formula, Ode
+and the Plot view are refused with the mode named. `refresh_probe_reports(true)`
+caches per probe on mode, case/formula, parameters, geometry, family, domain and
+the 100 ms-quantised clock (`REPORT_REFRESH_SECONDS`); a collapsed section
+performs no sampling, and unsupported or refused checks store status text rather
+than a number. While the section is open in Induction mode a full refresh can
+reach roughly `MAX_PROBE_SAMPLES` surfaces plus the half-resolution pass, with
+each field sample paying the fixed Gauss-Legendre-32 azimuthal integration (and
+its coarse companion): millions of kernel evaluations, so the 0.1 s
+quantisation may degrade to near-per-frame refresh. That worst case is bounded
+by the model's caps and only occurs while the user opts into the open section;
+the cache is not redesigned for it. `probe_overlay_lines` emits only
+`LineInstanceGPU` wireframes
+(sphere latitude/longitude rings, box edges, cylinder rims, circle, rectangle)
+using the existing electric/magnetic constants, alpha `0.6` and the Sources
+layer/family style via the shared sanitisers; `app::compose_vector_lines`
+appends them, so every capture path includes them with no `SceneGPU` change.
+The collapsed "Field probes" sidebar section shows the family selector, add rows
+per kind, editable geometry, the readout or status with sample count, and
+Remove; it is disabled with the model's reason when the mode cannot supply a
+field. Drafts are session-only and never persisted.
+
+**Pinned by (slice B).** `tests/probe_state_test.rs`:
+`adding_and_updating_probes_dirty_once_and_rejected_edits_do_not`,
+`flux_through_a_sphere_uses_the_active_family_and_mode`,
+`unsupported_modes_report_a_reason_instead_of_a_number`,
+`probe_reports_are_cached_until_geometry_or_mode_changes`,
+`probe_wireframes_are_included_in_composed_capture_lines`, and
+`sidebar_probe_rows_add_remove_and_show_honest_status`; persistence and scene
+documents in `probe_surfaces_and_loops_round_trip_through_the_envelope_and_scene_document`
+and `restoring_invalid_probes_drops_them_without_dirtying`; the family record in
+`legacy_envelope_without_probe_family_restores_electric`,
+`magnetic_probe_family_round_trips_and_keeps_magnetic_reports_working` and
+`corrupt_or_unavailable_probe_family_sanitises_to_electric_without_dirtying`.
 
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 

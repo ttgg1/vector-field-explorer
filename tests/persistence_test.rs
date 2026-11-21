@@ -12,6 +12,10 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_mapping::ColorQuantity;
 use vector_field_explorer::color_ramp::{ColorRamp, RampKind, Rgb, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::field_probe::{
+    CirculationLoop, GaussianSurface, IntegralStatus, LoopKind, MAX_LOOPS, MAX_SURFACES,
+    SurfaceKind,
+};
 use vector_field_explorer::induction::{InductionCase, InductionScene};
 use vector_field_explorer::interaction::{
     Bindings, CameraFeel, ChordModifiers, DEFAULT_PROFILE_NAME, InteractionAction,
@@ -21,7 +25,9 @@ use vector_field_explorer::interaction::{
 use vector_field_explorer::layer_style::LayerStyles;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
-use vector_field_explorer::persistence::{AppSettings, PresetUiRecord, ViewRecord, load, save};
+use vector_field_explorer::persistence::{
+    AppSettings, PresetUiRecord, ProbeLoopRecord, ProbeSurfaceRecord, ViewRecord, load, save,
+};
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame};
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::preset_library::PresetGroup;
@@ -32,6 +38,7 @@ use vector_field_explorer::scalar_analysis::{
     SeriesStyle,
 };
 use vector_field_explorer::scalar_view::{LineProbe, PointProbe, ScalarSample};
+use vector_field_explorer::scene_document::SceneDocument;
 use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint};
 use vector_field_explorer::seed_layout_library::{
     DEFAULT_LAYOUT_NAME as DEFAULT_SEED_LAYOUT_NAME, MAX_USER_LAYOUTS as MAX_USER_SEED_LAYOUTS,
@@ -40,7 +47,7 @@ use vector_field_explorer::seed_layout_library::{
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
 };
-use vector_field_explorer::sources::SourceKind;
+use vector_field_explorer::sources::{FieldFamily, Source, SourceKind};
 use vector_field_explorer::ui::layout::LayoutState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::style_panel::{
@@ -3819,5 +3826,332 @@ fn corrupt_series_and_gradient_are_sanitized_on_restore() {
     assert!(
         state.gradient.is_none(),
         "an invalid stored gradient is dropped instead of sampled"
+    );
+}
+
+fn probe_surface(radius: f32, segments: u32) -> GaussianSurface {
+    GaussianSurface {
+        kind: SurfaceKind::Sphere,
+        center: Vec3::ZERO,
+        axis: Vec3::Z,
+        size: Vec3::splat(2.0 * radius),
+        segments,
+    }
+}
+
+fn probe_loop(radius: f32, segments: u32) -> CirculationLoop {
+    CirculationLoop {
+        kind: LoopKind::Circle,
+        center: Vec3::ZERO,
+        axis: Vec3::Z,
+        size: Vec3::splat(2.0 * radius),
+        segments,
+    }
+}
+
+#[test]
+fn probe_surfaces_and_loops_round_trip_through_the_envelope_and_scene_document() {
+    let mut state = State::new(true);
+    let surface = probe_surface(1.0, 16);
+    let loop_ = probe_loop(0.75, 24);
+    state.add_probe_surface(surface).expect("valid surface");
+    state.add_probe_loop(loop_).expect("valid loop");
+
+    let record = ViewRecord::capture(&state);
+    assert_eq!(
+        record
+            .probe_surfaces
+            .iter()
+            .filter_map(ProbeSurfaceRecord::to_surface)
+            .collect::<Vec<_>>(),
+        vec![surface],
+        "capture flattens the stored surfaces"
+    );
+    assert_eq!(
+        record
+            .probe_loops
+            .iter()
+            .filter_map(ProbeLoopRecord::to_loop)
+            .collect::<Vec<_>>(),
+        vec![loop_],
+        "capture flattens the stored loops"
+    );
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: record.clone(),
+            ..Default::default()
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.view.probe_surfaces, record.probe_surfaces,
+        "the envelope round-trips surfaces"
+    );
+    assert_eq!(
+        loaded.view.probe_loops, record.probe_loops,
+        "the envelope round-trips loops"
+    );
+
+    let mut restored = State::new(false);
+    loaded.view.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.probe_surfaces(), &[surface]);
+    assert_eq!(restored.probe_loops(), &[loop_]);
+
+    let document = SceneDocument::capture(
+        "probe scene",
+        record.clone(),
+        ParameterSet::default(),
+        vector_field_explorer::scene_document::SceneCamera {
+            position: [0.0, 0.0],
+            scale: 1.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 4.0,
+            target: [0.0, 0.0, 0.0],
+            fov_y: 1.0,
+            ortho_zoom: 1.0,
+        },
+    );
+    let json = document.to_json().expect("the scene serializes");
+    let imported = SceneDocument::from_json(&json).expect("the scene parses");
+    assert_eq!(
+        imported.view.probe_surfaces, record.probe_surfaces,
+        "scene documents carry the surfaces"
+    );
+    assert_eq!(
+        imported.view.probe_loops, record.probe_loops,
+        "scene documents carry the loops"
+    );
+}
+
+#[test]
+fn restoring_invalid_probes_drops_them_without_dirtying() {
+    let source = State::new(false);
+    let mut surfaces = Vec::new();
+    // Two invalid geometries, then more valid ones than the cap allows.
+    surfaces.push(ProbeSurfaceRecord {
+        kind: "sphere".to_string(),
+        center: [0.0, 0.0, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        size: [2.0, 2.0, 2.0],
+        segments: 2,
+    });
+    surfaces.push(ProbeSurfaceRecord {
+        kind: "not-a-kind".to_string(),
+        center: [0.0, 0.0, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        size: [2.0, 2.0, 2.0],
+        segments: 16,
+    });
+    for _ in 0..MAX_SURFACES + 2 {
+        let surface = probe_surface(1.0, 16);
+        surfaces.push(ProbeSurfaceRecord::from_surface(&surface));
+    }
+    let mut loops = vec![ProbeLoopRecord {
+        kind: "circle".to_string(),
+        center: [0.0, 0.0, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        size: [2.0, 2.0, 2.0],
+        segments: 1,
+    }];
+    for _ in 0..MAX_LOOPS + 1 {
+        let loop_ = probe_loop(1.0, 16);
+        loops.push(ProbeLoopRecord::from_loop(&loop_));
+    }
+
+    let clean = ViewRecord::capture(&source);
+    let record = ViewRecord {
+        probe_surfaces: surfaces,
+        probe_loops: loops,
+        ..clean.clone()
+    };
+    // The surrounding restore may dirty for unrelated records; the probe
+    // assignment itself must add nothing beyond a clean record's restore.
+    let mut baseline = State::new(false);
+    baseline.dirty = false;
+    clean.restore(&mut baseline, &mut Controls::new());
+    let baseline_dirty = baseline.dirty;
+
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    state.dirty = false;
+    record.restore(&mut state, &mut controls);
+
+    assert_eq!(
+        state.probe_surfaces().len(),
+        MAX_SURFACES,
+        "invalid surfaces drop and the rest truncate to the cap"
+    );
+    assert_eq!(
+        state.probe_loops().len(),
+        MAX_LOOPS,
+        "invalid loops drop and the rest truncate to the cap"
+    );
+    assert!(
+        state
+            .probe_surfaces()
+            .iter()
+            .all(|surface| surface.validate().is_ok()),
+        "only validated surfaces survive"
+    );
+    assert!(
+        state
+            .probe_loops()
+            .iter()
+            .all(|loop_| loop_.validate().is_ok()),
+        "only validated loops survive"
+    );
+    assert_eq!(
+        state.dirty, baseline_dirty,
+        "a sanitised probe restore adds no dirtying beyond the enclosing restore"
+    );
+}
+
+fn magnetic_source_scene() -> SourceScene {
+    let mut scene = SourceScene::default();
+    scene
+        .add(Source {
+            center: DVec3::ZERO,
+            axis: DVec3::Z,
+            kind: SourceKind::CurrentLoop {
+                current: 1.0,
+                radius: 0.5,
+            },
+        })
+        .expect("the loop source is valid");
+    scene.set_display(SourceDisplay::Magnetic);
+    scene
+}
+
+fn scene_camera() -> vector_field_explorer::scene_document::SceneCamera {
+    vector_field_explorer::scene_document::SceneCamera {
+        position: [0.0, 0.0],
+        scale: 1.0,
+        yaw: 0.0,
+        pitch: 0.0,
+        distance: 4.0,
+        target: [0.0, 0.0, 0.0],
+        fov_y: 1.0,
+        ortho_zoom: 1.0,
+    }
+}
+
+#[test]
+fn legacy_envelope_without_probe_family_restores_electric() {
+    let loaded = load_legacy(false);
+    assert!(
+        loaded.view.probe_family.is_empty(),
+        "the legacy envelope carries no probe family key"
+    );
+    let mut state = State::new(false);
+    state.set_probe_family(FieldFamily::Magnetic);
+    loaded.view.restore(&mut state, &mut Controls::new());
+    assert_eq!(
+        state.probe_family(),
+        FieldFamily::Electric,
+        "a missing family falls back to electric"
+    );
+}
+
+#[test]
+fn magnetic_probe_family_round_trips_and_keeps_magnetic_reports_working() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state.set_source_scene(magnetic_source_scene());
+    state
+        .add_probe_surface(probe_surface(1.0, 32))
+        .expect("valid surface");
+    assert!(state.set_probe_family(FieldFamily::Magnetic));
+
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.probe_family, "magnetic");
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: record.clone(),
+            ..Default::default()
+        },
+    );
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.probe_family, "magnetic");
+
+    let mut restored = State::new(false);
+    loaded.view.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.probe_family(), FieldFamily::Magnetic);
+    restored.refresh_probe_reports(true);
+    let report = restored
+        .probe_surface_report(0)
+        .expect("a magnetic restore still builds a report");
+    assert_eq!(report.family, FieldFamily::Magnetic);
+    assert!(
+        matches!(report.status, IntegralStatus::Estimate { .. }),
+        "the magnetic report resolves in a magnetic mode: {:?}",
+        report.status
+    );
+
+    let document = SceneDocument::capture(
+        "magnetic probes",
+        record,
+        ParameterSet::default(),
+        scene_camera(),
+    );
+    let json = document.to_json().expect("the scene serializes");
+    let imported = SceneDocument::from_json(&json).expect("the scene parses");
+    assert_eq!(imported.view.probe_family, "magnetic");
+    let mut from_scene = State::new(false);
+    imported.view.restore(&mut from_scene, &mut Controls::new());
+    assert_eq!(from_scene.probe_family(), FieldFamily::Magnetic);
+}
+
+#[test]
+fn corrupt_or_unavailable_probe_family_sanitises_to_electric_without_dirtying() {
+    let mut source = State::new(true);
+    source.set_field_mode(FieldMode::Sources);
+    source.set_source_scene(magnetic_source_scene());
+    let clean = ViewRecord::capture(&source);
+
+    let mut baseline = State::new(false);
+    baseline.dirty = false;
+    clean.clone().restore(&mut baseline, &mut Controls::new());
+    let baseline_dirty = baseline.dirty;
+
+    let corrupt = ViewRecord {
+        probe_family: "sideways".to_string(),
+        ..clean.clone()
+    };
+    let mut state = State::new(false);
+    state.dirty = false;
+    corrupt.restore(&mut state, &mut Controls::new());
+    assert_eq!(
+        state.probe_family(),
+        FieldFamily::Electric,
+        "corrupt text falls back to electric"
+    );
+    assert_eq!(
+        state.dirty, baseline_dirty,
+        "sanitising the family adds no dirtying beyond the enclosing restore"
+    );
+
+    let unavailable = ViewRecord {
+        probe_family: "magnetic".to_string(),
+        field_mode: FieldMode::Induction,
+        ..clean
+    };
+    let mut state = State::new(false);
+    state.dirty = false;
+    unavailable.restore(&mut state, &mut Controls::new());
+    assert_eq!(
+        state.probe_family(),
+        FieldFamily::Electric,
+        "a family the restored mode cannot supply falls back to electric"
+    );
+    assert_eq!(
+        state.dirty, baseline_dirty,
+        "an unavailable family adds no dirtying beyond the enclosing restore"
     );
 }

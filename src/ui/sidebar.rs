@@ -32,6 +32,10 @@ use crate::color_mapping::{ClipCounts, ColorMapping, ColorQuantity, ColorStats};
 use crate::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb, ScaleMode};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
+use crate::field_probe::{
+    CirculationLoop, GaussianSurface, IntegralStatus, LoopKind, MAX_SEGMENTS, MIN_SEGMENTS,
+    SurfaceKind,
+};
 use crate::parameters::{MAX_PARAMETERS, PARAMETER_VERSION, Parameter, ParameterSet};
 use crate::particles::{
     MAX_PARTICLE_OPACITY, MAX_PARTICLES, MAX_STAGNATION_SECONDS, MAX_TRAIL_FADE, MAX_TRAIL_LEN,
@@ -50,6 +54,7 @@ use crate::seed_layout::{
 };
 use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, SeedLayoutDocument, SeedLayoutProfile};
 use crate::source_scene::{FieldMode, SourceDisplay};
+use crate::sources::FieldFamily;
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
@@ -1002,6 +1007,8 @@ pub struct Controls {
     /// Session-only comparison-series and gradient drafts (issue #93 slice B).
     /// Committed records live in `State`; these buffers never persist.
     pub scalar_analysis: ScalarAnalysisControls,
+    /// Session-only Field probes drafts (issue #95 slice B).
+    pub probe_controls: ProbeControls,
 }
 
 impl Controls {
@@ -1070,6 +1077,7 @@ impl Controls {
             scalar_place_probe: false,
             scalar_message: String::new(),
             scalar_analysis: ScalarAnalysisControls::default(),
+            probe_controls: ProbeControls::default(),
         }
     }
 
@@ -1313,6 +1321,39 @@ impl ScalarAnalysisControls {
                 false
             }
         }
+    }
+}
+
+/// Session-only probe drafts (issue #95 slice B). The committed surfaces and
+/// loops live in `State`; these buffers follow them and never persist.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProbeControls {
+    pub surface_drafts: Vec<GaussianSurface>,
+    pub loop_drafts: Vec<CirculationLoop>,
+    pub message: String,
+    synced_surfaces: Vec<GaussianSurface>,
+    synced_loops: Vec<CirculationLoop>,
+}
+
+impl ProbeControls {
+    /// Follow the committed geometry only when it actually changed, so a
+    /// rejected edit keeps its draft and message in place.
+    fn sync(&mut self, state: &State) {
+        if self.synced_surfaces != state.probe_surfaces() {
+            self.synced_surfaces = state.probe_surfaces().to_vec();
+            self.surface_drafts = self.synced_surfaces.clone();
+        }
+        if self.synced_loops != state.probe_loops() {
+            self.synced_loops = state.probe_loops().to_vec();
+            self.loop_drafts = self.synced_loops.clone();
+        }
+    }
+
+    fn resync(&mut self, state: &State) {
+        self.synced_surfaces = state.probe_surfaces().to_vec();
+        self.surface_drafts = self.synced_surfaces.clone();
+        self.synced_loops = state.probe_loops().to_vec();
+        self.loop_drafts = self.synced_loops.clone();
     }
 }
 
@@ -2767,6 +2808,14 @@ fn show_inner(
         scalar_view_section(ui, state, controls);
     }
 
+    // Issue #95 slice B: the Field probes section sits with the field
+    // sections. A collapsed section never samples; the open body performs the
+    // one visibility-gated refresh.
+    state.refresh_probe_reports(false);
+    if vector_mode {
+        probe_section(ui, state, controls);
+    }
+
     // The Domain editor renders only the axes the current sampling dimension
     // can use; reversed drags are handed over as-is and the seam's per-axis
     // swap normalizes them (mirrored back below so the widgets show the
@@ -2852,6 +2901,265 @@ fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
 /// setters and mirror the effective values back. A changed successful commit
 /// clears an earlier rejection; a rejection is surfaced in the message slot and
 /// leaves the committed value untouched.
+/// The collapsed-by-default Field probes section (issue #95 slice B). The body
+/// refreshes reports only while open, commits edits through the model's
+/// validating setters and reads fixed document geometry for the wireframes.
+fn probe_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    egui::CollapsingHeader::new("Field probes")
+        .id_salt("field_probes_section")
+        .default_open(false)
+        .show(ui, |ui| {
+            if let Some(reason) = state.probe_mode_unsupported_reason() {
+                ui.label(reason);
+                return;
+            }
+            state.refresh_probe_reports(true);
+            controls.probe_controls.sync(state);
+
+            let mut family = state.probe_family();
+            let mut family_changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Family");
+                family_changed |= ui
+                    .selectable_value(&mut family, FieldFamily::Electric, "Electric")
+                    .on_hover_text("Integrate E·n through surfaces and E·dl around loops")
+                    .changed();
+                family_changed |= ui
+                    .selectable_value(&mut family, FieldFamily::Magnetic, "Magnetic")
+                    .on_hover_text("Integrate B·n through surfaces and B·dl around loops")
+                    .changed();
+            });
+            if family_changed {
+                state.set_probe_family(family);
+            }
+
+            let domain = state.scene_domain();
+            for kind in [SurfaceKind::Sphere, SurfaceKind::Box, SurfaceKind::Cylinder] {
+                if ui
+                    .button(format!("Add {}", surface_kind_label(kind).to_lowercase()))
+                    .on_hover_text("Add one bounded Gaussian surface at the domain centre")
+                    .clicked()
+                {
+                    match state.add_probe_surface(default_probe_surface(kind, &domain)) {
+                        Ok(_) => {
+                            controls.probe_controls.message.clear();
+                            controls.probe_controls.resync(state);
+                        }
+                        Err(error) => controls.probe_controls.message = error,
+                    }
+                }
+            }
+            for kind in [LoopKind::Circle, LoopKind::Rectangle] {
+                if ui
+                    .button(format!("Add {}", loop_kind_label(kind).to_lowercase()))
+                    .on_hover_text("Add one bounded circulation loop at the domain centre")
+                    .clicked()
+                {
+                    match state.add_probe_loop(default_probe_loop(kind, &domain)) {
+                        Ok(_) => {
+                            controls.probe_controls.message.clear();
+                            controls.probe_controls.resync(state);
+                        }
+                        Err(error) => controls.probe_controls.message = error,
+                    }
+                }
+            }
+
+            let mut remove_surface = None;
+            let surfaces = state.probe_surfaces().to_vec();
+            for (index, _) in surfaces.iter().enumerate() {
+                let Some(draft) = controls.probe_controls.surface_drafts.get_mut(index) else {
+                    continue;
+                };
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(surface_kind_label(draft.kind));
+                    ui.label("centre");
+                    changed |= probe_drag(ui, &mut draft.center.x, "Centre x");
+                    changed |= probe_drag(ui, &mut draft.center.y, "Centre y");
+                    changed |= probe_drag(ui, &mut draft.center.z, "Centre z");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("axis");
+                    changed |= probe_drag(ui, &mut draft.axis.x, "Axis x");
+                    changed |= probe_drag(ui, &mut draft.axis.y, "Axis y");
+                    changed |= probe_drag(ui, &mut draft.axis.z, "Axis z");
+                    ui.label("size");
+                    changed |= probe_positive_drag(ui, &mut draft.size.x, "Size x");
+                    changed |= probe_positive_drag(ui, &mut draft.size.y, "Size y");
+                    changed |= probe_positive_drag(ui, &mut draft.size.z, "Size z");
+                    ui.label("segments");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut draft.segments)
+                                .range(MIN_SEGMENTS..=MAX_SEGMENTS),
+                        )
+                        .changed();
+                });
+                let candidate = *draft;
+                if changed {
+                    match state.update_probe_surface(index, candidate) {
+                        Ok(()) => controls.probe_controls.message.clear(),
+                        Err(error) => {
+                            controls.probe_controls.message = error;
+                            controls.probe_controls.resync(state);
+                        }
+                    }
+                }
+                let report = state.probe_surface_report(index);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Remove")
+                        .on_hover_text("Remove this surface")
+                        .clicked()
+                    {
+                        remove_surface = Some(index);
+                    }
+                    ui.label(probe_readout(
+                        report.map(|report| &report.status),
+                        report.map_or(0, |report| report.samples),
+                    ));
+                });
+            }
+
+            let mut remove_loop = None;
+            let loops = state.probe_loops().to_vec();
+            for (index, _) in loops.iter().enumerate() {
+                let Some(draft) = controls.probe_controls.loop_drafts.get_mut(index) else {
+                    continue;
+                };
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(loop_kind_label(draft.kind));
+                    ui.label("centre");
+                    changed |= probe_drag(ui, &mut draft.center.x, "Centre x");
+                    changed |= probe_drag(ui, &mut draft.center.y, "Centre y");
+                    changed |= probe_drag(ui, &mut draft.center.z, "Centre z");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("axis");
+                    changed |= probe_drag(ui, &mut draft.axis.x, "Axis x");
+                    changed |= probe_drag(ui, &mut draft.axis.y, "Axis y");
+                    changed |= probe_drag(ui, &mut draft.axis.z, "Axis z");
+                    ui.label("size");
+                    changed |= probe_positive_drag(ui, &mut draft.size.x, "Size x");
+                    changed |= probe_positive_drag(ui, &mut draft.size.y, "Size y");
+                    changed |= probe_positive_drag(ui, &mut draft.size.z, "Size z");
+                    ui.label("segments");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut draft.segments)
+                                .range(MIN_SEGMENTS..=MAX_SEGMENTS),
+                        )
+                        .changed();
+                });
+                let candidate = *draft;
+                if changed {
+                    match state.update_probe_loop(index, candidate) {
+                        Ok(()) => controls.probe_controls.message.clear(),
+                        Err(error) => {
+                            controls.probe_controls.message = error;
+                            controls.probe_controls.resync(state);
+                        }
+                    }
+                }
+                let report = state.probe_loop_report(index);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Remove")
+                        .on_hover_text("Remove this loop")
+                        .clicked()
+                    {
+                        remove_loop = Some(index);
+                    }
+                    ui.label(probe_readout(
+                        report.map(|report| &report.status),
+                        report.map_or(0, |report| report.samples),
+                    ));
+                });
+            }
+
+            if let Some(index) = remove_surface
+                && state.remove_probe_surface(index)
+            {
+                controls.probe_controls.message.clear();
+                controls.probe_controls.resync(state);
+            }
+            if let Some(index) = remove_loop
+                && state.remove_probe_loop(index)
+            {
+                controls.probe_controls.message.clear();
+                controls.probe_controls.resync(state);
+            }
+
+            if !controls.probe_controls.message.is_empty() {
+                ui.label(&controls.probe_controls.message);
+            }
+        });
+}
+
+fn surface_kind_label(kind: SurfaceKind) -> &'static str {
+    match kind {
+        SurfaceKind::Sphere => "Sphere",
+        SurfaceKind::Box => "Box",
+        SurfaceKind::Cylinder => "Cylinder",
+    }
+}
+
+fn loop_kind_label(kind: LoopKind) -> &'static str {
+    match kind {
+        LoopKind::Circle => "Circle",
+        LoopKind::Rectangle => "Rectangle",
+    }
+}
+
+fn default_probe_surface(kind: SurfaceKind, domain: &Domain) -> GaussianSurface {
+    GaussianSurface {
+        kind,
+        center: domain.center(),
+        axis: Vec3::Z,
+        size: Vec3::splat(1.0),
+        segments: 16,
+    }
+}
+
+fn default_probe_loop(kind: LoopKind, domain: &Domain) -> CirculationLoop {
+    CirculationLoop {
+        kind,
+        center: domain.center(),
+        axis: Vec3::Z,
+        size: Vec3::splat(1.0),
+        segments: 16,
+    }
+}
+
+fn probe_drag(ui: &mut egui::Ui, value: &mut f32, hover: &str) -> bool {
+    ui.add(egui::DragValue::new(value).speed(0.01))
+        .on_hover_text(hover)
+        .changed()
+}
+
+fn probe_positive_drag(ui: &mut egui::Ui, value: &mut f32, hover: &str) -> bool {
+    ui.add(egui::DragValue::new(value).speed(0.01).range(0.01..=100.0))
+        .on_hover_text(hover)
+        .changed()
+}
+
+fn probe_readout(status: Option<&IntegralStatus>, samples: u32) -> String {
+    match status {
+        None => "no report yet".to_string(),
+        Some(IntegralStatus::Estimate { value, error }) => {
+            format!("{value:.4} ± {error:.4} ({samples} samples)")
+        }
+        Some(IntegralStatus::Unresolved { reason }) => {
+            format!("unresolved: {reason} ({samples} samples)")
+        }
+        Some(IntegralStatus::Singular { reason }) => {
+            format!("singular: {reason} ({samples} samples)")
+        }
+    }
+}
+
 fn apply_scalar_controls(state: &mut State, controls: &mut Controls) {
     let mut committed = false;
     let mut rejected = false;

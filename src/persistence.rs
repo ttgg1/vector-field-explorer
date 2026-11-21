@@ -19,14 +19,19 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::colormap::Colormap;
+use crate::field_probe::{
+    CirculationLoop, GaussianSurface, LoopKind, MAX_LOOPS, MAX_SURFACES, SurfaceKind,
+};
 use crate::induction::{InductionCase, InductionScene};
 use crate::interaction::{self, DEFAULT_PROFILE_NAME, InteractionProfile};
 use crate::layer_style::LayerStyles;
 use crate::material::{
-    MaterialCase, MaterialError, MaterialScene, MaterialView, validate_material,
+    MaterialCase, MaterialError, MaterialFamily, MaterialScene, MaterialView, material_family,
+    validate_material,
 };
 use crate::maxwell::{
-    ConductorOutline, MaxwellCase, MaxwellError, MaxwellScene, MaxwellView, validate_maxwell,
+    ConductorOutline, MaxwellCase, MaxwellError, MaxwellFamily, MaxwellScene, MaxwellView,
+    maxwell_family, validate_maxwell,
 };
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::parameters::ParameterSet;
@@ -44,6 +49,7 @@ use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, MAX_USER_LAYOUTS, SeedLayo
 use crate::source_scene::{
     FieldMode, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceRecord, SourceScene,
 };
+use crate::sources::FieldFamily;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
@@ -307,6 +313,143 @@ impl AppSettings {
     }
 }
 
+/// One persisted Gaussian surface (issue #95 slice B), in a serde-friendly
+/// shape. The kind is the stable token `sphere`, `box` or `cylinder`; an
+/// unknown token drops the record on restore.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeSurfaceRecord {
+    pub kind: String,
+    pub center: [f32; 3],
+    pub axis: [f32; 3],
+    pub size: [f32; 3],
+    pub segments: u32,
+}
+
+impl ProbeSurfaceRecord {
+    /// Flatten one stored surface.
+    pub fn from_surface(surface: &GaussianSurface) -> Self {
+        Self {
+            kind: match surface.kind {
+                SurfaceKind::Sphere => "sphere",
+                SurfaceKind::Box => "box",
+                SurfaceKind::Cylinder => "cylinder",
+            }
+            .to_string(),
+            center: surface.center.to_array(),
+            axis: surface.axis.to_array(),
+            size: surface.size.to_array(),
+            segments: surface.segments,
+        }
+    }
+
+    /// Rebuild the model surface. An unknown kind returns `None`; geometry is
+    /// validated by the restore path, not here.
+    pub fn to_surface(&self) -> Option<GaussianSurface> {
+        let kind = match self.kind.as_str() {
+            "sphere" => SurfaceKind::Sphere,
+            "box" => SurfaceKind::Box,
+            "cylinder" => SurfaceKind::Cylinder,
+            _ => return None,
+        };
+        Some(GaussianSurface {
+            kind,
+            center: glam::Vec3::from_array(self.center),
+            axis: glam::Vec3::from_array(self.axis),
+            size: glam::Vec3::from_array(self.size),
+            segments: self.segments,
+        })
+    }
+}
+
+/// One persisted circulation loop (issue #95 slice B). The kind is the stable
+/// token `circle` or `rectangle`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeLoopRecord {
+    pub kind: String,
+    pub center: [f32; 3],
+    pub axis: [f32; 3],
+    pub size: [f32; 3],
+    pub segments: u32,
+}
+
+impl ProbeLoopRecord {
+    /// Flatten one stored loop.
+    pub fn from_loop(loop_: &CirculationLoop) -> Self {
+        Self {
+            kind: match loop_.kind {
+                LoopKind::Circle => "circle",
+                LoopKind::Rectangle => "rectangle",
+            }
+            .to_string(),
+            center: loop_.center.to_array(),
+            axis: loop_.axis.to_array(),
+            size: loop_.size.to_array(),
+            segments: loop_.segments,
+        }
+    }
+
+    /// Rebuild the model loop. An unknown kind returns `None`.
+    pub fn to_loop(&self) -> Option<CirculationLoop> {
+        let kind = match self.kind.as_str() {
+            "circle" => LoopKind::Circle,
+            "rectangle" => LoopKind::Rectangle,
+            _ => return None,
+        };
+        Some(CirculationLoop {
+            kind,
+            center: glam::Vec3::from_array(self.center),
+            axis: glam::Vec3::from_array(self.axis),
+            size: glam::Vec3::from_array(self.size),
+            segments: self.segments,
+        })
+    }
+}
+
+/// The stable probe-family token written by [`ViewRecord::capture`].
+fn probe_family_label(family: FieldFamily) -> &'static str {
+    match family {
+        FieldFamily::Electric => "electric",
+        FieldFamily::Magnetic => "magnetic",
+    }
+}
+
+/// Decode one stored probe-family token. Unknown or missing text returns
+/// `None`; the restore path treats that as the electric fallback.
+fn probe_family_from_label(label: &str) -> Option<FieldFamily> {
+    match label {
+        "electric" => Some(FieldFamily::Electric),
+        "magnetic" => Some(FieldFamily::Magnetic),
+        _ => None,
+    }
+}
+
+/// Whether the restored mode can supply a probe field for this family. Sources
+/// supply both families even when one has no enabled sources (its zero is
+/// exact); Induction supplies only the induced electric field; Materials and
+/// Maxwell supply the family of their active case. Formula and Ode supply no
+/// probe field at all.
+fn probe_family_available(state: &State, family: FieldFamily) -> bool {
+    match state.field_mode {
+        FieldMode::Sources => true,
+        FieldMode::Induction => family == FieldFamily::Electric,
+        FieldMode::Materials => {
+            matches!(
+                (material_family(state.material.case), family),
+                (MaterialFamily::Electric, FieldFamily::Electric)
+                    | (MaterialFamily::Magnetic, FieldFamily::Magnetic)
+            )
+        }
+        FieldMode::Maxwell => {
+            matches!(
+                (maxwell_family(state.maxwell.case), family),
+                (MaxwellFamily::Electric, FieldFamily::Electric)
+                    | (MaxwellFamily::Magnetic, FieldFamily::Magnetic)
+            )
+        }
+        FieldMode::Formula | FieldMode::Ode => false,
+    }
+}
+
 /// The view state the Controls panel edits, in a serde-friendly shape (JSON/RON
 /// arrays instead of glam types). These are the *effective* values from
 /// [`State`], so a restored record reproduces exactly what was on screen.
@@ -418,6 +561,21 @@ pub struct ViewRecord {
     /// Only positions and anchors are stored; sampled values are runtime.
     #[serde(default)]
     pub probes: ProbeSet,
+    /// Durable Gaussian surfaces (issue #95 slice B). Missing on older
+    /// envelopes/scenes, which restore as no surfaces with no extra dirtying.
+    /// Invalid or excess entries drop on restore.
+    #[serde(default)]
+    pub probe_surfaces: Vec<ProbeSurfaceRecord>,
+    /// Durable circulation loops (issue #95 slice B), with the same restore
+    /// sanitising as surfaces.
+    #[serde(default)]
+    pub probe_loops: Vec<ProbeLoopRecord>,
+    /// The explicit probe family as the stable token `electric` or `magnetic`
+    /// (issue #95 slice B). Missing on older envelopes/scenes, which restore
+    /// electric. Corrupt or mode-unavailable tokens also restore electric with
+    /// one warning and never dirty the scene.
+    #[serde(default)]
+    pub probe_family: String,
     /// Scalar view heatmap toggle (issue #92 slice B2). Missing on older
     /// records/scenes, which restore hidden without dirtying.
     #[serde(default)]
@@ -657,6 +815,17 @@ impl ViewRecord {
             streamline_count: state.streamline_count,
             seed_layout: state.seed_layout.clone(),
             probes: state.probes.clone(),
+            probe_surfaces: state
+                .probe_surfaces()
+                .iter()
+                .map(ProbeSurfaceRecord::from_surface)
+                .collect(),
+            probe_loops: state
+                .probe_loops()
+                .iter()
+                .map(ProbeLoopRecord::from_loop)
+                .collect(),
+            probe_family: probe_family_label(state.probe_family()).to_string(),
             show_scalar_heatmap: state.show_scalar_heatmap(),
             comparison_series: state.comparison_series.clone(),
             gradient: state.gradient.clone(),
@@ -818,6 +987,34 @@ impl ViewRecord {
             );
         }
         state.probes = probes;
+        // Probe surfaces and loops are document state (issue #95 slice B).
+        // Assign directly so the startup seam does not dirty per probe; drop
+        // unknown kinds, invalid geometry and excess entries, then log once.
+        let stored_surfaces = self.probe_surfaces.len();
+        let stored_loops = self.probe_loops.len();
+        let surfaces: Vec<GaussianSurface> = self
+            .probe_surfaces
+            .iter()
+            .filter_map(ProbeSurfaceRecord::to_surface)
+            .filter(|surface| surface.validate().is_ok())
+            .take(MAX_SURFACES)
+            .collect();
+        let loops: Vec<CirculationLoop> = self
+            .probe_loops
+            .iter()
+            .filter_map(ProbeLoopRecord::to_loop)
+            .filter(|loop_| loop_.validate().is_ok())
+            .take(MAX_LOOPS)
+            .collect();
+        if surfaces.len() != stored_surfaces || loops.len() != stored_loops {
+            log::warn!(
+                "persisted probes dropped {} invalid or excess surface(s) and {} loop(s)",
+                stored_surfaces - surfaces.len(),
+                stored_loops - loops.len()
+            );
+        }
+        state.probe_surfaces = surfaces;
+        state.probe_loops = loops;
         // The heatmap toggle is document state assigned directly at the startup
         // seam, so a restored hidden/enabled scene does not request a second
         // rebuild beyond the enclosing restore's one.
@@ -950,6 +1147,26 @@ impl ViewRecord {
         } else {
             FieldMode::Formula
         });
+        // The probe family is document state restored directly at the startup
+        // seam, after the mode so availability can be checked against it. A
+        // missing, corrupt or mode-unavailable token falls back to electric
+        // with one warning only when the stored non-empty token could not be
+        // used; an unavailable electric already equals the fallback.
+        let requested_family = probe_family_from_label(&self.probe_family);
+        let sanitised_family = match requested_family {
+            Some(family) if probe_family_available(state, family) => family,
+            _ => FieldFamily::Electric,
+        };
+        let adjusted = !self.probe_family.is_empty()
+            && (requested_family.is_none() || requested_family != Some(sanitised_family));
+        if adjusted {
+            log::warn!(
+                "persisted probe family {:?} is invalid or unavailable in the restored mode; using {}",
+                self.probe_family,
+                probe_family_label(sanitised_family)
+            );
+        }
+        state.restore_probe_family(sanitised_family);
         state.source_sampling = None;
         if valid_entries != self.source_entries.len() {
             state.source_notice = Some("Some saved sources were invalid and were skipped".into());
