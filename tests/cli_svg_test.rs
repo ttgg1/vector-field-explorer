@@ -2,18 +2,20 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use vector_field_explorer::{
+    VfApp,
     arrow_style::ArrowStyle2D,
     cli::{
         CliError, CliFlags, PreparedScene, output_frame, parse_config, prepare_scene,
         prepare_scene_with_styles, resolve_config, scene_to_cli_svg,
     },
     color_ramp::Rgb,
-    layer_style::{LayerId, LayerOverride, LayerStyles, MAX_WIDTH_MULTIPLIER, MIN_WIDTH_MULTIPLIER},
+    layer_style::{
+        LayerId, LayerOverride, LayerStyles, MAX_WIDTH_MULTIPLIER, MIN_WIDTH_MULTIPLIER,
+    },
     reference::scaled_viewport_style,
     renderer::{ArrowInstanceGPU, LineInstanceGPU},
     screenshot,
     viewport_style::ViewportStyle,
-    VfApp,
 };
 
 fn prepared(json: &str) -> PreparedScene {
@@ -376,7 +378,13 @@ fn cli_svg_export_ignores_arrows_flow_and_reference_overrides() {
             state.show_coordinate_system,
             &neutral_style,
         ));
-        scene_to_cli_svg(&PreparedScene { scene, frame }).unwrap()
+        scene_to_cli_svg(&PreparedScene {
+            scene,
+            frame,
+            objects: None,
+            object_style: Default::default(),
+        })
+        .unwrap()
     };
 
     assert_eq!(
@@ -398,8 +406,10 @@ fn cli_svg_export_ignores_arrows_flow_and_reference_overrides() {
     );
     // The route the CLI uses for SVG (default styles) matches the neutral scene.
     assert_eq!(
-        scene_to_cli_svg(&prepare_scene_with_styles(&options, frame, &LayerStyles::default()).unwrap())
-            .unwrap(),
+        scene_to_cli_svg(
+            &prepare_scene_with_styles(&options, frame, &LayerStyles::default()).unwrap()
+        )
+        .unwrap(),
         scene_to_cli_svg(&neutral_probe).unwrap()
     );
 }
@@ -413,8 +423,7 @@ fn app_svg_entry_uses_the_neutral_blueprint_when_styles_are_committed() {
         .commit_layer_styles(non_neutral_styles())
         .expect("test styles validate");
     styled.test_harness().advance_simulation();
-    let styled_blueprint =
-        styled.test_assemble_viewport_scene_with_styles(&LayerStyles::default());
+    let styled_blueprint = styled.test_assemble_viewport_scene_with_styles(&LayerStyles::default());
 
     let mut neutral = VfApp::new();
     neutral.state.set_mode(false);

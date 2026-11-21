@@ -1,5 +1,17 @@
+use std::sync::{Arc, Mutex};
+
 use eframe::wgpu;
-use vector_field_explorer::{cli, renderer};
+use vector_field_explorer::object_scene::ObjectStyle;
+use vector_field_explorer::{
+    animation::{AnimationFormat, AnimationSpec, FrameSink},
+    animation_scene::{AnimationFrame, AnimationSnapshot},
+    camera::OrbitCamera,
+    cli,
+    particles::Particles,
+    renderer,
+    source_scene::FieldMode,
+    viewmodel::State,
+};
 
 fn prepared() -> cli::PreparedScene {
     let options = cli::resolve_config(
@@ -16,6 +28,178 @@ fn prepared() -> cli::PreparedScene {
     )
     .unwrap();
     cli::prepare_scene(&options, cli::output_frame(&options).unwrap()).unwrap()
+}
+
+fn source_options() -> cli::CliOptions {
+    cli::resolve_config(
+        Some(
+            cli::parse_config(
+                r#"{"mode":"3d","formula":"(x, y, z)","density":4,"width":128,"height":128,"references":{"grid_and_domain_box":false,"world_axes":false}}"#,
+            )
+            .unwrap(),
+        ),
+        cli::CliFlags {
+            output: Some("plot.png".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn source_state() -> State {
+    let mut state = State::new(true);
+    let mut sources = vector_field_explorer::source_scene::SourceScene::default();
+    sources
+        .entries
+        .push(vector_field_explorer::source_scene::SourceEntry {
+            enabled: true,
+            source: vector_field_explorer::source_scene::SourceKindTag::SolidSphere
+                .default_source(),
+        });
+    assert!(state.set_source_scene(sources));
+    assert!(state.set_field_mode(FieldMode::Sources));
+    state
+}
+
+type RecordedObject = (
+    Arc<vector_field_explorer::object_scene::MeshScene>,
+    ObjectStyle,
+);
+
+struct RecordingSession {
+    seen: Arc<Mutex<Vec<RecordedObject>>>,
+}
+
+impl cli::AnimationRenderSession for RecordingSession {
+    fn render_animation_frame(
+        &mut self,
+        frame: &AnimationFrame,
+        width: u32,
+        height: u32,
+        _clear: [f64; 4],
+    ) -> Result<Vec<u8>, cli::CliError> {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((Arc::clone(&frame.object_scene), frame.object_style));
+        Ok(vec![0; width as usize * height as usize * 4])
+    }
+}
+
+struct NullSink;
+
+impl FrameSink for NullSink {
+    fn push_frame(
+        &mut self,
+        _rgba: &[u8],
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), vector_field_explorer::animation::AnimationError> {
+        Ok(())
+    }
+
+    fn bytes_written(&self) -> u64 {
+        0
+    }
+
+    fn finish(self: Box<Self>) -> Result<(), vector_field_explorer::animation::AnimationError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn cli_animation_frame_objects_reach_the_render_session() {
+    let mut state = State::new(true);
+    assert!(state.set_field_mode(FieldMode::Induction));
+    assert!(state.set_object_style(ObjectStyle::Wireframe));
+    let mut snapshot = AnimationSnapshot::from_parts(
+        state,
+        Particles::default(),
+        OrbitCamera::default(),
+        None,
+        [0.0, 0.0, 0.0, 1.0],
+    );
+    let expected = Arc::clone(&snapshot.object_scene);
+    assert!(
+        !expected.objects().is_empty(),
+        "the Induction snapshot maps one body"
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut session = RecordingSession {
+        seen: Arc::clone(&seen),
+    };
+    let spec = AnimationSpec {
+        start_time: 0.0,
+        duration: 0.1,
+        fps: 10,
+        width: 16,
+        height: 16,
+        loop_gif: false,
+        format: AnimationFormat::Gif,
+    };
+    cli::render_animation_frames(
+        &spec,
+        &mut snapshot,
+        &mut session,
+        Box::new(NullSink),
+        &vector_field_explorer::export_provenance::ExportProvenance::default(),
+    )
+    .unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(
+        Arc::ptr_eq(&seen[0].0, &expected),
+        "the session must receive the snapshot's object Arc"
+    );
+    assert_eq!(seen[0].0.generation(), expected.generation());
+    assert_eq!(seen[0].1, ObjectStyle::Wireframe);
+}
+
+/// Real displayless adapter probe for #192. Ordinary runs print
+/// `GPU not requested` and pass; only `VFE_OBJECT_GPU_PROBE=1` drives the CLI
+/// PNG path and proves objects composite with the committed style.
+#[test]
+fn cli_png_object_device_probe() {
+    if std::env::var_os("VFE_OBJECT_GPU_PROBE").is_none() {
+        eprintln!("GPU not requested");
+        return;
+    }
+    let options = source_options();
+    let frame = cli::output_frame(&options).unwrap();
+    let mut state = source_state();
+    state.set_object_style(ObjectStyle::Solid);
+    let solid = cli::prepare_scene_with_state(&options, frame, state.clone()).unwrap();
+    assert!(solid.objects.is_some(), "the CLI probe must carry objects");
+    let solid_pixels = cli::render_offscreen(&solid).expect("real adapter required");
+    let clear = solid.frame.background_srgb;
+    let differing = solid_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| **pixel != clear)
+        .count();
+    assert!(
+        differing > 0,
+        "the CLI PNG contains only the clear colour; objects did not composite"
+    );
+
+    state.set_object_style(ObjectStyle::Wireframe);
+    let wireframe = cli::prepare_scene_with_state(&options, frame, state).unwrap();
+    let wire_pixels = cli::render_offscreen(&wireframe).expect("real adapter required");
+    let style_differing = solid_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(wire_pixels.as_chunks::<4>().0)
+        .filter(|(solid, wire)| solid != wire)
+        .count();
+    assert!(
+        style_differing > 0,
+        "the Wireframe CLI PNG is byte-identical to Solid"
+    );
+    eprintln!(
+        "PROBE cli-png-objects: {differing} non-clear pixels; Wireframe differs in {style_differing} pixels"
+    );
 }
 
 #[test]
@@ -317,6 +501,8 @@ fn displayless_gpu_worker() {
     let color = [0.25, 0.5, 0.75, 0.5];
     let scene = cli::PreparedScene {
         frame,
+        objects: None,
+        object_style: ObjectStyle::Solid,
         scene: renderer::SceneGPU {
             mode_3d: false,
             arrows: std::sync::Arc::new(vec![renderer::ArrowInstanceGPU {

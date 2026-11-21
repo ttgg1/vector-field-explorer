@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use glam::{Mat4, Vec3};
 use vector_field_explorer::app::compose_lines_with_frame;
 use vector_field_explorer::color_mapping::{ColorSample, ColorStats};
@@ -5,10 +7,12 @@ use vector_field_explorer::{
     camera::OrbitCamera,
     cli::{
         CliError, CliFlags, CliOptions, Mode, OutputFrame, PreparedScene, output_frame,
-        parse_config, prepare_scene, resolve_config,
+        parse_config, prepare_scene, prepare_scene_with_state, resolve_config, scene_to_cli_svg,
     },
     fly_camera::FlyCamera,
+    object_scene::ObjectStyle,
     renderer::SceneGPU,
+    source_scene::{FieldMode, SourceEntry, SourceKindTag, SourceScene},
 };
 use vector_field_explorer::{
     particles::{self, AdvectSettings, ParticlePalette, Particles},
@@ -25,6 +29,91 @@ fn options(json: &str) -> CliOptions {
         },
     )
     .unwrap()
+}
+
+fn source_state() -> State {
+    let mut state = State::new(true);
+    let sources = SourceScene {
+        entries: vec![SourceEntry {
+            enabled: true,
+            source: SourceKindTag::SolidSphere.default_source(),
+        }],
+        ..Default::default()
+    };
+    assert!(state.set_source_scene(sources));
+    assert!(state.set_field_mode(FieldMode::Sources));
+    state
+}
+
+#[test]
+fn cli_png_empty_scene_stays_byte_identical_to_the_no_object_path() {
+    let o = options(r#"{"formula":"(x, y, z)"}"#);
+    let prepared = prepare_scene(&o, output_frame(&o).unwrap()).unwrap();
+    assert!(
+        prepared.objects.is_none(),
+        "Formula mode maps no objects, so the CLI must take the existing no-objects path"
+    );
+    assert_eq!(prepared.object_style, ObjectStyle::Solid);
+    // The empty carrier is the sole difference; the vector scene bytes still
+    // match a fresh preparation exactly.
+    let again = prepare_scene(&o, output_frame(&o).unwrap()).unwrap();
+    assert_eq!(again.objects, prepared.objects);
+    same_gpu(
+        prepared.scene.arrows.as_slice(),
+        again.scene.arrows.as_slice(),
+    );
+    same_gpu(
+        prepared.scene.lines.as_slice(),
+        again.scene.lines.as_slice(),
+    );
+}
+
+#[test]
+fn cli_png_sources_scene_carries_the_mapped_object_scene() {
+    let o = options(r#"{"mode":"3d","formula":"(x, y, z)"}"#);
+    let state = source_state();
+    let expected = vector_field_explorer::app::object_scene_for_state(&state);
+    assert!(
+        !expected.objects().is_empty(),
+        "the Sources fixture maps at least one body"
+    );
+    let prepared = prepare_scene_with_state(&o, output_frame(&o).unwrap(), state).unwrap();
+    let objects = prepared
+        .objects
+        .as_ref()
+        .expect("a non-empty mapped scene must be carried");
+    assert_eq!(objects.objects().len(), expected.objects().len());
+    assert_eq!(objects.generation(), expected.generation());
+    assert_eq!(objects.clip(), expected.clip());
+}
+
+#[test]
+fn cli_png_carries_the_committed_object_style() {
+    let o = options(r#"{"mode":"3d","formula":"(x, y, z)"}"#);
+    for style in [ObjectStyle::Solid, ObjectStyle::Wireframe] {
+        let mut state = source_state();
+        state.set_object_style(style);
+        let prepared = prepare_scene_with_state(&o, output_frame(&o).unwrap(), state).unwrap();
+        assert_eq!(prepared.object_style, style);
+    }
+}
+
+#[test]
+fn cli_svg_output_is_unaffected_by_objects() {
+    let o = options(r#"{"formula":"(-y, x)"}"#);
+    let frame = output_frame(&o).unwrap();
+    let without = prepare_scene(&o, frame).unwrap();
+    let plain_svg = scene_to_cli_svg(&without).unwrap();
+    let mut with = prepare_scene(&o, frame).unwrap();
+    with.objects = Some(Arc::new(
+        vector_field_explorer::app::object_scene_for_state(&source_state()),
+    ));
+    with.object_style = ObjectStyle::Wireframe;
+    assert_eq!(
+        plain_svg,
+        scene_to_cli_svg(&with).unwrap(),
+        "the SVG route must not consult the object carrier"
+    );
 }
 
 #[test]
@@ -770,6 +859,8 @@ fn background_decodes_srgb_without_premultiplying_alpha_and_carrier_keeps_frame(
     let prepared = PreparedScene {
         scene: SceneGPU::default(),
         frame: f,
+        objects: None,
+        object_style: ObjectStyle::Solid,
     };
     assert_eq!(prepared.frame.background_srgb, [10, 128, 255, 64]);
     assert!(prepared.scene.is_empty());
