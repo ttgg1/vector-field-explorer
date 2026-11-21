@@ -6,6 +6,23 @@
 
 use glam::{DVec3, Vec2, Vec3};
 use vector_field_explorer::field::{FieldError, FieldExpr};
+use vector_field_explorer::parameters::{Parameter, ParameterSet};
+
+fn parameters(entries: &[(&str, f64)]) -> ParameterSet {
+    ParameterSet {
+        version: 1,
+        entries: entries
+            .iter()
+            .map(|(name, value)| Parameter {
+                name: (*name).to_string(),
+                value: *value,
+                min: None,
+                max: None,
+                step: 1.0,
+            })
+            .collect(),
+    }
+}
 
 #[test]
 fn parse_two_component() {
@@ -122,4 +139,79 @@ fn is_time_dependent_only_for_free_t() {
     assert!(!FieldExpr::parse("(x, y)").unwrap().is_time_dependent());
     let f = FieldExpr::parse("(w, 0)").unwrap();
     assert!(f.eval3(Vec3::new(1.0, 1.0, 1.0)).is_none());
+}
+
+#[test]
+fn parameterised_formula_evaluates_with_the_committed_value() {
+    let set = parameters(&[("k", 2.5)]);
+    let f = FieldExpr::parse_with_parameters("(k*x, y)", &set).expect("parameter binds");
+    let v = f.eval2(Vec2::new(2.0, 1.0)).expect("should evaluate");
+    assert!((v.x - 5.0).abs() < 1e-6, "u = {}, expected 5", v.x);
+    assert!((v.y - 1.0).abs() < 1e-6, "v = {}, expected 1", v.y);
+    assert!(
+        !f.is_time_dependent(),
+        "a substituted value cannot make the field time-dependent"
+    );
+}
+
+#[test]
+fn changing_the_parameter_set_changes_the_result() {
+    let first = FieldExpr::parse_with_parameters("(k*x, 0)", &parameters(&[("k", 2.0)]))
+        .expect("first set binds");
+    let second = FieldExpr::parse_with_parameters("(k*x, 0)", &parameters(&[("k", 3.0)]))
+        .expect("second set binds");
+    let point = Vec2::new(1.5, 0.0);
+    assert!((first.eval2(point).unwrap().x - 3.0).abs() < 1e-6);
+    assert!((second.eval2(point).unwrap().x - 4.5).abs() < 1e-6);
+}
+
+#[test]
+fn environment_names_and_function_calls_are_never_rewritten() {
+    // The set is invalid on purpose: even a raw set that names coordinates or
+    // builtins must not shadow them in the formula environment.
+    let set = parameters(&[("x", 7.0), ("sin", 9.0), ("t", 11.0)]);
+    let f = FieldExpr::parse_with_parameters("(x, sin(x)+t)", &set).expect("parse");
+    let v = f.eval3_at(Vec3::new(2.0, 0.0, 0.0), 0.5).expect("evaluate");
+    assert!((v.x - 2.0).abs() < 1e-6, "x is the coordinate");
+    assert!(
+        (v.y - (2.0f32.sin() + 0.5)).abs() < 1e-6,
+        "sin stays a function and t stays the clock: {}",
+        v.y
+    );
+    assert!(
+        f.is_time_dependent(),
+        "the substituted component keeps free t"
+    );
+}
+
+#[test]
+fn an_identifier_followed_by_a_parenthesis_is_a_function_call() {
+    let set = parameters(&[("k", 2.0)]);
+    let error = FieldExpr::parse_with_parameters("(k(x), 0)", &set)
+        .expect_err("a parameter name in call position is not substituted");
+    let message = error.to_string();
+    assert!(
+        message.contains("function") && message.contains('k'),
+        "the error reports the unresolved call: {message}"
+    );
+}
+
+#[test]
+fn a_free_unknown_value_name_errors_and_names_the_component() {
+    let set = parameters(&[("k", 2.0)]);
+    let error = FieldExpr::parse_with_parameters("(x, k*w)", &set)
+        .expect_err("a free unknown value name is rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains("k*w"),
+        "the error names the component: {message}"
+    );
+    assert!(
+        message.contains('w'),
+        "the error names the free identifier: {message}"
+    );
+    assert!(
+        !message.to_lowercase().contains("parsed successfully"),
+        "the error must not claim the formula parsed: {message}"
+    );
 }

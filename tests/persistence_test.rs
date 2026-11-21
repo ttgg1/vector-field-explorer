@@ -2392,6 +2392,57 @@ fn restoring_parameters_does_not_dirty_the_scene() {
 }
 
 #[test]
+fn stored_parameters_bind_the_restored_formula() {
+    for (mode_3d, formula) in [
+        (false, "(gain*x, offset*y)"),
+        (true, "(gain*x, offset*y, gain*z)"),
+    ] {
+        let mut settings = sample_settings();
+        settings.parameters = sample_parameters();
+        settings.view.formula = formula.to_string();
+        settings.view.mode_3d = mode_3d;
+        settings.view.last_vector_mode_3d = Some(mode_3d);
+
+        let mut storage = MemoryStorage::default();
+        save(&mut storage, &settings);
+
+        // Startup restores the parameter set before the formula is parsed, so
+        // the stored formula binds the stored values.
+        let app = VfApp::new_with_storage(Some(&storage));
+        assert_eq!(
+            app.state.parse_error, "",
+            "{formula}: the restored formula binds the restored set"
+        );
+        assert_eq!(
+            app.state.parameters, settings.parameters,
+            "{formula}: the stored set is restored"
+        );
+        let value = app
+            .state
+            .field
+            .eval3(Vec3::new(2.0, 2.0, 2.0))
+            .expect("the restored field evaluates");
+        assert!(
+            (value.x - 5.0).abs() < 1e-6,
+            "{formula}: u = {}, expected 5",
+            value.x
+        );
+        assert!(
+            (value.y + 2.0).abs() < 1e-6,
+            "{formula}: v = {}, expected -2",
+            value.y
+        );
+        if mode_3d {
+            assert!(
+                (value.z - 5.0).abs() < 1e-6,
+                "{formula}: w = {}, expected 5",
+                value.z
+            );
+        }
+    }
+}
+
+#[test]
 fn old_envelope_without_viewport_style_keeps_everything_and_defaults_the_record() {
     let mut storage = MemoryStorage::default();
     eframe::set_value(&mut storage, eframe::APP_KEY, &legacy_settings(false));
