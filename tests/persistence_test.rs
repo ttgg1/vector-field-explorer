@@ -27,6 +27,7 @@ use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::preset_library::PresetGroup;
 use vector_field_explorer::profile_library::{MAX_USER_PROFILES, ProfileLibrary};
 use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::scalar_view::{LineProbe, PointProbe, ScalarSample};
 use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint};
 use vector_field_explorer::seed_layout_library::{
     DEFAULT_LAYOUT_NAME as DEFAULT_SEED_LAYOUT_NAME, MAX_USER_LAYOUTS as MAX_USER_SEED_LAYOUTS,
@@ -3606,4 +3607,85 @@ fn corrupt_seed_layout_profiles_are_sanitised_on_load() {
         loaded.seed_layouts[MAX_USER_SEED_LAYOUTS - 1].name,
         format!("Layout {}", MAX_USER_SEED_LAYOUTS - 1)
     );
+}
+
+// Issue #92 slice A: scalar probes are durable document state; sampled values
+// and line points are runtime-only cache.
+
+#[test]
+fn probes_round_trip_through_the_envelope_and_legacy_records_default_to_none() {
+    let anchor = SeedAnchor {
+        axis: PlaneAxis::Z,
+        index: 2,
+        u: -0.25,
+        v: 0.5,
+    };
+    let mut point =
+        PointProbe::new(Vec3::new(0.25, -0.5, 0.0), Some(anchor)).expect("valid point probe");
+    point.value = Some(9.5);
+    let mut line = LineProbe::new(
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        None,
+        vec![
+            ScalarSample {
+                position: Vec3::new(-1.0, 0.0, 0.0),
+                value: Some(8.5),
+            },
+            ScalarSample {
+                position: Vec3::new(1.0, 0.0, 0.0),
+                value: Some(7.5),
+            },
+        ],
+    )
+    .expect("valid line probe");
+    line.samples[1].value = None;
+
+    let mut state = State::new(false);
+    state.probes.push_point(point.clone()).expect("room");
+    state.probes.push_line(line.clone()).expect("room");
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: ViewRecord::capture(&state),
+            ..Default::default()
+        },
+    );
+    let raw = storage
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
+    assert!(raw.contains("probes"), "the probe record is stored:\n{raw}");
+    for cached in ["9.5", "8.5", "7.5"] {
+        assert!(
+            !raw.contains(cached),
+            "sampled value {cached} must not be persisted:\n{raw}"
+        );
+    }
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.probes.points.len(), 1);
+    assert_eq!(loaded.view.probes.lines.len(), 1);
+    assert_eq!(loaded.view.probes.points[0].position, point.position);
+    assert_eq!(loaded.view.probes.points[0].anchor, Some(anchor));
+    assert_eq!(loaded.view.probes.points[0].value, None);
+    assert_eq!(loaded.view.probes.lines[0].start, line.start);
+    assert_eq!(loaded.view.probes.lines[0].end, line.end);
+    assert!(
+        loaded.view.probes.lines[0].samples.is_empty(),
+        "line samples are runtime-only"
+    );
+
+    let mut restored = State::new(false);
+    loaded.view.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.probes.points, loaded.view.probes.points);
+    assert_eq!(restored.probes.lines, loaded.view.probes.lines);
+
+    // A legacy envelope without the field restores no probes.
+    let legacy = load_legacy(false);
+    assert!(legacy.view.probes.is_empty());
+    let mut legacy_state = State::new(false);
+    legacy.view.restore(&mut legacy_state, &mut Controls::new());
+    assert!(legacy_state.probes.is_empty());
 }

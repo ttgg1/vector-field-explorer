@@ -47,6 +47,7 @@ pub mod render;
 pub mod renderer;
 pub mod sampling;
 pub mod scalar;
+pub mod scalar_view;
 pub mod scene_document;
 pub mod scene_store;
 pub mod screenshot;

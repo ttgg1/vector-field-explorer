@@ -37,6 +37,7 @@ use crate::particles::{
 use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::profile_library::MAX_USER_PROFILES;
+use crate::scalar_view::ProbeSet;
 use crate::seed_layout::SeedLayout;
 use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, MAX_USER_LAYOUTS, SeedLayoutProfile};
 use crate::source_scene::{
@@ -406,6 +407,11 @@ pub struct ViewRecord {
     /// keeps the automatic grid.
     #[serde(default)]
     pub seed_layout: SeedLayout,
+    /// Durable scalar point and line probes (issue #92 slice A). Missing on
+    /// older envelopes/scenes, which restore as no probes with no dirtying.
+    /// Only positions and anchors are stored; sampled values are runtime.
+    #[serde(default)]
+    pub probes: ProbeSet,
     /// What one explicit left click does (ticket 60). Older records did not
     /// carry it; they load as SeedStreamline. An unknown spelling also falls
     /// back to the default instead of failing the whole envelope.
@@ -621,6 +627,7 @@ impl ViewRecord {
             seed_mode: state.seed_mode,
             streamline_count: state.streamline_count,
             seed_layout: state.seed_layout.clone(),
+            probes: state.probes.clone(),
             left_click_action: state.left_click_action,
             particles: state.particles,
             particle_size: state.particle_size,
@@ -766,6 +773,18 @@ impl ViewRecord {
             );
         }
         state.seed_layout = seed_layout;
+        // Scalar probes are document state (issue #92 slice A). Assign directly
+        // so the startup seam does not dirty per probe; drop non-finite or
+        // excess records instead of failing the whole envelope.
+        let stored_probes = self.probes.len();
+        let probes = self.probes.clone().sanitized();
+        if probes.len() != stored_probes {
+            log::warn!(
+                "persisted probes dropped {} invalid or excess probe(s)",
+                stored_probes - probes.len()
+            );
+        }
+        state.probes = probes;
         // Issue #83 colour mapping restores directly, not through the setters:
         // startup must not dirty per field, and corrupt values fall back
         // individually so the rest of the record still loads.
