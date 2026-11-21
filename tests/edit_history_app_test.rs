@@ -18,18 +18,31 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::edit_history::EditScope;
 use vector_field_explorer::parameters::ParameterSet;
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
+use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::scalar_view::MAX_PROBES;
 use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint, clamp_seed_local};
+use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::viewport_style::ViewportStyle;
 
 /// Run one full production frame with the given events at a desktop size.
 fn frame(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) -> egui::FullOutput {
+    frame_height(ctx, app, events, 700.0)
+}
+
+/// Run one production frame at an explicit window height.
+fn frame_height(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    events: Vec<egui::Event>,
+    height: f32,
+) -> egui::FullOutput {
     let mut native = eframe::Frame::_new_kittest();
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                vec2(900.0, 700.0),
+                vec2(900.0, height),
             )),
             events,
             ..Default::default()
@@ -105,6 +118,13 @@ fn pointer(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui:
 fn click(ctx: &egui::Context, app: &mut VfApp, pos: egui::Pos2) {
     let _ = frame(ctx, app, vec![moved(pos), button(pos, true)]);
     let _ = frame(ctx, app, vec![button(pos, false)]);
+}
+
+/// A real press→release pair in a tall window, so lower sidebar sections stay
+/// on screen and remain clickable.
+fn click_tall(ctx: &egui::Context, app: &mut VfApp, pos: egui::Pos2) {
+    let _ = frame_height(ctx, app, vec![moved(pos), button(pos, true)], 4000.0);
+    let _ = frame_height(ctx, app, vec![button(pos, false)], 4000.0);
 }
 
 /// Open `group` from the real menu bar and click `item`, both through genuine
@@ -805,4 +825,163 @@ fn seed_layout_profile(
                 .collect(),
         },
     }
+}
+
+#[test]
+fn probe_placement_adds_one_undo_entry_and_respects_the_cap() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(900.0, 700.0));
+    let aspect = rect.width() / rect.height();
+    let center = rect.center();
+    let base = app.history_len();
+
+    app.controls.scalar_place_probe = true;
+    let _ = frame(&ctx, &mut app, vec![moved(center), button(center, true)]);
+    app.test_seed_click(center, rect, aspect, 0.0);
+    let _ = frame(&ctx, &mut app, vec![button(center, false)]);
+
+    assert_eq!(app.state.probes.points.len(), 1, "one probe is placed");
+    assert!(
+        !app.controls.scalar_place_probe,
+        "placement disarms the click"
+    );
+    assert_eq!(
+        app.history_len(),
+        base + 1,
+        "placement is exactly one undo entry"
+    );
+    assert!(app.undo_document(&ctx));
+    assert!(
+        app.state.probes.points.is_empty(),
+        "undo removes the placed probe"
+    );
+
+    // Fill the shared cap and prove the next placement is rejected with the
+    // message slot instead of growing the document.
+    for _ in 0..MAX_PROBES {
+        app.state
+            .add_point_probe(Vec3::new(0.1, 0.1, 0.0), None)
+            .expect("room for the capped test probes");
+    }
+    app.controls.scalar_place_probe = true;
+    app.test_seed_click(center, rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        MAX_PROBES,
+        "the cap is enforced"
+    );
+    assert!(
+        app.controls.scalar_message.contains("at most 8"),
+        "the cap rejection is reported: {:?}",
+        app.controls.scalar_message
+    );
+    assert!(
+        !app.controls.scalar_place_probe,
+        "a cap rejection disarms the probe; retrying cannot succeed"
+    );
+}
+
+#[test]
+fn leaving_the_scalar_mode_while_armed_disarms_and_reports() {
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(900.0, 700.0));
+    let aspect = rect.width() / rect.height();
+    let center = rect.center();
+
+    app.state.set_streamlines(true);
+    app.controls.scalar_place_probe = true;
+    assert!(
+        app.state.set_field_mode(FieldMode::Sources),
+        "the fixture leaves the formula field"
+    );
+
+    app.test_seed_click(center, rect, aspect, 0.0);
+
+    assert!(
+        !app.controls.scalar_place_probe,
+        "an armed probe click disarms when the probe path is gone"
+    );
+    assert!(
+        !app.controls.scalar_message.is_empty(),
+        "the user is told why the click no longer places a probe"
+    );
+    assert!(
+        app.status
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("Probes are unavailable")),
+        "the status bar reports the same reason: {:?}",
+        app.status.hint
+    );
+    assert!(
+        app.state.probes.points.is_empty(),
+        "the unavailable placement adds nothing"
+    );
+}
+
+#[test]
+fn probe_rows_show_values_and_remove_is_one_edit() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "x + y".into());
+    app.state
+        .add_point_probe(Vec3::new(0.2, 0.2, 0.0), None)
+        .expect("room for one probe");
+    let _ = app.state.refresh_scalar_view(true);
+
+    let mut out = frame_height(&ctx, &mut app, Vec::new(), 4000.0);
+    for _ in 0..3 {
+        out = frame_height(&ctx, &mut app, Vec::new(), 4000.0);
+    }
+    let header = labelled_rect(&out, "Scalar view").expect("the section header is exposed");
+    click_tall(&ctx, &mut app, header.center());
+    for _ in 0..20 {
+        let _ = frame_height(&ctx, &mut app, Vec::new(), 4000.0);
+    }
+    let out = frame_height(&ctx, &mut app, Vec::new(), 4000.0);
+
+    let texts: Vec<String> = out
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .map(|update| {
+            update
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| {
+                    node.label()
+                        .map(str::to_owned)
+                        .or_else(|| node.value().map(str::to_owned))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Probe 1:") && text.contains("0.4")),
+        "the probe row shows its sampled value: {texts:?}"
+    );
+
+    let remove = labelled_rect(&out, "Remove").expect("the probe row exposes Remove");
+    let base = app.history_len();
+    click_tall(&ctx, &mut app, remove.center());
+    assert!(app.state.probes.points.is_empty(), "Remove drops the probe");
+    assert_eq!(
+        app.history_len(),
+        base + 1,
+        "Remove is exactly one undo entry"
+    );
+    assert!(app.undo_document(&ctx));
+    assert_eq!(
+        app.state.probes.points.len(),
+        1,
+        "undo restores the removed probe"
+    );
 }

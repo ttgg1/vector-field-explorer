@@ -9,12 +9,14 @@ use vector_field_explorer::{
     parameters::{Parameter, ParameterSet},
     persistence::ViewRecord,
     plane::{PlaneAxis, PlaneFrame, PlaneView},
+    plot::PlotKind,
     scalar::{ScalarContext, ScalarExpr},
     scalar_view::{
         LineProbe, MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MAX_LINE_SAMPLES, MAX_PROBES, MIN_GRID_SIDE,
         PointProbe, ProbeSet, ScalarGrid, ScalarSample, ScalarViewError, UNSUPPORTED_Z_REASON,
         contour_segments, sample_grid, sample_line, scalar_view_expr,
     },
+    source_scene::FieldMode,
     ui::sidebar::Controls,
     viewmodel::State,
 };
@@ -479,5 +481,257 @@ fn z_formula_reports_the_scalar_unsupported_reason() {
     assert_eq!(
         state.scalar_view_cache().error(),
         Some(UNSUPPORTED_Z_REASON)
+    );
+}
+
+#[test]
+fn contours_are_composed_as_scene_lines_for_a_linear_field() {
+    let mut state = State::new(false);
+    state.set_scalar_source(ScalarContext::Surface, "x".into());
+    state
+        .set_scalar_contour_levels(4)
+        .expect("four levels are in bounds");
+
+    let record = state
+        .refresh_scalar_view(true)
+        .expect("a linear surface samples");
+    let contour_count = record.contours.len();
+    assert!(contour_count > 0, "the linear field has contour segments");
+    let overlay = state.scalar_overlay_lines();
+    assert_eq!(
+        overlay.len(),
+        contour_count,
+        "every contour segment becomes one scene line"
+    );
+    for line in &overlay {
+        assert!(
+            (line.a[0] - line.b[0]).abs() < 1e-5,
+            "an x contour is a vertical world segment"
+        );
+        assert!(line.a[0].is_finite() && line.b[0].is_finite());
+        assert_eq!(line.color, state.scalar_text_color());
+    }
+
+    let scene = state.snapshot();
+    assert_eq!(
+        scene.lines.len(),
+        overlay.len(),
+        "the contour lines ride the normal scene assembly"
+    );
+}
+
+#[test]
+fn contours_do_not_cross_invalid_samples() {
+    let mut state = State::new(false);
+    state.set_scalar_source(ScalarContext::Surface, "1/x".into());
+    state
+        .set_scalar_contour_levels(8)
+        .expect("eight levels are in bounds");
+    let record = state
+        .refresh_scalar_view(true)
+        .expect("the pole field still has paintable cells");
+    assert!(!record.contours.is_empty());
+    let overlay = state.scalar_overlay_lines();
+
+    for line in overlay {
+        assert!(
+            line.a[0] * line.b[0] > 0.0,
+            "no contour segment crosses the undefined column: {line:?}"
+        );
+        assert!(line.a.iter().all(|v| v.is_finite()));
+        assert!(line.b.iter().all(|v| v.is_finite()));
+    }
+}
+
+#[test]
+fn collapsed_scalar_view_does_not_composite_stale_geometry() {
+    let color = [0.123, 0.456, 0.789, 1.0];
+    let mut state = State::new(true);
+    state.set_mode(false);
+    state.set_scalar_source(ScalarContext::Surface, "x".into());
+    state
+        .set_scalar_contour_levels(4)
+        .expect("four levels are in bounds");
+    state.set_scalar_text_color(color);
+    state
+        .add_point_probe(Vec3::new(0.1, -0.2, 0.0), None)
+        .expect("room for one probe");
+
+    let record = state
+        .refresh_scalar_view(true)
+        .expect("a linear surface samples");
+    assert!(!record.contours.is_empty(), "the fixture has contours");
+    assert!(
+        state
+            .scalar_overlay_lines()
+            .iter()
+            .any(|line| line.color == color),
+        "the current record and probe crosses are composed"
+    );
+
+    // Collapsing the section retains the record but performs no further
+    // refresh, so the formula edit is not sampled until the section reopens.
+    assert!(state.refresh_scalar_view(false).is_some());
+    state.set_scalar_source(ScalarContext::Surface, "y".into());
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "a collapsed section must not compose the old formula's contours or probes"
+    );
+    let scene = state.snapshot();
+    assert_eq!(
+        scene
+            .lines
+            .iter()
+            .filter(|line| line.color == color)
+            .count(),
+        0,
+        "no stale scalar geometry reaches the scene"
+    );
+
+    // The same holds for a plane change: collapse again after a fresh record,
+    // then move the slice without a visible refresh.
+    state
+        .refresh_scalar_view(true)
+        .expect("the reopened section samples the new formula");
+    state.refresh_scalar_view(false);
+    assert!(state.set_plane_axis(PlaneAxis::X));
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "a collapsed section must not compose the old plane's geometry"
+    );
+
+    // Leaving the formula field keeps the cached surface record but the
+    // scalar overlay does not apply to the source scene.
+    state
+        .refresh_scalar_view(true)
+        .expect("the reopened formula field samples");
+    state.refresh_scalar_view(false);
+    assert!(state.set_field_mode(FieldMode::Sources));
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "a source scene must not compose the formula field's contours or probes"
+    );
+    assert_eq!(
+        state
+            .snapshot()
+            .lines
+            .iter()
+            .filter(|line| line.color == color)
+            .count(),
+        0,
+        "no formula-field scalar geometry reaches a source scene"
+    );
+
+    // A scalar plot kind is equally inapplicable even with the surface
+    // expression still cached and identity-compatible.
+    assert!(state.set_field_mode(FieldMode::Formula));
+    state
+        .refresh_scalar_view(true)
+        .expect("the formula field samples again");
+    state.refresh_scalar_view(false);
+    assert!(state.set_plot_kind(PlotKind::Curve2D));
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "a scalar plot kind must not compose the vector view's contours or probes"
+    );
+    assert_eq!(
+        state
+            .snapshot()
+            .lines
+            .iter()
+            .filter(|line| line.color == color)
+            .count(),
+        0,
+        "no vector-field scalar geometry reaches a scalar scene"
+    );
+}
+
+#[test]
+fn unsupported_scalar_expression_composes_no_probe_crosses() {
+    let color = [0.234, 0.345, 0.456, 1.0];
+    let mut state = State::new(true);
+    state.set_mode(false);
+    state.set_scalar_text_color(color);
+    state
+        .add_point_probe(Vec3::new(0.1, -0.2, 0.0), None)
+        .expect("room for one probe");
+    // A z formula has no scalar record, but probe crosses must still respect
+    // the applicability gate.
+    state.set_scalar_source(ScalarContext::Surface, "z + x".into());
+
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "an unsupported expression composes no probe crosses"
+    );
+    assert_eq!(
+        state
+            .snapshot()
+            .lines
+            .iter()
+            .filter(|line| line.color == color)
+            .count(),
+        0,
+        "no unsupported scalar geometry reaches the scene"
+    );
+}
+
+#[test]
+fn scalar_text_color_dirties_only_on_a_real_change() {
+    let mut state = State::new(true);
+    state.set_scalar_source(ScalarContext::Surface, "x".into());
+    state
+        .add_point_probe(Vec3::new(0.1, -0.2, 0.0), None)
+        .expect("room for one probe");
+    state
+        .refresh_scalar_view(true)
+        .expect("a linear surface samples");
+    let _ = state
+        .snapshot_if_dirty()
+        .expect("the fixture's edits request a rebuild");
+    assert!(!state.dirty, "the scene is settled");
+
+    let color = [0.2, 0.3, 0.4, 1.0];
+    state.set_scalar_text_color(color);
+    let scene = state
+        .snapshot_if_dirty()
+        .expect("a theme colour change reaches the next snapshot");
+    assert!(
+        scene.lines.iter().any(|line| line.color == color),
+        "the probe cross adopts the new theme colour"
+    );
+
+    state.set_scalar_text_color(color);
+    assert!(!state.dirty, "an unchanged colour does not dirty the scene");
+    assert!(
+        state.snapshot_if_dirty().is_none(),
+        "an unchanged colour requests no rebuild"
+    );
+}
+
+#[test]
+fn contour_and_probe_lines_survive_scene_assembly_for_capture() {
+    let mut state = State::new(false);
+    state.set_scalar_source(ScalarContext::Surface, "x + y".into());
+    state
+        .set_scalar_contour_levels(3)
+        .expect("three levels are in bounds");
+    let contours = state
+        .refresh_scalar_view(true)
+        .expect("the surface samples")
+        .contours
+        .len();
+    assert!(contours > 0);
+    state
+        .add_point_probe(Vec3::new(0.2, -0.1, 0.0), None)
+        .expect("room for one probe under the cap");
+
+    let expected = contours + 2; // one cross marker = two line segments
+    let styled = state.snapshot();
+    let blueprint = state.snapshot_blueprint();
+    assert_eq!(styled.lines.len(), expected);
+    assert_eq!(blueprint.lines.len(), expected);
+    assert_eq!(
+        styled.lines.last().map(|line| line.color),
+        Some(state.scalar_text_color())
     );
 }

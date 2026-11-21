@@ -39,6 +39,7 @@ use crate::particles::{
     ParticleAppearance, ParticleColorMode,
 };
 use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, plane_coordinate};
+use crate::scalar_view::{MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, scalar_view_expr};
 use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedLayout, SeedPoint, circle_seeds,
     line_seeds, region_seeds,
@@ -48,11 +49,12 @@ use crate::source_scene::{FieldMode, SourceDisplay};
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
-    DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction, MAX_ARROW_OPACITY, MAX_ARROW_SCALE,
-    MAX_DENSITY_2D, MAX_DENSITY_3D, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE,
-    MAX_PLANE_DIM_OPACITY, MAX_PROPORTIONAL_EXPONENT, MAX_STREAMLINES, MIN_ARROW_OPACITY,
-    MIN_ARROW_SCALE, MIN_DENSITY, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE,
-    MIN_PLANE_DIM_OPACITY, MIN_PROPORTIONAL_EXPONENT, State, StreamlineSeedMode,
+    DEFAULT_PROPORTIONAL_EXPONENT, DEFAULT_SCALAR_CONTOUR_LEVELS, DEFAULT_SCALAR_GRID_SIDE,
+    LeftClickAction, MAX_ARROW_OPACITY, MAX_ARROW_SCALE, MAX_DENSITY_2D, MAX_DENSITY_3D,
+    MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PARTICLE_SIZE, MAX_PLANE_DIM_OPACITY,
+    MAX_PROPORTIONAL_EXPONENT, MAX_STREAMLINES, MIN_ARROW_OPACITY, MIN_ARROW_SCALE, MIN_DENSITY,
+    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, MIN_PARTICLE_SIZE, MIN_PLANE_DIM_OPACITY,
+    MIN_PROPORTIONAL_EXPONENT, MIN_SCALAR_GRID_SIDE, State, StreamlineSeedMode,
     clamp_domain_extent,
 };
 use glam::Vec3;
@@ -360,6 +362,51 @@ pub const MAX_SIGNED_LOG_HALF_WIDTH: f32 = 1.0e6;
 /// and Formula mode use the normal colormap path.
 pub fn coloring_controls_visible(field_mode: FieldMode, display: SourceDisplay) -> bool {
     !(field_mode == FieldMode::Sources && display == SourceDisplay::Both)
+}
+
+/// Whether the Scalar view section exists for the current field mode (issue
+/// #92 slice B1). It is a formula-field overlay; source/ODE/material modes own
+/// their own scenes and cannot host a surface scalar.
+pub fn scalar_section_visible(field_mode: FieldMode) -> bool {
+    field_mode == FieldMode::Formula
+}
+
+/// Why the Scalar view cannot sample the current scene, if it cannot. `None`
+/// means the controls are usable; the z reason is the model's explicit
+/// [`crate::scalar_view::UNSUPPORTED_Z_REASON`]. The positive case is the same
+/// [`State::scalar_view_applicable`] predicate that gates overlay composition.
+pub fn scalar_view_unsupported_reason(state: &State) -> Option<String> {
+    if state.scalar_view_applicable() {
+        return None;
+    }
+    if state.field_mode != FieldMode::Formula {
+        return Some("scalar views need the formula field".to_owned());
+    }
+    if !state.is_vector_mode() {
+        return Some("scalar views need a vector-field view".to_owned());
+    }
+    scalar_view_expr(&state.plot.surface.source, &state.parameters)
+        .err()
+        .map(|error| error.to_string())
+}
+
+/// One probe row's value text: an out-of-domain probe, an invalid evaluation,
+/// or the finite sampled value.
+fn probe_row_label(
+    index: usize,
+    probe: &crate::scalar_view::PointProbe,
+    domain: &Domain,
+) -> String {
+    let inside = probe.position.cmpge(domain.min).all() && probe.position.cmple(domain.max).all();
+    let status = if !inside {
+        "outside the field".to_owned()
+    } else {
+        match probe.value {
+            Some(value) => format!("{value:.3}"),
+            None => "invalid".to_owned(),
+        }
+    };
+    format!("Probe {}: {status}", index + 1)
 }
 
 /// Whether the particle size slider applies. With Particles off there are no
@@ -940,6 +987,14 @@ pub struct Controls {
     /// `fly_camera::sync_fly_mirror`; the sidebar itself never owns fly state.
     pub fly: bool,
     pub sensitivity: f32,
+    /// Scalar-view grid side (issue #92 slice B1): 16..=160 in steps of 8.
+    pub scalar_grid_side: u32,
+    /// Explicit contour-level count; `0` hides contours.
+    pub scalar_contour_levels: u32,
+    /// Armed "Place probe" toggle: the next viewport click plants one probe.
+    pub scalar_place_probe: bool,
+    /// The last Scalar view rejection, shown inline under the controls.
+    pub scalar_message: String,
 }
 
 impl Controls {
@@ -1003,6 +1058,10 @@ impl Controls {
             plane_drag: false,
             fly: false,
             sensitivity: 1.0,
+            scalar_grid_side: DEFAULT_SCALAR_GRID_SIDE,
+            scalar_contour_levels: DEFAULT_SCALAR_CONTOUR_LEVELS,
+            scalar_place_probe: false,
+            scalar_message: String::new(),
         }
     }
 
@@ -1085,6 +1144,78 @@ impl Controls {
         self.fly = defaults.fly;
         self.sensitivity = defaults.sensitivity;
     }
+}
+
+/// The collapsed-by-default Scalar view section (issue #92 slice B1): the
+/// bounded grid/contour controls, the point-probe list and the click-arming
+/// toggle. It refreshes the scalar cache only while its body is open.
+fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    egui::CollapsingHeader::new("Scalar view")
+        .id_salt("scalar_view_section")
+        .default_open(false)
+        .show(ui, |ui| {
+            let _ = state.refresh_scalar_view(true);
+            let text = ui.visuals().text_color().to_array();
+            state.set_scalar_text_color([
+                f32::from(text[0]) / 255.0,
+                f32::from(text[1]) / 255.0,
+                f32::from(text[2]) / 255.0,
+                1.0,
+            ]);
+
+            if let Some(reason) = scalar_view_unsupported_reason(state) {
+                ui.label(reason);
+                controls.scalar_place_probe = false;
+                return;
+            }
+
+            ui.horizontal(|ui| {
+                ui.label("Grid resolution");
+                ui.add(
+                    egui::Slider::new(
+                        &mut controls.scalar_grid_side,
+                        MIN_SCALAR_GRID_SIDE..=MAX_GRID_SIDE,
+                    )
+                    .step_by(8.0),
+                )
+                .on_hover_text("Samples per grid side; 16..=160 in steps of 8");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Contour levels");
+                ui.add(egui::Slider::new(
+                    &mut controls.scalar_contour_levels,
+                    0..=MAX_CONTOUR_LEVELS as u32,
+                ))
+                .on_hover_text("Explicit marching-squares levels; 0 hides contours");
+            });
+
+            ui.checkbox(&mut controls.scalar_place_probe, "Place probe")
+                .on_hover_text("Click the viewport plane to add one point probe");
+
+            let mut remove = None;
+            let domain = state.scene_domain();
+            for (index, probe) in state.probes.points.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(probe_row_label(index, probe, &domain));
+                    if ui
+                        .button("Remove")
+                        .on_hover_text("Remove this point probe")
+                        .clicked()
+                    {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove
+                && state.remove_point_probe(index)
+            {
+                controls.scalar_message.clear();
+            }
+
+            if !controls.scalar_message.is_empty() {
+                ui.label(&controls.scalar_message);
+            }
+        });
 }
 
 /// The same defaults as [`Controls::new`], so the type honours clippy's
@@ -2236,6 +2367,14 @@ fn show_inner(
         });
     }
 
+    // Issue #92 slice B1: the scalar overlay section sits after Coloring. A
+    // collapsed section must not sample; the open body performs the one
+    // visible refresh.
+    state.refresh_scalar_view(false);
+    if scalar_section_visible(state.field_mode) {
+        scalar_view_section(ui, state, controls);
+    }
+
     // The Domain editor renders only the axes the current sampling dimension
     // can use; reversed drags are handed over as-is and the seam's per-axis
     // swap normalizes them (mirrored back below so the widgets show the
@@ -2296,6 +2435,7 @@ fn show_inner(
 fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
     state.set_show_grid(controls.show_grid);
     state.set_show_coordinate_system(controls.show_coordinate_system);
+    apply_scalar_controls(state, controls);
     let domain_min = Vec3::new(
         extent_or_previous(controls.domain_min.x, state.domain.min.x),
         extent_or_previous(controls.domain_min.y, state.domain.min.y),
@@ -2314,6 +2454,37 @@ fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
     controls.show_coordinate_system = state.show_coordinate_system;
     controls.domain_min = state.domain.min;
     controls.domain_max = state.domain.max;
+}
+
+/// Commit the two bounded Scalar view settings through their validated State
+/// setters and mirror the effective values back. A changed successful commit
+/// clears an earlier rejection; a rejection is surfaced in the message slot and
+/// leaves the committed value untouched.
+fn apply_scalar_controls(state: &mut State, controls: &mut Controls) {
+    let mut committed = false;
+    let mut rejected = false;
+
+    let grid_side_changed = controls.scalar_grid_side != state.scalar_grid_side();
+    if let Err(error) = state.set_scalar_grid_side(controls.scalar_grid_side) {
+        controls.scalar_message = error.to_string();
+        rejected = true;
+    } else if grid_side_changed {
+        committed = true;
+    }
+
+    let levels_changed = controls.scalar_contour_levels != state.scalar_contour_levels();
+    if let Err(error) = state.set_scalar_contour_levels(controls.scalar_contour_levels) {
+        controls.scalar_message = error.to_string();
+        rejected = true;
+    } else if levels_changed {
+        committed = true;
+    }
+
+    if committed && !rejected {
+        controls.scalar_message.clear();
+    }
+    controls.scalar_grid_side = state.scalar_grid_side();
+    controls.scalar_contour_levels = state.scalar_contour_levels();
 }
 
 /// Draw the plane selector and report whether the selection should be
@@ -2749,6 +2920,7 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
         extent_or_previous(controls.domain_max.z, state.domain.max.z),
     );
     state.set_domain(domain_min, domain_max);
+    apply_scalar_controls(state, controls);
 
     controls.density = state.density;
     controls.arrow_scale = state.arrow_scale;

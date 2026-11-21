@@ -566,6 +566,25 @@ impl VfApp {
     /// [`view_command::click_action_plan`] owns the feature gates and the
     /// one-line no-op hint; this wrapper owns the seed/burst side effects.
     pub(super) fn seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
+        // Issue #92 slice B1: an armed "Place probe" plants one point probe on
+        // the active plane and disarms; it never also seeds a streamline. If
+        // the probe path disappeared (field mode or plot kind switched), disarm
+        // it and report why instead of silently running the default click.
+        if self.controls.scalar_place_probe {
+            if self.scalar_probes_editable() {
+                self.place_scalar_probe(pos, rect, aspect);
+            } else {
+                self.controls.scalar_place_probe = false;
+                self.controls.scalar_message = "Probes are unavailable in this view".to_owned();
+                restart_hint(
+                    &mut self.status.hint,
+                    &mut self.hint_elapsed,
+                    "Probes are unavailable in this view",
+                );
+            }
+            self.last_click_seed = None;
+            return;
+        }
         // Issue #87 S2: an armed "Place seed" plants one document seed and
         // disarms; it never also plants a runtime click burst.
         if self.controls.place_seed && self.seeds_editable() {
@@ -662,6 +681,108 @@ impl VfApp {
                 );
             }
         }
+    }
+
+    /// Whether point probes can be placed in the current view: the same
+    /// applicability predicate the Scalar section and overlay use (issue #92
+    /// slice B1).
+    pub(super) fn scalar_probes_editable(&self) -> bool {
+        self.state.scalar_view_applicable()
+    }
+
+    /// Plant one point probe at a viewport pick on the scalar plane. The pick
+    /// maps through the active [`crate::plane::PlaneFrame`] and is rejected when
+    /// it misses the scene domain or the shared probe cap is full.
+    fn place_scalar_probe(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) {
+        let Some((position, anchor)) = self.probe_world_point(pos, rect, aspect) else {
+            // A pick outside the scene domain is retryable, so the probe stays
+            // armed for the next click; only the message reports the miss.
+            self.controls.scalar_message =
+                "Click inside the scene domain to place a probe".to_owned();
+            return;
+        };
+        match self.state.add_point_probe(position, anchor) {
+            Ok(_) => {
+                self.controls.scalar_place_probe = false;
+                self.controls.scalar_message.clear();
+            }
+            Err(error) => {
+                // Retrying a cap rejection cannot succeed until a probe is
+                // removed, so disarm and report; an out-of-domain miss above
+                // stays armed.
+                if matches!(
+                    error,
+                    crate::scalar_view::ScalarViewError::ProbeLimit { .. }
+                ) {
+                    self.controls.scalar_place_probe = false;
+                }
+                self.controls.scalar_message = error.to_string();
+            }
+        }
+    }
+
+    /// Map a viewport point onto the scalar plane frame without clamping, then
+    /// require it to lie inside the visible scene domain.
+    fn probe_world_point(
+        &self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> Option<(Vec3, Option<SeedAnchor>)> {
+        let width = rect.width().max(1.0);
+        let height = rect.height().max(1.0);
+        let ndc = Vec2::new(
+            (pos.x - rect.left()) / width * 2.0 - 1.0,
+            1.0 - (pos.y - rect.top()) / height * 2.0,
+        );
+        let frame = self.state.scalar_view_frame();
+        let view_camera = match &self.fly {
+            Some(fly) => ViewCamera::Fly(fly),
+            None => ViewCamera::Orbit(&self.orbit),
+        };
+        let ortho = if self.state.plane_frame().is_some() || !self.state.mode_3d {
+            Some(self.state.plane_size())
+        } else {
+            None
+        };
+        let inverse = view_camera.vp_matrix(aspect, ortho).inverse();
+        if !inverse.is_finite() {
+            return None;
+        }
+        let unproject = |z: f32| {
+            let p = inverse * Vec4::new(ndc.x, ndc.y, z, 1.0);
+            Vec3::new(p.x, p.y, p.z) / p.w
+        };
+        let near = unproject(-1.0);
+        let far = unproject(1.0);
+        let direction = far - near;
+        let denominator = direction.dot(frame.normal);
+        if !direction.is_finite() || !denominator.is_finite() || denominator.abs() < 1e-9 {
+            return None;
+        }
+        let hit = near + direction * ((frame.origin - near).dot(frame.normal) / denominator);
+        if !hit.is_finite() {
+            return None;
+        }
+        // Snap the hit onto the frame to remove projection epsilon before the
+        // scene-domain test (the 2D scene domain is the exact mid-z plane).
+        let local = frame.to_local(hit);
+        let hit = frame.to_world(Vec3::new(local.x, local.y, 0.0));
+        let domain = self.state.scene_domain();
+        if !hit.cmpge(domain.min).all() || !hit.cmple(domain.max).all() {
+            return None;
+        }
+        let anchor = self.state.plane_frame().map(|frame| {
+            let grid = self.state.plane_grid();
+            let plane = self.state.plane.clamped(grid);
+            SeedAnchor {
+                axis: frame.axis,
+                index: plane.index,
+                u: local.x,
+                v: local.y,
+            }
+        });
+        Some((hit, anchor))
     }
 
     /// Project a stored seed to screen coordinates for picking.
