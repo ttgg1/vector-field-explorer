@@ -10,6 +10,7 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
+use super::field_cache::{FieldSampleCache, FieldSampleKey};
 use super::field_probe::{
     CirculationLoop, CirculationReport, FluxReport, GaussianSurface, IntegralStatus, LoopKind,
     ProbeField, SurfaceKind, circulation, flux,
@@ -74,7 +75,7 @@ use crate::sources::{EvalOptions, Evaluator, FamilyResult, FieldFamily, SourceSe
 use crate::view_orientation::UpAxis;
 use crate::viewport_style::ViewportStyle;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 mod plot;
@@ -685,6 +686,13 @@ pub struct State {
     pub dirty: bool,
     /// Transient simulated time mirrored from the clock. Not persisted.
     pub time: f32,
+    /// One-entry runtime cache for an unchanged formula sampling pass (issue
+    /// #240). `sample(&self)` stays a pure read while a style-only rebuild
+    /// reuses the previous pass. Cloning a state resets it, and it never reaches
+    /// history, documents or scenes.
+    field_sample_cache: RefCell<FieldSampleCache>,
+    /// Counts fresh (uncached) sampling passes; a doc-hidden test seam.
+    field_sample_passes: Cell<u64>,
 }
 
 /// Runtime readout for the gradient overlay: what the last refresh drew and
@@ -963,6 +971,7 @@ impl State {
         if next == self.parameters {
             return Ok(());
         }
+        self.clear_field_sample_cache();
         self.parameters = next;
         // A parameter change invalidates every stored density estimate; the
         // next explicit refresh re-runs both diagnostics at most once.
@@ -1580,6 +1589,8 @@ impl State {
             ode_dirty: false,
             dirty: true,
             time: 0.0,
+            field_sample_cache: RefCell::new(FieldSampleCache::default()),
+            field_sample_passes: Cell::new(0),
         }
     }
 
@@ -1591,6 +1602,7 @@ impl State {
         if self.formula == formula {
             return false;
         }
+        self.clear_field_sample_cache();
         let parsed = FieldExpr::parse_with_parameters(formula.as_str(), &self.parameters);
         self.formula = formula;
         match parsed {
@@ -1641,6 +1653,7 @@ impl State {
         if self.field_mode == mode {
             return false;
         }
+        self.clear_field_sample_cache();
         if matches!(
             mode,
             FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
@@ -2278,6 +2291,7 @@ impl State {
         if self.mode_3d == mode_3d {
             return false;
         }
+        self.clear_field_sample_cache();
         let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
         self.plot.vector_mode_3d = mode_3d;
@@ -2310,6 +2324,7 @@ impl State {
         if self.density == density {
             return false;
         }
+        self.clear_field_sample_cache();
         let previous_grid = self.plane_grid();
         self.density = density;
         self.sync_plane(previous_grid);
@@ -2324,6 +2339,7 @@ impl State {
         if self.domain == domain {
             return false;
         }
+        self.clear_field_sample_cache();
         let previous_grid = self.plane_grid();
         if self.domain.min.x != domain.min.x
             || self.domain.max.x != domain.max.x
@@ -2461,6 +2477,7 @@ impl State {
         if self.color_ramp == ramp {
             return false;
         }
+        self.clear_field_sample_cache();
         self.color_ramp = ramp;
         self.plot.generation += 1;
         self.mark_dirty()
@@ -2474,6 +2491,7 @@ impl State {
         if self.color_mode == mode {
             return false;
         }
+        self.clear_field_sample_cache();
         self.color_mode = mode;
         self.mark_dirty()
     }
@@ -2486,6 +2504,7 @@ impl State {
         if self.color_quantity == quantity {
             return false;
         }
+        self.clear_field_sample_cache();
         self.color_quantity = quantity;
         self.mark_dirty()
     }
@@ -2503,6 +2522,7 @@ impl State {
         if !self.auto_fit && self.color_min == min && self.color_max == max {
             return false;
         }
+        self.clear_field_sample_cache();
         self.color_min = min;
         self.color_max = max;
         self.auto_fit = false;
@@ -2515,6 +2535,7 @@ impl State {
         if self.colormap == colormap && !cleared_override {
             return false;
         }
+        self.clear_field_sample_cache();
         self.colormap = colormap;
         self.plot.generation += 1;
         self.mark_dirty()
@@ -2526,6 +2547,7 @@ impl State {
         if self.auto_fit == auto_fit {
             return false;
         }
+        self.clear_field_sample_cache();
         self.auto_fit = auto_fit;
         self.mark_dirty()
     }
@@ -2538,6 +2560,7 @@ impl State {
         if self.color_min == lo && self.color_max == hi {
             return false;
         }
+        self.clear_field_sample_cache();
         self.color_min = lo;
         self.color_max = hi;
         self.mark_dirty()
@@ -2739,6 +2762,7 @@ impl State {
         if self.plane == plane {
             return false;
         }
+        self.clear_field_sample_cache();
         self.plane = plane;
         self.mark_dirty()
     }
@@ -3843,7 +3867,65 @@ impl State {
     /// slice of a three-component field samples its flat local plane frame, so
     /// positions, directions and magnitudes are all local; every other view
     /// keeps sampling the world domain exactly as before.
+    ///
+    /// A time-invariant formula reuses the previous pass when every
+    /// [`FieldSampleKey`] component is unchanged (issue #240); a time-dependent
+    /// formula always samples fresh so an animation step can never hit.
     pub fn sample(self: &State) -> Vec<ArrowData> {
+        if self.field.is_time_dependent() {
+            return self.sample_uncached();
+        }
+        let key = self.field_sample_key();
+        if let Some(samples) = self.field_sample_cache.borrow().get(&key) {
+            return samples.to_vec();
+        }
+        let samples = self.sample_uncached();
+        self.field_sample_cache
+            .borrow_mut()
+            .insert(key, samples.clone());
+        samples
+    }
+
+    /// The exact cache identity for the next sampling pass. Every sampler
+    /// input that can affect the returned arrows is present; simulation time is
+    /// absent because time-dependent fields bypass the cache entirely.
+    fn field_sample_key(self: &State) -> FieldSampleKey {
+        FieldSampleKey {
+            formula: self.formula.clone(),
+            parameters: self.parameters.clone(),
+            domain: self.domain,
+            density: self.density,
+            mode_3d: self.mode_3d,
+            plane_frame: self.plane_frame(),
+            field_mode: self.field_mode,
+            view: self.view_options(),
+        }
+    }
+
+    /// Invalidate the runtime sample cache after a setter changed a key
+    /// component. The key alone would also force a miss; this keeps the
+    /// no-longer-current pass from occupying memory.
+    fn clear_field_sample_cache(self: &mut State) {
+        self.field_sample_cache.get_mut().clear();
+    }
+
+    /// Fresh sampling passes since construction; a doc-hidden test seam.
+    #[doc(hidden)]
+    pub fn field_sample_passes_for_tests(self: &State) -> u64 {
+        self.field_sample_passes.get()
+    }
+
+    /// Whether the runtime sample cache holds an entry; a doc-hidden test seam.
+    #[doc(hidden)]
+    pub fn field_sample_cache_is_empty_for_tests(self: &State) -> bool {
+        self.field_sample_cache.borrow().is_empty()
+    }
+
+    /// The uncached sampling path. Callers that bypass the cache (animated
+    /// fields) and the fresh-pass branch both land here.
+    fn sample_uncached(self: &State) -> Vec<ArrowData> {
+        self.field_sample_passes
+            .set(self.field_sample_passes.get() + 1);
         if let Some(frame) = self.plane_frame() {
             return sample_plane_at(
                 &self.field,

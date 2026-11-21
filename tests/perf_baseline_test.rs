@@ -9,6 +9,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::wgpu;
 use glam::Vec3;
+use vector_field_explorer::arrow_style::ArrowStyle;
 use vector_field_explorer::cli::{self, CliFlags, CliOptions, Mode};
 use vector_field_explorer::custom_density::{
     DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw,
@@ -125,6 +126,16 @@ fn run_baseline_with_gate(enabled: bool, mut now: impl FnMut() -> Instant) -> bo
                 });
                 report(scene.name, "maxwell_sample", &samples);
             }
+            Extra::StyleRebuild => {
+                let styles = [ArrowStyle::Cone, ArrowStyle::Flat];
+                let mut step = 0usize;
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    step = step.wrapping_add(1);
+                    scene.state.set_arrow_style(styles[step % styles.len()]);
+                    black_box(scene.state.snapshot())
+                });
+                report(scene.name, "style_rebuild", &samples);
+            }
         }
     }
 
@@ -171,6 +182,9 @@ enum Extra {
     Density,
     Probe,
     Maxwell,
+    /// Toggle the arrow family between rebuilds: a style-only change that must
+    /// reuse the previous sampling pass (issue #240 hit path).
+    StyleRebuild,
 }
 
 struct Scene {
@@ -189,6 +203,15 @@ fn build_scenes() -> Vec<Scene> {
         options: cli_options(Mode::TwoD, 24, false, 0, 0),
         state,
         extra: Extra::None,
+    });
+
+    // Warm-cache hit path: the style toggle does not change the sampling key,
+    // so this number is a style-only rebuild, not a cold sampling pass.
+    scenes.push(Scene {
+        name: "style-rebuild",
+        options: cli_options(Mode::TwoD, 24, false, 0, 0),
+        state: State::new(false),
+        extra: Extra::StyleRebuild,
     });
 
     let mut state = State::new(true);

@@ -24,6 +24,7 @@ pub mod edit_history;
 pub mod export;
 pub mod export_provenance;
 pub mod field;
+pub mod field_cache;
 pub mod field_probe;
 pub mod flow;
 pub mod fly_camera;
