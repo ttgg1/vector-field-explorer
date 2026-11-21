@@ -153,6 +153,15 @@ Mapping (extent = largest `Domain::domain_size()` component, floor `1e-6`; `unit
 | `CurrentLoop` | Torus | major `radius`, minor `0.02 * extent` | current sign |
 | `Solenoid` | Tube | radius `radius`, length `length` | current sign |
 
+> **Amendment (2026-11-21):** the `minor 0.02 * extent` entry above is the
+> **vertical** minor radius only. A single per-instance linear transform cannot
+> independently control the torus minor radius, so ring and current-loop bodies
+> scale the torus (major `0.75`, minor `0.25`) by `radius / 0.75` radially and
+> `0.02 * extent / 0.25` vertically: vertical minor `0.02 * extent`, radial minor
+> `radius / 3`. Visual consequence: rings read proportionally thicker radially
+> at large source radius. A dedicated thin-ring primitive with proportional wall
+> thickness is deferred to a later renderer slice (follow-up candidate).
+
 - [ ] **Step 1: Write the failing mapping tests**
 
 Tests must assert, for one source of every kind: the primitive, the sign, the family colour, a finite transform with determinant > 0, and the mapped centre. Add: component axes are orthonormal for a non-Z axis; a zero axis maps like `Z`; a NaN radius still yields a finite transform; `Clip` equals the frame normal and plane offset; `display = Both` with `Electric`/`Magnetic` filters by family; disabled entries emit nothing; a `SourceScene` with 64 enabled sources yields 64 objects and `drawn_triangles() <= MAX_DRAWN_TRIANGLES`; `from_sources` twice on the same scene yields the same `generation`, while changing one radius changes it; `MeshScene::empty()` has zero objects, zero triangles and a generation that never collides with a non-empty scene.

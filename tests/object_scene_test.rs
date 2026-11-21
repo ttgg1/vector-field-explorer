@@ -1,6 +1,14 @@
+use glam::{DVec3, Vec3};
+use vector_field_explorer::domain::Domain;
 use vector_field_explorer::object_scene::{
-    MeshPrimitive, MeshVertex, STATIC_TRIANGLES, STATIC_VERTICES, VERTEX_BYTES, primitive_mesh,
+    MAX_DRAWN_TRIANGLES, MAX_OBJECTS, MeshPrimitive, MeshScene, MeshVertex, STATIC_TRIANGLES,
+    STATIC_VERTICES, VERTEX_BYTES, object_transform, primitive_mesh,
 };
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame};
+use vector_field_explorer::source_scene::{
+    ELECTRIC_COLOR, MAGNETIC_COLOR, SourceDisplay, SourceEntry, SourceScene,
+};
+use vector_field_explorer::sources::{Source, SourceKind};
 
 /// Barycentric corner markers in `push_triangle` order.
 const CORNERS: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -215,4 +223,581 @@ fn tube_has_twelve_visible_turns() {
         (total.abs() - expected).abs() < 0.1,
         "tube wraps 12 turns: total azimuth {total} rad, expected {expected}"
     );
+}
+
+// --- Scene mapping, slice clip and fingerprint (Task 2) -------------------
+
+const CENTER: [f64; 3] = [0.1, 0.2, 0.3];
+
+fn source(kind: SourceKind, center: [f64; 3], axis: [f64; 3]) -> Source {
+    Source {
+        center: DVec3::from_array(center),
+        axis: DVec3::from_array(axis),
+        kind,
+    }
+}
+
+fn entry(source: Source) -> SourceEntry {
+    SourceEntry {
+        enabled: true,
+        source,
+    }
+}
+
+fn scene(entries: Vec<SourceEntry>) -> SourceScene {
+    SourceScene {
+        entries,
+        ..SourceScene::default()
+    }
+}
+
+fn unit_domain() -> Domain {
+    Domain::new(Vec3::splat(-1.0), Vec3::splat(1.0))
+}
+
+fn column(transform: [[f32; 4]; 4], index: usize) -> Vec3 {
+    Vec3::new(
+        transform[index][0],
+        transform[index][1],
+        transform[index][2],
+    )
+}
+
+fn translation(transform: [[f32; 4]; 4]) -> Vec3 {
+    column(transform, 3)
+}
+
+fn determinant(transform: [[f32; 4]; 4]) -> f32 {
+    column(transform, 0).dot(column(transform, 1).cross(column(transform, 2)))
+}
+
+fn assert_finite_transform(transform: [[f32; 4]; 4]) -> f32 {
+    for (row, values) in transform.iter().enumerate() {
+        for (col, value) in values.iter().enumerate() {
+            assert!(value.is_finite(), "transform[{row}][{col}] = {value}");
+        }
+    }
+    determinant(transform)
+}
+
+fn assert_near(actual: f32, expected: f32, label: &str) {
+    assert!(
+        (actual - expected).abs() < 1e-5,
+        "{label}: expected {expected}, got {actual}"
+    );
+}
+
+fn assert_vec_near(actual: Vec3, expected: Vec3, label: &str) {
+    assert!(
+        (actual - expected).length() < 1e-5,
+        "{label}: expected {expected:?}, got {actual:?}"
+    );
+}
+
+fn family_color(kind: &SourceKind) -> [f32; 3] {
+    let [red, green, blue] = match kind {
+        SourceKind::PointCharge { .. }
+        | SourceKind::FiniteLineCharge { .. }
+        | SourceKind::ChargedRing { .. }
+        | SourceKind::ChargedDisc { .. }
+        | SourceKind::SolidSphere { .. } => ELECTRIC_COLOR,
+        SourceKind::StraightWire { .. }
+        | SourceKind::CurrentLoop { .. }
+        | SourceKind::Solenoid { .. } => MAGNETIC_COLOR,
+    };
+    [
+        f32::from(red) / 255.0,
+        f32::from(green) / 255.0,
+        f32::from(blue) / 255.0,
+    ]
+}
+
+fn expected_sign(kind: &SourceKind) -> i8 {
+    let strength = match *kind {
+        SourceKind::PointCharge { charge }
+        | SourceKind::FiniteLineCharge { charge, .. }
+        | SourceKind::ChargedRing { charge, .. }
+        | SourceKind::ChargedDisc { charge, .. }
+        | SourceKind::SolidSphere { charge, .. } => charge,
+        SourceKind::StraightWire { current }
+        | SourceKind::CurrentLoop { current, .. }
+        | SourceKind::Solenoid { current, .. } => current,
+    };
+    if strength < 0.0 { -1 } else { 1 }
+}
+
+fn mapping_cases() -> Vec<(SourceKind, MeshPrimitive)> {
+    vec![
+        (
+            SourceKind::PointCharge { charge: -2.0 },
+            MeshPrimitive::Sphere,
+        ),
+        (
+            SourceKind::FiniteLineCharge {
+                charge: 3.0,
+                length: 1.5,
+            },
+            MeshPrimitive::Cylinder,
+        ),
+        (
+            SourceKind::ChargedRing {
+                charge: -1.0,
+                radius: 0.75,
+            },
+            MeshPrimitive::Torus,
+        ),
+        (
+            SourceKind::ChargedDisc {
+                charge: 2.0,
+                radius: 0.5,
+            },
+            MeshPrimitive::Disc,
+        ),
+        (
+            SourceKind::SolidSphere {
+                charge: -3.0,
+                radius: 0.4,
+            },
+            MeshPrimitive::Sphere,
+        ),
+        (
+            SourceKind::StraightWire { current: -5.0 },
+            MeshPrimitive::Cylinder,
+        ),
+        (
+            SourceKind::CurrentLoop {
+                current: 2.0,
+                radius: 0.6,
+            },
+            MeshPrimitive::Torus,
+        ),
+        (
+            SourceKind::Solenoid {
+                current: -1.0,
+                radius: 0.5,
+                length: 1.2,
+                turns: 8,
+            },
+            MeshPrimitive::Tube,
+        ),
+    ]
+}
+
+#[test]
+fn every_source_kind_maps_to_its_primitive_sign_colour_and_centre() {
+    for (kind, primitive) in mapping_cases() {
+        let source = source(kind, CENTER, [0.0, 1.0, 0.0]);
+        let mapped = MeshScene::from_sources(&scene(vec![entry(source)]), &unit_domain(), None);
+
+        assert_eq!(mapped.objects().len(), 1, "{kind:?}");
+        let object = &mapped.objects()[0];
+        assert_eq!(object.primitive, primitive, "{kind:?}");
+        assert_eq!(object.sign, expected_sign(&kind), "{kind:?}");
+        assert_eq!(object.color, family_color(&kind), "{kind:?}");
+        assert_eq!(object.opacity, 1.0, "{kind:?}");
+
+        let determinant = assert_finite_transform(object.transform);
+        assert!(determinant > 0.0, "{kind:?} determinant {determinant}");
+        assert_vec_near(
+            translation(object.transform),
+            Vec3::new(CENTER[0] as f32, CENTER[1] as f32, CENTER[2] as f32),
+            "mapped centre",
+        );
+    }
+}
+
+#[test]
+fn non_axis_aligned_basis_is_orthonormal_with_a_positive_determinant() {
+    let transform = object_transform(
+        Vec3::new(1.0, -2.0, 0.5),
+        Vec3::new(1.0, 2.0, 3.0),
+        Vec3::new(2.0, 3.0, 4.0),
+    );
+    let right = column(transform, 0);
+    let up = column(transform, 1);
+    let normal = column(transform, 2);
+
+    assert_near(right.length(), 2.0, "right length");
+    assert_near(up.length(), 3.0, "up length");
+    assert_near(normal.length(), 4.0, "normal length");
+    assert!(right.dot(up).abs() < 1e-5);
+    assert!(right.dot(normal).abs() < 1e-5);
+    assert!(up.dot(normal).abs() < 1e-5);
+    assert_vec_near(
+        up.normalize(),
+        Vec3::new(1.0, 2.0, 3.0).normalize(),
+        "primitive Y follows the source axis",
+    );
+    assert!(determinant(transform) > 0.0);
+}
+
+#[test]
+fn zero_or_non_finite_axis_falls_back_to_z_with_a_finite_transform() {
+    let center = Vec3::new(0.25, 0.5, -0.75);
+    let scale = Vec3::new(2.0, 3.0, 4.0);
+    let z = object_transform(center, Vec3::Z, scale);
+    let zero = object_transform(center, Vec3::ZERO, scale);
+    let nan = object_transform(center, Vec3::new(f32::NAN, 0.0, 0.0), scale);
+    let infinite = object_transform(center, Vec3::new(0.0, f32::INFINITY, 0.0), scale);
+
+    assert_eq!(zero, z);
+    assert_eq!(nan, z);
+    assert_eq!(infinite, z);
+    assert!(assert_finite_transform(z) > 0.0);
+}
+
+#[test]
+fn transform_stays_finite_for_non_finite_center_and_scale() {
+    for transform in [
+        object_transform(
+            Vec3::new(f32::NAN, 0.0, 0.0),
+            Vec3::Y,
+            Vec3::new(1.0, 1.0, 1.0),
+        ),
+        object_transform(
+            Vec3::ZERO,
+            Vec3::Y,
+            Vec3::new(f32::NAN, f32::INFINITY, -1.0),
+        ),
+    ] {
+        assert!(assert_finite_transform(transform) > 0.0);
+    }
+}
+
+#[test]
+fn unit_and_extent_scaling_follow_the_mapping_table() {
+    let domain = unit_domain(); // extent 2 => unit 0.1
+    let point = MeshScene::from_sources(
+        &scene(vec![entry(source(
+            SourceKind::PointCharge { charge: 1.0 },
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+        ))]),
+        &domain,
+        None,
+    );
+    let sphere = point.objects()[0].transform;
+    for index in 0..3 {
+        assert_near(column(sphere, index).length(), 0.1, "point-charge radius");
+    }
+
+    let wire = MeshScene::from_sources(
+        &scene(vec![entry(source(
+            SourceKind::StraightWire { current: 1.0 },
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+        ))]),
+        &domain,
+        None,
+    );
+    let cylinder = wire.objects()[0].transform;
+    assert_near(column(cylinder, 1).length(), 4.4, "wire spans 2.2 extents");
+    assert_near(
+        column(cylinder, 0).length(),
+        2.0 * 0.012 * 2.0,
+        "wire radius 0.012 extents over a 0.5-radius mesh",
+    );
+
+    let disc = MeshScene::from_sources(
+        &scene(vec![entry(source(
+            SourceKind::ChargedDisc {
+                charge: 1.0,
+                radius: 0.5,
+            },
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+        ))]),
+        &domain,
+        None,
+    );
+    let flat = disc.objects()[0].transform;
+    assert_near(column(flat, 0).length(), 0.5, "disc radius");
+    assert_near(
+        column(flat, 1).length(),
+        0.04,
+        "disc Y scale is reserved: the zero-thickness fan ignores it",
+    );
+}
+
+#[test]
+fn nan_radius_still_yields_a_finite_transform() {
+    let mapped = MeshScene::from_sources(
+        &scene(vec![entry(source(
+            SourceKind::SolidSphere {
+                charge: 1.0,
+                radius: f64::NAN,
+            },
+            CENTER,
+            [0.0, 1.0, 0.0],
+        ))]),
+        &unit_domain(),
+        None,
+    );
+    assert_eq!(mapped.objects().len(), 1);
+    assert!(assert_finite_transform(mapped.objects()[0].transform) > 0.0);
+}
+
+#[test]
+fn non_finite_centres_are_skipped_without_panicking() {
+    let mapped = MeshScene::from_sources(
+        &scene(vec![
+            entry(source(
+                SourceKind::PointCharge { charge: 1.0 },
+                [f64::NAN, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            )),
+            entry(source(
+                SourceKind::PointCharge { charge: 1.0 },
+                [0.0, f64::INFINITY, 0.0],
+                [0.0, 1.0, 0.0],
+            )),
+            entry(source(
+                SourceKind::PointCharge { charge: 1.0 },
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            )),
+        ]),
+        &unit_domain(),
+        None,
+    );
+    assert_eq!(mapped.objects().len(), 1);
+}
+
+#[test]
+fn clip_matches_the_plane_frame_normal_and_offset() {
+    let frame = PlaneFrame {
+        axis: PlaneAxis::Z,
+        origin: Vec3::new(1.0, 2.0, 3.0),
+        right: Vec3::X,
+        up: Vec3::Y,
+        normal: Vec3::Z,
+        half_u: 1.0,
+        half_v: 1.0,
+    };
+    let mapped = MeshScene::from_sources(&scene(Vec::new()), &unit_domain(), Some(&frame));
+    let clip = mapped.clip().expect("clip from frame");
+    assert_eq!(clip.normal, [0.0, 0.0, 1.0]);
+    assert_near(clip.offset, 3.0, "normal dot origin");
+
+    let no_plane = MeshScene::from_sources(&scene(Vec::new()), &unit_domain(), None);
+    assert!(no_plane.clip().is_none());
+}
+
+#[test]
+fn both_display_filters_by_family() {
+    let entries = vec![
+        entry(source(
+            SourceKind::PointCharge { charge: 1.0 },
+            [-0.5, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        )),
+        entry(source(
+            SourceKind::CurrentLoop {
+                current: 1.0,
+                radius: 0.5,
+            },
+            [0.5, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        )),
+    ];
+
+    let mut both = scene(entries.clone());
+    both.display = SourceDisplay::Both;
+    assert_eq!(
+        MeshScene::from_sources(&both, &unit_domain(), None)
+            .objects()
+            .len(),
+        2
+    );
+
+    let mut electric = scene(entries.clone());
+    electric.display = SourceDisplay::Electric;
+    let electric_scene = MeshScene::from_sources(&electric, &unit_domain(), None);
+    assert_eq!(electric_scene.objects().len(), 1);
+    assert_eq!(
+        electric_scene.objects()[0].color,
+        family_color(&SourceKind::PointCharge { charge: 1.0 })
+    );
+
+    let mut magnetic = scene(entries);
+    magnetic.display = SourceDisplay::Magnetic;
+    let magnetic_scene = MeshScene::from_sources(&magnetic, &unit_domain(), None);
+    assert_eq!(magnetic_scene.objects().len(), 1);
+    assert_eq!(
+        magnetic_scene.objects()[0].color,
+        family_color(&SourceKind::CurrentLoop {
+            current: 1.0,
+            radius: 0.5
+        })
+    );
+}
+
+#[test]
+fn disabled_entries_emit_nothing() {
+    let mut disabled = entry(source(
+        SourceKind::PointCharge { charge: 1.0 },
+        [0.0; 3],
+        [0.0, 1.0, 0.0],
+    ));
+    disabled.enabled = false;
+    let mapped = MeshScene::from_sources(&scene(vec![disabled]), &unit_domain(), None);
+    assert!(mapped.objects().is_empty());
+    assert_eq!(mapped.drawn_triangles(), 0);
+}
+
+#[test]
+fn object_order_is_the_scene_entry_order() {
+    let entries: Vec<SourceEntry> = (0..5)
+        .map(|index| {
+            entry(source(
+                SourceKind::PointCharge { charge: 1.0 },
+                [f64::from(index), 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ))
+        })
+        .collect();
+    let mapped = MeshScene::from_sources(&scene(entries), &unit_domain(), None);
+    for (index, object) in mapped.objects().iter().enumerate() {
+        assert_near(
+            translation(object.transform).x,
+            index as f32,
+            "deterministic order",
+        );
+    }
+}
+
+#[test]
+fn sixty_four_solenoids_fit_both_budgets() {
+    assert_eq!(MAX_OBJECTS, 64);
+    let entries: Vec<SourceEntry> = (0..64)
+        .map(|index| {
+            entry(source(
+                SourceKind::Solenoid {
+                    current: 1.0,
+                    radius: 0.25,
+                    length: 1.0,
+                    turns: 12,
+                },
+                [f64::from(index % 4), 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ))
+        })
+        .collect();
+    let mapped = MeshScene::from_sources(&scene(entries), &unit_domain(), None);
+    assert_eq!(mapped.objects().len(), MAX_OBJECTS);
+    assert_eq!(
+        mapped.drawn_triangles(),
+        64 * MeshPrimitive::Tube.triangles()
+    );
+    assert!(mapped.drawn_triangles() <= MAX_DRAWN_TRIANGLES);
+}
+
+#[test]
+fn truncation_keeps_the_first_sixty_four_entries_and_drops_the_sixty_fifth() {
+    assert_eq!(MAX_OBJECTS, 64);
+    // Distinct centres make the dropped entry identifiable: entry `n` sits at
+    // `x = n`, so the 65th entry (index 64) is the one that must disappear.
+    let entries: Vec<SourceEntry> = (0..=MAX_OBJECTS)
+        .map(|index| {
+            entry(source(
+                SourceKind::PointCharge { charge: 1.0 },
+                [index as f64, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ))
+        })
+        .collect();
+    let mapped = MeshScene::from_sources(&scene(entries), &unit_domain(), None);
+    assert_eq!(mapped.objects().len(), MAX_OBJECTS);
+    for (index, object) in mapped.objects().iter().enumerate() {
+        assert_near(
+            translation(object.transform).x,
+            index as f32,
+            "entry order preserved under truncation",
+        );
+    }
+    let dropped = (MAX_OBJECTS as f32, 0.0, 0.0);
+    assert!(
+        mapped.objects().iter().all(|object| {
+            let centre = translation(object.transform);
+            (centre.x - dropped.0).abs() > 0.5 || centre.y.abs() > 0.5 || centre.z.abs() > 0.5
+        }),
+        "the 65th entry must be the dropped one, not an arbitrary entry"
+    );
+}
+
+#[test]
+fn triangle_budget_cannot_bind_before_the_object_budget() {
+    // The triangle-budget break is unreachable with the current primitive set:
+    // the largest body is the 1,152-triangle Tube, so MAX_OBJECTS (64) caps a
+    // scene at 73,728 triangles, well under MAX_DRAWN_TRIANGLES (150,000). The
+    // object budget always binds first; this pins the headroom that must hold
+    // before a triangle-budget truncation path can be exercised.
+    let largest = MeshPrimitive::ALL
+        .iter()
+        .map(|primitive| primitive.triangles())
+        .max()
+        .expect("at least one primitive");
+    assert_eq!(largest, MeshPrimitive::Tube.triangles());
+    assert!(MAX_OBJECTS * largest < MAX_DRAWN_TRIANGLES);
+}
+
+#[test]
+fn nan_source_strength_maps_to_positive_sign() {
+    // `source_sign` compares `strength < 0.0`, and every comparison with NaN is
+    // false, so a NaN charge or current reads as positive rather than signless.
+    for kind in [
+        SourceKind::PointCharge { charge: f64::NAN },
+        SourceKind::CurrentLoop {
+            current: f64::NAN,
+            radius: 1.0,
+        },
+    ] {
+        let mapped = MeshScene::from_sources(
+            &scene(vec![entry(source(kind, CENTER, [0.0, 1.0, 0.0]))]),
+            &unit_domain(),
+            None,
+        );
+        assert_eq!(mapped.objects().len(), 1, "{kind:?}");
+        assert_eq!(mapped.objects()[0].sign, 1, "{kind:?}");
+    }
+}
+
+#[test]
+fn generation_is_stable_and_changes_with_mapped_input() {
+    let make = |radius: f64| {
+        scene(vec![entry(source(
+            SourceKind::CurrentLoop {
+                current: 1.0,
+                radius,
+            },
+            CENTER,
+            [1.0, 2.0, 3.0],
+        ))])
+    };
+    let first = MeshScene::from_sources(&make(0.5), &unit_domain(), None);
+    let again = MeshScene::from_sources(&make(0.5), &unit_domain(), None);
+    let changed = MeshScene::from_sources(&make(0.75), &unit_domain(), None);
+
+    assert_eq!(first.generation(), again.generation());
+    assert_ne!(first.generation(), changed.generation());
+    assert_ne!(first.generation(), MeshScene::empty().generation());
+}
+
+#[test]
+fn empty_scene_has_no_objects_or_triangles_and_a_distinct_generation() {
+    let empty = MeshScene::empty();
+    assert!(empty.objects().is_empty());
+    assert_eq!(empty.drawn_triangles(), 0);
+    assert!(empty.clip().is_none());
+
+    let non_empty = MeshScene::from_sources(
+        &scene(vec![entry(source(
+            SourceKind::PointCharge { charge: 1.0 },
+            [0.0; 3],
+            [0.0, 1.0, 0.0],
+        ))]),
+        &unit_domain(),
+        None,
+    );
+    assert_ne!(empty.generation(), non_empty.generation());
 }

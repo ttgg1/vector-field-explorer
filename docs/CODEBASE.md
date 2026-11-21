@@ -4025,21 +4025,27 @@ annotation, and no plane-mode dimming.
 
 ### 3.6 Rendering
 
-#### `src/object_scene.rs` — static primitive meshes for object instances
+#### `src/object_scene.rs` — primitive meshes and source mapping for object instances
 
 **Purpose.** Pure, GPU-free geometry for the depth-enabled object renderer. Five
 object bodies are generated once per process and reused by every instance:
-`MeshPrimitive::{Sphere, Cylinder, Torus, Tube, Disc}`. The module has no
-renderer, app, persistence or `wgpu` dependency; later slices add source mapping,
-instance transforms and the offscreen pass.
+`MeshPrimitive::{Sphere, Cylinder, Torus, Tube, Disc}`. `MeshScene::from_sources`
+maps the enabled, displayed source entries to instances with a slice clip and a
+content fingerprint. The module has no renderer, app, persistence or `wgpu`
+dependency; a later slice adds the offscreen pass.
 
 **Public API.** `MeshPrimitive` with `ALL`, `triangles()`, `vertices()`,
 `index()` and `from_index(u32) -> Option<MeshPrimitive>`; `MeshVertex {
 position: [f32; 3], normal: [f32; 3], barycentric: [f32; 3] }` (`repr(C)`);
 `PrimitiveMesh { primitive, vertices: &'static [MeshVertex] }`;
-`primitive_mesh(MeshPrimitive) -> &'static PrimitiveMesh`; and the budget
+`primitive_mesh(MeshPrimitive) -> &'static PrimitiveMesh`; the budget
 constants `STATIC_TRIANGLES = 2_832`, `STATIC_VERTICES = 8_496`,
-`VERTEX_BYTES = 36`.
+`VERTEX_BYTES = 36`, `MAX_OBJECTS = 64` and `MAX_DRAWN_TRIANGLES = 150_000`;
+`MeshObject { primitive, transform: [[f32; 4]; 4], color: [f32; 3], opacity,
+sign: i8 }`; `MeshScene` with `empty()`, `from_sources(&SourceScene, &Domain,
+Option<&PlaneFrame>)`, `objects()`, `drawn_triangles()`, `generation()` and
+`clip()`; `SliceClip { normal: [f32; 3], offset: f32 }`; and `object_transform(
+center: Vec3, axis: Vec3, scale: Vec3) -> [[f32; 4]; 4]`.
 
 **Invariants.** Every mesh is non-indexed, three vertices per triangle, with
 exactly `[1,0,0]`, `[0,1,0]`, `[0,0,1]` barycentrics. Normals are outward unit
@@ -4049,6 +4055,45 @@ Cylinder 96 (24 sides plus two 24-triangle caps), Torus 768 (32 × 12), Tube 1,1
 `+Y`), Disc 48 (24 rim segments, two-sided fan). `STATIC_VERTICES × VERTEX_BYTES`
 is 305,856 B of static geometry. Each variant is cached in its own
 `OnceLock<PrimitiveMesh>`; there is no per-frame allocation and no `unsafe`.
+
+**Mapping.** The domain extent is its largest `domain_size()` component with a
+`1e-6` floor; `unit = 0.05 * extent`. Point charge → unit sphere; finite line
+charge → cylinder (`0.02 * extent` radius, source length); charged ring and
+current loop → torus with source major radius and a `0.02 * extent` **vertical**
+minor radius, while the **radial** minor radius is `radius / 3`; charged disc →
+disc (source radius; its `scale.y = 0.02 * extent` is a reserved value, not a
+physical thickness, because the slice-1 disc is a zero-thickness two-sided fan
+at local `Y = 0`); solid sphere → source-radius sphere; straight wire → cylinder
+(`0.012 * extent` radius, `2.2 * extent` length); solenoid → tube (source radius
+and length, 12 visible turns). Family colour comes from
+`ELECTRIC_COLOR`/`MAGNETIC_COLOR`, opacity is `1.0`, and `sign` is `-1` only for
+a finite negative charge/current (a NaN strength compares false and maps to
+`+1`). `SourceDisplay` filters families; disabled entries emit nothing; entry
+order is preserved, and either truncation drops the tail without reordering.
+
+Torus geometry: the primitive has major `0.75` and minor `0.25`, and
+`object_mapping` sets `scale = (radius / 0.75, 0.02 * extent / 0.25, radius /
+0.75)`. So the major radius is exactly `radius`, the vertical minor radius is
+exactly `0.02 * extent`, and the radial minor radius is
+`(radius / 0.75) * 0.25 = radius / 3`. A single per-instance linear transform
+cannot vary the tube's minor radius with direction: the minor cross-section
+spans both the radial and vertical axes of the same mesh, and a diagonal scale
+stretches it differently along each. The consequence is that a ring reads
+proportionally thicker radially as its major radius grows, while its vertical
+span stays fixed. A dedicated thin-ring primitive with proportional wall
+thickness is deferred to a later renderer slice (follow-up candidate).
+
+Transforms are column-major: the first three columns are the scaled right,
+source-axis and forward basis vectors, and the last column is the centre. Local
+`+Y` follows the source axis; a zero or non-finite axis falls back to `Z`, and
+non-finite centres or degenerate scales are skipped or clamped so every emitted
+transform is finite with a positive determinant. `clip()` is the frame normal
+and `normal.dot(origin)`; the normal is taken as unit because
+`PlaneFrame::new` builds it from unit in-plane axes, so consumers must not
+assume that for hand-built or foreign frames. An empty mapped scene with a
+plane has `generation == 0` but `clip: Some(_)`. The FNV-1a `generation` covers
+each instance's primitive index, sign, opacity/colour bits and all 16 transform
+bit patterns; `empty()` reserves generation `0`.
 
 **Pinned by.** [tests/object_scene_test.rs](../tests/object_scene_test.rs):
 `primitive_triangle_counts_match_the_budget`,
@@ -4060,12 +4105,37 @@ is 305,856 B of static geometry. Each variant is cached in its own
 winding and non-degenerate cross products), `generated_geometry_matches_static_budget`
 (generated vertex/triangle totals equal the constants),
 `sphere_vertices_lie_on_the_unit_sphere`,
-`cylinder_spans_unit_height_and_has_caps`, `disc_is_two_sided_and_flat`, and
-`tube_has_twelve_visible_turns` (unit height and 12-turn azimuthal span).
+`cylinder_spans_unit_height_and_has_caps`, `disc_is_two_sided_and_flat`,
+`tube_has_twelve_visible_turns` (unit height and 12-turn azimuthal span),
+`every_source_kind_maps_to_its_primitive_sign_colour_and_centre`,
+`non_axis_aligned_basis_is_orthonormal_with_a_positive_determinant`,
+`zero_or_non_finite_axis_falls_back_to_z_with_a_finite_transform`,
+`transform_stays_finite_for_non_finite_center_and_scale`,
+`unit_and_extent_scaling_follow_the_mapping_table`,
+`nan_radius_still_yields_a_finite_transform`,
+`non_finite_centres_are_skipped_without_panicking`,
+`clip_matches_the_plane_frame_normal_and_offset`,
+`both_display_filters_by_family`, `disabled_entries_emit_nothing`,
+`object_order_is_the_scene_entry_order`, `sixty_four_solenoids_fit_both_budgets`,
+`truncation_keeps_the_first_sixty_four_entries_and_drops_the_sixty_fifth`,
+`triangle_budget_cannot_bind_before_the_object_budget` (documents that the
+triangle-budget break is unreachable until a primitive exceeds 2,343 triangles
+at 64 instances; the current largest is 1,152, so 64 × 1,152 = 73,728 <
+150,000 and `MAX_OBJECTS` always binds first),
+`nan_source_strength_maps_to_positive_sign`,
+`generation_is_stable_and_changes_with_mapped_input`, and
+`empty_scene_has_no_objects_or_triangles_and_a_distinct_generation`.
 
 **Limitations.** Fixed tessellation, no LOD, no picking metadata and no
 per-triangle colour. Solenoid turns are capped at 12 for honesty; the source's
-numeric `turns` remains authoritative in panel and export text.
+numeric `turns` remains authoritative in panel and export text. Ring and
+current-loop bodies have a fixed `0.02 * extent` vertical minor radius and a
+`radius / 3` radial minor radius, so they read proportionally thicker radially
+at large source radius; finer tube control needs a dedicated thin-ring
+primitive (deferred). The disc's Y scale is reserved, not a thickness. The
+triangle-budget branch of `from_sources` is unreachable with the current
+primitive set, because `MAX_OBJECTS × largest primitive` is below
+`MAX_DRAWN_TRIANGLES`.
 
 #### `src/renderer.rs` — instanced wgpu renderer
 

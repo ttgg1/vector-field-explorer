@@ -425,3 +425,371 @@ fn tube_mesh() -> Vec<MeshVertex> {
 
     out
 }
+
+use glam::Vec3;
+
+use crate::domain::Domain;
+use crate::plane::PlaneFrame;
+use crate::source_scene::{ELECTRIC_COLOR, MAGNETIC_COLOR, SourceDisplay, SourceScene};
+use crate::sources::{FieldFamily, SourceKind};
+
+/// Hard cap on instances emitted by one [`MeshScene`].
+pub const MAX_OBJECTS: usize = 64;
+
+/// Hard cap on triangles drawn by one [`MeshScene`].
+pub const MAX_DRAWN_TRIANGLES: usize = 150_000;
+
+/// Smallest domain extent used to derive object dimensions.
+const MIN_EXTENT: f32 = 1e-6;
+
+/// One instanced object ready for the renderer.
+///
+/// `transform` is column-major: columns 0..=2 are the scaled right, axis and
+/// forward basis vectors and column 3 is the world translation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshObject {
+    /// Static body drawn at this instance.
+    pub primitive: MeshPrimitive,
+    /// Column-major model-to-world transform.
+    pub transform: [[f32; 4]; 4],
+    /// Linear sRGB colour in `0..=1`.
+    pub color: [f32; 3],
+    /// Opacity, always `1.0` for sources.
+    pub opacity: f32,
+    /// `-1` for a negative charge/current, otherwise `1`.
+    pub sign: i8,
+}
+
+/// The clip plane that cuts object bodies on a 2D slice.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SliceClip {
+    /// World-space unit normal facing the visible half-space.
+    ///
+    /// Taken as unit because [`PlaneFrame::new`] builds it from the
+    /// cross product of two unit in-plane axes. Consumers must not assume
+    /// this for a hand-built or foreign frame.
+    pub normal: [f32; 3],
+    /// Plane offset: `normal.dot(origin)`.
+    pub offset: f32,
+}
+
+/// A mapped source scene plus its content fingerprint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshScene {
+    objects: Vec<MeshObject>,
+    generation: u64,
+    clip: Option<SliceClip>,
+}
+
+impl MeshScene {
+    /// An empty scene. Its generation is reserved (`0`) and never collides
+    /// with a mapped scene.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            objects: Vec::new(),
+            generation: 0,
+            clip: None,
+        }
+    }
+
+    /// Map every visible, enabled source entry to one instance.
+    ///
+    /// Entries with a non-finite centre are skipped. Display filtering follows
+    /// [`SourceDisplay`]; disabled entries emit nothing. At most the first
+    /// [`MAX_OBJECTS`] instances that fit [`MAX_DRAWN_TRIANGLES`] are kept in
+    /// entry order; both truncations drop the tail, never an earlier entry.
+    /// An enabled set that yields no objects still maps the plane, so such a
+    /// scene has `generation == 0` but `clip: Some(_)`.
+    #[must_use]
+    pub fn from_sources(scene: &SourceScene, domain: &Domain, plane: Option<&PlaneFrame>) -> Self {
+        let extent = scene_extent(domain);
+        let unit = 0.05 * extent;
+        let mut objects = Vec::new();
+        let mut drawn = 0usize;
+
+        for entry in scene.entries.iter() {
+            if !entry.enabled || !display_includes(scene.display, entry.source.kind.family()) {
+                continue;
+            }
+            if objects.len() >= MAX_OBJECTS {
+                break;
+            }
+            if !entry.source.center.is_finite() {
+                continue;
+            }
+            let (primitive, scale) = object_mapping(entry.source.kind, extent, unit);
+            let triangles = primitive.triangles();
+            if drawn.saturating_add(triangles) > MAX_DRAWN_TRIANGLES {
+                break;
+            }
+            objects.push(MeshObject {
+                primitive,
+                transform: object_transform(
+                    entry.source.center.as_vec3(),
+                    entry.source.axis.as_vec3(),
+                    scale,
+                ),
+                color: family_color(entry.source.kind.family()),
+                opacity: 1.0,
+                sign: source_sign(entry.source.kind),
+            });
+            drawn += triangles;
+        }
+
+        let clip = plane.map(|frame| SliceClip {
+            normal: [frame.normal.x, frame.normal.y, frame.normal.z],
+            offset: frame.normal.dot(frame.origin),
+        });
+        let generation = fingerprint(&objects);
+
+        Self {
+            objects,
+            generation,
+            clip,
+        }
+    }
+
+    /// The mapped instances, in deterministic source-entry order.
+    #[must_use]
+    pub fn objects(&self) -> &[MeshObject] {
+        &self.objects
+    }
+
+    /// Triangles this scene draws across all instances.
+    #[must_use]
+    pub fn drawn_triangles(&self) -> usize {
+        self.objects
+            .iter()
+            .map(|object| object.primitive.triangles())
+            .sum()
+    }
+
+    /// Content fingerprint: stable for identical scenes and changed by any
+    /// mapped input.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The slice clip plane, when mapped from a [`PlaneFrame`].
+    #[must_use]
+    pub fn clip(&self) -> Option<SliceClip> {
+        self.clip
+    }
+}
+
+/// Build a column-major model transform whose local `+Y` follows `axis`.
+///
+/// Columns are the scaled `right`, `axis` and `forward` basis vectors; the
+/// translation is the last column. A zero, non-finite or unnormalizable axis
+/// falls back to `Vec3::Z`. Non-finite centres and non-positive or non-finite
+/// scales are clamped so the result is always finite with a positive
+/// determinant.
+#[must_use]
+pub fn object_transform(center: Vec3, axis: Vec3, scale: Vec3) -> [[f32; 4]; 4] {
+    let center = if center.is_finite() {
+        center
+    } else {
+        Vec3::ZERO
+    };
+    let normal = normalized_axis(axis);
+    let helper = if normal.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
+    let right = finite_normalize(normal.cross(helper), Vec3::Y);
+    let forward = right.cross(normal);
+    let scale = Vec3::new(
+        sanitize_scale(scale.x),
+        sanitize_scale(scale.y),
+        sanitize_scale(scale.z),
+    );
+    let right = right * scale.x;
+    let normal = normal * scale.y;
+    let forward = forward * scale.z;
+
+    [
+        [right.x, right.y, right.z, 0.0],
+        [normal.x, normal.y, normal.z, 0.0],
+        [forward.x, forward.y, forward.z, 0.0],
+        [center.x, center.y, center.z, 1.0],
+    ]
+}
+
+fn normalized_axis(axis: Vec3) -> Vec3 {
+    finite_normalize(axis, Vec3::Z)
+}
+
+fn finite_normalize(value: Vec3, fallback: Vec3) -> Vec3 {
+    if value.is_finite() && value.length_squared() > 0.0 {
+        let normalized = value.normalize();
+        if normalized.is_finite() {
+            return normalized;
+        }
+    }
+    fallback
+}
+
+fn sanitize_scale(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else if value.is_finite() {
+        MIN_EXTENT
+    } else {
+        1.0
+    }
+}
+
+fn scene_extent(domain: &Domain) -> f32 {
+    let size = domain.domain_size();
+    let extent = size.x.max(size.y).max(size.z);
+    if extent.is_finite() && extent > MIN_EXTENT {
+        extent
+    } else {
+        MIN_EXTENT
+    }
+}
+
+fn display_includes(display: SourceDisplay, family: FieldFamily) -> bool {
+    matches!(
+        (display, family),
+        (SourceDisplay::Both, _)
+            | (SourceDisplay::Electric, FieldFamily::Electric)
+            | (SourceDisplay::Magnetic, FieldFamily::Magnetic)
+    )
+}
+
+fn family_color(family: FieldFamily) -> [f32; 3] {
+    let [red, green, blue] = match family {
+        FieldFamily::Electric => ELECTRIC_COLOR,
+        FieldFamily::Magnetic => MAGNETIC_COLOR,
+    };
+    [
+        f32::from(red) / 255.0,
+        f32::from(green) / 255.0,
+        f32::from(blue) / 255.0,
+    ]
+}
+
+fn source_sign(kind: SourceKind) -> i8 {
+    let strength = match kind {
+        SourceKind::PointCharge { charge }
+        | SourceKind::FiniteLineCharge { charge, .. }
+        | SourceKind::ChargedRing { charge, .. }
+        | SourceKind::ChargedDisc { charge, .. }
+        | SourceKind::SolidSphere { charge, .. } => charge,
+        SourceKind::StraightWire { current }
+        | SourceKind::CurrentLoop { current, .. }
+        | SourceKind::Solenoid { current, .. } => current,
+    };
+    // A NaN strength fails every comparison, including `< 0.0`, so it maps to
+    // `+1`; only a finite negative value flips the sign.
+    if strength < 0.0 { -1 } else { 1 }
+}
+
+fn positive_dimension(value: f64, fallback: f32) -> f32 {
+    let value = value as f32;
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
+    }
+}
+
+/// Primitive and local-axis scale for one source kind.
+///
+/// The primitive meshes are `Y`-axial, so `scale.y` is the length along the
+/// source axis and `scale.x`/`scale.z` are radial. Ring and current-loop bodies
+/// use the torus primitive (major `0.75`, minor `0.25`), scaled so the major
+/// radius and the vertical minor radius are set independently:
+/// `scale.x = radius / 0.75` gives a radial minor radius of `radius / 3`, while
+/// `scale.y = (0.02 * extent) / 0.25` gives a vertical minor radius of exactly
+/// `0.02 * extent`. A single per-instance linear transform cannot vary the
+/// minor radius with direction, so the tube reads proportionally thicker
+/// radially as the major radius grows.
+fn object_mapping(kind: SourceKind, extent: f32, unit: f32) -> (MeshPrimitive, Vec3) {
+    let thin = 0.02 * extent;
+    match kind {
+        SourceKind::PointCharge { .. } => (MeshPrimitive::Sphere, Vec3::splat(unit)),
+        SourceKind::FiniteLineCharge { length, .. } => {
+            let radius = 0.02 * extent;
+            (
+                MeshPrimitive::Cylinder,
+                Vec3::new(
+                    radius / 0.5,
+                    positive_dimension(length, extent),
+                    radius / 0.5,
+                ),
+            )
+        }
+        SourceKind::ChargedRing { radius, .. } => {
+            let radius = positive_dimension(radius, unit);
+            (
+                MeshPrimitive::Torus,
+                Vec3::new(radius / 0.75, thin / 0.25, radius / 0.75),
+            )
+        }
+        SourceKind::ChargedDisc { radius, .. } => {
+            let radius = positive_dimension(radius, unit);
+            // The disc is a zero-thickness fan at local `Y = 0`, so `scale.y`
+            // has no geometric effect; keep `thin` as the reserved value the
+            // shared mapping table names rather than a physical thickness.
+            (MeshPrimitive::Disc, Vec3::new(radius, thin, radius))
+        }
+        SourceKind::SolidSphere { radius, .. } => {
+            let radius = positive_dimension(radius, unit);
+            (MeshPrimitive::Sphere, Vec3::splat(radius))
+        }
+        SourceKind::StraightWire { .. } => {
+            let radius = 0.012 * extent;
+            let length = 2.2 * extent;
+            (
+                MeshPrimitive::Cylinder,
+                Vec3::new(radius / 0.5, length, radius / 0.5),
+            )
+        }
+        SourceKind::CurrentLoop { radius, .. } => {
+            let radius = positive_dimension(radius, unit);
+            (
+                MeshPrimitive::Torus,
+                Vec3::new(radius / 0.75, thin / 0.25, radius / 0.75),
+            )
+        }
+        SourceKind::Solenoid { radius, length, .. } => {
+            let radius = positive_dimension(radius, unit);
+            let length = positive_dimension(length, extent);
+            (MeshPrimitive::Tube, Vec3::new(radius, length, radius))
+        }
+    }
+}
+
+/// FNV-1a over every mapped instance field. The empty scene reserves `0`.
+fn fingerprint(objects: &[MeshObject]) -> u64 {
+    if objects.is_empty() {
+        return 0;
+    }
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for object in objects {
+        hash_u32(&mut hash, object.primitive.index());
+        hash_u32(&mut hash, u32::from(object.sign as u8));
+        hash_u32(&mut hash, object.opacity.to_bits());
+        for channel in object.color {
+            hash_u32(&mut hash, channel.to_bits());
+        }
+        for column in object.transform {
+            for value in column {
+                hash_u32(&mut hash, value.to_bits());
+            }
+        }
+    }
+    if hash == 0 { 1 } else { hash }
+}
+
+fn hash_u32(hash: &mut u64, value: u32) {
+    for byte in value.to_le_bytes() {
+        *hash ^= u64::from(byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
