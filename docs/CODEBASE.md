@@ -3569,7 +3569,7 @@ singularity between accepted points is not detected. Slice B1 wires the list
 into document state, persistence and the Sources panel; it still never feeds the
 sampled E/B fields, renders a support wireframe or adds a new solver.
 
-#### Custom density document state and editor (issue #96 slice B1)
+#### Custom density document state and editor (issues #96 slice B1 and #98 slice B)
 
 **Public API.** `viewmodel::MAX_DENSITIES = 4`,
 `DensityReportRow { spec_index, charge: Option<ChargeReport>, continuity:
@@ -3578,7 +3578,9 @@ Option<ContinuityReport> }`, `State::densities()`,
 `State::reset_densities()`, `State::refresh_density_reports()` and
 `State::density_reports()`. `SourcesPanelState` keeps session-only
 `DensityDraft`s and a `density_error`, and exposes `sync_densities`,
-`add_density`, `remove_density` and `commit_density`.
+`add_density`, `remove_density` and `commit_density`. Each draft carries
+`TimeLawKind { Steady, Harmonic }`, `omega`, `phase` and `charge_formula`
+session mirrors beside the spatial fields.
 
 **Contract.**
 - `ViewRecord.densities: Vec<DensitySpecRecord>` is serde-defaulted and capped
@@ -3598,10 +3600,10 @@ Option<ContinuityReport> }`, `State::densities()`,
   one warning. A stored steady-current/harmonic-charge conflict is demoted the
   same way, and restore never dirties. When a harmonic current loses its law
   this way, a still-valid `charge_formula` survives on what is now a steady
-  current, where `continuity_report` silently ignores it and runs the historical
-  `div J = 0` check; slice B must either surface or drop that orphaned pairing,
-  and that decision is owed to slice B. Scenes and the edit history inherit the
-  field through the existing `ViewRecord`/`EditSnapshot` seams.
+  current; the editor seeds the pairing into its mirror, shows that it is
+  ignored while the law is steady, and keeps it through edits rather than
+  destroying it. Scenes and the edit history inherit the field through the
+  existing `ViewRecord`/`EditSnapshot` seams.
 - `commit_densities` validates the whole list (cap, unique names, support,
   formula parsing/evaluation, sample budget, time law and the cross-spec
   steady-current/harmonic-charge rule) atomically; a stale list is untouched on
@@ -3614,16 +3616,30 @@ Option<ContinuityReport> }`, `State::densities()`,
   reasons are shown verbatim and estimates show their reported error. A
   parameter change invalidates every stored report.
 - The collapsed Sources section edits name, family, support kind and geometry,
-  formula, samples (`MIN_SAMPLES..=MAX_SAMPLES`) and softening; Add is bounded by
-  `MAX_DENSITIES` with a message. Copy keeps the normalized teaching units, the
-  no-field-integration boundary and the surface-charge limit explicit.
+  formula, samples (`MIN_SAMPLES..=MAX_SAMPLES`) and softening, plus the declared
+  clock: a Steady/Harmonic selector, with `omega` (rad/s) and `phase` (rad)
+  revealed only for Harmonic, and a `Charge formula` field on SteadyCurrent
+  rows. A harmonic current without that pairing still commits (the model accepts
+  it) and its `Unresolved` continuity reason names the missing term verbatim; an
+  unparseable pairing is rejected by the model seam and shown on the row. A
+  steady current may keep a non-empty pairing: the editor shows that it is
+  ignored and preserves the value. Continuous numeric widgets defer through the
+  existing pending-commit queue, so a drag validates and samples once on
+  release. The omega/phase mirrors survive a committed Steady law, so disabling
+  Harmonic does not discard the user's values; re-enabling restores them. Add is
+  bounded by `MAX_DENSITIES` with a message, and a per-draft rejection never
+  clears that panel-level notice. Copy keeps the normalized teaching units, the
+  no-field-integration boundary and the surface-charge limit explicit; report
+  lines never render a NaN placeholder, including a non-finite estimate
+  extreme.
 
 **Pinned by.** [tests/density_state_test.rs](../tests/density_state_test.rs)
 (atomic validation, equal-list no-op, cap message, one history entry per edit),
 [tests/persistence_test.rs](../tests/persistence_test.rs) (missing/default,
 round trip, sanitised restore and cap) and
-[tests/sources_panel_test.rs](../tests/sources_panel_test.rs) (on-demand reports
-and verbatim unresolved/violation reasons).
+[tests/sources_panel_test.rs](../tests/sources_panel_test.rs) (on-demand reports,
+verbatim unresolved/violation reasons, harmonic controls, deferred omega drags,
+the steady-current ignored-pairing note and the omega/phase steady round trip).
 
 #### `src/scene_document.rs` — versioned scene document
 

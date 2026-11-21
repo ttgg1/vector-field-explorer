@@ -123,6 +123,36 @@ impl SourceDraft {
     }
 }
 
+/// The editor's two-valued view of [`TimeLaw`]. Keeping the kind separate from
+/// the numeric mirrors lets the widgets reveal omega and phase without
+/// rebuilding the model enum. The mirrors live for the whole session: a
+/// committed steady law carries no parameters, so `sync_densities` preserves
+/// the row's omega/phase instead of re-seeding them, and re-selecting Harmonic
+/// restores the user's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeLawKind {
+    #[default]
+    Steady,
+    Harmonic,
+}
+
+impl TimeLawKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Steady => "Steady",
+            Self::Harmonic => "Harmonic",
+        }
+    }
+
+    fn is_harmonic(self) -> bool {
+        matches!(self, Self::Harmonic)
+    }
+}
+
+/// The omega a *fresh* steady row starts with. A row that has committed a
+/// steady law keeps its own omega/phase mirrors instead of using this value.
+const DEFAULT_OMEGA: f64 = 1.0;
+
 /// One editable custom-density row. `committed` is the last valid spec; the
 /// text and numeric mirrors stay session-only and may be invalid while typed.
 #[derive(Debug, Clone)]
@@ -137,12 +167,24 @@ pub struct DensityDraft {
     pub formula: String,
     pub samples: u32,
     pub softening: f64,
+    /// Mirror of the declared clock kind. The numeric mirrors below persist
+    /// while the kind is steady so toggling back does not lose them.
+    pub law_kind: TimeLawKind,
+    pub omega: f64,
+    pub phase: f64,
+    /// Mirror of the optional paired charge density for a steady current.
+    /// Kept verbatim while the law is steady even though the model ignores it.
+    pub charge_formula: String,
     pub error: Option<String>,
     pub dirty: bool,
 }
 
 impl DensityDraft {
     fn from_spec(spec: &DensitySpec) -> Self {
+        let (law_kind, omega, phase) = match spec.time_law {
+            TimeLaw::Steady => (TimeLawKind::Steady, DEFAULT_OMEGA, 0.0),
+            TimeLaw::Harmonic { omega, phase } => (TimeLawKind::Harmonic, omega, phase),
+        };
         Self {
             committed: spec.clone(),
             name: spec.name.clone(),
@@ -154,6 +196,10 @@ impl DensityDraft {
             formula: spec.formula.clone(),
             samples: spec.samples,
             softening: spec.softening,
+            law_kind,
+            omega,
+            phase,
+            charge_formula: spec.charge_formula.clone().unwrap_or_default(),
             error: None,
             dirty: false,
         }
@@ -185,10 +231,18 @@ impl DensityDraft {
             formula: self.formula.clone(),
             samples: self.samples,
             softening: self.softening,
-            // Slice A has no clock editor; an existing law survives an edit of
-            // the other fields until slice B adds the controls.
-            time_law: self.committed.time_law,
-            charge_formula: self.committed.charge_formula.clone(),
+            time_law: match self.law_kind {
+                TimeLawKind::Steady => TimeLaw::Steady,
+                TimeLawKind::Harmonic => TimeLaw::Harmonic {
+                    omega: self.omega,
+                    phase: self.phase,
+                },
+            },
+            // Only a steady current may carry a pairing; a charge family's own
+            // formula is its rho, so the hidden mirror must not leak into it.
+            charge_formula: (self.family == DensityFamily::SteadyCurrent
+                && !self.charge_formula.trim().is_empty())
+            .then(|| self.charge_formula.clone()),
         }
     }
 }
@@ -283,7 +337,16 @@ impl SourcesPanelState {
         }
         for (draft, spec) in self.density_drafts.iter_mut().zip(committed) {
             if !draft.dirty {
+                // A steady spec carries no omega/phase, so preserve this row's
+                // mirrors rather than resetting a value the user just hid by
+                // selecting Steady. Only a truly harmonic spec re-seeds them.
+                let harmonic = matches!(spec.time_law, TimeLaw::Harmonic { .. });
+                let (omega, phase) = (draft.omega, draft.phase);
                 *draft = DensityDraft::from_spec(spec);
+                if !harmonic {
+                    draft.omega = omega;
+                    draft.phase = phase;
+                }
             }
         }
     }
@@ -931,7 +994,8 @@ fn default_density(name: String) -> DensitySpec {
     }
 }
 
-fn density_report_lines(row: &DensityReportRow) -> Vec<String> {
+#[doc(hidden)]
+pub fn density_report_lines(row: &DensityReportRow) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(charge) = &row.charge {
         lines.push(charge_line(charge));
@@ -944,10 +1008,15 @@ fn density_report_lines(row: &DensityReportRow) -> Vec<String> {
 
 fn charge_line(report: &ChargeReport) -> String {
     match &report.status {
-        DiagnosticsStatus::Estimate { error } => format!(
-            "Estimate: total = {:.6e}, error = {:.6e}",
-            report.total, error
-        ),
+        DiagnosticsStatus::Estimate { error } if report.total.is_finite() && error.is_finite() => {
+            format!(
+                "Estimate: total = {:.6e}, error = {:.6e}",
+                report.total, error
+            )
+        }
+        DiagnosticsStatus::Estimate { .. } => {
+            "Unresolved: the charge estimate was not finite".to_string()
+        }
         DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
         DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
     }
@@ -955,15 +1024,30 @@ fn charge_line(report: &ChargeReport) -> String {
 
 fn continuity_line(report: &ContinuityReport) -> String {
     match &report.status {
-        ContinuityStatus::Estimate { value, error } => format!(
-            "Estimate: div J in [{:.6e}, {:.6e}], residual = {value:.6e}, error = {error:.6e}",
-            report.div_j_min, report.div_j_max
-        ),
+        ContinuityStatus::Estimate { value, error }
+            if value.is_finite()
+                && error.is_finite()
+                && report.div_j_min.is_finite()
+                && report.div_j_max.is_finite() =>
+        {
+            format!(
+                "Estimate: div J in [{:.6e}, {:.6e}], residual = {value:.6e}, error = {error:.6e}",
+                report.div_j_min, report.div_j_max
+            )
+        }
+        ContinuityStatus::Estimate { .. } => {
+            "Unresolved: the continuity estimate was not finite".to_string()
+        }
         ContinuityStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
         ContinuityStatus::Violation {
             residual,
             tolerance,
-        } => format!("Violation: residual = {residual:.6e}, tolerance = {tolerance:.6e}"),
+        } if residual.is_finite() && tolerance.is_finite() => {
+            format!("Violation: residual = {residual:.6e}, tolerance = {tolerance:.6e}")
+        }
+        ContinuityStatus::Violation { .. } => {
+            "Unresolved: the continuity violation was not finite".to_string()
+        }
     }
 }
 
@@ -1120,6 +1204,61 @@ fn show_density_section(ui: &mut egui::Ui, state: &mut State, panel: &mut Source
                                     .changed();
                             });
                             ui.horizontal_wrapped(|ui| {
+                                ui.label("Time law");
+                                let mut law_kind = draft.law_kind;
+                                egui::ComboBox::from_id_salt(("density_time_law", index))
+                                    .selected_text(law_kind.label())
+                                    .show_ui(ui, |ui| {
+                                        for option in [TimeLawKind::Steady, TimeLawKind::Harmonic] {
+                                            ui.selectable_value(
+                                                &mut law_kind,
+                                                option,
+                                                option.label(),
+                                            );
+                                        }
+                                    });
+                                if law_kind != draft.law_kind {
+                                    draft.law_kind = law_kind;
+                                    edited = true;
+                                }
+                                if draft.law_kind.is_harmonic() {
+                                    ui.label("Omega (rad/s)");
+                                    if ui
+                                        .add(egui::DragValue::new(&mut draft.omega).speed(0.05))
+                                        .changed()
+                                    {
+                                        continuous = true;
+                                    }
+                                    ui.label("Phase (rad)");
+                                    if ui
+                                        .add(egui::DragValue::new(&mut draft.phase).speed(0.01))
+                                        .changed()
+                                    {
+                                        continuous = true;
+                                    }
+                                }
+                            });
+                            if draft.family == DensityFamily::SteadyCurrent {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label("Charge formula");
+                                    edited |= ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut draft.charge_formula)
+                                                .hint_text("scalar rho(x, y, z, t)")
+                                                .desired_width(220.0),
+                                        )
+                                        .changed();
+                                });
+                                if !draft.law_kind.is_harmonic()
+                                    && !draft.charge_formula.trim().is_empty()
+                                {
+                                    ui.label(
+                                        "Charge formula is ignored while the time law is \
+                                         steady.",
+                                    );
+                                }
+                            }
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label("Softening");
                                 let response = ui.add(
                                     egui::DragValue::new(&mut draft.softening)
@@ -1153,14 +1292,20 @@ fn show_density_section(ui: &mut egui::Ui, state: &mut State, panel: &mut Source
                         immediate.push(index);
                     }
                 }
-                for line in state
+                if let Some(row) = state
                     .density_reports()
                     .iter()
                     .find(|row| row.spec_index == index)
-                    .map(density_report_lines)
-                    .unwrap_or_default()
                 {
-                    ui.label(line);
+                    for line in density_report_lines(row) {
+                        ui.label(line);
+                    }
+                    if row.continuity.is_some() {
+                        ui.label(
+                            "Continuity is measured in normalized teaching units \
+                             (eps0 = mu0 = 1).",
+                        );
+                    }
                 }
                 if draft.family == DensityFamily::SurfaceCharge {
                     ui.label("No volume total for a SurfaceCharge density.");

@@ -3,8 +3,8 @@
 use eframe::egui;
 use eframe::egui::{Pos2, Rect, vec2};
 use vector_field_explorer::custom_density::{
-    ContinuityStatus, DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus, SupportKind,
-    TimeLaw,
+    ContinuityReport, ContinuityStatus, DensityFamily, DensitySpec, DensitySupport,
+    DiagnosticsStatus, SupportKind, TimeLaw,
 };
 use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::source_scene::{
@@ -14,7 +14,7 @@ use vector_field_explorer::sources::SourceKind;
 use vector_field_explorer::ui::formula_bar::{self, FormulaBarState};
 use vector_field_explorer::ui::layout::{LayoutState, SheetState};
 use vector_field_explorer::ui::sources_panel::{self, SourcesPanelState};
-use vector_field_explorer::viewmodel::{MAX_DENSITIES, State};
+use vector_field_explorer::viewmodel::{DensityReportRow, MAX_DENSITIES, State};
 
 fn context() -> egui::Context {
     let ctx = egui::Context::default();
@@ -156,6 +156,56 @@ fn text_inputs_for(nodes: &[WidgetNode], label: &str) -> Vec<Rect> {
     rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
     rects.dedup();
     rects
+}
+
+/// The ComboBox to the right of `label`. Several density selectors share a row,
+/// so match by proximity rather than by the selected text alone.
+fn combo_for(nodes: &[WidgetNode], label: &str) -> Option<Rect> {
+    let label_node = find(nodes, label)?;
+    nodes
+        .iter()
+        .filter(|node| node.role == egui::Role::ComboBox)
+        .filter(|node| (node.rect.center().y - label_node.rect.center().y).abs() < 8.0)
+        .filter(|node| node.rect.left() >= label_node.rect.right() - 2.0)
+        .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .map(|node| node.rect)
+}
+
+/// Open the combo next to `label` and click the option with `option` text.
+fn select_combo_option(
+    ctx: &egui::Context,
+    width: f32,
+    state: &mut State,
+    panel: &mut SourcesPanelState,
+    compact: bool,
+    label: &str,
+    option: &str,
+) {
+    let painted = nodes(&paint_panel(ctx, width, state, panel, compact, 1));
+    let combo = combo_for(&painted, label).unwrap_or_else(|| panic!("{label} has no combo box"));
+    click_sources(ctx, width, combo.center(), state, panel, compact);
+    let mut painted = nodes(&paint_panel(ctx, width, state, panel, compact, 1));
+    // A click cycle can just toggle a popup shut depending on which frame egui
+    // opens it in, so retry the open before giving up.
+    let mut tries = 0;
+    while find(&painted, option).is_none() && tries < 2 {
+        click_sources(ctx, width, combo.center(), state, panel, compact);
+        painted = nodes(&paint_panel(ctx, width, state, panel, compact, 1));
+        tries += 1;
+    }
+    let target = find(&painted, option)
+        .unwrap_or_else(|| {
+            panic!(
+                "{option} is not offered by {label}: {:?}",
+                painted
+                    .iter()
+                    .map(|node| node.label.as_str())
+                    .collect::<Vec<_>>()
+            )
+        })
+        .rect
+        .center();
+    click_sources(ctx, width, target, state, panel, compact);
 }
 
 fn click_sources(
@@ -1104,4 +1154,584 @@ fn a_rejected_draft_edit_keeps_the_panel_cap_message() {
         Some(cap_message.as_str()),
         "the cap message stays until the cap condition clears"
     );
+}
+
+fn harmonic(spec: &mut DensitySpec, omega: f64, phase: f64) {
+    spec.time_law = TimeLaw::Harmonic { omega, phase };
+}
+
+#[test]
+fn harmonic_selector_reveals_omega_and_phase_and_commits_them() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .commit_densities(vec![density_spec(
+            "ac wire",
+            DensityFamily::SteadyCurrent,
+            "0,0,1",
+        )])
+        .expect("the steady fixture is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        !has(&painted, "Omega (rad/s)") && !has(&painted, "Phase (rad)"),
+        "a steady law hides the harmonic parameters"
+    );
+    assert!(
+        combo_for(&painted, "Time law").is_some(),
+        "every density row paints a time-law selector"
+    );
+
+    select_combo_option(
+        &ctx, 1200.0, &mut state, &mut panel, false, "Time law", "Harmonic",
+    );
+    assert_eq!(
+        state.densities()[0].time_law,
+        TimeLaw::Harmonic {
+            omega: 1.0,
+            phase: 0.0
+        },
+        "selecting Harmonic commits the seeded law"
+    );
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        has(&painted, "Omega (rad/s)") && has(&painted, "Phase (rad)"),
+        "the harmonic law reveals omega and phase"
+    );
+
+    panel.density_drafts[0].omega = 2.0;
+    panel.density_drafts[0].phase = 0.5;
+    assert!(
+        panel.commit_density(0, &mut state).is_none(),
+        "the omega/phase mirrors commit"
+    );
+    assert_eq!(
+        state.densities()[0].time_law,
+        TimeLaw::Harmonic {
+            omega: 2.0,
+            phase: 0.5
+        }
+    );
+}
+
+#[test]
+fn harmonic_current_without_a_charge_formula_shows_the_model_rejection() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("ac wire", DensityFamily::SteadyCurrent, "0,0,1");
+    harmonic(&mut spec, 1.0, 0.0);
+    state
+        .commit_densities(vec![spec])
+        .expect("a harmonic current without a pairing is accepted by the model");
+    state.refresh_density_reports();
+    let missing_reason = state.density_reports()[0]
+        .continuity
+        .as_ref()
+        .and_then(|report| match &report.status {
+            ContinuityStatus::Unresolved { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("a pairing-free harmonic current reports the missing term");
+    assert_eq!(
+        missing_reason,
+        "a harmonic current needs its paired charge density (charge_formula) for a \
+         continuity check"
+    );
+
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        painted.iter().any(|node| node
+            .label
+            .contains(&format!("Unresolved: {missing_reason}"))),
+        "the missing-term rejection is shown verbatim: {:?}",
+        painted
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    // An unparseable pairing is rejected by the same model seam, and its text
+    // is shown on the row rather than folded into a number.
+    panel.density_drafts[0].charge_formula = "(".to_string();
+    let rejection = panel
+        .commit_density(0, &mut state)
+        .expect("an unparseable charge formula is rejected");
+    assert!(
+        rejection.starts_with("paired charge formula:"),
+        "the model rejection is surfaced verbatim: {rejection}"
+    );
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        painted
+            .iter()
+            .any(|node| node.label.contains("paired charge formula:")),
+        "the unparseable rejection is painted on the draft"
+    );
+}
+
+#[test]
+fn steady_current_charge_formula_is_kept_with_an_ignored_note() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("steady wire", DensityFamily::SteadyCurrent, "0,0,1");
+    spec.charge_formula = Some("1".to_string());
+    state
+        .commit_densities(vec![spec])
+        .expect("a steady current may keep an ignored pairing");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        has(
+            &painted,
+            "Charge formula is ignored while the time law is steady."
+        ),
+        "the ignored-pairing note is shown"
+    );
+    assert_eq!(
+        panel.density_drafts[0].charge_formula, "1",
+        "the panel keeps the value instead of dropping it"
+    );
+    assert_eq!(
+        panel.density_drafts[0].spec().charge_formula.as_deref(),
+        Some("1"),
+        "the mirror round-trips through the spec"
+    );
+
+    panel.density_drafts[0].formula = "0,0,2".to_string();
+    assert!(panel.commit_density(0, &mut state).is_none());
+    assert_eq!(
+        state.densities()[0].charge_formula.as_deref(),
+        Some("1"),
+        "editing another field keeps the ignored pairing"
+    );
+}
+
+#[test]
+fn harmonic_charge_rows_hide_the_charge_formula_field() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("space charge", DensityFamily::VolumeCharge, "1");
+    harmonic(&mut spec, 1.0, 0.0);
+    state
+        .commit_densities(vec![spec])
+        .expect("a harmonic charge density is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        has(&painted, "Omega (rad/s)"),
+        "the charge row still edits its harmonic law"
+    );
+    assert!(
+        !has(&painted, "Charge formula"),
+        "only a SteadyCurrent row paints the pairing field"
+    );
+}
+
+#[test]
+fn dragging_omega_defers_the_commit_until_release() {
+    let ctx = context();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("ac wire", DensityFamily::SteadyCurrent, "0,0,1");
+    harmonic(&mut spec, 1.0, 0.0);
+    spec.charge_formula = Some("0".to_string());
+    state
+        .commit_densities(vec![spec])
+        .expect("the harmonic fixture is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let rect = drag_value_for(&painted, "Omega (rad/s)")
+        .expect("the harmonic law paints an omega drag value");
+    let start = rect.center();
+    let end = start + vec2(40.0, 0.0);
+    let base = state.density_report_generation();
+
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start + vec2(20.0, 0.0))],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(end)],
+    );
+    assert_eq!(
+        state.densities()[0].time_law,
+        TimeLaw::Harmonic {
+            omega: 1.0,
+            phase: 0.0
+        },
+        "mid-drag frames leave the committed omega untouched"
+    );
+    assert_eq!(
+        state.density_report_generation(),
+        base,
+        "mid-drag frames never sample or refresh a report"
+    );
+
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![pointer(end, false)],
+    );
+    let TimeLaw::Harmonic { omega, phase } = state.densities()[0].time_law else {
+        panic!("the released drag still commits a harmonic law");
+    };
+    assert_ne!(omega, 1.0, "the released drag reaches the committed omega");
+    assert_eq!(phase, 0.0);
+    assert_eq!(
+        state.density_report_generation(),
+        base + 1,
+        "one drag release refreshes the reports exactly once"
+    );
+}
+
+#[test]
+fn continuity_violation_and_unresolved_reasons_are_shown_verbatim() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state.time = 1.0;
+    state
+        .commit_densities(vec![
+            density_spec("transient", DensityFamily::VolumeCharge, "1/(t-1)"),
+            density_spec("divergent", DensityFamily::SteadyCurrent, "x,0,0"),
+            density_spec("conserved", DensityFamily::SteadyCurrent, "0,0,1"),
+        ])
+        .expect("the fixtures are valid at t = 0");
+    state.refresh_density_reports();
+    let mut expected = Vec::new();
+    for row in state.density_reports() {
+        if let Some(report) = &row.charge {
+            expected.push(match &report.status {
+                DiagnosticsStatus::Estimate { error } => format!("Estimate: {error}"),
+                DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+                DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
+            });
+        }
+        if let Some(report) = &row.continuity {
+            expected.push(match &report.status {
+                ContinuityStatus::Estimate { value, error } => {
+                    format!("Estimate: div J in [{:.6e}, {:.6e}], residual = {value:.6e}, error = {error:.6e}", report.div_j_min, report.div_j_max)
+                }
+                ContinuityStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+                ContinuityStatus::Violation {
+                    residual,
+                    tolerance,
+                } => format!("Violation: residual = {residual:.6e}, tolerance = {tolerance:.6e}"),
+            });
+        }
+    }
+    for prefix in ["Estimate: ", "Unresolved: ", "Violation: "] {
+        assert!(
+            expected.iter().any(|line| line.starts_with(prefix)),
+            "the fixtures produce a {prefix:?} readout: {expected:?}"
+        );
+    }
+
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    for line in expected {
+        assert!(
+            painted.iter().any(|node| node.label.contains(&line)),
+            "the panel shows {line:?} verbatim"
+        );
+    }
+    assert!(
+        painted.iter().all(|node| !node.label.contains("NaN")),
+        "a report readout never renders a NaN placeholder"
+    );
+    assert!(
+        painted
+            .iter()
+            .any(|node| node.label.contains("normalized teaching units")),
+        "the continuity readout names its normalized units"
+    );
+}
+
+#[test]
+fn disabling_harmonic_restores_a_steady_law_and_keeps_the_formula() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("ac wire", DensityFamily::SteadyCurrent, "0,0,1");
+    harmonic(&mut spec, 2.0, 0.5);
+    spec.charge_formula = Some("1".to_string());
+    state
+        .commit_densities(vec![spec])
+        .expect("the harmonic fixture is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    select_combo_option(
+        &ctx, 1200.0, &mut state, &mut panel, false, "Time law", "Steady",
+    );
+    assert_eq!(state.densities()[0].time_law, TimeLaw::Steady);
+    assert_eq!(
+        state.densities()[0].charge_formula.as_deref(),
+        Some("1"),
+        "disabling harmonic keeps the charge formula"
+    );
+    assert_eq!(panel.density_drafts[0].charge_formula, "1");
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    assert!(
+        has(
+            &painted,
+            "Charge formula is ignored while the time law is steady."
+        ),
+        "the steady row explains why the retained formula is inert"
+    );
+
+    panel.density_drafts[0].formula = "0,0,3".to_string();
+    assert!(panel.commit_density(0, &mut state).is_none());
+    assert_eq!(
+        state.densities()[0].charge_formula.as_deref(),
+        Some("1"),
+        "later edits keep the retained formula"
+    );
+}
+
+#[test]
+fn density_controls_do_not_trigger_field_sampling() {
+    let ctx = context();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("ac wire", DensityFamily::SteadyCurrent, "0,0,1");
+    harmonic(&mut spec, 1.0, 0.0);
+    spec.charge_formula = Some("0".to_string());
+    state
+        .commit_densities(vec![spec])
+        .expect("the fixture is valid");
+    let before_densities = state.densities().to_vec();
+    let base = state.density_report_generation();
+
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 5));
+    assert_eq!(
+        state.density_report_generation(),
+        base,
+        "painting the controls never samples the reports"
+    );
+    assert_eq!(state.densities(), before_densities.as_slice());
+
+    // An in-flight omega drag is a control gesture, not a sample.
+    let rect = drag_value_for(&painted, "Omega (rad/s)")
+        .expect("the harmonic law paints an omega drag value");
+    let start = rect.center();
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start + vec2(40.0, 0.0))],
+    );
+    assert_eq!(
+        state.density_report_generation(),
+        base,
+        "a drag in flight never samples"
+    );
+    assert_eq!(state.densities(), before_densities.as_slice());
+    assert!(state.density_reports().is_empty());
+}
+
+#[test]
+fn harmonic_mirrors_survive_a_steady_round_trip() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("ac wire", DensityFamily::SteadyCurrent, "0,0,1");
+    harmonic(&mut spec, 2.5, 0.75);
+    spec.charge_formula = Some("0".to_string());
+    state
+        .commit_densities(vec![spec])
+        .expect("the harmonic fixture is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+    assert_eq!(panel.density_drafts[0].omega, 2.5);
+    assert_eq!(panel.density_drafts[0].phase, 0.75);
+
+    select_combo_option(
+        &ctx, 1200.0, &mut state, &mut panel, false, "Time law", "Steady",
+    );
+    assert_eq!(state.densities()[0].time_law, TimeLaw::Steady);
+    assert_eq!(
+        panel.density_drafts[0].omega, 2.5,
+        "a committed steady law keeps the draft's omega mirror"
+    );
+    assert_eq!(
+        panel.density_drafts[0].phase, 0.75,
+        "a committed steady law keeps the draft's phase mirror"
+    );
+
+    select_combo_option(
+        &ctx, 1200.0, &mut state, &mut panel, false, "Time law", "Harmonic",
+    );
+    assert_eq!(
+        state.densities()[0].time_law,
+        TimeLaw::Harmonic {
+            omega: 2.5,
+            phase: 0.75
+        },
+        "re-enabling harmonic restores the user's values"
+    );
+}
+
+#[test]
+fn continuity_estimate_never_prints_non_finite_extremes() {
+    let row = DensityReportRow {
+        spec_index: 0,
+        charge: None,
+        continuity: Some(ContinuityReport {
+            div_j_min: f64::NAN,
+            div_j_max: 0.0,
+            worst_point: None,
+            status: ContinuityStatus::Estimate {
+                value: 1.0,
+                error: 0.0,
+            },
+        }),
+    };
+    let lines = sources_panel::density_report_lines(&row);
+    assert!(
+        lines.iter().all(|line| !line.contains("NaN")),
+        "every formatted continuity field must be finite: {lines:?}"
+    );
+    assert!(
+        lines[0].starts_with("Unresolved: "),
+        "a non-finite estimate is reported honestly: {lines:?}"
+    );
+}
+
+#[test]
+fn a_text_edit_and_an_in_flight_omega_drag_commit_both_in_one_frame() {
+    let ctx = context();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut spec = density_spec("ac wire", DensityFamily::SteadyCurrent, "0,0,1");
+    harmonic(&mut spec, 1.0, 0.0);
+    spec.charge_formula = Some("0".to_string());
+    state
+        .commit_densities(vec![spec])
+        .expect("the harmonic fixture is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let formula = text_inputs_for(&painted, "Formula")
+        .into_iter()
+        .next_back()
+        .expect("the density row paints a formula text field");
+    click_sources(
+        &ctx,
+        1200.0,
+        formula.center(),
+        &mut state,
+        &mut panel,
+        false,
+    );
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let start = drag_value_for(&painted, "Omega (rad/s)")
+        .expect("the harmonic law paints an omega drag value")
+        .center();
+    let end = start + vec2(40.0, 0.0);
+
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start + vec2(20.0, 0.0))],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(end)],
+    );
+    assert_eq!(
+        state.densities()[0].time_law,
+        TimeLaw::Harmonic {
+            omega: 1.0,
+            phase: 0.0
+        }
+    );
+
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![pointer(end, false), egui::Event::Text("2".to_owned())],
+    );
+    let _ = paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1);
+
+    let TimeLaw::Harmonic { omega, .. } = state.densities()[0].time_law else {
+        panic!("the row stays harmonic");
+    };
+    assert_ne!(
+        state.densities()[0].formula,
+        "0,0,1",
+        "the text edit reaches the committed spec"
+    );
+    assert_ne!(omega, 1.0, "the dragged omega reaches the committed spec");
 }
