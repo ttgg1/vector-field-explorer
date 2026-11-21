@@ -17,6 +17,7 @@ use crate::maxwell::{
     maxwell_family, maxwell_warning,
 };
 use crate::ui::help_overlay::HelpRow;
+use crate::ui::maxwell_learning_panel::MaxwellLearningPanel;
 use crate::viewmodel::State;
 
 /// The exact arrows-only note shared by the panel and the Features section.
@@ -48,6 +49,8 @@ pub struct MaxwellPanelState {
     pub draft: MaxwellScene,
     pub error: Option<String>,
     pub advanced: bool,
+    /// Session-only learning/residual section; it never enters persistence.
+    pub learning: MaxwellLearningPanel,
 }
 
 impl MaxwellPanelState {
@@ -246,6 +249,17 @@ pub fn show(
         0.05,
     );
     commit_now |= release;
+
+    // Collapsed by default: the teaching/residual section is one bounded press
+    // away and never samples the field on its own.
+    let learning = &mut panel.learning;
+    let draft = &mut panel.draft;
+    let bem = state.maxwell_bem_solution();
+    egui::CollapsingHeader::new("Maxwell equations")
+        .default_open(false)
+        .show(ui, |ui| {
+            learning.show(ui, draft, bem);
+        });
 
     ui.label("View: Field");
 

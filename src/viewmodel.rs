@@ -1791,6 +1791,12 @@ impl State {
         self.maxwell_sampling.as_ref()
     }
 
+    /// The cached 2D conductor solution, if any. Read-only: only
+    /// [`State::refresh_maxwell_sampling`] populates the cache.
+    pub fn maxwell_bem_solution(self: &State) -> Option<&BemSolution> {
+        self.maxwell_bem.as_deref()
+    }
+
     /// The projection: an orthographic front view for 2D, the orbiting
     /// perspective camera for 3D.
     pub fn set_mode(self: &mut State, mode_3d: bool) -> bool {
