@@ -306,6 +306,54 @@ if `#[cfg(test)]` reappears under `src/`. Adding a module means adding it here
 **Limitation.** Re-exports are intentionally narrow; most modules are reached by
 path in tests. Do not widen this surface just to make a test compile.
 
+#### `src/tour.rs` — guided onboarding tour model
+
+**Purpose.** The pure, UI-agnostic half of the guided tour (#99 slice A): one
+ordered table of stops and a session-only progress value. It carries no `egui`
+types, no renderer, no persistence and no document mutation; the overlay and
+app wiring are a separate slice.
+
+**Public API.** `TourTarget::{Control(ControlId), Panel(PanelId),
+Viewport(Region), Maximize}`, `AdvanceRule::{Next, Changed(&'static str)}`,
+`TourStop { id, title, body, target, advance }`, the ordered `TOUR` table
+(14 stops), the semantic `ControlId`/`PanelId`/`Region` enums with `ALL` and
+stable keys, `resolve(target)` returning a `TourAnchor` descriptor, and
+`TourProgress` with `advance`, `back`, `dismiss`, `restart`, `is_finished`,
+`current`, `mark_opened` and `opened_panels`.
+
+**Invariants / notes.** Every stop targets a capability that exists in this
+build; a removed `ControlId`/`PanelId` variant stops the table compiling, and
+`tests/tour_test.rs` checks that every target appears in the corresponding
+`ALL` list. `AdvanceRule::Changed` stores a `ControlId::key`, so a wait cannot
+name an unknown control; the Maxwell stop waits on `maxwell_case` because its
+body asks the user to choose a case. `ControlId::Play` is chrome in the compact
+transport strip rather than a panel child, so it maps to
+`PanelId::FormulaBar` only because that strip is assembled with the top bar; UI
+code should not treat `FormulaBar` as the transport's own panel. Progress is
+bounded: `back` clamps at the first stop and is a no-op once finished,
+`advance` clamps at the end, `dismiss` ends the tour for the session without
+writing, and `restart` returns to the first stop and clears the tour-opened
+panel list. The tour table is immutable; only `TourProgress` changes, and
+nothing is persisted.
+
+**Slice A boundary.** This slice ships the model only. The tour overlay, the app
+wiring and a Help-menu tour entry (including restart-from-Help) are slice B; the
+done-stop body therefore promises only that the tour can be restarted, not
+where. UI code must not yet assume a menu anchor exists.
+
+**Pinned by.** [tests/tour_test.rs](../tests/tour_test.rs):
+`tour_table_has_unique_non_empty_ids_and_text`,
+`every_stop_targets_an_existing_capability`,
+`every_control_and_panel_resolves_through_the_anchor_descriptor`,
+`changed_rules_name_a_real_control`,
+`maxwell_stop_waits_for_a_case_change`,
+`advance_and_back_preserve_index_bounds`,
+`back_after_dismiss_keeps_the_tour_finished`,
+`dismiss_finishes_and_restart_returns_to_the_start`,
+`opened_panels_are_recorded_once_per_panel`,
+`current_stop_follows_the_index_and_never_panics_after_finish`, and
+`full_tour_run_opens_each_target_panel_exactly_once`.
+
 #### `src/main.rs` — native and wasm bootstrap
 
 **Purpose.** Native `main` and the browser `wasm_bindgen(start)` entry point,
