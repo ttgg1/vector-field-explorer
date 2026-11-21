@@ -2574,13 +2574,24 @@ impl State {
     }
 
     /// Validate and commit the explicit contour-level count (`0..=MAX_CONTOUR_LEVELS`).
+    /// A rejected value leaves the committed count and the dirty flag untouched.
+    /// An accepted real change dirties the scene once and bumps the plot
+    /// generation, because the count changes what the contour overlay samples.
+    /// The display-only scalar toggles (`set_show_scalar_heatmap`,
+    /// `set_scalar_text_color`) only mark dirty; this setter follows the
+    /// sampled-geometry convention used by `set_domain` and the colour setters.
     pub fn set_scalar_contour_levels(self: &mut State, levels: u32) -> Result<(), ScalarViewError> {
         if levels as usize > MAX_CONTOUR_LEVELS {
             return Err(ScalarViewError::ContourLevels {
                 reason: format!("at most {MAX_CONTOUR_LEVELS} levels are allowed"),
             });
         }
+        if self.scalar_contour_levels == levels {
+            return Ok(());
+        }
         self.scalar_contour_levels = levels;
+        self.plot.generation += 1;
+        self.mark_dirty();
         Ok(())
     }
 

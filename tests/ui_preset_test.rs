@@ -16,7 +16,7 @@ use vector_field_explorer::export::{delete_preset, load_presets};
 use vector_field_explorer::fly_camera::FlyCamera;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::persistence::ViewRecord;
-use vector_field_explorer::preset_library::{PresetFilters, PresetGroup};
+use vector_field_explorer::preset_library::{PresetFilters, PresetGroup, PresetLibrary};
 use vector_field_explorer::presets::presets;
 use vector_field_explorer::render::Camera;
 use vector_field_explorer::scene_document::{SceneCamera, SceneDocument};
@@ -316,6 +316,78 @@ fn two_and_three_dimensional_dipoles_are_independently_selectable() {
             "3D dipole retains depth flow"
         );
     }
+}
+
+#[test]
+fn loading_a_scalar_preset_switches_to_its_kind_without_touching_the_vector_formula() {
+    let library = PresetLibrary::builtin().expect("built-in catalogue");
+    let scalars: Vec<_> = library
+        .entries()
+        .iter()
+        .filter(|entry| entry.scalar.is_some())
+        .collect();
+    assert_eq!(scalars.len(), 5, "five scalar presets are indexed");
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    state.set_formula("(-y, x)".to_string());
+    let vector_formula = state.formula.clone();
+
+    for entry in scalars {
+        let spec = entry.scalar.expect("scalar spec");
+        assert!(
+            panel.load_field(entry.name, &mut state),
+            "scalar preset `{}` loads",
+            entry.name
+        );
+        assert_eq!(
+            state.plot.kind, spec.kind,
+            "`{}` switches to its shipped scalar kind",
+            entry.name
+        );
+        assert_eq!(
+            state.plot.kind,
+            vector_field_explorer::plot::PlotKind::Surface3D
+        );
+        assert!(
+            state.plot.surface.error.is_none(),
+            "`{}` accepts its surface expression",
+            entry.name
+        );
+        assert_eq!(
+            state.plot.surface.source, spec.expr,
+            "`{}` installs the surface expression",
+            entry.name
+        );
+        assert_eq!(
+            state.show_scalar_heatmap(),
+            spec.show_heatmap,
+            "`{}` heatmap visibility",
+            entry.name
+        );
+        assert_eq!(
+            state.scalar_contour_levels(),
+            spec.contour_levels,
+            "`{}` contour levels",
+            entry.name
+        );
+        assert_eq!(
+            state.formula, vector_formula,
+            "`{}` must not overwrite the vector formula",
+            entry.name
+        );
+        assert_eq!(state.field_mode, FieldMode::Formula);
+        assert_eq!(panel.active_field_name(), Some(entry.name));
+    }
+
+    // Switching back to a vector row restores the vector kind and formula.
+    assert!(panel.load_field("Vortex", &mut state));
+    assert_eq!(
+        state.plot.kind,
+        vector_field_explorer::plot::PlotKind::VectorField
+    );
+    assert_eq!(state.formula, "(-y, x)");
 }
 
 #[test]
@@ -777,6 +849,70 @@ fn clicking_library_entries_loads_through_the_existing_seams() {
         panel.active_source_name(),
         Some("Coulomb point"),
         "the clicked source entry owns the highlight"
+    );
+}
+
+#[test]
+fn clicking_a_scalar_library_row_loads_the_scalar_view() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    let mut camera = Camera::default();
+    state.set_formula("(-y, x)".to_string());
+
+    click_label(&ctx, &mut panel, &mut state, &mut camera, "Scalar saddle");
+
+    assert_eq!(
+        state.plot.kind,
+        vector_field_explorer::plot::PlotKind::Surface3D,
+        "the clicked scalar row switches to the shipped surface view"
+    );
+    assert_eq!(state.plot.surface.source, "(x^2 - y^2)/2");
+    assert_eq!(
+        state.formula, "(-y, x)",
+        "a scalar row never overwrites the vector formula"
+    );
+    assert_eq!(panel.active_field_name(), Some("Scalar saddle"));
+}
+
+#[test]
+fn a_scalar_reload_that_only_changes_the_contour_count_dirties_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let mut state = State::new(false);
+    assert!(panel.load_field("Scalar saddle", &mut state));
+    let levels = state.scalar_contour_levels();
+
+    // Make the contour count the only delta between the state and the row.
+    state
+        .set_scalar_contour_levels(levels - 1)
+        .expect("one fewer level is in bounds");
+    state.dirty = false;
+    let generation = state.plot.generation;
+
+    assert!(
+        panel.load_field("Scalar saddle", &mut state),
+        "the same scalar row reloads"
+    );
+    assert_eq!(state.scalar_contour_levels(), levels);
+    assert!(state.dirty, "restoring the contour count dirties the scene");
+    assert_eq!(
+        state.plot.generation,
+        generation + 1,
+        "the contour-only reload advances the plot generation exactly once"
+    );
+
+    state.dirty = false;
+    let generation = state.plot.generation;
+    assert!(
+        panel.load_field("Scalar saddle", &mut state),
+        "the same scalar row reloads again"
+    );
+    assert!(!state.dirty, "a no-op reload leaves the scene clean");
+    assert_eq!(
+        state.plot.generation, generation,
+        "a no-op reload leaves the plot generation alone"
     );
 }
 

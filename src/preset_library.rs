@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::plot::PlotKind;
 use crate::presets::{Preset, PresetCategory, preset_approximation_label, presets};
 use crate::source_presets::{SourcePreset, source_presets};
 
@@ -171,6 +172,24 @@ pub struct PresetFilters {
     pub animated: bool,
 }
 
+/// A surface-context scalar expression carried by a catalogue row.
+///
+/// The scalar view is the shipped [`PlotKind::Surface3D`] workbench: `kind`
+/// names the scalar plot the row switches to, `show_heatmap` and
+/// `contour_levels` choose the existing heatmap/contour controls. Loading a row
+/// with a spec never touches the vector formula.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarPresetSpec {
+    /// Surface-context scalar expression over `x`, `y` and `t`.
+    pub expr: &'static str,
+    /// The shipped scalar view kind the row switches to.
+    pub kind: PlotKind,
+    /// Whether the filled heatmap is painted.
+    pub show_heatmap: bool,
+    /// Explicit contour-level count.
+    pub contour_levels: u32,
+}
+
 /// One indexed preset.
 #[derive(Debug, Clone)]
 pub struct PresetEntry {
@@ -192,6 +211,9 @@ pub struct PresetEntry {
     pub exploration_prompt: &'static str,
     /// Mathematical-illustration or physically-valid label, when catalogued.
     pub validity: Option<PresetValidity>,
+    /// Surface-context scalar twin for a row that loads the scalar workbench;
+    /// `None` keeps the ordinary vector/source load path.
+    pub scalar: Option<ScalarPresetSpec>,
 }
 
 /// Why a [`PresetLibrary`] could not be built.
@@ -239,9 +261,13 @@ impl PresetLibrary {
     /// presets. Fails only if a name cannot form a valid ID or two entries
     /// collide.
     pub fn builtin() -> Result<Self, PresetLibraryError> {
-        let mut entries = Vec::with_capacity(presets().len() + source_presets().len());
+        let mut entries =
+            Vec::with_capacity(presets().len() + SCALAR_PRESETS.len() + source_presets().len());
         for preset in presets() {
             entries.push(formula_entry(preset)?);
+        }
+        for metadata in &SCALAR_PRESETS {
+            entries.push(scalar_entry(metadata)?);
         }
         for preset in source_presets() {
             entries.push(source_entry(preset)?);
@@ -353,6 +379,103 @@ struct SourceMetadata {
     validity: Option<PresetValidity>,
 }
 
+/// One pure scalar catalogue row. The surface expression and view controls
+/// come from [`scalar_metadata`], mirroring the formula/source metadata split.
+#[derive(Debug, Clone, Copy)]
+struct ScalarPresetMetadata {
+    name: &'static str,
+    summary: &'static str,
+    assumptions: &'static str,
+    exploration_prompt: &'static str,
+    animated: bool,
+    validity: PresetValidity,
+}
+
+/// The ticket-91 slice C scalar rows, in catalogue order after the vector
+/// formulas and before the source scenes.
+const SCALAR_PRESETS: [ScalarPresetMetadata; 5] = [
+    ScalarPresetMetadata {
+        name: "Scalar saddle",
+        summary: "A saddle height field whose gradient is the Saddle potential",
+        assumptions: "Mathematical illustration: the scalar height (x^2 - y^2)/2; its gradient is the shipped Saddle potential field (x, -y)",
+        exploration_prompt: "Trace the two rising and two falling directions that cross at the saddle point.",
+        animated: false,
+        validity: PresetValidity::MathematicalIllustration,
+    },
+    ScalarPresetMetadata {
+        name: "Scalar anisotropic well",
+        summary: "An anisotropic harmonic bowl",
+        assumptions: "Mathematical illustration: uncoupled harmonic well with stiffness 4 along the y axis",
+        exploration_prompt: "Compare the contour spacing along x with the stiffer y axis.",
+        animated: false,
+        validity: PresetValidity::MathematicalIllustration,
+    },
+    ScalarPresetMetadata {
+        name: "Softened dipole potential",
+        summary: "Regularized potential of an opposite charge pair",
+        assumptions: "Physically valid (regularized): +1 and -1 unit charges at (0.75, 0) and (-0.75, 0); each softened distance includes the in-plane y offset with s^2 = 0.0625, so both centres stay finite; normalized teaching units, not an SI potential",
+        exploration_prompt: "See how softening keeps both charge centres finite while the potential still changes sign across the dipole.",
+        animated: false,
+        validity: PresetValidity::PhysicallyValidRegularized,
+    },
+    ScalarPresetMetadata {
+        name: "Scalar moving Gaussian packet",
+        summary: "A Gaussian packet oscillating along x",
+        assumptions: "Mathematical illustration: kinematic Gaussian height whose centre follows 0.5*sin(t); not a physical wavefunction",
+        exploration_prompt: "Track the packet centre as time advances and watch it reverse at the turning points.",
+        animated: true,
+        validity: PresetValidity::MathematicalIllustration,
+    },
+    ScalarPresetMetadata {
+        name: "Interfering waves",
+        summary: "Two counter-propagating waves forming a standing pattern",
+        assumptions: "Mathematical illustration: sum of two equal counter-propagating sinusoids; a standing-wave interference pattern with no medium or physical calibration",
+        exploration_prompt: "Watch the nodes stay fixed while the antinodes alternate with the shared clock.",
+        animated: true,
+        validity: PresetValidity::MathematicalIllustration,
+    },
+];
+
+/// The shipped scalar view and controls for a pure scalar row. Only
+/// [`PlotKind::Surface3D`] is a surface-context scalar workbench; heatmap and
+/// contour visibility stay separate controls on that view.
+fn scalar_metadata(name: &str) -> Option<ScalarPresetSpec> {
+    let spec = match name {
+        "Scalar saddle" => ScalarPresetSpec {
+            expr: "(x^2 - y^2)/2",
+            kind: PlotKind::Surface3D,
+            show_heatmap: true,
+            contour_levels: 8,
+        },
+        "Scalar anisotropic well" => ScalarPresetSpec {
+            expr: "x^2 + 4*y^2",
+            kind: PlotKind::Surface3D,
+            show_heatmap: false,
+            contour_levels: 8,
+        },
+        "Softened dipole potential" => ScalarPresetSpec {
+            expr: "1/sqrt((x-0.75)^2+y^2+0.0625) - 1/sqrt((x+0.75)^2+y^2+0.0625)",
+            kind: PlotKind::Surface3D,
+            show_heatmap: true,
+            contour_levels: 8,
+        },
+        "Scalar moving Gaussian packet" => ScalarPresetSpec {
+            expr: "exp(-((x-0.5*sin(t))^2 + y^2)/0.5)",
+            kind: PlotKind::Surface3D,
+            show_heatmap: true,
+            contour_levels: 8,
+        },
+        "Interfering waves" => ScalarPresetSpec {
+            expr: "sin(6*x - 2*t) + sin(6*x + 2*t)",
+            kind: PlotKind::Surface3D,
+            show_heatmap: true,
+            contour_levels: 8,
+        },
+        _ => return None,
+    };
+    Some(spec)
+}
+
 fn formula_metadata(name: &str) -> Option<FormulaMetadata> {
     let metadata = match name {
         "Pulsating radial field" => FormulaMetadata {
@@ -439,7 +562,7 @@ fn formula_metadata(name: &str) -> Option<FormulaMetadata> {
             id: Some("formula.uniform-field"),
             summary: "A constant field pointing along x",
             assumptions: "Physically valid: uniform field in normalized teaching units with no spatial variation",
-            exploration_prompt: "Check that every sampled arrow has the same direction and length.",
+            exploration_prompt: "Compare the flux entering and leaving a closed surface in this uniform field: they cancel, the Gauss's-law result when no charge is enclosed.",
             animated: false,
             validity: Some(PresetValidity::PhysicallyValid),
         },
@@ -506,6 +629,16 @@ fn formula_metadata(name: &str) -> Option<FormulaMetadata> {
 
 fn source_metadata(name: &str) -> Option<SourceMetadata> {
     let metadata = match name {
+        "Electric dipole" => SourceMetadata {
+            assumptions: "Physically valid: equal and opposite point charges separated along x; normalized teaching units",
+            exploration_prompt: "Treat the mid-plane between the charges as an illustrative conducting boundary: the field crosses it at a right angle, the geometry behind an image-charge construction.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Infinite wire" => SourceMetadata {
+            assumptions: "Physically valid: idealised straight current-carrying wire along z; normalized teaching units with no end effects",
+            exploration_prompt: "Walk an Ampere loop around the wire at several radii: the circulation stays the same, illustrating Ampere's law.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
         "Unequal charges" => SourceMetadata {
             assumptions: "Physically valid: Coulomb superposition of four unit point charges with alternating signs; normalized teaching units and softened field",
             exploration_prompt: "Find the neutral point where the four charge fields balance.",
@@ -518,7 +651,7 @@ fn source_metadata(name: &str) -> Option<SourceMetadata> {
         },
         "Sphere inside and out" => SourceMetadata {
             assumptions: "Physically valid: uniformly charged solid sphere of unit charge and radius; normalized teaching units",
-            exploration_prompt: "Compare the interior field growing with radius to the exterior inverse-square falloff.",
+            exploration_prompt: "Compare the interior field growing with radius to the exterior inverse-square falloff; a conducting sphere would instead shield its interior, so this solid-sphere scene illustrates the boundary only.",
             validity: Some(PresetValidity::PhysicallyValid),
         },
         "Paired loops" => SourceMetadata {
@@ -544,6 +677,28 @@ fn source_metadata(name: &str) -> Option<SourceMetadata> {
         _ => return None,
     };
     Some(metadata)
+}
+
+fn scalar_entry(
+    metadata: &'static ScalarPresetMetadata,
+) -> Result<PresetEntry, PresetLibraryError> {
+    let spec =
+        scalar_metadata(metadata.name).expect("every SCALAR_PRESETS row has a surface scalar spec");
+    Ok(PresetEntry {
+        id: derive_id("formula", metadata.name)?,
+        name: metadata.name,
+        summary: metadata.summary,
+        group: PresetGroup::Physics,
+        filters: PresetFilters {
+            dimension: Some(2),
+            animated: metadata.animated,
+        },
+        assumptions: metadata.assumptions,
+        parameters: &[],
+        exploration_prompt: metadata.exploration_prompt,
+        validity: Some(metadata.validity),
+        scalar: Some(spec),
+    })
 }
 
 fn formula_entry(preset: &'static Preset) -> Result<PresetEntry, PresetLibraryError> {
@@ -576,6 +731,7 @@ fn formula_entry(preset: &'static Preset) -> Result<PresetEntry, PresetLibraryEr
         parameters: &[],
         exploration_prompt: metadata.map_or("", |metadata| metadata.exploration_prompt),
         validity: metadata.and_then(|metadata| metadata.validity),
+        scalar: None,
     })
 }
 
@@ -600,6 +756,7 @@ fn source_entry(preset: &'static SourcePreset) -> Result<PresetEntry, PresetLibr
         parameters: &[],
         exploration_prompt: metadata.map_or("", |metadata| metadata.exploration_prompt),
         validity: metadata.and_then(|metadata| metadata.validity),
+        scalar: None,
     })
 }
 

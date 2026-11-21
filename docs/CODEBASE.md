@@ -1754,7 +1754,11 @@ sampled values/points remain runtime-only and unpersisted.
 
 **Slice B1 UI/render seam.** `State::scalar_grid_side`/`scalar_contour_levels`
 (default 64/8) commit only through `set_scalar_grid_side` (16..=160) and
-`set_scalar_contour_levels` (0..=16). `scalar_view_request` generates explicit
+`set_scalar_contour_levels` (0..=16). `set_scalar_grid_side` validates and stores
+without touching the dirty flag; `set_scalar_contour_levels` is the
+geometry-affecting commit, so a real change dirties the scene once and bumps
+`plot.generation`, while an equal count is a free no-op. `scalar_view_request`
+generates explicit
 evenly spaced levels from a bounded 32² preview on the quantised clock, so an
 animated formula keeps the 100 ms throttle; the preview levels are memoised
 under the scalar identity, so a visible but idle section does not re-sample
@@ -2163,16 +2167,17 @@ claim.
 #### `src/preset_library.rs` — indexed preset catalogue
 
 **Purpose.** A pure, searchable index over the existing formula presets
-([`presets()`](../src/presets.rs)) and source presets
-([`source_presets()`](../src/source_presets.rs)). It owns no physics and no UI;
-later panel work consumes the stable IDs and metadata.
+([`presets()`](../src/presets.rs)), the slice-C pure scalar rows, and source
+presets ([`source_presets()`](../src/source_presets.rs)). It owns no physics and
+no UI; later panel work consumes the stable IDs and metadata.
 
 **Public API.** `PresetId` with `new(&str)`/`as_str`; `PresetIdError`;
 `PresetGroup { Classic, Physics, Sources, Gallery }`;
 `PresetValidity { MathematicalIllustration, PhysicallyValid,
 PhysicallyValidRegularized }` with `label`; `PresetFilters { dimension, animated }`;
+`ScalarPresetSpec { expr, kind, show_heatmap, contour_levels }`;
 `PresetEntry { id, name, summary, group, filters, assumptions, parameters,
-exploration_prompt, validity }`; `PresetLibrary::builtin`, `from_entries`,
+exploration_prompt, validity, scalar }`; `PresetLibrary::builtin`, `from_entries`,
 `entries`, `len`, `is_empty`, `search`, `filtered`, `search_filtered`, `get`;
 `PresetLibraryError`.
 
@@ -2183,22 +2188,35 @@ exploration_prompt, validity }`; `PresetLibrary::builtin`, `from_entries`,
   run replaced by `_`) unless ticket 91 metadata fixes an explicit ID;
   `Quadrupole (unequal charges)` uses
   `formula.quadrupole-unequal-charges` because the legacy `Quadrupole` already
-  owns `formula.quadrupole`. Source IDs are `source.<slug>`. IDs are unique
-  across the whole catalogue and construction rejects duplicates.
-- Catalogue order is `presets()` order, then `source_presets()` order. Formula
-  groups map `Classic` to `Classic` and the three physics categories to
-  `Physics`; source entries are `Sources` except the named last gallery, which
-  is `Gallery`.
+  owns `formula.quadrupole`. The five scalar rows reuse that same
+  `formula.<slug>` prefix, for example `formula.scalar_saddle` and
+  `formula.softened_dipole_potential`. Source IDs are `source.<slug>`. IDs are
+  unique across the whole catalogue and construction rejects duplicates.
+- Catalogue order is `presets()` order, then the slice-C `SCALAR_PRESETS` rows,
+  then `source_presets()` order. Formula groups map `Classic` to `Classic` and
+  the three physics categories to `Physics`; scalar rows are `Physics`; source
+  entries are `Sources` except the named last gallery, which is `Gallery`.
 - Formula entries carry `Preset::dimension`; the six ticket-91 clock-driven
   entries set `animated`, the rest stay static. Source entries are
-  dimension-agnostic (`None`) and static.
+  dimension-agnostic (`None`) and static. The five scalar rows are surface
+  scalars (`Some(2)`); the moving Gaussian and interfering waves set `animated`.
+- Only the five `SCALAR_PRESETS` rows carry `scalar: Some(ScalarPresetSpec)`;
+  every existing vector and source row keeps `scalar: None`, so their load path
+  is unchanged. The spec always names the shipped `PlotKind::Surface3D` scalar
+  workbench and the existing heatmap/contour controls; no new plot kind exists.
+  Rows are: Scalar saddle, Scalar anisotropic well, Softened dipole potential,
+  Scalar moving Gaussian packet, and Interfering waves. The moving Gaussian row
+  is named with a `Scalar` prefix because the vector row already owns
+  `Moving Gaussian packet`.
 - `assumptions` reuses `preset_approximation_label` for legacy formulas and
-  carries the ticket-91 teaching note otherwise. The new formula and source
-  entries also carry a non-empty summary, exploration prompt and a
+  carries the ticket-91 teaching note otherwise. The new formula, scalar and
+  source entries also carry a non-empty summary, exploration prompt and a
   `PresetValidity` label (`Mathematical illustration`, `Physically valid`, or
-  `Physically valid (regularized)` for the softened dipole and softened point
-  charge); legacy entries without labels carry `validity: None`. `parameters`
-  stays empty until a preset defines them.
+  `Physically valid (regularized)` for the softened dipole, softened point
+  charge and softened dipole potential); legacy entries without labels carry
+  `validity: None`. The Gauss/flux, Ampere, shielding and image-charge prompts
+  attach to Uniform field, Infinite wire, Sphere inside and out, and Electric
+  dipole respectively. `parameters` stays empty until a preset defines them.
 - `search` is trimmed, case-insensitive substring over name, summary and ID,
   with a blank query returning all entries in catalogue order. `filtered` keeps
   sources under every dimension and only animated entries when `animated` is
@@ -2214,13 +2232,26 @@ exploration_prompt, validity }`; `PresetLibrary::builtin`, `from_entries`,
 `teaching_formula_entries_carry_stable_metadata`,
 `slice_b_3d_formula_entries_carry_stable_metadata`,
 `teaching_source_entries_carry_stable_metadata`,
+`scalar_presets_are_indexed_with_surface_expressions`,
+`every_scalar_preset_expression_parses_in_surface_context`,
+`interfering_waves_is_animated_and_evaluates_finitely`,
+`softened_dipole_potential_is_a_pair_potential_in_the_plane`,
+`scalar_saddle_gradient_is_the_shipped_saddle_field`,
+`exploration_prompts_are_attached_to_the_gauss_ampere_shielding_and_image_charge_rows`,
+`builtin_scalar_entries_leave_the_vector_and_source_catalogue_unchanged`,
 `combined_search_and_filter_matches_manual_intersection`,
-`get_returns_the_entry_or_none`, and `duplicate_ids_are_rejected`.
+`get_returns_the_entry_or_none`, and `duplicate_ids_are_rejected`; the scalar
+load path is pinned by `tests/ui_preset_test.rs`:
+`loading_a_scalar_preset_switches_to_its_kind_without_touching_the_vector_formula`,
+`a_scalar_reload_that_only_changes_the_contour_count_dirties_once`
+and `clicking_a_scalar_library_row_loads_the_scalar_view`.
 
 **Limitations.** Legacy formula presets have no summary in their source
 catalogue, so their `summary` is empty and their `validity` label is `None`.
 No preset is parameterised yet. The animated flag is catalogue metadata; the
 panel already runs the shared clock from `State`, but no library API drives it.
+Scalar rows carry a static surface expression; they reuse the shipped
+`Surface3D` workbench and cannot name a separate heatmap or contour plot kind.
 
 #### `src/colormap.rs` — scalar-to-RGB ramps
 
