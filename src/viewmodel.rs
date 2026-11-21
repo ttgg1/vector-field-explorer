@@ -10,6 +10,7 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
+use super::field_bake::{BakeAxis, BakeError, BakeSpec, BakedField};
 use super::field_cache::{FieldSampleCache, FieldSampleKey};
 use super::field_probe::{
     CirculationLoop, CirculationReport, FluxReport, GaussianSurface, IntegralStatus, LoopKind,
@@ -691,6 +692,17 @@ pub struct State {
     /// reuses the previous pass. Cloning a state resets it, and it never reaches
     /// history, documents or scenes.
     field_sample_cache: RefCell<FieldSampleCache>,
+    /// Optional CPU-baked lattice (P3 slice 1a). Runtime-only: built only by
+    /// [`State::rebuild_field_bake`], dropped by every field-affecting setter
+    /// and by [`crate::persistence::ViewRecord::restore`], and never written to
+    /// a `ViewRecord`, history snapshot or scene document. No default particle,
+    /// streamline, `advance_exact`, animation or CLI path reads it in this
+    /// slice; the opt-in switch is slice 1b.
+    ///
+    /// `State` derives `Clone`, so cloning copies this lattice deliberately.
+    /// The copied bake stays valid for the copied state because it is a pure
+    /// function of the copied formula, parameters, domain and plane inputs.
+    field_bake: Option<BakedField>,
     /// Counts fresh (uncached) sampling passes; a doc-hidden test seam.
     field_sample_passes: Cell<u64>,
 }
@@ -971,6 +983,7 @@ impl State {
         if next == self.parameters {
             return Ok(());
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         self.parameters = next;
         // A parameter change invalidates every stored density estimate; the
@@ -1590,6 +1603,7 @@ impl State {
             dirty: true,
             time: 0.0,
             field_sample_cache: RefCell::new(FieldSampleCache::default()),
+            field_bake: None,
             field_sample_passes: Cell::new(0),
         }
     }
@@ -1602,6 +1616,7 @@ impl State {
         if self.formula == formula {
             return false;
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         let parsed = FieldExpr::parse_with_parameters(formula.as_str(), &self.parameters);
         self.formula = formula;
@@ -1653,6 +1668,7 @@ impl State {
         if self.field_mode == mode {
             return false;
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         if matches!(
             mode,
@@ -2130,6 +2146,11 @@ impl State {
             self.maxwell_sampling = None;
             return;
         }
+        // A bake only ever describes the formula field. This refresh also
+        // clamps `self.plane` directly, so a stale bake reached through a
+        // direct field write must be dropped here rather than left describing
+        // the previous plane.
+        self.clear_field_bake();
         if let Err(error) = validate_maxwell(&self.maxwell) {
             self.maxwell_error = Some(maxwell_error_text(&error));
             self.maxwell_sampling = None;
@@ -2291,6 +2312,7 @@ impl State {
         if self.mode_3d == mode_3d {
             return false;
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         let previous_grid = self.plane_grid();
         self.mode_3d = mode_3d;
@@ -2339,6 +2361,7 @@ impl State {
         if self.domain == domain {
             return false;
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         let previous_grid = self.plane_grid();
         if self.domain.min.x != domain.min.x
@@ -2762,6 +2785,7 @@ impl State {
         if self.plane == plane {
             return false;
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         self.plane = plane;
         self.mark_dirty()
@@ -3796,6 +3820,52 @@ impl State {
         }
     }
 
+    /// The optional CPU-baked lattice built by
+    /// [`State::rebuild_field_bake`]. Runtime-only; `None` means every caller
+    /// keeps today's direct flow.
+    pub fn field_bake(self: &State) -> Option<&BakedField> {
+        self.field_bake.as_ref()
+    }
+
+    /// Drop the runtime bake. This never changes any particle or streamline
+    /// result: slice 1a has no default call site reading the bake.
+    pub fn clear_field_bake(self: &mut State) {
+        self.field_bake = None;
+    }
+
+    /// Explicitly build (or replace) the runtime bake for the current field.
+    ///
+    /// Rebuild is never automatic: the field-affecting setters only invalidate,
+    /// so an idle frame or an unrelated display edit cannot pay baking cost.
+    /// A 2-component field bakes on [`BakeAxis::Plane2d`]; a 3-component field
+    /// bakes a world [`BakeAxis::Volume3d`] lattice (a 2D plane slice projects
+    /// that world bake later). A failed build leaves no stale bake behind.
+    pub fn rebuild_field_bake(self: &mut State, resolution: u32) -> Result<(), BakeError> {
+        self.field_bake = None;
+        if self.field_mode != FieldMode::Formula {
+            return Err(BakeError::UnsupportedMode {
+                mode: self.field_mode,
+            });
+        }
+        let axis = if self.field.dimension == 2 {
+            BakeAxis::Plane2d
+        } else {
+            BakeAxis::Volume3d
+        };
+        let spec = BakeSpec {
+            formula: self.formula.clone(),
+            parameters: self.parameters.clone(),
+            domain: self.domain,
+            axis,
+            resolution,
+            field_mode: self.field_mode,
+            plane_frame: self.plane_frame(),
+        };
+        let baked = BakedField::build(spec, &self.field)?;
+        self.field_bake = Some(baked);
+        Ok(())
+    }
+
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
     /// `n`×`n`×`n` when sampling runs three-dimensional.
     pub fn grid(self: &State) -> UVec3 {
@@ -3913,6 +3983,14 @@ impl State {
     #[doc(hidden)]
     pub fn field_sample_passes_for_tests(self: &State) -> u64 {
         self.field_sample_passes.get()
+    }
+
+    /// Simulate the direct `field_mode` write that bypasses
+    /// [`State::set_field_mode`]'s invalidation; a doc-hidden test seam for the
+    /// runtime bake's mode guard.
+    #[doc(hidden)]
+    pub fn force_field_mode_for_tests(self: &mut State, mode: FieldMode) {
+        self.field_mode = mode;
     }
 
     /// Whether the runtime sample cache holds an entry; a doc-hidden test seam.

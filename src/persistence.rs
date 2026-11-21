@@ -1117,6 +1117,9 @@ impl ViewRecord {
     /// — while the other non-finite numbers fall back to defaults so a corrupt
     /// record cannot poison the sampling grid.
     pub fn restore(&self, state: &mut State, controls: &mut Controls) {
+        // A bake is runtime-only and cannot be described by a `ViewRecord`;
+        // restoring a document snapshot never revives one.
+        state.clear_field_bake();
         let defaults = Controls::new();
         state.set_plot_kind(PlotKind::VectorField);
         state.set_mode(self.last_vector_mode_3d.unwrap_or(self.mode_3d));
