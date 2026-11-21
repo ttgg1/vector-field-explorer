@@ -582,12 +582,14 @@ impl VfApp {
         });
     }
 
-    /// Replace the cached object scene only when its content fingerprint
-    /// changes. The mapping is bounded by `MAX_OBJECTS`; an unchanged source,
-    /// domain or slice keeps the old `Arc` so the pass skips the upload.
+    /// Replace the cached object scene only when its cache key changes: the
+    /// content fingerprint plus the slice clip. The mapping is bounded by
+    /// `MAX_OBJECTS`; an unchanged source, domain or slice keeps the old `Arc`
+    /// so the pass skips the upload, while a 2D/3D switch drops or adds the clip
+    /// even though the objects fingerprint is unchanged.
     fn refresh_object_scene(&mut self) {
         let next = super::object_scene_for_state(&self.state);
-        if next.generation() != self.object_scene.generation() {
+        if !self.object_scene.cache_matches(&next) {
             self.object_scene = Arc::new(next);
         }
     }

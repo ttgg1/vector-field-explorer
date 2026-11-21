@@ -1080,6 +1080,10 @@ handling, scene ordering, screenshot capture, and the fly crosshair.
 - Ode appends current-time marker dots to a copy of the 2D `dots` list or to
   the 3D combined stream before the sort. The cached scene is never mutated;
   markers use `PARTICLE_KIND` and the fixed ODE palette.
+- The cached object scene is replaced when `MeshScene::cache_matches` fails,
+  which compares the content `generation()` **and** the slice `clip()`. The
+  fingerprint omits the clip, so generation alone would retain the 2D clip in
+  3D (and the unclipped 3D scene in 2D) across a mode switch (#207).
 - The screenshot runs before the paint callback, using the same `scene`,
   `view_proj` and eye position, so the capture is the displayed frame. A
   request is consumed once per capture.
@@ -4649,7 +4653,13 @@ and `normal.dot(origin)`; the normal is taken as unit because
 assume that for hand-built or foreign frames. An empty mapped scene with a
 plane has `generation == 0` but `clip: Some(_)`. The FNV-1a `generation` covers
 each instance's primitive index, sign, opacity/colour bits and all 16 transform
-bit patterns; `empty()` reserves generation `0`.
+bit patterns; `empty()` reserves generation `0`. It does **not** hash `clip()`:
+the 2D and 3D mapping of the same sources share one generation even though only
+2D carries a `SliceClip`, and another plane or index changes the clip without
+changing the generation. The cache key is therefore `generation` **plus**
+`clip`: `MeshScene::cache_matches` compares both, and the live viewport cache in
+`src/app/viewport.rs` replaces its `Arc<MeshScene>` when either differs. A
+2D → 3D switch drops the clip and a 3D → 2D switch adds it (issue #207).
 
 **Pinned by.** [tests/object_scene_test.rs](../tests/object_scene_test.rs):
 `primitive_triangle_counts_match_the_budget`,
@@ -4679,7 +4689,9 @@ triangle-budget break is unreachable until a primitive exceeds 2,343 triangles
 at 64 instances; the current largest is 1,152, so 64 × 1,152 = 73,728 <
 150,000 and `MAX_OBJECTS` always binds first),
 `nan_source_strength_maps_to_positive_sign`,
-`generation_is_stable_and_changes_with_mapped_input`, and
+`generation_is_stable_and_changes_with_mapped_input`,
+`cache_matches_compares_the_slice_clip_as_well_as_the_generation` (a 2D clip,
+no clip and another plane all fail to match despite equal generations), and
 `empty_scene_has_no_objects_or_triangles_and_a_distinct_generation`.
 
 **Limitations.** Fixed tessellation, no LOD, no picking metadata and no
@@ -4723,8 +4735,8 @@ otherwise the extent plus the sanitized draw list. `ObjectTargetKey` identifies
 target extent/format within one pass object.
 
 **Pipeline and shader.** `src/shaders.object.wgsl` holds both the geometry pair
-(`vs_object`/`fs_object`), the faint discarded-side entry
-(`fs_object_faint`) and the composite pair (`vs_composite`/`fs_composite`).
+(`vs_object`/`fs_object`), the attenuated discarded-side entry
+(`fs_object_attenuated`) and the composite pair (`vs_composite`/`fs_composite`).
 Geometry reads a 36-byte `MeshVertex` vertex stream plus the 128-byte instance
 stream (bind group 0 is the `ObjectGlobals` uniform only; instances are vertex
 attributes at locations 3–10), tests and writes `Depth32Float` with `LessEqual`,
@@ -4733,9 +4745,13 @@ straight alpha. The fragment stage combines `0.25` ambient with one directional
 diffuse term, discards the world-space half `dot(p, n) - offset < 0` when the
 slice clip is active, and has a barycentric `fwidth` wireframe path selected by
 `params.x`. When the slice clip is active the same instances are drawn once more
-with the faint pipeline: `fs_object_faint` keeps only the discarded half,
-forces the barycentric wireframe and multiplies alpha by `0.2`, without adding
-vertices, buffers or a depth write. Composite binds the target texture and
+with the attenuated pipeline: `fs_object_attenuated` keeps only the discarded
+half, applies the same two-sided lighting, multiplies alpha by `0.35` and never
+writes depth, so a camera on the far side sees a shaded body instead of the dark
+interior or an empty cut, while the kept half stays authoritative. In Wireframe
+style the attenuated pass keeps the barycentric edges-only reading; in Solid it
+fills the discarded side as a shaded body. It adds no vertices, buffers or
+geometry. Composite binds the target texture and
 sampler at bindings 2/3 (no binding collision with the uniform), draws an
 oversized triangle and writes premultiplied alpha into egui's no-depth pass.
 
@@ -4779,10 +4795,16 @@ viewport return `Ok` with no target, a 64×64 sphere frame allocates and renders
 (`2316/4096` non-clear pixels observed on the AMD RX 9070 XT / RADV probe), a
 repeated frame is byte-identical, the capture-style stage proves a default
 capture equals an explicit Solid capture while a Wireframe capture of the same
-scene differs in pixels (#115), an asymmetric clipped sphere proves both
-on-slice body pixels and attenuated discarded-side wireframe pixels rather than
-opaque body pixels (#114), and no validation/internal/out-of-memory error is
-reported. There is no noop backend or silent skip.
+scene differs in pixels (#115), a sparse clipped disc proves the discarded slice
+half reads as a shaded attenuated body from both `±Z` eyes (the full far-side
+silhouette is filled and
+differs from the opaque body, while the kept half stays byte-identical; a
+wireframe-only pass leaves interior pixels empty), an unclipped sphere covers the
+same area from all six axis eyes, and the stale-clip regression drives the
+`MeshScene::cache_matches` rule through 2D → 3D (unclipped full body from both
+`±Z` eyes) and 3D → 2D (the clipped scene), with equal generations (#207). No
+validation/internal/out-of-memory error is reported. There is no noop backend or
+silent skip.
 
 #### `src/renderer.rs` — instanced wgpu renderer
 
@@ -4857,8 +4879,10 @@ sorting, and the offscreen screenshot pass.
   capture `DrawState`'s object style (set by every capture call site to the
   committed style; the default is Solid, the pre-style behaviour), with
   `render_offscreen_with_objects` (native and wasm) forwarding the frame's
-  object scene. The object target/instances are uploaded only when the scene
-  fingerprint changes; an unchanged frame touches no object buffer.
+  object scene. The live cache key is the scene generation plus the slice clip,
+  so a 2D ↔ 3D switch replaces a scene whose objects are unchanged; the object
+  renderer uploads instances only when the generation or drawable count changes,
+  and an unchanged frame touches no object buffer.
 
 **Invariants.**
 - 3D uses one combined draw for arrows and particles, at the fixed 186-vertex
@@ -6595,7 +6619,7 @@ pin that.
 | `shaders.arrow2d.wgsl` | `vs_arrow2d`, `fs_arrow2d` | Flat 2D arrows in world XY; unlit |
 | `shaders.line.wgsl` | `vs_line`, `fs_line` | Camera-facing line ribbons; unlit |
 | `shaders.dot.wgsl` | `vs_dot`, `fs_dot` | Camera-facing round dot billboards (2D dot path); half-Lambert |
-| `shaders.object.wgsl` | `vs_object`, `fs_object`, `vs_composite`, `fs_composite` | Offscreen object bodies: lit 36-byte mesh + 128-byte instance stream, slice discard, barycentric wireframe; fullscreen premultiplied-alpha composite |
+| `shaders.object.wgsl` | `vs_object`, `fs_object`, `fs_object_attenuated`, `vs_composite`, `fs_composite` | Offscreen object bodies: lit 36-byte mesh + 128-byte instance stream, slice discard, barycentric wireframe, attenuated shaded discarded slice half; fullscreen premultiplied-alpha composite |
 
 The four vector files share one bind group: `Globals` uniform + a read-only
 storage array of instances. They generate geometry from `vertex_index`; there is

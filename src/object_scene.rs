@@ -672,6 +672,16 @@ impl MeshScene {
     pub fn clip(&self) -> Option<SliceClip> {
         self.clip
     }
+
+    /// Whether a cached scene covering this content can stand in for `next`.
+    ///
+    /// The cache key is [`Self::generation`] plus the slice [`Self::clip`]:
+    /// the fingerprint deliberately omits the clip, so the 2D and 3D mapping
+    /// of the same sources share one generation even though only 2D is cut.
+    #[must_use]
+    pub fn cache_matches(&self, next: &Self) -> bool {
+        self.generation == next.generation && self.clip == next.clip
+    }
 }
 
 /// Build a column-major model transform whose local `+Y` follows `axis`.

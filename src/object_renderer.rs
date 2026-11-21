@@ -264,7 +264,7 @@ pub struct ObjectDrawState {
 
 struct ObjectPipelines {
     object: wgpu::RenderPipeline,
-    object_faint: wgpu::RenderPipeline,
+    object_attenuated: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     scene_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -361,11 +361,11 @@ impl ObjectPipelines {
             cache: None,
         });
         // Same geometry, layout and depth target as the body pipeline; only the
-        // fragment stage flips the slice discard and attenuates the wireframe.
-        // It never writes depth, so it cannot hide the authoritative on-slice
-        // body or the composite.
-        let object_faint = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("vfe object faint discarded-side pipeline"),
+        // fragment stage flips the slice discard and draws the discarded side
+        // as an attenuated shaded body. It never writes depth, so it cannot
+        // hide the authoritative on-slice body or the composite.
+        let object_attenuated = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vfe object attenuated discarded-side pipeline"),
             layout: Some(&scene_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -375,7 +375,7 @@ impl ObjectPipelines {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_object_faint"),
+                entry_point: Some("fs_object_attenuated"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -436,7 +436,7 @@ impl ObjectPipelines {
 
         Self {
             object,
-            object_faint,
+            object_attenuated,
             composite,
             scene_layout,
             composite_layout,
@@ -818,11 +818,12 @@ impl ObjectPass {
             pass.draw(0..primitive.vertices() as u32, 0..1);
         }
 
-        // Issue #114 slice 5: one extra attenuated wireframe draw over the same
-        // instances, keeping only the discarded side of the slice. No new
-        // vertices or buffers; the faint pipeline never writes depth.
+        // Issue #207: one extra attenuated shaded draw over the same instances,
+        // keeping only the discarded side of the slice. No new vertices or
+        // buffers; the attenuated pipeline never writes depth, so the kept half
+        // stays authoritative.
         if self.globals_cache.params[1] > 0.5 {
-            pass.set_pipeline(&self.pipelines.object_faint);
+            pass.set_pipeline(&self.pipelines.object_attenuated);
             pass.set_bind_group(0, &self.scene_bind, &[]);
             for (primitive, instance_index) in &self.draws {
                 let Some(mesh) = self.primitive_bufs[primitive.index() as usize].as_ref() else {
