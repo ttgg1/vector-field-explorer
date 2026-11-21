@@ -476,7 +476,7 @@ fn run_panel(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(900.0, 1400.0),
+                egui::vec2(900.0, 2200.0),
             )),
             events,
             ..Default::default()
@@ -666,7 +666,18 @@ fn dimension_and_animated_filters_narrow_entries_and_combine_with_search() {
         animated: true,
     });
     let animated = run_panel(&ctx, &mut panel, &mut state, &mut camera, Vec::new());
-    assert!(has_text(&animated, "No presets match"));
+    assert!(
+        has_text(&animated, "Traveling wave field"),
+        "the animated filter keeps clock-driven teaching presets"
+    );
+    assert!(
+        has_text(&animated, "Moving Gaussian packet"),
+        "every animated preset survives the filter"
+    );
+    assert!(
+        !has_text(&animated, "Vortex"),
+        "the animated filter drops static presets"
+    );
 }
 
 #[test]
@@ -900,7 +911,7 @@ fn run_app_panel(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(900.0, 1400.0),
+                egui::vec2(900.0, 2200.0),
             )),
             events,
             ..Default::default()
@@ -1038,8 +1049,14 @@ fn loading_a_scene_applies_view_and_parameters_without_touching_ui_preferences()
     click_app_label(&ctx, &mut app, "Load");
 
     assert_eq!(app.state.formula, saved_view.formula);
-    assert_eq!(app.state.domain.min, Vec3::from_array(saved_view.domain_min));
-    assert_eq!(app.state.domain.max, Vec3::from_array(saved_view.domain_max));
+    assert_eq!(
+        app.state.domain.min,
+        Vec3::from_array(saved_view.domain_min)
+    );
+    assert_eq!(
+        app.state.domain.max,
+        Vec3::from_array(saved_view.domain_max)
+    );
     assert_eq!(app.state.parameters, saved_parameters);
     assert_eq!(app.style, style_before, "loading keeps the app style");
     assert_eq!(app.layout, layout_before, "loading keeps the layout record");

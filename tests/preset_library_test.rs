@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use vector_field_explorer::preset_library::{
     PresetEntry, PresetFilters, PresetGroup, PresetId, PresetLibrary, PresetLibraryError,
+    PresetValidity,
 };
 use vector_field_explorer::presets::{PresetCategory, presets};
 use vector_field_explorer::source_presets::source_presets;
@@ -26,6 +27,14 @@ fn ids(entries: &[&PresetEntry]) -> Vec<String> {
         .map(|entry| entry.id.as_str().to_owned())
         .collect()
 }
+
+/// Ticket-91 formula entries advanced by the shared clock.
+const ANIMATED_FORMULAS: [&str; 4] = [
+    "Pulsating radial field",
+    "Traveling wave field",
+    "Standing wave field",
+    "Moving Gaussian packet",
+];
 
 #[test]
 fn ids_are_unique_and_stable() {
@@ -112,9 +121,10 @@ fn formula_entries_keep_catalogue_order_and_groups() {
             "dimension for `{}`",
             preset.name
         );
-        assert!(
-            !entry.filters.animated,
-            "no formula preset is animated: `{}`",
+        assert_eq!(
+            entry.filters.animated,
+            ANIMATED_FORMULAS.contains(&preset.name),
+            "animated flag for `{}`",
             preset.name
         );
     }
@@ -217,7 +227,7 @@ fn dimension_filter_keeps_sources_and_matching_dimension() {
 }
 
 #[test]
-fn animated_filter_is_honest_for_an_all_static_catalogue() {
+fn animated_filter_returns_exactly_the_clock_driven_entries() {
     let library = builtin();
 
     let static_only = library.filtered(PresetFilters {
@@ -234,10 +244,157 @@ fn animated_filter_is_honest_for_an_all_static_catalogue() {
         dimension: None,
         animated: true,
     });
-    assert!(
-        animated_only.is_empty(),
-        "no built-in preset is animated yet"
+    assert_eq!(
+        names(&animated_only),
+        ANIMATED_FORMULAS,
+        "animated entries are exactly the clock-driven teaching presets"
     );
+}
+
+#[test]
+fn teaching_formula_entries_carry_stable_metadata() {
+    let library = builtin();
+    let expected = [
+        (
+            "formula.pulsating-radial",
+            "Pulsating radial field",
+            PresetGroup::Classic,
+            true,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.rotating-field",
+            "Rotating field",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.traveling-wave-field",
+            "Traveling wave field",
+            PresetGroup::Physics,
+            true,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.standing-wave-field",
+            "Standing wave field",
+            PresetGroup::Physics,
+            true,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.quadrupole-unequal-charges",
+            "Quadrupole (unequal charges)",
+            PresetGroup::Physics,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.saddle-potential",
+            "Saddle potential",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.anisotropic-well",
+            "Anisotropic well",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.double-well",
+            "Double-well potential",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.softened-dipole",
+            "Softened dipole",
+            PresetGroup::Physics,
+            false,
+            PresetValidity::PhysicallyValidRegularized,
+        ),
+        (
+            "formula.moving-gaussian",
+            "Moving Gaussian packet",
+            PresetGroup::Physics,
+            true,
+            PresetValidity::MathematicalIllustration,
+        ),
+    ];
+
+    for (id, name, group, animated, validity) in expected {
+        let entry = library
+            .get(&PresetId::new(id).unwrap())
+            .unwrap_or_else(|| panic!("entry `{id}` must be retrievable"));
+        assert_eq!(entry.name, name, "name for `{id}`");
+        assert_eq!(entry.group, group, "group for `{id}`");
+        assert_eq!(entry.filters.dimension, Some(2), "dimension for `{id}`");
+        assert_eq!(entry.filters.animated, animated, "animated flag for `{id}`");
+        assert_eq!(entry.validity, Some(validity), "validity label for `{id}`");
+        assert!(!entry.summary.is_empty(), "summary for `{id}`");
+        assert!(!entry.assumptions.is_empty(), "assumptions for `{id}`");
+        assert!(
+            !entry.exploration_prompt.is_empty(),
+            "exploration prompt for `{id}`"
+        );
+    }
+}
+
+#[test]
+fn validity_labels_are_explicit_and_stable() {
+    assert_eq!(
+        PresetValidity::MathematicalIllustration.label(),
+        "Mathematical illustration"
+    );
+    assert_eq!(PresetValidity::PhysicallyValid.label(), "Physically valid");
+    assert_eq!(
+        PresetValidity::PhysicallyValidRegularized.label(),
+        "Physically valid (regularized)"
+    );
+}
+
+#[test]
+fn teaching_source_entries_carry_stable_metadata() {
+    let library = builtin();
+    let expected = [
+        "Unequal charges",
+        "Off-axis ring",
+        "Sphere inside and out",
+        "Paired loops",
+        "Helmholtz pair",
+        "Opposing wires",
+        "Solenoid ends",
+    ];
+
+    for name in expected {
+        let entry = library
+            .entries()
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("source entry `{name}` must be indexed"));
+        assert_eq!(entry.group, PresetGroup::Sources, "group for `{name}`");
+        assert_eq!(
+            entry.filters.dimension, None,
+            "source dimension for `{name}`"
+        );
+        assert!(!entry.filters.animated, "source animation for `{name}`");
+        assert_eq!(
+            entry.validity,
+            Some(PresetValidity::PhysicallyValid),
+            "validity label for `{name}`"
+        );
+        assert!(!entry.summary.is_empty(), "summary for `{name}`");
+        assert!(!entry.assumptions.is_empty(), "assumptions for `{name}`");
+        assert!(
+            !entry.exploration_prompt.is_empty(),
+            "exploration prompt for `{name}`"
+        );
+    }
 }
 
 #[test]

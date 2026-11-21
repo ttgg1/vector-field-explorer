@@ -22,9 +22,9 @@ pub struct SourcePreset {
     pub build: fn() -> SourceScene,
 }
 
-/// The ten source presets in panel order. The last one is a gallery that
+/// The seventeen source presets in panel order. The last one is a gallery that
 /// places one source of every kind.
-static PRESETS: [SourcePreset; 10] = [
+static PRESETS: [SourcePreset; 17] = [
     SourcePreset {
         name: "Coulomb point",
         summary: "A single positive point charge at the origin",
@@ -69,6 +69,41 @@ static PRESETS: [SourcePreset; 10] = [
         name: "Finite solenoid",
         summary: "A finite current-carrying solenoid",
         build: finite_solenoid,
+    },
+    SourcePreset {
+        name: "Unequal charges",
+        summary: "Four alternating point charges in a quadrupole arrangement",
+        build: unequal_charges,
+    },
+    SourcePreset {
+        name: "Off-axis ring",
+        summary: "A charged ring displaced from the origin",
+        build: off_axis_ring,
+    },
+    SourcePreset {
+        name: "Sphere inside and out",
+        summary: "A solid charged sphere sampled inside and outside",
+        build: sphere_inside_and_out,
+    },
+    SourcePreset {
+        name: "Paired loops",
+        summary: "Two widely separated coaxial current loops",
+        build: paired_loops,
+    },
+    SourcePreset {
+        name: "Helmholtz pair",
+        summary: "Two coaxial loops at the classic one-radius separation",
+        build: helmholtz_pair,
+    },
+    SourcePreset {
+        name: "Opposing wires",
+        summary: "Two parallel straight wires carrying opposite currents",
+        build: opposing_wires,
+    },
+    SourcePreset {
+        name: "Solenoid ends",
+        summary: "A finite solenoid with visible end effects",
+        build: solenoid_ends,
     },
     SourcePreset {
         name: "Source gallery",
@@ -192,6 +227,76 @@ fn current_loop() -> SourceScene {
 }
 
 fn finite_solenoid() -> SourceScene {
+    scene(vec![SourceKindTag::Solenoid.default_source()])
+}
+
+fn unequal_charges() -> SourceScene {
+    // Alternating signs at the corners of a square make a quadrupole-like
+    // arrangement rather than two neutral pairs.
+    scene(vec![
+        with_strength(
+            at(SourceKindTag::PointCharge, DVec3::new(-0.5, -0.5, 0.0)),
+            1.0,
+        ),
+        with_strength(
+            at(SourceKindTag::PointCharge, DVec3::new(0.5, -0.5, 0.0)),
+            -1.0,
+        ),
+        with_strength(
+            at(SourceKindTag::PointCharge, DVec3::new(-0.5, 0.5, 0.0)),
+            -1.0,
+        ),
+        with_strength(
+            at(SourceKindTag::PointCharge, DVec3::new(0.5, 0.5, 0.0)),
+            1.0,
+        ),
+    ])
+}
+
+fn off_axis_ring() -> SourceScene {
+    // The ring keeps its unit radius and axis but sits off the canonical axis.
+    scene(vec![at(
+        SourceKindTag::ChargedRing,
+        DVec3::new(0.6, 0.35, 0.0),
+    )])
+}
+
+fn sphere_inside_and_out() -> SourceScene {
+    // The canonical [-2, 2]^3 domain shows both the interior and exterior.
+    scene(vec![SourceKindTag::SolidSphere.default_source()])
+}
+
+fn paired_loops() -> SourceScene {
+    scene(vec![
+        at(SourceKindTag::CurrentLoop, DVec3::new(0.0, 0.0, -1.5)),
+        at(SourceKindTag::CurrentLoop, DVec3::new(0.0, 0.0, 1.5)),
+    ])
+}
+
+fn helmholtz_pair() -> SourceScene {
+    // Classic Helmholtz spacing equals the loop radius (the default 1.0).
+    scene(vec![
+        at(SourceKindTag::CurrentLoop, DVec3::new(0.0, 0.0, -0.5)),
+        at(SourceKindTag::CurrentLoop, DVec3::new(0.0, 0.0, 0.5)),
+    ])
+}
+
+fn opposing_wires() -> SourceScene {
+    scene(vec![
+        with_strength(
+            at(SourceKindTag::StraightWire, DVec3::new(-0.5, 0.0, 0.0)),
+            1.0,
+        ),
+        with_strength(
+            at(SourceKindTag::StraightWire, DVec3::new(0.5, 0.0, 0.0)),
+            -1.0,
+        ),
+    ])
+}
+
+fn solenoid_ends() -> SourceScene {
+    // The default length-2 solenoid spans z in [-1, 1], so the canonical
+    // [-2, 2]^3 domain extends past both ends.
     scene(vec![SourceKindTag::Solenoid.default_source()])
 }
 

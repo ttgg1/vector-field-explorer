@@ -137,6 +137,30 @@ pub enum PresetGroup {
     Gallery,
 }
 
+/// The honesty label attached to a teaching preset where the catalogue makes
+/// the distinction. Legacy entries predate the labels and carry `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetValidity {
+    /// A kinematic or mathematical construction, not a physical field.
+    MathematicalIllustration,
+    /// A physical model in normalized teaching units.
+    PhysicallyValid,
+    /// A physical model regularized by softening so its singular centre stays
+    /// finite.
+    PhysicallyValidRegularized,
+}
+
+impl PresetValidity {
+    /// The user-facing label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MathematicalIllustration => "Mathematical illustration",
+            Self::PhysicallyValid => "Physically valid",
+            Self::PhysicallyValidRegularized => "Physically valid (regularized)",
+        }
+    }
+}
+
 /// Filter fields carried by every entry.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PresetFilters {
@@ -165,6 +189,8 @@ pub struct PresetEntry {
     pub parameters: &'static [&'static str],
     /// Optional exploration prompt; empty when none is supplied.
     pub exploration_prompt: &'static str,
+    /// Mathematical-illustration or physically-valid label, when catalogued.
+    pub validity: Option<PresetValidity>,
 }
 
 /// Why a [`PresetLibrary`] could not be built.
@@ -303,12 +329,171 @@ fn matches_filters(entry: &PresetEntry, filters: PresetFilters) -> bool {
     dimension_matches && animated_matches
 }
 
+/// Catalogue metadata the formula-preset table does not itself carry. Kept
+/// beside the indexed library so the formula catalogue stays a pure list of
+/// formulas and the metadata remains the library's concern.
+#[derive(Debug, Clone, Copy)]
+struct FormulaMetadata {
+    /// Explicit ID when the design fixes one; `None` uses the derived slug.
+    id: Option<&'static str>,
+    summary: &'static str,
+    assumptions: &'static str,
+    exploration_prompt: &'static str,
+    animated: bool,
+    validity: Option<PresetValidity>,
+}
+
+/// Catalogue metadata for the new source entries; the summary stays on the
+/// source preset itself.
+#[derive(Debug, Clone, Copy)]
+struct SourceMetadata {
+    assumptions: &'static str,
+    exploration_prompt: &'static str,
+    validity: Option<PresetValidity>,
+}
+
+fn formula_metadata(name: &str) -> Option<FormulaMetadata> {
+    let metadata = match name {
+        "Pulsating radial field" => FormulaMetadata {
+            id: Some("formula.pulsating-radial"),
+            summary: "Radial outflow that breathes with the shared clock",
+            assumptions: "Mathematical illustration: a radial flow whose strength oscillates; not a physical field",
+            exploration_prompt: "Watch how the outward speed grows and shrinks while every direction stays radial.",
+            animated: true,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Rotating field" => FormulaMetadata {
+            id: Some("formula.rotating-field"),
+            summary: "Rigid rotation about the origin",
+            assumptions: "Mathematical illustration: constant angular speed with no decay away from the origin",
+            exploration_prompt: "Compare the circulation with Vortex: both rotate, but this field never weakens.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Traveling wave field" => FormulaMetadata {
+            id: Some("formula.traveling-wave-field"),
+            summary: "A sinusoidal profile moving along x",
+            assumptions: "Mathematical illustration: kinematic one-dimensional wave with no medium or speed calibration",
+            exploration_prompt: "Follow one crest as time advances; the pattern translates at unit speed.",
+            animated: true,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Standing wave field" => FormulaMetadata {
+            id: Some("formula.standing-wave-field"),
+            summary: "A spatial sinusoid oscillating in place",
+            assumptions: "Mathematical illustration: a stationary sinusoid with no physical medium",
+            exploration_prompt: "Find the nodes that never move and the antinodes that reverse every half period.",
+            animated: true,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Quadrupole (unequal charges)" => FormulaMetadata {
+            id: Some("formula.quadrupole-unequal-charges"),
+            summary: "A symmetric quadrupole saddle field",
+            assumptions: "Mathematical illustration: the symmetric (x, -y) saddle, not the field of four specified charges",
+            exploration_prompt: "Trace the two inflow directions and the two outflow directions meeting at the origin.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Saddle potential" => FormulaMetadata {
+            id: Some("formula.saddle-potential"),
+            summary: "Negative gradient of a saddle-shaped potential",
+            assumptions: "Mathematical illustration: potential x^2 - y^2 yields the field (x, -y) up to scale",
+            exploration_prompt: "Identify the stable and unstable directions of the saddle.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Anisotropic well" => FormulaMetadata {
+            id: Some("formula.anisotropic-well"),
+            summary: "An anisotropic linear restoring field",
+            assumptions: "Mathematical illustration: uncoupled harmonic well with stiffness 4 along y",
+            exploration_prompt: "Compare how quickly motion converges along x and along the stiffer y axis.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Double-well potential" => FormulaMetadata {
+            id: Some("formula.double-well"),
+            summary: "Negative gradient of a symmetric double well",
+            assumptions: "Mathematical illustration: potential (x^2 - 1)^2 gives -4x^3 + 4x, with a separate linear y well",
+            exploration_prompt: "Locate the two stable x wells and the unstable barrier between them.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Softened dipole" => FormulaMetadata {
+            id: Some("formula.softened-dipole"),
+            summary: "Opposite softened unit charges along x",
+            assumptions: "Physically valid (regularized): +1 and -1 unit charges at (1.25, 0) and (0.75, 0), each softened with s^2 = 0.0625 so neither centre is singular; a teaching regularization, not an SI field",
+            exploration_prompt: "See how softening keeps both charge centres finite while preserving the dipole pattern between and outside them.",
+            animated: false,
+            validity: Some(PresetValidity::PhysicallyValidRegularized),
+        },
+        "Moving Gaussian packet" => FormulaMetadata {
+            id: Some("formula.moving-gaussian"),
+            summary: "A Gaussian packet translating along x",
+            assumptions: "Mathematical illustration: kinematic packet derived from a translating Gaussian potential",
+            exploration_prompt: "Track the packet centre as time advances.",
+            animated: true,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        _ => return None,
+    };
+    Some(metadata)
+}
+
+fn source_metadata(name: &str) -> Option<SourceMetadata> {
+    let metadata = match name {
+        "Unequal charges" => SourceMetadata {
+            assumptions: "Physically valid: Coulomb superposition of four unit point charges with alternating signs; normalized teaching units and softened field",
+            exploration_prompt: "Find the neutral point where the four charge fields balance.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Off-axis ring" => SourceMetadata {
+            assumptions: "Physically valid: uniformly charged unit ring displaced from the origin; normalized teaching units and softening",
+            exploration_prompt: "Compare the near-axis field with the centred ring: the axis has moved.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Sphere inside and out" => SourceMetadata {
+            assumptions: "Physically valid: uniformly charged solid sphere of unit charge and radius; normalized teaching units",
+            exploration_prompt: "Compare the interior field growing with radius to the exterior inverse-square falloff.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Paired loops" => SourceMetadata {
+            assumptions: "Physically valid: superposition of two separated coaxial unit-current loops; normalized teaching units",
+            exploration_prompt: "Look for the field between the loops, where both contributions join.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Helmholtz pair" => SourceMetadata {
+            assumptions: "Physically valid: two coaxial unit-current loops separated by one loop radius; normalized teaching units",
+            exploration_prompt: "Check how uniform the axial field is near the midpoint between the loops.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Opposing wires" => SourceMetadata {
+            assumptions: "Physically valid: superposition of two parallel unit-current straight wires with opposite currents; normalized teaching units",
+            exploration_prompt: "Find where the two magnetic fields cancel between the wires.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Solenoid ends" => SourceMetadata {
+            assumptions: "Physically valid: finite eight-turn unit-current solenoid; normalized teaching geometry with the canonical domain extending past both ends",
+            exploration_prompt: "Compare the axial field near the middle with the spreading field past the ends.",
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        _ => return None,
+    };
+    Some(metadata)
+}
+
 fn formula_entry(preset: &'static Preset) -> Result<PresetEntry, PresetLibraryError> {
-    let id = derive_id("formula", preset.name)?;
+    let metadata = formula_metadata(preset.name);
+    let id = match metadata.and_then(|metadata| metadata.id) {
+        Some(id) => PresetId::new(id).map_err(|error| PresetLibraryError::InvalidId {
+            preset: preset.name,
+            error,
+        })?,
+        None => derive_id("formula", preset.name)?,
+    };
     Ok(PresetEntry {
         id,
         name: preset.name,
-        summary: "",
+        summary: metadata.map_or("", |metadata| metadata.summary),
         group: match preset.category {
             PresetCategory::Classic => PresetGroup::Classic,
             PresetCategory::Electrostatics
@@ -317,15 +502,20 @@ fn formula_entry(preset: &'static Preset) -> Result<PresetEntry, PresetLibraryEr
         },
         filters: PresetFilters {
             dimension: Some(preset.dimension),
-            animated: false,
+            animated: metadata.is_some_and(|metadata| metadata.animated),
         },
-        assumptions: preset_approximation_label(preset.name).unwrap_or(""),
+        assumptions: metadata
+            .map(|metadata| metadata.assumptions)
+            .or_else(|| preset_approximation_label(preset.name))
+            .unwrap_or(""),
         parameters: &[],
-        exploration_prompt: "",
+        exploration_prompt: metadata.map_or("", |metadata| metadata.exploration_prompt),
+        validity: metadata.and_then(|metadata| metadata.validity),
     })
 }
 
 fn source_entry(preset: &'static SourcePreset) -> Result<PresetEntry, PresetLibraryError> {
+    let metadata = source_metadata(preset.name);
     let id = derive_id("source", preset.name)?;
     let group = if preset.name == SOURCE_GALLERY_NAME {
         PresetGroup::Gallery
@@ -341,9 +531,10 @@ fn source_entry(preset: &'static SourcePreset) -> Result<PresetEntry, PresetLibr
             dimension: None,
             animated: false,
         },
-        assumptions: "",
+        assumptions: metadata.map_or("", |metadata| metadata.assumptions),
         parameters: &[],
-        exploration_prompt: "",
+        exploration_prompt: metadata.map_or("", |metadata| metadata.exploration_prompt),
+        validity: metadata.and_then(|metadata| metadata.validity),
     })
 }
 
