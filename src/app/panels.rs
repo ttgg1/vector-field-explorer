@@ -3,8 +3,16 @@
 
 use super::*;
 
+use crate::cas_actions::{CameraFraming, CasAction, CasActionError};
+use crate::color_mapping::ColorQuantity;
+use crate::color_ramp::ScaleMode;
+use crate::colormap::Colormap;
+use crate::field::FieldExpr;
+use crate::scalar::{ScalarContext, ScalarExpr};
+use crate::scalar_view::MAX_PROBES;
 use crate::scene_document::{SceneCamera, SceneDocument};
 use crate::ui::presets::SceneAction;
+use crate::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, MIN_DENSITY};
 
 impl VfApp {
     /// Frame phase: the top menu bar, formula bar, fly-input sync, both side
@@ -607,7 +615,245 @@ impl VfApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn show_cas_body(&mut self, ui: &mut egui::Ui) {
-        crate::ui::cas_panel::show(ui, &mut self.state, &mut self.cas);
+        if let Some(action) = crate::ui::cas_panel::show(ui, &mut self.state, &mut self.cas) {
+            let result = self.apply_cas_action(&action);
+            self.cas.action_message = None;
+            self.cas.action_rejection = None;
+            match result {
+                Ok(message) => self.cas.action_message = Some(message),
+                Err(error) => self.cas.action_rejection = Some(error.to_string()),
+            }
+        }
+    }
+
+    /// Apply one typed CAS action through the existing setters.
+    ///
+    /// Every piece is validated before the first mutation, so a rejected
+    /// action leaves the document, camera, dirty flag and edit history exactly
+    /// as they were. An accepted action is one frame-boundary dirty
+    /// transition, which the idle edit-history driver records as one undo
+    /// entry. No action creates a source, runs a solver, writes a file or
+    /// touches preset storage.
+    pub fn apply_cas_action(&mut self, action: &CasAction) -> Result<String, CasActionError> {
+        match action {
+            CasAction::SetFormula { formula } => {
+                require_formula_field_mode(&self.state)?;
+                FieldExpr::parse_with_parameters(formula, &self.state.parameters)
+                    .map_err(|error| bad_action("formula", error.to_string()))?;
+                self.state.set_formula(formula.clone());
+            }
+            CasAction::SetScalarSource { expr } => {
+                // The surface source is a Formula-mode concept: the scalar
+                // overlay only applies when `scalar_view_applicable` holds
+                // (`FieldMode::Formula`) and the Surface plot is a Formula-mode
+                // view. Sources mode is refused for the same reason as the
+                // formula field, with the same explanation.
+                require_formula_field_mode(&self.state)?;
+                ScalarExpr::parse(expr, ScalarContext::Surface)
+                    .map_err(|error| bad_action("scalar", error.to_string()))?;
+                self.state
+                    .set_scalar_source(ScalarContext::Surface, expr.clone());
+            }
+            CasAction::SetParameters { values } => {
+                let mut next = self.state.parameters.clone();
+                for (name, value) in values {
+                    if !value.is_finite() {
+                        return Err(bad_action(
+                            "param",
+                            format!("parameter `{name}` must be finite"),
+                        ));
+                    }
+                    let Some(entry) = next.entries.iter_mut().find(|entry| entry.name == *name)
+                    else {
+                        return Err(bad_action(
+                            "param",
+                            format!("unknown parameter `{name}`; define it first"),
+                        ));
+                    };
+                    entry.value = f64::from(*value);
+                }
+                next.validate()
+                    .map_err(|reason| bad_action("param", reason))?;
+                self.state
+                    .commit_parameters(next)
+                    .map_err(|reason| bad_action("param", reason))?;
+            }
+            CasAction::SetDomain { half_extents } => {
+                for value in half_extents {
+                    if !value.is_finite()
+                        || *value < crate::cas_actions::MIN_HALF_EXTENT
+                        || *value > crate::cas_actions::MAX_HALF_EXTENT
+                    {
+                        return Err(bad_action(
+                            "domain",
+                            format!(
+                                "half-extent {value} is outside {}..={}",
+                                crate::cas_actions::MIN_HALF_EXTENT,
+                                crate::cas_actions::MAX_HALF_EXTENT
+                            ),
+                        ));
+                    }
+                }
+                let extents = Vec3::from_array(*half_extents);
+                self.state.set_domain(-extents, extents);
+                self.controls.domain_min = self.state.domain.min;
+                self.controls.domain_max = self.state.domain.max;
+            }
+            CasAction::SetDensity { samples_per_axis } => {
+                let max = if self.state.is_3d() {
+                    MAX_DENSITY_3D
+                } else {
+                    MAX_DENSITY_2D
+                };
+                if !(MIN_DENSITY..=max).contains(samples_per_axis) {
+                    return Err(bad_action(
+                        "density",
+                        format!(
+                            "{samples_per_axis} samples per axis is outside \
+                             {MIN_DENSITY}..={max} for the current view"
+                        ),
+                    ));
+                }
+                self.state.set_density(*samples_per_axis);
+                self.controls.density = self.state.density;
+            }
+            CasAction::SetDimension { three_d } => {
+                self.state.set_mode(*three_d);
+            }
+            CasAction::SetColors {
+                colormap,
+                quantity,
+                mode,
+            } => {
+                quantity
+                    .available(self.state.is_3d())
+                    .map_err(|reason| bad_action("colors", reason))?;
+                mode.validate()
+                    .map_err(|reason| bad_action("colors", reason))?;
+                self.state.set_colormap(*colormap);
+                self.state.set_color_quantity(*quantity);
+                self.state.set_color_mode(*mode);
+                self.sync_color_controls(*colormap, *quantity, *mode);
+            }
+            CasAction::ApplyAppearanceProfile { name } => {
+                let profile = self
+                    .profiles
+                    .all()
+                    .into_iter()
+                    .find(|profile| profile.name == *name)
+                    .ok_or_else(|| {
+                        CasActionError::UnsupportedHere(format!(
+                            "appearance profile `{name}` was not found"
+                        ))
+                    })?;
+                profile
+                    .apply(&mut self.state)
+                    .map_err(|reason| bad_action("appearance", reason))?;
+                self.sync_color_controls(
+                    self.state.colormap,
+                    self.state.color_quantity,
+                    self.state.color_mode,
+                );
+            }
+            CasAction::AddPointProbe { position } => {
+                let position = Vec3::from_array(*position);
+                if !position.is_finite() {
+                    return Err(bad_action("probe", "position must be finite"));
+                }
+                if !self.state.scalar_view_applicable() {
+                    return Err(CasActionError::UnsupportedHere(
+                        "probes need a formula vector view with a valid surface expression"
+                            .to_owned(),
+                    ));
+                }
+                let domain = self.state.scene_domain();
+                if !domain_contains(&domain, position) {
+                    return Err(bad_action("probe", "position is outside the scene domain"));
+                }
+                if self.state.probes.len() >= MAX_PROBES {
+                    return Err(bad_action(
+                        "probe",
+                        format!("at most {MAX_PROBES} probes are allowed"),
+                    ));
+                }
+                self.state
+                    .add_point_probe(position, None)
+                    .map_err(|error| bad_action("probe", error.to_string()))?;
+            }
+            CasAction::ApplySeedLayout { name } => {
+                let domain = self.state.scene_domain();
+                let layout = self
+                    .seed_layouts
+                    .all(&domain)
+                    .into_iter()
+                    .find(|layout| layout.name == *name)
+                    .ok_or_else(|| {
+                        CasActionError::UnsupportedHere(format!(
+                            "seed layout `{name}` was not found"
+                        ))
+                    })?;
+                layout
+                    .seeds
+                    .validate(&domain)
+                    .map_err(|reason| bad_action("seeds", reason))?;
+                self.state
+                    .commit_seed_layout(layout.seeds)
+                    .map_err(|reason| bad_action("seeds", reason))?;
+            }
+            CasAction::SetCamera { framing } => match framing {
+                CameraFraming::Fit | CameraFraming::Reset => {
+                    let command = if *framing == CameraFraming::Fit {
+                        ViewCommand::Fit
+                    } else {
+                        ViewCommand::Reset
+                    };
+                    if self.state.is_vector_mode() {
+                        self.apply_view_command(command);
+                    } else {
+                        self.apply_plot_view_command(command);
+                    }
+                }
+                CameraFraming::Isometric => {
+                    if self.state.is_vector_mode() {
+                        let context = self.view_context();
+                        self.orbit = view_command::apply_view_command(
+                            OrbitCamera::default(),
+                            context,
+                            ViewCommand::Fit,
+                        );
+                        self.fly = None;
+                        self.presets.clear_active();
+                    } else {
+                        self.apply_plot_view_command(ViewCommand::Reset);
+                    }
+                }
+            },
+            CasAction::SetTransport { playing } => {
+                self.clock.set_playing(*playing);
+            }
+        }
+        Ok(crate::cas_actions::preview(action))
+    }
+
+    /// Keep the Controls colour mirrors in step with an action-driven colour
+    /// change. The sidebar re-applies its mirrors every frame, so a stale
+    /// mirror would otherwise repaint the old mapping.
+    fn sync_color_controls(
+        &mut self,
+        colormap: Colormap,
+        quantity: ColorQuantity,
+        mode: ScaleMode,
+    ) {
+        self.controls.colormap = colormap;
+        self.controls.color_quantity = quantity;
+        self.controls.color_mode = mode;
+        match mode {
+            ScaleMode::Linear => self.controls.signed_log = false,
+            ScaleMode::SignedLog { half_width } => {
+                self.controls.signed_log = true;
+                self.controls.signed_log_half_width = half_width;
+            }
+        }
     }
 
     fn recentre_domain(&mut self, domain_before: Domain) {
@@ -1831,4 +2077,35 @@ impl VfApp {
     pub fn test_prepare_animation_start(&mut self) -> bool {
         self.prepare_animation_start().is_some()
     }
+}
+
+/// A rejected CAS action value, in the error shape the panel displays.
+fn bad_action(field: &'static str, reason: impl Into<String>) -> CasActionError {
+    CasActionError::BadValue {
+        field,
+        reason: reason.into(),
+    }
+}
+
+/// The one refusal shared by the actions that edit the formula field. It
+/// matches the #168 mathematical path exactly so a Sources-mode command can
+/// never mutate a field the active adapter does not show.
+fn require_formula_field_mode(state: &State) -> Result<(), CasActionError> {
+    if state.field_mode == FieldMode::Formula {
+        Ok(())
+    } else {
+        Err(CasActionError::UnsupportedHere(
+            "CAS edits the formula field; switch to Formula.".to_owned(),
+        ))
+    }
+}
+
+/// Inclusive scene-domain containment, matching the probe placement gate.
+fn domain_contains(domain: &Domain, position: Vec3) -> bool {
+    position.x >= domain.min.x
+        && position.x <= domain.max.x
+        && position.y >= domain.min.y
+        && position.y <= domain.max.y
+        && position.z >= domain.min.z
+        && position.z <= domain.max.z
 }

@@ -30,6 +30,7 @@ mod camera_input_test;
 mod camera_pan_zoom_test;
 mod camera_test;
 mod camera_zoom_pan_test;
+mod cas_actions_test;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod cas_backend_test;
 mod cas_intent_test;
