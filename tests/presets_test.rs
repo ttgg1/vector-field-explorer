@@ -12,7 +12,7 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::presets::{PresetCategory, START_HERE, presets, presets_in};
 
-const REQUIRED: [&str; 31] = [
+const REQUIRED: [&str; 39] = [
     // Classic (pre-existing)
     "Pump",
     "Vortex",
@@ -50,14 +50,25 @@ const REQUIRED: [&str; 31] = [
     "Double-well potential",
     "Softened dipole",
     "Moving Gaussian packet",
+    // Ticket 91 slice B: 3D and animated 3D teaching catalogue
+    "Uniform field",
+    "Quadrupole field",
+    "Softened point charge",
+    "Helical solenoid field",
+    "ABC flow",
+    "3D shear flow",
+    "Rotating uniform field",
+    "3D plane wave",
 ];
 
 /// The ticket-91 formula entries driven by the shared clock.
-const ANIMATED: [&str; 4] = [
+const ANIMATED: [&str; 6] = [
     "Pulsating radial field",
     "Traveling wave field",
     "Standing wave field",
     "Moving Gaussian packet",
+    "Rotating uniform field",
+    "3D plane wave",
 ];
 
 #[test]
@@ -100,7 +111,7 @@ fn preset_count_includes_the_owner_added_3d_dipole() {
     assert_eq!(
         presets().len(),
         REQUIRED.len(),
-        "the original 20 plus the 3D dipole"
+        "every required preset is listed exactly once"
     );
 }
 
@@ -178,6 +189,28 @@ fn new_physics_presets_have_the_declared_category_and_dimension() {
             .unwrap_or_else(|| panic!("preset `{name}` must be listed"));
         assert_eq!(preset.category, category, "preset `{name}` category");
         assert_eq!(preset.dimension, dimension, "preset `{name}` dimension");
+    }
+}
+
+#[test]
+fn slice_b_3d_presets_have_the_declared_category_and_dimension() {
+    let expected = [
+        ("Uniform field", PresetCategory::Classic),
+        ("Quadrupole field", PresetCategory::Electrostatics),
+        ("Softened point charge", PresetCategory::Electrostatics),
+        ("Helical solenoid field", PresetCategory::Magnetostatics),
+        ("ABC flow", PresetCategory::Classic),
+        ("3D shear flow", PresetCategory::Classic),
+        ("Rotating uniform field", PresetCategory::Electrodynamics),
+        ("3D plane wave", PresetCategory::Electrodynamics),
+    ];
+    for (name, category) in expected {
+        let preset = presets()
+            .iter()
+            .find(|preset| preset.name == name)
+            .unwrap_or_else(|| panic!("preset `{name}` must be listed"));
+        assert_eq!(preset.category, category, "preset `{name}` category");
+        assert_eq!(preset.dimension, 3, "preset `{name}` dimension");
     }
 }
 
@@ -324,6 +357,76 @@ fn new_teaching_presets_have_representative_values() {
         eval_named("Softened dipole", Vec3::ZERO, 0.0),
         "softened dipole symmetry about x = 1",
     );
+
+    // Ticket 91 slice B static 3D entries.
+
+    // Uniform field (1, 0, 0) has the same value everywhere.
+    assert_close(
+        eval_named("Uniform field", Vec3::new(2.0, -1.0, 3.0), 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        "uniform field at (2, -1, 3)",
+    );
+
+    // Quadrupole field (x, y, -2z) is traceless: div = 1 + 1 - 2 = 0.
+    assert_close(
+        eval_named("Quadrupole field", Vec3::new(1.0, 2.0, 3.0), 0.0),
+        Vec3::new(1.0, 2.0, -6.0),
+        "quadrupole field at (1, 2, 3)",
+    );
+
+    // Softened point charge (x, y, z) / (r^2 + 0.0625)^1.5.
+    // At (1, 0, 0), D = 17/16 so D^1.5 = 17*sqrt(17)/64 and the value is
+    // 64/(17*sqrt(17)) = 0.9130752942...
+    assert_close(
+        eval_named("Softened point charge", Vec3::X, 0.0),
+        Vec3::new(64.0 / (17.0 * 17.0_f32.sqrt()), 0.0, 0.0),
+        "softened point charge at (1, 0, 0)",
+    );
+    // At (1, 1, 1), D = 3.0625 = 49/16 so D^1.5 = 343/64 and each
+    // component is 64/343 = 0.1865889212...
+    assert_close(
+        eval_named("Softened point charge", Vec3::ONE, 0.0),
+        Vec3::splat(64.0 / 343.0),
+        "softened point charge at (1, 1, 1)",
+    );
+    // Softening keeps the singular centre finite; the numerator vanishes.
+    assert_close(
+        eval_named("Softened point charge", Vec3::ZERO, 0.0),
+        Vec3::ZERO,
+        "softened point charge at the origin",
+    );
+
+    // Helical solenoid: azimuthal (-y, x) plus a uniform axial 0.75.
+    assert_close(
+        eval_named("Helical solenoid field", Vec3::new(1.0, 2.0, 3.0), 0.0),
+        Vec3::new(-2.0, 1.0, 0.75),
+        "helical solenoid at (1, 2, 3)",
+    );
+
+    // ABC flow at the origin: sin(0) + cos(0) = 1 in every component.
+    assert_close(
+        eval_named("ABC flow", Vec3::ZERO, 0.0),
+        Vec3::ONE,
+        "ABC flow at the origin",
+    );
+    // At (pi/2, 0, 0): (sin 0 + cos 0, sin(pi/2) + cos 0, sin 0 + cos(pi/2))
+    // = (1, 2, 0), with cos(pi/2) at float precision.
+    assert_close(
+        eval_named(
+            "ABC flow",
+            Vec3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0),
+            0.0,
+        ),
+        Vec3::new(1.0, 2.0, 0.0),
+        "ABC flow at (pi/2, 0, 0)",
+    );
+
+    // 3D shear flow (y, 0, 0) transports along x at speed y.
+    assert_close(
+        eval_named("3D shear flow", Vec3::new(1.0, 2.0, 3.0), 0.0),
+        Vec3::new(2.0, 0.0, 0.0),
+        "3D shear flow at (1, 2, 3)",
+    );
 }
 
 #[test]
@@ -399,6 +502,42 @@ fn new_animated_presets_move_with_the_shared_clock() {
         eval_named("Moving Gaussian packet", Vec3::new(1.0, 0.0, 0.0), 1.0),
         Vec3::ZERO,
         "moving packet at its centre",
+    );
+
+    // Rotating uniform field: (cos t, sin t, 0), independent of position.
+    assert_close(
+        eval_named("Rotating uniform field", Vec3::new(1.0, 2.0, 3.0), 0.0),
+        Vec3::X,
+        "rotating uniform field at t = 0",
+    );
+    assert_close(
+        eval_named(
+            "Rotating uniform field",
+            Vec3::new(1.0, 2.0, 3.0),
+            std::f32::consts::FRAC_PI_2,
+        ),
+        Vec3::Y,
+        "rotating uniform field at t = pi/2",
+    );
+
+    // 3D plane wave: (0, sin(z - t), 0) at z = pi/2.
+    assert_close(
+        eval_named(
+            "3D plane wave",
+            Vec3::new(0.0, 0.0, std::f32::consts::FRAC_PI_2),
+            0.0,
+        ),
+        Vec3::Y,
+        "3D plane wave at z = pi/2, t = 0",
+    );
+    assert_close(
+        eval_named(
+            "3D plane wave",
+            Vec3::new(0.0, 0.0, std::f32::consts::FRAC_PI_2),
+            std::f32::consts::FRAC_PI_2,
+        ),
+        Vec3::ZERO,
+        "3D plane wave at z = t = pi/2",
     );
 }
 

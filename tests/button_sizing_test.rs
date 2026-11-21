@@ -372,10 +372,16 @@ fn real_presets_actions_selectables_and_confirmation_buttons_fit() {
                         panel.show_compact(ui, &mut camera, &mut state, compact);
                     });
             };
+            // The panel expands the whole preset catalogue, so this surface
+            // must stay tall enough to lay out every row. Keep headroom for
+            // catalogue growth; when it runs out, the clipped-control
+            // assertion below fails loudly instead of hiding the overflow.
+            let height = 8000.0;
+            let width = if compact { 360.0 } else { 1400.0 };
             for _ in 0..3 {
-                frame(&ctx, compact, vec![], &mut draw);
+                frame_at(&ctx, width, height, vec![], &mut draw);
             }
-            let out = frame(&ctx, compact, vec![], &mut draw);
+            let out = frame_at(&ctx, width, height, vec![], &mut draw);
             for label in [
                 "Reset view",
                 "Fit domain",
