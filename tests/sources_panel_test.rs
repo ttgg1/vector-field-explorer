@@ -2,6 +2,9 @@
 
 use eframe::egui;
 use eframe::egui::{Pos2, Rect, vec2};
+use vector_field_explorer::custom_density::{
+    DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus, SupportKind,
+};
 use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag, SourceSampling,
@@ -10,7 +13,7 @@ use vector_field_explorer::sources::SourceKind;
 use vector_field_explorer::ui::formula_bar::{self, FormulaBarState};
 use vector_field_explorer::ui::layout::{LayoutState, SheetState};
 use vector_field_explorer::ui::sources_panel::{self, SourcesPanelState};
-use vector_field_explorer::viewmodel::State;
+use vector_field_explorer::viewmodel::{MAX_DENSITIES, State};
 
 fn context() -> egui::Context {
     let ctx = egui::Context::default();
@@ -67,9 +70,21 @@ fn show_sources_frame(
     panel: &mut SourcesPanelState,
     compact: bool,
 ) -> egui::FullOutput {
+    show_sources_frame_events(ctx, width, state, panel, compact, Vec::new())
+}
+
+fn show_sources_frame_events(
+    ctx: &egui::Context,
+    width: f32,
+    state: &mut State,
+    panel: &mut SourcesPanelState,
+    compact: bool,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 900.0))),
+            events,
             ..Default::default()
         },
         |ui| {
@@ -80,6 +95,66 @@ fn show_sources_frame(
     );
     output.textures_delta.clear();
     output
+}
+
+fn pointer(pos: Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// The SpinButton (DragValue) on the same row as `label`, to its right.
+fn drag_value_for(nodes: &[WidgetNode], label: &str) -> Option<Rect> {
+    // The panel can paint the same label elsewhere (Advanced also shows
+    // "Softening"); the density editor is the lower occurrence.
+    drag_values_for(nodes, label).last().copied()
+}
+
+/// Every SpinButton (DragValue) to the right of `label`, ordered top to bottom.
+/// A label can repeat across sections (Advanced's "Softening") and rows.
+fn drag_values_for(nodes: &[WidgetNode], label: &str) -> Vec<Rect> {
+    let mut rects: Vec<Rect> = nodes
+        .iter()
+        .filter(|node| node.label == label)
+        .filter_map(|label_node| spin_button_right_of(nodes, label_node.rect))
+        .collect();
+    rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    rects.dedup();
+    rects
+}
+
+fn spin_button_right_of(nodes: &[WidgetNode], label: Rect) -> Option<Rect> {
+    nodes
+        .iter()
+        .filter(|node| node.role == egui::Role::SpinButton)
+        .filter(|node| (node.rect.center().y - label.center().y).abs() < 8.0)
+        .filter(|node| node.rect.left() >= label.right() - 2.0)
+        .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .map(|node| node.rect)
+}
+
+/// Every TextInput to the right of `label`, ordered top to bottom. Rows repeat
+/// the "Formula" label, so callers pick an occurrence.
+fn text_inputs_for(nodes: &[WidgetNode], label: &str) -> Vec<Rect> {
+    let mut rects: Vec<Rect> = nodes
+        .iter()
+        .filter(|node| node.label == label)
+        .filter_map(|label_node| {
+            nodes
+                .iter()
+                .filter(|node| node.role == egui::Role::TextInput)
+                .filter(|node| (node.rect.center().y - label_node.rect.center().y).abs() < 8.0)
+                .filter(|node| node.rect.left() >= label_node.rect.right() - 2.0)
+                .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+                .map(|node| node.rect)
+        })
+        .collect();
+    rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    rects.dedup();
+    rects
 }
 
 fn click_sources(
@@ -626,4 +701,400 @@ fn display_selector_changes_only_the_scene_display() {
     state.set_source_scene(scene);
     assert_eq!(state.sources.display, SourceDisplay::Electric);
     assert!(state.sources.entries.is_empty());
+}
+
+fn density_support() -> DensitySupport {
+    DensitySupport {
+        kind: SupportKind::Box,
+        center: glam::Vec3::ZERO,
+        axis: glam::Vec3::Z,
+        size: glam::Vec3::splat(2.0),
+    }
+}
+
+fn density_spec(name: &str, family: DensityFamily, formula: &str) -> DensitySpec {
+    DensitySpec {
+        name: name.to_string(),
+        family,
+        support: density_support(),
+        formula: formula.to_string(),
+        samples: 8,
+        softening: 0.0,
+    }
+}
+
+fn open_custom_densities(
+    ctx: &egui::Context,
+    width: f32,
+    state: &mut State,
+    panel: &mut SourcesPanelState,
+    compact: bool,
+) {
+    let painted = nodes(&paint_panel(ctx, width, state, panel, compact, 3));
+    let header = find(&painted, "Custom densities")
+        .expect("the Sources panel paints the custom densities section")
+        .rect
+        .center();
+    click_sources(ctx, width, header, state, panel, compact);
+    let _ = paint_panel(ctx, width, state, panel, compact, 2);
+}
+
+#[test]
+fn reports_are_computed_on_demand_not_per_frame() {
+    for (width, compact) in [(1200.0, false), (390.0, true)] {
+        let ctx = context();
+        let mut state = State::new(true);
+        state.set_field_mode(FieldMode::Sources);
+        state.time = 1.0;
+        state
+            .commit_densities(vec![density_spec(
+                "transient",
+                DensityFamily::VolumeCharge,
+                "1/(t-1)",
+            )])
+            .expect("the fixture density is valid at t = 0");
+        let mut panel = SourcesPanelState::default();
+        assert!(
+            state.density_reports().is_empty(),
+            "a committed density does not sample a report by itself"
+        );
+        let generation = state.density_report_generation();
+        let _ = paint_panel(&ctx, width, &mut state, &mut panel, compact, 4);
+        assert_eq!(
+            state.density_report_generation(),
+            generation,
+            "painting frames never refreshes the reports"
+        );
+        assert!(state.density_reports().is_empty());
+
+        open_custom_densities(&ctx, width, &mut state, &mut panel, compact);
+        let painted = nodes(&paint_panel(
+            &ctx, width, &mut state, &mut panel, compact, 1,
+        ));
+        let compute = find(&painted, "Compute")
+            .expect("the open section offers an explicit Compute action")
+            .rect
+            .center();
+        click_sources(&ctx, width, compute, &mut state, &mut panel, compact);
+        assert_eq!(
+            state.density_report_generation(),
+            generation + 1,
+            "the Compute action refreshes exactly once"
+        );
+        assert_eq!(state.density_reports().len(), 1);
+    }
+}
+
+#[test]
+fn unresolved_and_violation_reasons_are_shown_verbatim() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state.time = 1.0;
+    state
+        .commit_densities(vec![
+            density_spec("transient", DensityFamily::VolumeCharge, "1/(t-1)"),
+            density_spec("divergent", DensityFamily::SteadyCurrent, "x,0,0"),
+        ])
+        .expect("both fixtures are valid at t = 0");
+    state.refresh_density_reports();
+    let expected: Vec<String> = state
+        .density_reports()
+        .iter()
+        .flat_map(|row| {
+            let charge = row.charge.as_ref().map(|report| &report.status).into_iter();
+            let continuity = row
+                .continuity
+                .as_ref()
+                .map(|report| &report.status)
+                .into_iter();
+            charge.chain(continuity)
+        })
+        .map(|status| match status {
+            DiagnosticsStatus::Estimate { error } => format!("Estimate: {error}"),
+            DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+            DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
+        })
+        .collect();
+    assert!(
+        expected.iter().any(|line| line.starts_with("Unresolved: ")),
+        "the fixture produces an unresolved report: {expected:?}"
+    );
+    assert!(
+        expected.iter().any(|line| line.starts_with("Violation: ")),
+        "the fixture produces a violation report: {expected:?}"
+    );
+
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    for line in expected {
+        assert!(
+            painted.iter().any(|node| node.label.contains(&line)),
+            "the panel shows {line:?} verbatim; painted labels: {:?}",
+            painted
+                .iter()
+                .map(|node| node.label.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn a_multi_frame_density_drag_commits_and_refreshes_once() {
+    let ctx = context();
+    // Snap collapsing headers open so the row's interact rect does not grow
+    // while the drag is being synthesised.
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .commit_densities(vec![density_spec("drag", DensityFamily::VolumeCharge, "1")])
+        .expect("the fixture density is valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let rect = drag_value_for(&painted, "Softening")
+        .expect("the density row paints a Softening drag value");
+    let start = rect.center();
+    let end = start + vec2(40.0, 0.0);
+    let base = state.density_report_generation();
+
+    // Press, two move frames, release: a real continuous drag.
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start + vec2(20.0, 0.0))],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(end)],
+    );
+    assert_eq!(
+        state.density_report_generation(),
+        base,
+        "mid-drag frames must not validate, commit or refresh the reports"
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![pointer(end, false)],
+    );
+    assert_eq!(
+        state.density_report_generation(),
+        base + 1,
+        "the whole drag refreshes the reports exactly once"
+    );
+    assert_ne!(
+        state.densities()[0].softening,
+        0.0,
+        "the drag still reached the committed density"
+    );
+}
+
+#[test]
+fn a_drag_release_and_a_text_edit_in_one_frame_commit_both_rows() {
+    let ctx = context();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .commit_densities(vec![
+            density_spec("dragged", DensityFamily::VolumeCharge, "1"),
+            density_spec("typed", DensityFamily::VolumeCharge, "1"),
+        ])
+        .expect("the fixture densities are valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    // Focus the second row's formula field. The text event sent on the drag
+    // release frame below lands in this focused editor.
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let formula = text_inputs_for(&painted, "Formula")
+        .into_iter()
+        .next_back()
+        .expect("the second density row paints a formula text field");
+    click_sources(
+        &ctx,
+        1200.0,
+        formula.center(),
+        &mut state,
+        &mut panel,
+        false,
+    );
+
+    // The panel also paints Advanced's "Softening"; the density rows follow it,
+    // so occurrence 1 is the first density row.
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let softening = drag_values_for(&painted, "Softening");
+    assert_eq!(
+        softening.len(),
+        3,
+        "Advanced plus two density rows paint a Softening drag value: {softening:?}"
+    );
+    let start = softening[1].center();
+    let end = start + vec2(40.0, 0.0);
+
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start + vec2(20.0, 0.0))],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(end)],
+    );
+    // One frame ends the drag gesture and edits the other row's formula.
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![pointer(end, false), egui::Event::Text("2".to_owned())],
+    );
+    let _ = paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1);
+
+    let softening = state.densities()[0].softening;
+    let formula = state.densities()[1].formula.clone();
+    assert!(
+        softening != 0.0 && formula != "1",
+        "the drag release and the text edit both commit in one frame: \
+         first row softening = {softening}, second row formula = {formula:?}"
+    );
+}
+
+#[test]
+fn removing_one_row_preserves_another_rows_pending_drag() {
+    let ctx = context();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state
+        .commit_densities(vec![
+            density_spec("dragged", DensityFamily::VolumeCharge, "1"),
+            density_spec("removed", DensityFamily::VolumeCharge, "1"),
+        ])
+        .expect("the fixture densities are valid");
+    let mut panel = SourcesPanelState::default();
+    open_custom_densities(&ctx, 1200.0, &mut state, &mut panel, false);
+
+    let painted = nodes(&paint_panel(&ctx, 1200.0, &mut state, &mut panel, false, 1));
+    let start = drag_values_for(&painted, "Softening")[1].center();
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start), pointer(start, true)],
+    );
+    let _ = show_sources_frame_events(
+        &ctx,
+        1200.0,
+        &mut state,
+        &mut panel,
+        false,
+        vec![egui::Event::PointerMoved(start + vec2(40.0, 0.0))],
+    );
+
+    // Remove the *other* row while the first row's drag is still in flight.
+    assert!(
+        panel.remove_density(1, &mut state).is_none(),
+        "the second row is removed"
+    );
+
+    assert_ne!(
+        state.densities()[0].softening,
+        0.0,
+        "removing another row must not cancel the pending drag"
+    );
+}
+
+#[test]
+fn a_rejected_draft_edit_keeps_the_panel_cap_message() {
+    let mut state = State::new(true);
+    let at_cap: Vec<DensitySpec> = (0..MAX_DENSITIES)
+        .map(|index| {
+            density_spec(
+                &format!("density {index}"),
+                DensityFamily::VolumeCharge,
+                "1",
+            )
+        })
+        .collect();
+    state
+        .commit_densities(at_cap)
+        .expect("the cap itself is accepted");
+    let mut panel = SourcesPanelState::default();
+    panel.sync_densities(&state);
+    assert!(
+        panel.add_density(&mut state).is_some(),
+        "adding at the cap is rejected"
+    );
+    let cap_message = panel
+        .density_error
+        .clone()
+        .expect("the cap rejection sets the panel message");
+
+    panel.density_drafts[0].formula = "(".to_string();
+    assert!(
+        panel.commit_density(0, &mut state).is_some(),
+        "the invalid draft is rejected"
+    );
+    assert!(
+        panel.density_drafts[0].error.is_some(),
+        "the rejection is shown on the draft itself"
+    );
+    assert_eq!(
+        panel.density_error.as_deref(),
+        Some(cap_message.as_str()),
+        "a rejected per-draft edit must not clear another action's panel message"
+    );
+
+    // A successful per-draft edit does not change the cap condition either.
+    panel.density_drafts[0].formula = "1".to_string();
+    assert!(
+        panel.commit_density(0, &mut state).is_none(),
+        "the repaired draft commits"
+    );
+    assert_eq!(
+        panel.density_error.as_deref(),
+        Some(cap_message.as_str()),
+        "the cap message stays until the cap condition clears"
+    );
 }

@@ -14,9 +14,12 @@ use crate::support::storage::MemoryStorage;
 use vector_field_explorer::VfApp;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::custom_density::{
+    DensityFamily, DensitySpec, DensitySupport, SupportKind,
+};
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::edit_history::EditScope;
-use vector_field_explorer::parameters::ParameterSet;
+use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::scalar_view::MAX_PROBES;
@@ -983,5 +986,72 @@ fn probe_rows_show_values_and_remove_is_one_edit() {
         app.state.probes.points.len(),
         1,
         "undo restores the removed probe"
+    );
+}
+
+fn parameter_dependent_density() -> DensitySpec {
+    DensitySpec {
+        name: "scaled".to_string(),
+        family: DensityFamily::VolumeCharge,
+        support: DensitySupport {
+            kind: SupportKind::Box,
+            center: Vec3::ZERO,
+            axis: Vec3::Z,
+            size: Vec3::splat(2.0),
+        },
+        formula: "gain".to_string(),
+        samples: 8,
+        softening: 0.0,
+    }
+}
+
+#[test]
+fn undo_keeps_a_density_that_binds_a_restored_parameter() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    idle(&ctx, &mut app);
+
+    let parameters = ParameterSet {
+        version: 1,
+        entries: vec![Parameter {
+            name: "gain".to_string(),
+            value: 2.0,
+            min: None,
+            max: None,
+            step: 1.0,
+        }],
+    };
+    app.state
+        .commit_parameters(parameters)
+        .expect("the fixture parameter set is valid");
+    let density = parameter_dependent_density();
+    app.state
+        .commit_densities(vec![density.clone()])
+        .expect("the density binds the committed parameter");
+    idle(&ctx, &mut app);
+    assert_eq!(app.state.densities(), [density.clone()].as_slice());
+
+    // Removing the parameter leaves the live density list alone but makes the
+    // stored formula unbindable. This is the state the undo entry records.
+    app.state
+        .commit_parameters(ParameterSet::default())
+        .expect("an empty parameter set is valid");
+    idle(&ctx, &mut app);
+    assert_eq!(
+        app.state.densities(),
+        [density.clone()].as_slice(),
+        "parameter removal does not itself delete densities"
+    );
+
+    assert!(app.undo_document(&ctx), "the parameter removal is undoable");
+    assert_eq!(
+        app.state.parameters.value("gain"),
+        Some(2.0),
+        "undo restores the parameter set"
+    );
+    assert_eq!(
+        app.state.densities(),
+        [density].as_slice(),
+        "undo restores parameters before validating the density, so it survives"
     );
 }

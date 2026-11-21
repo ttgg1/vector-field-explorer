@@ -12,6 +12,9 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_mapping::ColorQuantity;
 use vector_field_explorer::color_ramp::{ColorRamp, RampKind, Rgb, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
+use vector_field_explorer::custom_density::{
+    DensityFamily, DensitySpec, DensitySupport, SupportKind,
+};
 use vector_field_explorer::field_probe::{
     CirculationLoop, GaussianSurface, IntegralStatus, LoopKind, MAX_LOOPS, MAX_SURFACES,
     SurfaceKind,
@@ -27,7 +30,8 @@ use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{
-    AppSettings, PresetUiRecord, ProbeLoopRecord, ProbeSurfaceRecord, ViewRecord, load, save,
+    AppSettings, DensitySpecRecord, PresetUiRecord, ProbeLoopRecord, ProbeSurfaceRecord,
+    ViewRecord, load, save,
 };
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame};
 use vector_field_explorer::plot::PlotKind;
@@ -56,8 +60,9 @@ use vector_field_explorer::ui::style_panel::{
 };
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_PARTICLE_SIZE, DEFAULT_PROPORTIONAL_EXPONENT, LeftClickAction,
-    MAX_ARROW_OPACITY, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE, MAX_PROPORTIONAL_EXPONENT,
-    MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State, StreamlineSeedMode,
+    MAX_ARROW_OPACITY, MAX_DENSITIES, MAX_DOMAIN_EXTENT, MAX_MAGNITUDE_SCALE,
+    MAX_PROPORTIONAL_EXPONENT, MIN_DOMAIN_EXTENT, MIN_MAGNITUDE_SCALE, STREAMLINE_MAX_LEN, State,
+    StreamlineSeedMode,
 };
 use vector_field_explorer::viewport_style::{MAX_LINE_WIDTH, ViewportStyle};
 
@@ -4257,5 +4262,249 @@ fn corrupt_or_unavailable_probe_family_sanitises_to_electric_without_dirtying() 
     assert_eq!(
         state.dirty, baseline_dirty,
         "an unavailable family adds no dirtying beyond the enclosing restore"
+    );
+}
+
+fn density_support() -> DensitySupport {
+    DensitySupport {
+        kind: SupportKind::Box,
+        center: Vec3::ZERO,
+        axis: Vec3::Z,
+        size: Vec3::splat(2.0),
+    }
+}
+
+fn density_spec(name: &str, family: DensityFamily, formula: &str) -> DensitySpec {
+    DensitySpec {
+        name: name.to_string(),
+        family,
+        support: density_support(),
+        formula: formula.to_string(),
+        samples: 8,
+        softening: 0.25,
+    }
+}
+
+fn volume_density(name: &str, formula: &str) -> DensitySpec {
+    density_spec(name, DensityFamily::VolumeCharge, formula)
+}
+
+#[test]
+fn missing_densities_load_as_an_empty_list_without_dirtying() {
+    let source = State::new(true);
+    let clean = ViewRecord::capture(&source);
+    let mut value = serde_json::to_value(&clean).expect("a view record serializes");
+    value
+        .as_object_mut()
+        .expect("the view record is an object")
+        .remove("densities");
+    let legacy: ViewRecord = serde_json::from_value(value).expect("a legacy record parses");
+    assert!(
+        legacy.densities.is_empty(),
+        "a missing key loads the empty document list"
+    );
+
+    let mut baseline = State::new(true);
+    baseline.dirty = false;
+    clean.restore(&mut baseline, &mut Controls::new());
+
+    let mut state = State::new(true);
+    state.dirty = false;
+    legacy.restore(&mut state, &mut Controls::new());
+    assert!(state.densities().is_empty());
+    assert_eq!(
+        state.dirty, baseline.dirty,
+        "a missing density list adds no dirtying beyond the enclosing restore"
+    );
+}
+
+#[test]
+fn density_round_trip_preserves_order_and_fields() {
+    let specs = vec![
+        DensitySpec {
+            name: "shell".to_string(),
+            family: DensityFamily::SurfaceCharge,
+            support: DensitySupport {
+                kind: SupportKind::Sphere,
+                center: Vec3::new(0.25, -0.5, 1.0),
+                axis: Vec3::Y,
+                size: Vec3::new(2.5, 2.5, 2.5),
+            },
+            formula: "x + 2*y".to_string(),
+            samples: 11,
+            softening: 0.125,
+        },
+        density_spec("wire", DensityFamily::SteadyCurrent, "0,0,1"),
+    ];
+    let mut state = State::new(true);
+    state
+        .commit_densities(specs.clone())
+        .expect("the fixture list is valid");
+
+    let records: Vec<DensitySpecRecord> = specs.iter().map(DensitySpecRecord::from_spec).collect();
+    let record = ViewRecord::capture(&state);
+    assert_eq!(record.densities, records, "capture keeps list order");
+
+    let raw = ron_string(&record);
+    let restored: ViewRecord = from_ron(&raw);
+    assert_eq!(
+        restored.densities, records,
+        "the storage codec preserves every field"
+    );
+
+    let mut state = State::new(true);
+    restored.restore(&mut state, &mut Controls::new());
+    assert_eq!(state.densities(), specs.as_slice());
+}
+
+#[test]
+fn restore_drops_invalid_densities_and_keeps_the_rest_in_order() {
+    let valid_a = volume_density("alpha", "1");
+    let invalid_geometry = DensitySpec {
+        support: DensitySupport {
+            kind: SupportKind::Box,
+            center: Vec3::ZERO,
+            axis: Vec3::Z,
+            size: Vec3::new(0.0, 2.0, 2.0),
+        },
+        ..volume_density("broken", "1")
+    };
+    let invalid_formula = volume_density("broken formula", "(");
+    let valid_b = density_spec("current", DensityFamily::SteadyCurrent, "0,0,1");
+
+    let clean = ViewRecord::capture(&State::new(true));
+    let record = ViewRecord {
+        densities: [
+            valid_a.clone(),
+            invalid_geometry,
+            invalid_formula,
+            valid_b.clone(),
+        ]
+        .iter()
+        .map(DensitySpecRecord::from_spec)
+        .collect(),
+        ..clean.clone()
+    };
+
+    let mut baseline = State::new(true);
+    baseline.dirty = false;
+    clean.restore(&mut baseline, &mut Controls::new());
+
+    let mut state = State::new(true);
+    state.dirty = false;
+    record.restore(&mut state, &mut Controls::new());
+
+    assert_eq!(
+        state.densities(),
+        [valid_a, valid_b].as_slice(),
+        "invalid entries drop and the survivors keep their order"
+    );
+    assert_eq!(
+        state.dirty, baseline.dirty,
+        "a sanitised density restore adds no dirtying beyond the enclosing restore"
+    );
+}
+
+#[test]
+fn restore_truncates_densities_to_the_document_cap() {
+    let clean = ViewRecord::capture(&State::new(true));
+    let densities: Vec<DensitySpecRecord> = (0..MAX_DENSITIES + 2)
+        .map(|index| {
+            DensitySpecRecord::from_spec(&volume_density(&format!("density {index}"), "1"))
+        })
+        .collect();
+    let record = ViewRecord { densities, ..clean };
+    let mut state = State::new(true);
+    record.restore(&mut state, &mut Controls::new());
+    assert_eq!(state.densities().len(), MAX_DENSITIES);
+}
+
+#[test]
+fn an_unknown_density_token_drops_only_that_entry_and_keeps_the_envelope() {
+    let keeper = volume_density("keeper", "1");
+    let tail = density_spec("tail", DensityFamily::SteadyCurrent, "0,0,1");
+    let mut bad_family = DensitySpecRecord::from_spec(&keeper);
+    bad_family.name = "bad family".to_string();
+    bad_family.family = "quark_charge".to_string();
+    let mut bad_kind = DensitySpecRecord::from_spec(&keeper);
+    bad_kind.name = "bad kind".to_string();
+    bad_kind.support.kind = "tesseract".to_string();
+
+    let settings = AppSettings {
+        view: ViewRecord {
+            formula: "(y, -x)".to_string(),
+            densities: vec![
+                DensitySpecRecord::from_spec(&keeper),
+                bad_family,
+                bad_kind,
+                DensitySpecRecord::from_spec(&tail),
+            ],
+            ..ViewRecord::capture(&State::new(true))
+        },
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.view.formula, "(y, -x)",
+        "an unknown density token must not reset the rest of the envelope"
+    );
+    assert_eq!(
+        loaded.view.densities.len(),
+        4,
+        "the wire list keeps every raw entry for the restore filter"
+    );
+
+    let mut state = State::new(true);
+    loaded.restore(&mut state, &mut Controls::new());
+    assert_eq!(
+        state.densities(),
+        [keeper, tail].as_slice(),
+        "only the unknown-token entries drop, and the survivors keep their order"
+    );
+}
+
+#[test]
+fn parameter_dependent_density_restores_against_its_stored_parameter() {
+    let parameters = ParameterSet {
+        version: 1,
+        entries: vec![Parameter {
+            name: "gain".to_string(),
+            value: 2.0,
+            min: None,
+            max: None,
+            step: 1.0,
+        }],
+    };
+    let density = volume_density("scaled", "gain");
+    let mut source = State::new(true);
+    source.parameters = parameters.clone();
+    source
+        .commit_densities(vec![density.clone()])
+        .expect("the fixture density binds the stored parameter");
+
+    let settings = AppSettings {
+        parameters: parameters.clone(),
+        view: ViewRecord::capture(&source),
+        ..AppSettings::default()
+    };
+    let mut state = State::new(true);
+    settings.restore(&mut state, &mut Controls::new());
+    assert_eq!(
+        state.densities(),
+        [density].as_slice(),
+        "restore validates the density against the restored parameter set"
+    );
+
+    let absent = AppSettings {
+        parameters: ParameterSet::default(),
+        ..settings
+    };
+    let mut state = State::new(true);
+    absent.restore(&mut state, &mut Controls::new());
+    assert!(
+        state.densities().is_empty(),
+        "the same density drops when the restored parameter set cannot bind it"
     );
 }

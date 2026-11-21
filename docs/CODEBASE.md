@@ -3420,8 +3420,50 @@ inside-support rejection, the analytic uniform-sphere total, sign-change countin
 deterministic bounded sampling.
 
 **Limitations.** Validation samples the declared lattice, not the continuum; a
-singularity between accepted points is not detected. This slice is not wired to
-`State`, persistence or the UI.
+singularity between accepted points is not detected. Slice B1 wires the list
+into document state, persistence and the Sources panel; it still never feeds the
+sampled E/B fields, renders a support wireframe or adds a new solver.
+
+#### Custom density document state and editor (issue #96 slice B1)
+
+**Public API.** `viewmodel::MAX_DENSITIES = 4`,
+`DensityReportRow { spec_index, charge: Option<ChargeReport>, continuity:
+Option<ContinuityReport> }`, `State::densities()`,
+`State::commit_densities(Vec<DensitySpec>) -> Result<(), String>`,
+`State::reset_densities()`, `State::refresh_density_reports()` and
+`State::density_reports()`. `SourcesPanelState` keeps session-only
+`DensityDraft`s and a `density_error`, and exposes `sync_densities`,
+`add_density`, `remove_density` and `commit_density`.
+
+**Contract.**
+- `ViewRecord.densities: Vec<DensitySpec>` is serde-defaulted and capped at
+  `MAX_DENSITIES`; capture copies the committed list, and restore drops entries
+  that fail `validate` against the already restored parameters, keeps the
+  survivors in order, logs once and adds no dirtying beyond the enclosing
+  restore. Scenes and the edit history inherit the field through the existing
+  `ViewRecord`/`EditSnapshot` seams.
+- `commit_densities` validates the whole list (cap, unique names, support,
+  formula parsing/evaluation and sample budget) atomically; a stale list is
+  untouched on rejection, an equal list is a no-op and a real change dirties
+  once and clears stale reports. `reset_densities` clears without dirtying when
+  already empty.
+- Reports are computed only by `refresh_density_reports`, called by the panel's
+  Compute action or after an accepted edit, never per frame. Volume charges get
+  a charge report, steady currents a continuity report, and a surface charge
+  honestly reports that it has no volume total. `Unresolved`/`Violation`
+  reasons are shown verbatim and estimates show their reported error. A
+  parameter change invalidates every stored report.
+- The collapsed Sources section edits name, family, support kind and geometry,
+  formula, samples (`MIN_SAMPLES..=MAX_SAMPLES`) and softening; Add is bounded by
+  `MAX_DENSITIES` with a message. Copy keeps the normalized teaching units, the
+  no-field-integration boundary and the surface-charge limit explicit.
+
+**Pinned by.** [tests/density_state_test.rs](../tests/density_state_test.rs)
+(atomic validation, equal-list no-op, cap message, one history entry per edit),
+[tests/persistence_test.rs](../tests/persistence_test.rs) (missing/default,
+round trip, sanitised restore and cap) and
+[tests/sources_panel_test.rs](../tests/sources_panel_test.rs) (on-demand reports
+and verbatim unresolved/violation reasons).
 
 #### `src/scene_document.rs` — versioned scene document
 
@@ -3823,7 +3865,7 @@ helpers.
     failing startup. Startup never applies a layout or dirties the scene, and
     save writes `seed_layouts.user()`.
 
-**Tested by.** `tests/persistence_test.rs` (103 tests):
+**Tested by.** `tests/persistence_test.rs` (109 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
