@@ -33,6 +33,7 @@ pub mod material;
 pub mod maxwell;
 pub mod maxwell_learning;
 pub mod maxwell_residual;
+pub mod object_renderer;
 pub mod object_scene;
 pub mod ode;
 pub mod palette_io;
