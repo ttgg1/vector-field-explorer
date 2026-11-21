@@ -1,0 +1,4 @@
+PERF present default-2d p50_ms=5.553 p95_ms=5.737 p99_ms=5.891 fps_p50=180.1 n=1794 window_s=10.0
+PERF present host=AMD_Ryzen_9_7950X_16-Core_Processor gpu=AMD_Radeon_RX_9070_XT_(RADV_GFX1201) backend=Vulkan size=1280x800 build=release
+PERF present densest-3d p50_ms=5.570 p95_ms=5.766 p99_ms=5.933 fps_p50=179.5 n=1786 window_s=10.0
+PERF present host=AMD_Ryzen_9_7950X_16-Core_Processor gpu=AMD_Radeon_RX_9070_XT_(RADV_GFX1201) backend=Vulkan size=1280x800 build=release

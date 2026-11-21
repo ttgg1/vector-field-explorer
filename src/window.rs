@@ -61,3 +61,53 @@ pub fn window_options() -> eframe::NativeOptions {
         ..Default::default()
     }
 }
+
+/// Startup options for the bounded present-path measurement (#18 task b): the
+/// documented 1280×800 logical inner size, not resizable, with window
+/// persistence disabled so the measurement cannot rewrite the user's saved
+/// window geometry.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn window_options_present() -> eframe::NativeOptions {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(WINDOW_TITLE)
+        // A distinct app id keeps compositor window rules (for example a
+        // remembered size for the normal app) from overriding the forced
+        // 1280x800 measurement geometry.
+        .with_app_id("vector-field-explorer-present")
+        .with_inner_size(DEFAULT_INNER_SIZE)
+        .with_min_inner_size(DEFAULT_INNER_SIZE)
+        .with_max_inner_size(DEFAULT_INNER_SIZE)
+        .with_resizable(false);
+    if let Some(icon) = icon_data() {
+        viewport = viewport.with_icon(icon);
+    }
+
+    eframe::NativeOptions {
+        viewport,
+        centered: true,
+        persist_window: false,
+        // eframe always creates a file-backed store and restores window
+        // geometry from it. On Unix `/dev/null` discards every write and
+        // yields no saved geometry, so the measurement neither reads nor
+        // overwrites user settings; the app itself is also built with `None`
+        // storage in `main`. Other platforms get a throwaway temp file.
+        persistence_path: Some(present_persistence_path()),
+        ..Default::default()
+    }
+}
+
+/// Where a measurement run lets eframe's own storage live.
+///
+/// Unix uses `/dev/null` (nothing is read back, nothing survives). Other
+/// platforms use a per-process temp file: still never the user's app store.
+#[cfg(not(target_arch = "wasm32"))]
+fn present_persistence_path() -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        std::path::PathBuf::from("/dev/null")
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::temp_dir().join(format!("vfe-present-{}.ron", std::process::id()))
+    }
+}

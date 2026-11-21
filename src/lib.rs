@@ -42,6 +42,7 @@ pub mod ode;
 pub mod palette_io;
 pub mod parameters;
 pub mod particles;
+pub mod perf_present;
 pub mod persistence;
 pub mod plane;
 pub mod plot;

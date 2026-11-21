@@ -3,7 +3,9 @@
 // `NativeOptions` already pins the behaviour.
 
 use eframe::egui;
-use vector_field_explorer::window::{DEFAULT_INNER_SIZE, MIN_INNER_SIZE, WINDOW_TITLE, window_options};
+use vector_field_explorer::window::{
+    DEFAULT_INNER_SIZE, MIN_INNER_SIZE, WINDOW_TITLE, window_options, window_options_present,
+};
 
 #[test]
 fn opens_at_the_desktop_default_inner_size() {
@@ -29,13 +31,20 @@ fn refuses_to_shrink_below_the_minimum() {
 fn starts_centred_and_resizable() {
     let options = window_options();
     assert!(options.centered, "the window starts centred on the desktop");
-    assert_eq!(options.viewport.resizable, Some(true), "the window stays resizable");
+    assert_eq!(
+        options.viewport.resizable,
+        Some(true),
+        "the window stays resizable"
+    );
 }
 
 #[test]
 fn remembers_its_size_and_position() {
     let options = window_options();
-    assert!(options.persist_window, "eframe restores size/position on restart");
+    assert!(
+        options.persist_window,
+        "eframe restores size/position on restart"
+    );
 }
 
 #[test]
@@ -58,5 +67,35 @@ fn installs_the_mark_on_the_window_options() {
     assert!(
         icon.rgba.iter().any(|&alpha| alpha != 0),
         "the mark must not decode to a fully transparent icon",
+    );
+}
+
+#[test]
+fn present_measurement_pins_the_documented_floor_geometry() {
+    let options = window_options_present();
+    let expected = Some(egui::vec2(DEFAULT_INNER_SIZE[0], DEFAULT_INNER_SIZE[1]));
+    assert_eq!(options.viewport.inner_size, expected);
+    assert_eq!(options.viewport.min_inner_size, expected);
+    assert_eq!(options.viewport.max_inner_size, expected);
+    assert_eq!(options.viewport.resizable, Some(false));
+    assert!(
+        !options.persist_window,
+        "a measurement must not save geometry"
+    );
+    assert_eq!(
+        options.viewport.app_id.as_deref(),
+        Some("vector-field-explorer-present"),
+        "a distinct app id avoids normal-app compositor rules",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn present_measurement_discards_eframe_storage() {
+    let options = window_options_present();
+    assert_eq!(
+        options.persistence_path.as_deref(),
+        Some(std::path::Path::new("/dev/null")),
+        "the measurement store must discard every write",
     );
 }
