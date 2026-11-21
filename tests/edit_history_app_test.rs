@@ -744,3 +744,65 @@ fn capture_then_apply_is_a_no_op_for_a_changed_document() {
     assert_eq!(app.state.colormap, Colormap::Turbo);
     assert_eq!(app.orbit.yaw, 0.7);
 }
+
+#[test]
+fn library_actions_do_not_record_history_but_applying_does() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.history_len(), 0, "the first idle frame records nothing");
+
+    let stored = seed_layout_profile("Mine", &[Vec3::ZERO]);
+    // Saving a library entry is a settings-side action, not a document edit.
+    app.seed_layouts
+        .upsert(stored.clone(), &app.state.scene_domain())
+        .expect("the layout is valid against the live domain");
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.history_len(), 0, "saving a layout never records");
+    assert!(app.state.seed_layout().is_empty(), "saving does not apply");
+
+    // Deleting one is likewise history-neutral.
+    assert!(app.seed_layouts.remove("Mine"));
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.history_len(), 0, "deleting a layout never records");
+
+    // Applying replaces the seeds through the existing commit seam. The next
+    // idle frame records that document change exactly once.
+    app.state
+        .commit_seed_layout(stored.seeds.clone())
+        .expect("the stored seeds validate");
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert_eq!(
+        app.history_len(),
+        1,
+        "applying a layout is exactly one undo entry"
+    );
+    assert_eq!(app.state.seed_layout().len(), 1);
+    let _ = frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.history_len(), 1, "a second idle frame adds nothing");
+
+    assert!(app.undo_document(&ctx), "the apply is undoable");
+    assert!(
+        app.state.seed_layout().is_empty(),
+        "undo restores the pre-apply seeds"
+    );
+}
+
+fn seed_layout_profile(
+    name: &str,
+    positions: &[Vec3],
+) -> vector_field_explorer::seed_layout_library::SeedLayoutProfile {
+    vector_field_explorer::seed_layout_library::SeedLayoutProfile {
+        name: name.to_owned(),
+        seeds: SeedLayout {
+            seeds: positions
+                .iter()
+                .map(|position| SeedPoint {
+                    position: *position,
+                    anchor: None,
+                })
+                .collect(),
+        },
+    }
+}

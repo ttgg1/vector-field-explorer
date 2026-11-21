@@ -640,7 +640,11 @@ scoped resets without touching persistence or the renderer.
   primary release commits at most one entry. A secondary press/release is not a
   gesture boundary and can neither commit nor split the primary gesture.
   Outside a gesture any document change is recorded directly. Idle frames,
-  simulation ticks and save/export paths record nothing.
+  simulation ticks and save/export paths record nothing. Applying a named seed
+  layout commits the seeds once; saving, deleting or importing library entries
+  touches settings-side data only and records nothing.
+  `tests/edit_history_app_test.rs::library_actions_do_not_record_history_but_applying_does`
+  pins that split.
 - Every idle frame captures a `ViewRecord`/`ParameterSet`/`AppearanceProfile`
   and compares it with `last_committed`. That per-frame clone-and-compare cost
   is accepted for this slice; the intended cheap path is a dirty/fingerprint
@@ -4682,6 +4686,19 @@ with a local mirror and a single `apply` handoff.
   visible explanation). The streamline count is disabled when an explicit seed
   layout exists and a note explains that the automatic count/grid is inactive
   until "Clear all".
+- The Seed layout editor ends with a collapsed-by-default nested "Named
+  layouts" area, always available while the editor is visible even with zero
+  explicit seeds. It lists the built-in `Default (generated grid)` first, then
+  user layouts with seed counts. Apply validates the stored layout against the
+  current scene domain and commits it through `State::commit_seed_layout`,
+  clearing selection/drag/placement and reporting `Applied layout "…"`; the
+  existing history driver records that document change as one entry. Save
+  current and the two-click Delete mutate only `VfApp::seed_layouts`, never the
+  document, so they neither dirty the scene nor record history. Portable
+  export/import is versioned compact JSON; import is atomic and reports the
+  new-layout delta honestly (replacement-only imports say so). One
+  `seed_layout_message` slot carries these results and is separate from the
+  generator/picking `seed_error`.
 - The Features section's collapsed "Seed layout" area is shown only for
   formula streamlines (`seed_layout_visible`). It reads the count, offers
   "Place seed", "Clear all", numeric line/circle/region generator rows with
@@ -4733,14 +4750,21 @@ with a local mirror and a single `apply` handoff.
   disabled with explanations and retain their values. Only shared plot controls
   (grid/axes, domain, palette) reach the seam, and Fit is returned to the app.
 
-**Pinned by.** `tests/sidebar_controls_test.rs` (51), including
+**Pinned by.** `tests/sidebar_controls_test.rs` (63), including
 `untouched_frame_rebuilds_nothing_through_apply`,
 `synced_controls_never_redirty_the_scene`,
 `density_clamp_keys_to_sampled_dimension_through_apply`,
 `reversed_drag_extrema_swap_through_the_seam`,
 `nan_domain_edit_keeps_the_previous_extent_through_apply`,
 `apply_never_commits_the_plane_mirror`,
-`every_control_dirties_the_scene_through_apply`;
+`every_control_dirties_the_scene_through_apply`,
+`named_layouts_list_builtin_default_first_and_user_layouts_after`,
+`applying_a_layout_replaces_seeds_and_reports_the_name`,
+`applying_an_invalid_layout_reports_the_reason_and_keeps_seeds`,
+`saving_current_seeds_rejects_empty_builtin_and_oversized_names`,
+`saving_twice_with_one_name_replaces_in_place`,
+`deleting_a_user_layout_needs_two_clicks_and_clears_on_other_actions`,
+`export_copy_and_import_report_deltas_and_reject_bad_documents_atomically`;
 `tests/sidebar_sections_test.rs` (order/reset isolation),
 `tests/sidebar_camera_ui_test.rs`, `tests/sidebar_colormap_ui_test.rs`
 (`quantity_selector_applies_component_colouring`,

@@ -350,6 +350,7 @@ impl VfApp {
                                 ui,
                                 &mut self.state,
                                 &mut self.controls,
+                                &mut self.seed_layouts,
                                 false,
                             );
                         });
@@ -1269,6 +1270,7 @@ impl VfApp {
                             ui,
                             &mut self.state,
                             &mut self.controls,
+                            &mut self.seed_layouts,
                             true,
                         );
                         ui.separator();
