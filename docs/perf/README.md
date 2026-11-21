@@ -12,13 +12,20 @@ post-epic scene set from shipped public APIs and measures, per scene:
 - `snapshot`: `State::snapshot()`, the CPU geometry build (arrow instances,
   streamlines, scalar overlays and, for the scalar scene, the heatmap). This
   call also runs the field sampling pass internally: `snapshot_with_styles`
-  calls `sample()` at `src/viewmodel.rs:4408`. Its numbers therefore sit
-  close to the `sample` row, and the `sample` column is the isolated sampling
-  cost, not an addition to `snapshot`.
+  calls `sample()` at `src/viewmodel.rs:4497`. After P1 (#240) a repeated
+  sampling pass on an unchanged time-invariant field is a cache hit, so
+  `sample` is the hit-path sampling cost and `snapshot - sample` is the
+  cached-sample geometry build; on a cached rebuild the two rows do not sit
+  close.
 - Extra per-scene work where the interesting cost is outside the two above:
   `scalar_view` for the 160x160 heatmap, `continuity_report` for the harmonic
   custom density, `source_sample` and `probe_report` for the Sources Gaussian
   surface, and `maxwell_sample` for the plane wave.
+- Assembly extras (#247): `densest-3d` and `worst-particles` also price the
+  per-frame vector-scene work separately from `snapshot`/`sample` — particle
+  `advect`, `dot_build`, `trail_build`, `trail_sort`, `combined_assemble`,
+  `frame_assembly` and the dirty-frame `compose_lines`. See
+  [p2-measurement.md](p2-measurement.md).
 
 `probe_report` clocks only `State::update_probe_surface` (validation and dirty
 mark) plus `refresh_probe_reports(true)` (the uncached flux pass). The harness
@@ -162,6 +169,8 @@ changes no floor and promotes no code by itself.
   sampling and bounded Conductor2D BEM.
 - [ode-performance.md](ode-performance.md): precomputed ODE solve.
 - [object-renderer.md](object-renderer.md): native object pass.
+- [p2-measurement.md](p2-measurement.md): per-frame buffer assembly and P2
+  decision (#247).
 - [particle-performance.md](particle-performance.md): ticket 35 CPU harness;
   reproduction set in [bench-35/](bench-35/).
 - [source-preset-benchmark.md](source-preset-benchmark.md): densest source
