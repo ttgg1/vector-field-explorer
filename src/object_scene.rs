@@ -8,6 +8,101 @@
 
 use std::sync::OnceLock;
 
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// How mapped source/induction bodies are drawn, persisted with the settings.
+///
+/// The two stable storage tokens are `"Solid"` and `"Wireframe"`. A missing
+/// field loads [`ObjectStyle::Solid`]; an unknown stored name is repaired to
+/// `Solid` with one warning, without failing the rest of the envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
+pub enum ObjectStyle {
+    /// Filled, lit bodies (the shipped default).
+    #[default]
+    Solid,
+    /// Barycentric edge outlines over the same bodies.
+    Wireframe,
+}
+
+impl ObjectStyle {
+    /// Whether this style selects the shader's wireframe path.
+    #[must_use]
+    pub const fn is_wireframe(self) -> bool {
+        matches!(self, Self::Wireframe)
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectStyle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_enum("ObjectStyle", &["Solid", "Wireframe"], ObjectStyleVisitor)
+    }
+}
+
+/// The stored variant name, decoded without rejecting an unknown value.
+struct ObjectStyleName(String);
+
+impl<'de> Deserialize<'de> for ObjectStyleName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Visitor;
+
+        struct NameVisitor;
+
+        impl Visitor<'_> for NameVisitor {
+            type Value = ObjectStyleName;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an object style name")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ObjectStyleName(value.to_owned()))
+            }
+        }
+
+        deserializer.deserialize_identifier(NameVisitor)
+    }
+}
+
+/// Decode the unit variant, repairing an unknown token to [`ObjectStyle::Solid`]
+/// with exactly one warning.
+struct ObjectStyleVisitor;
+
+impl<'de> serde::de::Visitor<'de> for ObjectStyleVisitor {
+    type Value = ObjectStyle;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Solid or Wireframe")
+    }
+
+    fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::EnumAccess<'de>,
+    {
+        use serde::de::VariantAccess;
+
+        let (name, variant) = data.variant::<ObjectStyleName>()?;
+        let style = match name.0.as_str() {
+            "Solid" => ObjectStyle::Solid,
+            "Wireframe" => ObjectStyle::Wireframe,
+            other => {
+                log::warn!("persisted object style {other:?} is unknown; using the Solid default");
+                ObjectStyle::Solid
+            }
+        };
+        variant.unit_variant()?;
+        Ok(style)
+    }
+}
+
 /// One reusable object body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MeshPrimitive {

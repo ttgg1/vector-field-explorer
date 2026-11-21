@@ -16,7 +16,7 @@ use vector_field_explorer::{
     object_renderer::{
         OBJECT_PROBE_ENV, ObjectGlobals, ObjectInstance, ObjectPass, ObjectView, object_draw_plan,
     },
-    object_scene::{MeshObject, MeshPrimitive, MeshScene, SliceClip},
+    object_scene::{MeshObject, MeshPrimitive, MeshScene, ObjectStyle, SliceClip},
     renderer::{self, DrawState, SceneGPU},
     screenshot,
     source_scene::{SourceEntry, SourceKindTag, SourceScene},
@@ -97,10 +97,11 @@ fn cpu_contract_checks() {
 
     // The wireframe flag reaches the uniform in the first params slot.
     let wireframe = ObjectView {
-        wireframe: true,
+        wireframe: ObjectStyle::Wireframe.is_wireframe(),
         ..view
     };
     assert_eq!(ObjectGlobals::from_view(&wireframe, None).params[0], 1.0);
+    assert!(!ObjectStyle::Solid.is_wireframe());
 
     // A slice clip becomes the packed plane and enables the fragment discard.
     let clipped = ObjectGlobals::from_view(
@@ -564,11 +565,79 @@ fn probe_offscreen_capture(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(),
     Ok(())
 }
 
+/// Proves the fully assembled offscreen capture path honours the committed
+/// object style (#115). The capture call site sets [`DrawState::set_object_style`];
+/// a Solid capture must stay byte-identical to the default (pre-style) capture,
+/// while a Wireframe capture of the same scene must differ in pixels.
+fn probe_capture_object_style(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(), String> {
+    let viewport = [256u32, 256u32];
+    let view = probe_view(viewport);
+    let view_proj = Mat4::from_cols_array_2d(&view.view_proj);
+    let camera_pos = Vec3::from_array(view.eye);
+    let vector_scene = SceneGPU::default();
+    let objects = Arc::new(sphere_scene());
+
+    let mut state = DrawState::new(&gpu.device, format);
+    if state.object_style() != ObjectStyle::Solid {
+        return Err("a fresh DrawState does not default to the Solid capture style".into());
+    }
+    let capture = |state: &mut DrawState, style: Option<ObjectStyle>| {
+        if let Some(style) = style {
+            state.set_object_style(style);
+        }
+        state
+            .render_offscreen_with_objects(
+                &gpu.device,
+                &gpu.queue,
+                &vector_scene,
+                Some(&objects),
+                view_proj,
+                camera_pos,
+                viewport[0],
+                viewport[1],
+                PROBE_CLEAR,
+            )
+            .map_err(|error| format!("style capture failed: {error}"))
+    };
+
+    // No setter call: the default is the pre-change Solid behaviour.
+    let default_capture = capture(&mut state, None)?;
+    let solid_capture = capture(&mut state, Some(ObjectStyle::Solid))?;
+    if default_capture != solid_capture {
+        return Err(
+            "an explicit Solid capture differs from the default capture; the pre-style \
+             byte identity was lost"
+                .into(),
+        );
+    }
+    let wireframe_capture = capture(&mut state, Some(ObjectStyle::Wireframe))?;
+    let differing = default_capture
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(wireframe_capture.as_chunks::<4>().0)
+        .filter(|(solid, wire)| solid != wire)
+        .count();
+    if differing == 0 {
+        return Err(
+            "the Wireframe capture is byte-identical to the Solid capture; the committed style \
+             did not reach the capture path"
+                .into(),
+        );
+    }
+    eprintln!(
+        "PROBE capture-style: default == Solid, Wireframe differs in {differing} of {} pixels",
+        viewport[0] * viewport[1]
+    );
+    Ok(())
+}
+
 fn run_probe() -> Result<(), String> {
     let gpu = request_device()?;
     let scopes = gpu.begin_scopes("object pass");
     let result = probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb)
-        .and_then(|()| probe_offscreen_capture(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
+        .and_then(|()| probe_offscreen_capture(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
+        .and_then(|()| probe_capture_object_style(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
     gpu.end_scopes(scopes)?;
     result
 }

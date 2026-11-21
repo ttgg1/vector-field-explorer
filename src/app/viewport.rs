@@ -84,6 +84,7 @@ impl VfApp {
                                 self.renderer_ready = true;
                             }
                             if let Some(draw) = renderer.callback_resources.get_mut::<DrawState>() {
+                                draw.set_object_style(request.frame.object_style);
                                 let started = draw.render_offscreen_async_with_objects(
                                     &render_state.device,
                                     &render_state.queue,
@@ -458,26 +459,27 @@ impl VfApp {
                 {
                     let capture = {
                         let mut renderer = render_state.renderer.write();
-                        renderer
+                        let draw = renderer
                             .callback_resources
                             .get_mut::<DrawState>()
-                            .expect("DrawState must be installed before capturing")
-                            .render_offscreen_with_objects(
-                                &render_state.device,
-                                &render_state.queue,
-                                &scene,
-                                Some(&self.object_scene),
-                                view_proj,
-                                eye_position,
-                                capture_width,
-                                capture_height,
-                                [
-                                    f64::from(clear[0]),
-                                    f64::from(clear[1]),
-                                    f64::from(clear[2]),
-                                    f64::from(clear[3]),
-                                ],
-                            )
+                            .expect("DrawState must be installed before capturing");
+                        draw.set_object_style(self.state.object_style());
+                        draw.render_offscreen_with_objects(
+                            &render_state.device,
+                            &render_state.queue,
+                            &scene,
+                            Some(&self.object_scene),
+                            view_proj,
+                            eye_position,
+                            capture_width,
+                            capture_height,
+                            [
+                                f64::from(clear[0]),
+                                f64::from(clear[1]),
+                                f64::from(clear[2]),
+                                f64::from(clear[3]),
+                            ],
+                        )
                     };
                     match capture {
                         Ok(rgba) => match self.screenshot.capture_sink() {
@@ -508,37 +510,38 @@ impl VfApp {
                     let ctx = ui.ctx().clone();
                     let started = {
                         let mut renderer = render_state.renderer.write();
-                        renderer
+                        let draw = renderer
                             .callback_resources
                             .get_mut::<DrawState>()
-                            .expect("DrawState must be installed before capturing")
-                            .render_offscreen_async_with_objects(
-                                &render_state.device,
-                                &render_state.queue,
-                                &scene,
-                                Some(&self.object_scene),
-                                view_proj,
-                                eye_position,
-                                capture_width,
-                                capture_height,
-                                [
-                                    f64::from(clear[0]),
-                                    f64::from(clear[1]),
-                                    f64::from(clear[2]),
-                                    f64::from(clear[3]),
-                                ],
-                                move |result| {
-                                    screenshot::finish_download(
-                                        result,
-                                        capture_width,
-                                        capture_height,
-                                        filename,
-                                        sink,
-                                        ctx,
-                                        provenance,
-                                    );
-                                },
-                            )
+                            .expect("DrawState must be installed before capturing");
+                        draw.set_object_style(self.state.object_style());
+                        draw.render_offscreen_async_with_objects(
+                            &render_state.device,
+                            &render_state.queue,
+                            &scene,
+                            Some(&self.object_scene),
+                            view_proj,
+                            eye_position,
+                            capture_width,
+                            capture_height,
+                            [
+                                f64::from(clear[0]),
+                                f64::from(clear[1]),
+                                f64::from(clear[2]),
+                                f64::from(clear[3]),
+                            ],
+                            move |result| {
+                                screenshot::finish_download(
+                                    result,
+                                    capture_width,
+                                    capture_height,
+                                    filename,
+                                    sink,
+                                    ctx,
+                                    provenance,
+                                );
+                            },
+                        )
                     };
                     if let Err(error) = started {
                         self.screenshot.fail(error);
@@ -556,6 +559,7 @@ impl VfApp {
                 DrawCallback {
                     scene,
                     objects: Arc::clone(&self.object_scene),
+                    object_style: self.state.object_style(),
                     screen: rect,
                     object_viewport,
                     object_clear,
@@ -798,6 +802,7 @@ impl crate::animation_job::AnimationRenderer for NativeAnimationRenderer<'_> {
         height: u32,
         clear: [f64; 4],
     ) -> Result<Vec<u8>, AnimationError> {
+        self.draw.set_object_style(frame.object_style);
         self.draw
             .render_offscreen_with_objects(
                 self.device,

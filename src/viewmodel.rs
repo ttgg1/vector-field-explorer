@@ -42,6 +42,7 @@ use crate::maxwell::{
     MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family,
     maxwell_field_with_bem, maxwell_outline, sample_maxwell_with_bem, solve_bem, validate_maxwell,
 };
+use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
 use crate::particles::{
@@ -417,6 +418,10 @@ pub struct State {
     /// A1). Only [`State::commit_layer_styles`] may replace it in response to
     /// an edit; an invalid commit leaves the previous record untouched.
     pub layer_styles: LayerStyles,
+    /// Durable global object style (issue #115). Only
+    /// [`State::set_object_style`] replaces it in response to an edit; the
+    /// startup restore assigns it directly and never dirties the scene.
+    object_style: ObjectStyle,
     pub field: FieldExpr,
     pub parse_error: String,
     pub density: u32,
@@ -963,6 +968,27 @@ impl State {
         &self.layer_styles
     }
 
+    /// The committed global object style.
+    pub fn object_style(self: &State) -> ObjectStyle {
+        self.object_style
+    }
+
+    /// Replace the global object style. Selecting the committed style is a
+    /// no-op; a real change is assigned once and dirties the scene once.
+    pub fn set_object_style(self: &mut State, style: ObjectStyle) -> bool {
+        if self.object_style == style {
+            return false;
+        }
+        self.object_style = style;
+        self.mark_dirty();
+        true
+    }
+
+    /// Apply a startup-restored object style without dirtying the scene.
+    pub fn restore_object_style(self: &mut State, style: ObjectStyle) {
+        self.object_style = style;
+    }
+
     /// Atomically replace the appearance overrides after validating the whole
     /// record. A rejected record leaves the previous styles and the dirty flag
     /// untouched; an accepted record requests exactly one scene rebuild.
@@ -1252,6 +1278,7 @@ impl State {
             parameters: ParameterSet::default(),
             viewport_style: ViewportStyle::default(),
             layer_styles: LayerStyles::default(),
+            object_style: ObjectStyle::default(),
             field,
             parse_error: String::new(),
             density,

@@ -23,6 +23,7 @@ use vector_field_explorer::interaction::{
     ProfileLibrary as InteractionProfileLibrary,
 };
 use vector_field_explorer::layer_style::LayerStyles;
+use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{
@@ -60,7 +61,7 @@ use vector_field_explorer::viewmodel::{
 };
 use vector_field_explorer::viewport_style::{MAX_LINE_WIDTH, ViewportStyle};
 
-use crate::support::storage::{MemoryStorage, ron_string};
+use crate::support::storage::{MemoryStorage, from_ron, ron_string};
 
 #[test]
 fn old_record_defaults_vector_and_preserves_projection() {
@@ -530,6 +531,7 @@ fn sample_settings() -> AppSettings {
         viewport_style: ViewportStyle::white_paper(),
         layer_styles: LayerStyles::default(),
         preset_ui: PresetUiRecord::default(),
+        object_style: ObjectStyle::Solid,
         appearance_profiles: Vec::new(),
         interaction: InteractionProfile::default(),
         interaction_profiles: Vec::new(),
@@ -568,6 +570,108 @@ fn settings_round_trip_through_eframe_storage() {
         (app.controls.show_grid, app.controls.show_coordinate_system),
         (false, false)
     );
+}
+
+#[test]
+fn object_style_defaults_to_solid_when_the_field_is_missing() {
+    let raw = ron_string(&AppSettings::default());
+    assert!(
+        raw.contains("object_style:Solid"),
+        "the current envelope writes the style:\n{raw}"
+    );
+    let without_field = raw.replace(",object_style:Solid", "");
+    assert!(!without_field.contains("object_style"));
+    let loaded: AppSettings = from_ron(&without_field);
+    assert_eq!(loaded.object_style, ObjectStyle::Solid);
+}
+
+#[test]
+fn wireframe_object_style_round_trips_through_storage() {
+    let settings = AppSettings {
+        object_style: ObjectStyle::Wireframe,
+        viewport_style: ViewportStyle::white_paper(),
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let raw = storage
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
+    assert!(
+        raw.contains("object_style:Wireframe"),
+        "the style is written as its stable token:\n{raw}"
+    );
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.object_style, ObjectStyle::Wireframe);
+
+    let app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(app.state.object_style(), ObjectStyle::Wireframe);
+}
+
+#[test]
+fn corrupt_object_style_falls_back_to_solid_without_losing_the_envelope() {
+    let settings = AppSettings {
+        style: AppStyle {
+            theme_dark: false,
+            accent: eframe::egui::Color32::from_rgb(12, 34, 56),
+            rounding: 5.0,
+            spacing: 8.0,
+            font_size: 13.0,
+        },
+        object_style: ObjectStyle::Wireframe,
+        ..AppSettings::default()
+    };
+    let raw = ron_string(&settings).replace("object_style:Wireframe", "object_style:Glowy");
+    let mut storage = MemoryStorage::default();
+    storage.set_string(eframe::APP_KEY, raw);
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.object_style, ObjectStyle::Solid);
+    assert_eq!(
+        loaded.style, settings.style,
+        "only the corrupt style field falls back; the rest of the envelope survives"
+    );
+}
+
+#[test]
+fn non_string_object_style_is_repaired_without_losing_the_envelope() {
+    let settings = AppSettings {
+        style: AppStyle {
+            theme_dark: false,
+            accent: eframe::egui::Color32::from_rgb(90, 12, 34),
+            rounding: 6.0,
+            spacing: 9.0,
+            font_size: 14.0,
+        },
+        object_style: ObjectStyle::Wireframe,
+        ..AppSettings::default()
+    };
+    let raw = ron_string(&settings).replace("object_style:Wireframe", "object_style:5");
+    let mut storage = MemoryStorage::default();
+    storage.set_string(eframe::APP_KEY, raw);
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.object_style, ObjectStyle::Solid);
+    assert_eq!(
+        loaded.style, settings.style,
+        "a non-string style field is repaired to Solid; the rest of the envelope survives"
+    );
+}
+
+#[test]
+fn object_style_setter_and_restore_own_the_dirty_flag() {
+    let mut state = State::new(false);
+    assert_eq!(state.object_style(), ObjectStyle::Solid);
+    state.dirty = false;
+
+    assert!(!state.set_object_style(ObjectStyle::Solid));
+    assert!(!state.dirty, "an equal style is a no-op");
+    assert!(state.set_object_style(ObjectStyle::Wireframe));
+    assert!(state.dirty, "a real change marks the scene dirty once");
+    assert_eq!(state.object_style(), ObjectStyle::Wireframe);
+
+    state.dirty = false;
+    state.restore_object_style(ObjectStyle::Solid);
+    assert_eq!(state.object_style(), ObjectStyle::Solid);
+    assert!(!state.dirty, "startup restore never dirties the scene");
 }
 
 #[test]

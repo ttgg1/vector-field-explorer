@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use eframe::egui::{Pos2, Rect, vec2};
+use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag, SourceSampling,
 };
@@ -569,6 +570,46 @@ fn both_source_display_paints_the_viewport_family_legend() {
         labels.contains(&"B cyan"),
         "the viewport legend names the magnetic family: {labels:?}"
     );
+}
+
+#[test]
+fn object_style_control_writes_the_enum_and_names_both_modes() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut panel = SourcesPanelState::default();
+
+    let mut out = None;
+    for _ in 0..3 {
+        out = Some(show_sources_frame(
+            &ctx, 1200.0, &mut state, &mut panel, false,
+        ));
+    }
+    let painted = nodes(out.as_ref().unwrap());
+    assert!(has(&painted, "Object style"));
+    assert!(
+        has(
+            &painted,
+            "Solid draws filled bodies; Wireframe draws edge outlines. \
+             SVG exports keep the line blueprint."
+        ),
+        "the help text names both modes and the SVG line blueprint"
+    );
+    assert_eq!(state.object_style(), ObjectStyle::Solid);
+
+    let wireframe = find(&painted, "Wireframe").unwrap().rect.center();
+    click_sources(&ctx, 1200.0, wireframe, &mut state, &mut panel, false);
+    assert_eq!(state.object_style(), ObjectStyle::Wireframe);
+
+    for _ in 0..3 {
+        out = Some(show_sources_frame(
+            &ctx, 1200.0, &mut state, &mut panel, false,
+        ));
+    }
+    let painted = nodes(out.as_ref().unwrap());
+    let solid = find(&painted, "Solid").unwrap().rect.center();
+    click_sources(&ctx, 1200.0, solid, &mut state, &mut panel, false);
+    assert_eq!(state.object_style(), ObjectStyle::Solid);
 }
 
 #[test]

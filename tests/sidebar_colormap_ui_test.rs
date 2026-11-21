@@ -80,7 +80,8 @@ impl Sidebar {
                         ui,
                         state,
                         controls,
-                        &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+                        &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(
+                        ),
                     );
                 });
             })
@@ -317,6 +318,7 @@ fn colormap_row_drives_state_scene_and_persistence() {
         interaction: Default::default(),
         interaction_profiles: Default::default(),
         seed_layouts: Default::default(),
+        object_style: Default::default(),
     };
     let mut storage = MemoryStorage::default();
     vector_field_explorer::persistence::save(&mut storage, &settings);

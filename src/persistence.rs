@@ -33,6 +33,7 @@ use crate::maxwell::{
     ConductorOutline, MaxwellCase, MaxwellError, MaxwellFamily, MaxwellScene, MaxwellView,
     maxwell_family, validate_maxwell,
 };
+use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::parameters::ParameterSet;
 use crate::particles::{
@@ -115,6 +116,13 @@ pub struct AppSettings {
     /// all-expanded default without failing the envelope.
     #[serde(default, deserialize_with = "deserialize_preset_ui")]
     pub preset_ui: PresetUiRecord,
+    /// How source/induction bodies are drawn (issue #115). Missing on older
+    /// envelopes, which load Solid; an unknown stored token is repaired to
+    /// Solid by [`ObjectStyle`]'s decoder with one warning, and a non-string
+    /// stored value is repaired to Solid by the field wrapper instead of
+    /// failing the whole envelope.
+    #[serde(default, deserialize_with = "deserialize_object_style")]
+    pub object_style: ObjectStyle,
 }
 
 /// Persisted Presets-panel state. Only the per-group expansion is durable; the
@@ -155,6 +163,9 @@ impl AppSettings {
     /// record a bogus parse error and keep the default field.
     pub fn restore(&self, state: &mut State, controls: &mut Controls) {
         state.parameters = self.parameters.clone();
+        // A display-only startup assignment: the object style never dirties
+        // the first scene, and the field decoder already repaired bad values.
+        state.restore_object_style(self.object_style);
         self.view.restore(state, controls);
     }
 
@@ -1658,6 +1669,30 @@ fn induction_case_label(case: InductionCase) -> &'static str {
         InductionCase::CurrentLoop => "current_loop",
         InductionCase::Solenoid => "solenoid",
     }
+}
+
+/// Decode the persisted object style field by field: a valid token goes through
+/// [`ObjectStyle`]'s lenient decoder (which repairs an unknown name to `Solid`),
+/// while any other stored shape — for example a number — consumes its own value
+/// and becomes `Solid` with one warning. Neither case can fail the envelope.
+fn deserialize_object_style<'de, D>(deserializer: D) -> Result<ObjectStyle, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum StyleOrSolid {
+        Style(ObjectStyle),
+        Invalid(serde::de::IgnoredAny),
+    }
+
+    Ok(match StyleOrSolid::deserialize(deserializer)? {
+        StyleOrSolid::Style(style) => style,
+        StyleOrSolid::Invalid(_) => {
+            log::warn!("persisted object style is unreadable; using the Solid default");
+            ObjectStyle::Solid
+        }
+    })
 }
 
 /// Decode the Presets-panel expansion leniently: a missing record keeps the
