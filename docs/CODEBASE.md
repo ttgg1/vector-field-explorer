@@ -4032,7 +4032,7 @@ object bodies are generated once per process and reused by every instance:
 `MeshPrimitive::{Sphere, Cylinder, Torus, Tube, Disc}`. `MeshScene::from_sources`
 maps the enabled, displayed source entries to instances with a slice clip and a
 content fingerprint. The module has no renderer, app, persistence or `wgpu`
-dependency; a later slice adds the offscreen pass.
+dependency; the offscreen pass lives in `src/object_renderer.rs`.
 
 **Public API.** `MeshPrimitive` with `ALL`, `triangles()`, `vertices()`,
 `index()` and `from_index(u32) -> Option<MeshPrimitive>`; `MeshVertex {
@@ -4136,6 +4136,69 @@ primitive (deferred). The disc's Y scale is reserved, not a thickness. The
 triangle-budget branch of `from_sources` is unreachable with the current
 primitive set, because `MAX_OBJECTS × largest primitive` is below
 `MAX_DRAWN_TRIANGLES`.
+
+#### `src/object_renderer.rs` — offscreen object pass and composite
+
+**Purpose / API.** The depth-enabled GPU pass for the mapped bodies from
+`src/object_scene.rs`; it is not yet wired into the live viewport, capture or
+animation. `ObjectDrawState { pass: ObjectPass }` is the future callback-resource
+owner. `ObjectPass::new(&Device, TextureFormat)` builds the pipelines, the
+composite sampler and the uniform buffer; the colour/depth target, instance
+buffer and primitive buffers stay unallocated until a drawable frame arrives.
+`prepare(&Device, &Queue, &mut CommandEncoder, &MeshScene, &ObjectView)`
+allocates or reuses the target, uploads changed instances/uniforms and records
+the geometry pass into the caller's encoder (it never submits).
+`paint(&mut RenderPass, egui::Rect)` composites the prepared target as a
+fullscreen textured quad in physical-pixel screen coordinates.
+`texture_view() -> Option<&TextureView>` exposes the colour target.
+`OBJECT_PROBE_ENV = "VFE_OBJECT_GPU_PROBE"` gates the native device probe.
+`ObjectView { view_proj: [[f32; 4]; 4], eye: [f32; 3], viewport: [u32; 2],
+wireframe: bool, clear: [f64; 4] }` is the frame input; `target_extent()` maps a
+zero axis to `None`. `ObjectGlobals` (128 bytes) is the uniform ABI
+(`view_proj`, `eye`, `clip_plane`, `light_dir`, `params`), `ObjectInstance`
+(128 bytes) is one per-instance vertex record (model matrix, inverse-transpose
+normal matrix, linear colour), and `ObjectDrawPlan`/`object_draw_plan` are the
+device-free prepare decision: `None` for an empty scene or a zero-area viewport,
+otherwise the extent plus the sanitized draw list. `ObjectTargetKey` identifies
+target extent/format within one pass object.
+
+**Pipeline and shader.** `src/shaders.object.wgsl` holds both the geometry pair
+(`vs_object`/`fs_object`) and the composite pair (`vs_composite`/`fs_composite`).
+Geometry reads a 36-byte `MeshVertex` vertex stream plus the 128-byte instance
+stream (bind group 0 is the `ObjectGlobals` uniform only; instances are vertex
+attributes at locations 3–10), tests and writes `Depth32Float` with `LessEqual`,
+never culls (two-sided lighting flips the normal on back faces), and blends
+straight alpha. The fragment stage combines `0.25` ambient with one directional
+diffuse term, discards the world-space half `dot(p, n) - offset < 0` when the
+slice clip is active, and has a barycentric `fwidth` wireframe path selected by
+`params.x`. Composite binds the target texture and sampler at bindings 2/3 (no
+binding collision with the uniform), draws an oversized triangle and writes
+premultiplied alpha into egui's no-depth pass.
+
+**Invariants.** Colour is `RENDER_ATTACHMENT | TEXTURE_BINDING`, depth is
+`Depth32Float` with `RENDER_ATTACHMENT` and clears to `1.0`. An empty scene or a
+zero-area viewport returns `Ok` without allocating a target, recording a pass or
+uploading geometry. The target is recreated only when its extent or format
+changes; instances are uploaded only when the scene generation or drawable count
+changes, and the uniform only when the packed values differ. Every uniform and
+instance value is finite: a non-finite view matrix becomes the identity,
+non-finite eye components `0`, an unusable clip plane disables the discard, and
+non-finite or singular object transforms/colours are skipped instead of uploaded
+as NaN. Draw order is scene-entry order with the same `MeshPrimitive::vertices()`
+count per draw, so identical scene + view produces identical draw calls and
+target contents. No `unsafe`.
+
+**Pinned by.** `tests/object_gpu_test.rs` always runs the device-free contracts
+(empty scene and zero-area viewport plan nothing, the sphere plan is
+deterministic, the view/wireframe/clip values round-trip into `ObjectGlobals`,
+non-finite input is sanitized, and non-finite/singular instances are skipped) and
+prints `GPU not requested`. `scripts/test-object-gpu.sh` sets
+`VFE_OBJECT_GPU_PROBE=1` on its child process only and drives the real pass on a
+native adapter: empty scene and zero-area viewport return `Ok` with no target, a
+64×64 sphere frame allocates and renders (`2316/4096` non-clear pixels observed on
+the AMD RX 9070 XT / RADV probe), a repeated frame is byte-identical, and no
+validation/internal/out-of-memory error is reported. There is no noop backend or
+silent skip.
 
 #### `src/renderer.rs` — instanced wgpu renderer
 
@@ -5813,11 +5876,14 @@ pin that.
 | `shaders.arrow2d.wgsl` | `vs_arrow2d`, `fs_arrow2d` | Flat 2D arrows in world XY; unlit |
 | `shaders.line.wgsl` | `vs_line`, `fs_line` | Camera-facing line ribbons; unlit |
 | `shaders.dot.wgsl` | `vs_dot`, `fs_dot` | Camera-facing round dot billboards (2D dot path); half-Lambert |
+| `shaders.object.wgsl` | `vs_object`, `fs_object`, `vs_composite`, `fs_composite` | Offscreen object bodies: lit 36-byte mesh + 128-byte instance stream, slice discard, barycentric wireframe; fullscreen premultiplied-alpha composite |
 
-All four use the same bind group: `Globals` uniform + a read-only storage array
-of instances. They generate geometry from `vertex_index`; there is no vertex
-buffer. All are `TriangleList` with `cull_mode: None`, no depth attachment, one
-sample, alpha blending.
+The four vector files share one bind group: `Globals` uniform + a read-only
+storage array of instances. They generate geometry from `vertex_index`; there is
+no vertex buffer. All are `TriangleList` with `cull_mode: None`, no depth
+attachment, one sample, alpha blending. `shaders.object.wgsl` is the separate
+depth-enabled object pass described in §3.6; it is not part of the vector
+draw-plan table and its composite runs in egui's no-depth pass.
 
 ### 6.3 Orthographic vs perspective
 
