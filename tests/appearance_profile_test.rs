@@ -53,10 +53,63 @@ fn sample_document() -> ProfileDocument {
     }
 }
 
+/// The shipped looks in display order: the original nine, then seaborn
+/// categorical, seaborn sequential and the popular editor schemes.
+const EXPECTED_BUILTIN_ORDER: [&str; 24] = [
+    "Dark laboratory",
+    "White paper",
+    "High contrast",
+    "Tokyo Night",
+    "Catppuccin Mocha",
+    "Catppuccin Latte",
+    "Nord",
+    "Gruvbox Dark",
+    "Solarized Light",
+    "Seaborn Deep",
+    "Seaborn Muted",
+    "Seaborn Pastel",
+    "Seaborn Bright",
+    "Seaborn Dark",
+    "Seaborn Colorblind",
+    "Seaborn Rocket",
+    "Seaborn Mako",
+    "Seaborn Crest",
+    "Seaborn Flare",
+    "Dracula",
+    "One Dark",
+    "Monokai",
+    "Solarized Dark",
+    "Gruvbox Light",
+];
+
+fn ramp_hexes(profile: &AppearanceProfile) -> Vec<String> {
+    profile
+        .color
+        .ramp
+        .as_ref()
+        .expect("the profile ships a ramp")
+        .stops
+        .iter()
+        .map(|stop| stop.color.to_hex())
+        .collect()
+}
+
+fn ramp_positions(profile: &AppearanceProfile) -> Vec<f32> {
+    profile
+        .color
+        .ramp
+        .as_ref()
+        .expect("the profile ships a ramp")
+        .stops
+        .iter()
+        .map(|stop| stop.position)
+        .collect()
+}
+
 #[test]
 fn builtin_profiles_all_validate_and_have_unique_names() {
     let profiles = builtins();
-    assert_eq!(profiles.len(), 9, "nine shipped looks");
+    assert_eq!(profiles.len(), 24, "twenty-four shipped looks");
     assert_eq!(
         profiles.first().map(|profile| profile.name.as_str()),
         Some(DEFAULT_PROFILE_NAME),
@@ -75,19 +128,58 @@ fn builtin_profiles_all_validate_and_have_unique_names() {
         );
     }
 
-    for expected in [
-        "Dark laboratory",
-        "White paper",
-        "High contrast",
-        "Tokyo Night",
-        "Catppuccin Mocha",
-        "Catppuccin Latte",
-        "Nord",
-        "Gruvbox Dark",
-        "Solarized Light",
-    ] {
-        assert!(names.contains(expected), "missing builtin {expected:?}");
-    }
+    let order: Vec<&str> = profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect();
+    assert_eq!(
+        order, EXPECTED_BUILTIN_ORDER,
+        "existing looks stay first, then the new groups in order"
+    );
+}
+
+#[test]
+fn representative_new_builtin_ramps_are_pinned() {
+    // Categorical: all six seaborn palette colours, evenly spaced.
+    let deep = profile_named("Seaborn Deep");
+    assert_eq!(
+        ramp_hexes(&deep),
+        [
+            "#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860",
+        ]
+    );
+    assert_eq!(ramp_positions(&deep), [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]);
+    let deep_ramp = deep.color.ramp.expect("Seaborn Deep ships a ramp");
+    assert_eq!(deep_ramp.kind, RampKind::Sequential);
+
+    // Sequential: the documented dark-to-light teaching approximation.
+    let rocket = profile_named("Seaborn Rocket");
+    assert_eq!(
+        ramp_hexes(&rocket),
+        ["#03051a", "#781c81", "#c33d5b", "#ef8f59", "#fae6c6"]
+    );
+    assert_eq!(ramp_positions(&rocket), [0.0, 0.25, 0.5, 0.75, 1.0]);
+
+    // Popular editor scheme: four stops with the matching axes.
+    let dracula = profile_named("Dracula");
+    assert_eq!(
+        ramp_hexes(&dracula),
+        ["#ff79c6", "#bd93f9", "#8be9fd", "#50fa7b"]
+    );
+    assert_eq!(ramp_positions(&dracula), [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
+    assert_eq!(
+        [
+            dracula.viewport.axis_x_color,
+            dracula.viewport.axis_y_color,
+            dracula.viewport.axis_z_color,
+        ],
+        [
+            Rgba::from(Color32::from_rgb(0xff, 0x55, 0x55)).to_array(),
+            Rgba::from(Color32::from_rgb(0x50, 0xfa, 0x7b)).to_array(),
+            Rgba::from(Color32::from_rgb(0x8b, 0xe9, 0xfd)).to_array(),
+        ],
+        "Dracula keeps the listed axes colours"
+    );
 }
 
 #[test]

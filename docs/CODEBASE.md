@@ -2232,15 +2232,22 @@ on-disk profile storage, scene documents, the renderer or sampling.
   errors use `invalid appearance profiles: `; serde errors use
   `invalid appearance profile JSON: `. Imports are atomic and reject duplicate
   names. `to_json` emits compact JSON with pinned field order.
-- `builtins` ships Dark laboratory (the defaults), White paper, High contrast,
-  Tokyo Night, Catppuccin Mocha, Catppuccin Latte, Nord, Gruvbox Dark and
-  Solarized Light. Theme text colours are sRGB hex converted to the linear RGB
-  stored by `ViewportStyle`; ramp stops stay sRGB bytes with positions
-  `0.0`, `0.5`, `1.0`.
+- `builtins` ships 24 looks in fixed display order: the original nine (Dark
+  laboratory, White paper, High contrast, Tokyo Night, Catppuccin Mocha,
+  Catppuccin Latte, Nord, Gruvbox Dark, Solarized Light), then six seaborn
+  categorical palettes (Deep, Muted, Pastel, Bright, Dark, Colorblind), four
+  seaborn sequential approximations (Rocket, Mako, Crest, Flare) and five
+  popular editor schemes (Dracula, One Dark, Monokai, Solarized Dark, Gruvbox
+  Light). Theme text colours are sRGB hex converted to the linear RGB stored by
+  `ViewportStyle`; ramp stops stay sRGB bytes. A multi-stop ramp helper spaces
+  2–16 stops evenly from `0.0` to `1.0` with kind `Sequential`. Seaborn looks
+  and popular themes are documented teaching approximations, not byte-exact
+  reproductions.
 
-**Pinned by.** `tests/appearance_profile_test.rs`: builtin validity and unique
-names, the default profile, JSON round trip and pinned field order,
-version-first and unknown-field rejection, atomic duplicate-name import,
+**Pinned by.** `tests/appearance_profile_test.rs`: builtin validity, unique
+names and pinned order, representative categorical/sequential/popular ramp
+hexes and positions, the default profile, JSON round trip and pinned field
+order, version-first and unknown-field rejection, atomic duplicate-name import,
 appearance-only apply, capture round trip of all six appearance fields and
 double-apply idempotence, rollback on invalid input, total sanitization,
 sRGB-to-linear theme conversion (Tokyo Night background and axis), and the ramp
@@ -3997,17 +4004,20 @@ so it is not compiled. Do not add UI code to it expecting it to run.
 `LayerStyles` overrides. Each row exposes bounded opacity (`0.0..=1.0`) and
 width (`0.05..=4.0`) sliders with an explicit `Default` escape that clears the
 field, plus family colour and a global `Reset all`. Issue #85 slice A2b adds a
-`Profiles` section above the layers: apply a shipped or user profile, save the
-current appearance under a name, delete a user profile after a two-click
-confirm, and import/export the user library as portable text. The header notes
-that styling affects the live/raster view only; SVG exports keep the unstyled
-blueprint.
+`Profiles` section above the layers: one dropdown lists the built-ins first and
+then the user profiles, with one `Apply` and one `Delete` button. Choosing an
+entry only drafts a selection; `Apply` applies it, `Delete` is enabled only for
+a user selection and still needs a two-click confirm. The section also saves
+the current appearance under a name and imports/exports the user library as
+portable text. The header notes that styling affects the live/raster view only;
+SVG exports keep the unstyled blueprint, and preset labels say the seaborn and
+editor-theme looks are teaching approximations, not byte-exact reproductions.
 
 **Public API.** `AppearanceEdit` (`LayerOpacity`, `LayerWidth`, `FamilyOpacity`,
 `FamilyWidth`, `FamilyColor`); `apply_edit`, `reset_all`; `AppearancePanelState`
 with `show(ui, state, profiles, compact)`, `apply_profile`, an inline `error` and
 a weak-coloured success `message`. Session drafts (`profile_name`, `import_text`,
-`export_text`, `pending_delete`) are never persisted.
+`export_text`, `pending_delete`, `selected_profile`) are never persisted.
 
 **Invariants.**
 - Every edit copies the committed record, changes exactly one field and calls
@@ -4017,10 +4027,14 @@ a weak-coloured success `message`. Session drafts (`profile_name`, `import_text`
   an invalid record.
 - `reset_all` commits `LayerStyles::default()`; resetting this panel never
   touches particle or viewport controls.
-- Applying a profile mutates `State` only through `AppearanceProfile::apply`;
-  saving captures the live appearance and upserts it, rejecting empty and
-  built-in names before the library is touched. A successful save clears any
-  armed delete; applying clears it only on success. Imports use the library's
+- Applying a profile mutates `State` only through `AppearanceProfile::apply`
+  and only for the dropdown's selected entry; selecting an entry never applies
+  it. A selection that disappears (delete or an import replacing the user
+  library) falls back to no selection without panicking. `Delete` is enabled
+  only when the selection is a user profile (index >= the built-in count).
+  Saving captures the live appearance and upserts it, rejecting empty and
+  built-in names before the library is touched. A successful save, apply and
+  import each clear any armed delete. Imports use the library's
   atomic merge, so a malformed, duplicate, invalid or over-cap document leaves
   the library unchanged, and the success message reports the number of new
   profiles added (a pure replacement says no new profiles were imported, while
@@ -4031,15 +4045,18 @@ a weak-coloured success `message`. Session drafts (`profile_name`, `import_text`
   revision counters; an empty user library yields an empty buffer, so `Copy`
   stays disabled.
 
-**Pinned by.** `tests/appearance_panel_test.rs` (29): panel toggle/width
+**Pinned by.** `tests/appearance_panel_test.rs` (34): panel toggle/width
 round trip and clamp, single compact sheet, compact Appearance tab opening,
 layer/family commit and resolution, layer-over-family precedence and the
 family-only fallback, default escape, inline error display/clearing, invalid
 write rejection, reset, the rendered six-layer/two-family body, profile apply
-and its rejected-record path, save/replace/built-in/empty-name handling,
-two-click delete, the armed-delete-cleared-by-save case, the user-profile cap,
-atomic import with its added-profile delta, replacement-only import, empty
-import document, empty export/Copy, and the compact profile section.
+and its rejected-record path, dropdown listing order, apply-only-the-selection,
+selection never applying on its own and surviving frames, delete disabled for
+built-ins and two-click delete for users with the vanished-selection fallback,
+save/replace/built-in/empty-name handling, the armed-delete-cleared-by-save
+case, the user-profile cap, atomic import with its added-profile delta and
+armed-delete clearing, replacement-only import, empty import document, empty
+export/Copy, and the compact profile section.
 
 #### `src/ui/interaction_panel.rs` — the Interaction panel
 

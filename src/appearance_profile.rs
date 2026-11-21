@@ -328,7 +328,7 @@ pub fn builtins() -> Vec<AppearanceProfile> {
                 grid: "#2f334d",
                 box_color: "#414868",
                 axes: ["#f7768e", "#9ece6a", "#7aa2f7"],
-                ramp: ["#7aa2f7", "#bb9af7", "#7dcfff"],
+                ramp: &["#7aa2f7", "#bb9af7", "#7dcfff"],
             },
         ),
         theme_profile(
@@ -338,7 +338,7 @@ pub fn builtins() -> Vec<AppearanceProfile> {
                 grid: "#313244",
                 box_color: "#45475a",
                 axes: ["#f38ba8", "#a6e3a1", "#89b4fa"],
-                ramp: ["#89b4fa", "#cba6f7", "#f5c2e7"],
+                ramp: &["#89b4fa", "#cba6f7", "#f5c2e7"],
             },
         ),
         theme_profile(
@@ -348,7 +348,7 @@ pub fn builtins() -> Vec<AppearanceProfile> {
                 grid: "#dce0e8",
                 box_color: "#bcc0cc",
                 axes: ["#d20f39", "#40a02b", "#1e66f5"],
-                ramp: ["#1e66f5", "#8839ef", "#ea76cb"],
+                ramp: &["#1e66f5", "#8839ef", "#ea76cb"],
             },
         ),
         theme_profile(
@@ -358,7 +358,7 @@ pub fn builtins() -> Vec<AppearanceProfile> {
                 grid: "#3b4252",
                 box_color: "#434c5e",
                 axes: ["#bf616a", "#a3be8c", "#81a1c1"],
-                ramp: ["#5e81ac", "#88c0d0", "#8fbcbb"],
+                ramp: &["#5e81ac", "#88c0d0", "#8fbcbb"],
             },
         ),
         theme_profile(
@@ -368,7 +368,7 @@ pub fn builtins() -> Vec<AppearanceProfile> {
                 grid: "#3c3836",
                 box_color: "#504945",
                 axes: ["#fb4934", "#b8bb26", "#83a598"],
-                ramp: ["#d65d0e", "#fabd2f", "#b8bb26"],
+                ramp: &["#d65d0e", "#fabd2f", "#b8bb26"],
             },
         ),
         theme_profile(
@@ -378,10 +378,156 @@ pub fn builtins() -> Vec<AppearanceProfile> {
                 grid: "#eee8d5",
                 box_color: "#93a1a1",
                 axes: ["#dc322f", "#859900", "#268bd2"],
-                ramp: ["#268bd2", "#2aa198", "#859900"],
+                ramp: &["#268bd2", "#2aa198", "#859900"],
+            },
+        ),
+        // Seaborn's categorical palettes: the six palette colours drive the
+        // ramp, with a shared dark neutral viewport and the first three colours
+        // as axes. Teaching approximations, not byte-exact reproductions.
+        seaborn_categorical(
+            "Seaborn Deep",
+            &[
+                "#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3", "#937860",
+            ],
+        ),
+        seaborn_categorical(
+            "Seaborn Muted",
+            &[
+                "#4878D0", "#EE854A", "#6ACC64", "#D65F5F", "#956CB4", "#8C613C",
+            ],
+        ),
+        seaborn_categorical(
+            "Seaborn Pastel",
+            &[
+                "#A1C9F4", "#FFB482", "#8DE5A1", "#FF9F9B", "#D0BBFF", "#DEBB9B",
+            ],
+        ),
+        seaborn_categorical(
+            "Seaborn Bright",
+            &[
+                "#023EFF", "#FF7C00", "#1AC938", "#E8000B", "#8B2BE2", "#9F4800",
+            ],
+        ),
+        seaborn_categorical(
+            "Seaborn Dark",
+            &[
+                "#001C7F", "#B1400D", "#12711C", "#8C0800", "#591E71", "#592F0D",
+            ],
+        ),
+        seaborn_categorical(
+            "Seaborn Colorblind",
+            &[
+                "#0173B2", "#DE8F05", "#029E73", "#D55E00", "#CC78BC", "#CA9161",
+            ],
+        ),
+        // Seaborn sequential approximations, dark to light. On the shared dark
+        // neutral viewport the light end of each ramp supplies the axes, so the
+        // reference lines stay legible.
+        seaborn_sequential(
+            "Seaborn Rocket",
+            &["#03051A", "#781C81", "#C33D5B", "#EF8F59", "#FAE6C6"],
+        ),
+        seaborn_sequential(
+            "Seaborn Mako",
+            &["#0B0405", "#21386F", "#2A7899", "#63C3B4", "#DEF5E5"],
+        ),
+        seaborn_sequential(
+            "Seaborn Crest",
+            &["#0B1D2A", "#21466B", "#3E7C8C", "#7FB69E", "#C7E9C0"],
+        ),
+        seaborn_sequential(
+            "Seaborn Flare",
+            &["#1B0C41", "#6A1F7A", "#C33D5B", "#F08A62", "#FCE3C3"],
+        ),
+        // Popular editor schemes with matching viewport colours and honest
+        // four-stop ramps.
+        theme_profile(
+            "Dracula",
+            ThemeColors {
+                background: "#282a36",
+                grid: "#44475a",
+                box_color: "#6272a4",
+                axes: ["#ff5555", "#50fa7b", "#8be9fd"],
+                ramp: &["#ff79c6", "#bd93f9", "#8be9fd", "#50fa7b"],
+            },
+        ),
+        theme_profile(
+            "One Dark",
+            ThemeColors {
+                background: "#282c34",
+                grid: "#3b4048",
+                box_color: "#565c64",
+                axes: ["#e06c75", "#98c379", "#61afef"],
+                ramp: &["#61afef", "#c678dd", "#56b6c2", "#98c379"],
+            },
+        ),
+        theme_profile(
+            "Monokai",
+            ThemeColors {
+                background: "#272822",
+                grid: "#3e3d32",
+                box_color: "#75715e",
+                axes: ["#f92672", "#a6e22e", "#66d9ef"],
+                ramp: &["#f92672", "#fd971f", "#e6db74", "#a6e22e"],
+            },
+        ),
+        theme_profile(
+            "Solarized Dark",
+            ThemeColors {
+                background: "#002b36",
+                grid: "#073642",
+                box_color: "#586e75",
+                axes: ["#dc322f", "#859900", "#268bd2"],
+                ramp: &["#268bd2", "#2aa198", "#b58900", "#cb4b16"],
+            },
+        ),
+        theme_profile(
+            "Gruvbox Light",
+            ThemeColors {
+                background: "#fbf1c7",
+                grid: "#ebdbb2",
+                box_color: "#bdae93",
+                axes: ["#cc241d", "#98971a", "#458588"],
+                ramp: &["#b16286", "#d79921", "#458588", "#689d6a"],
             },
         ),
     ]
+}
+
+/// A seaborn categorical look: the six palette colours in order with the
+/// shared dark neutral viewport and the first three colours as axes.
+fn seaborn_categorical(name: &str, palette: &'static [&'static str]) -> AppearanceProfile {
+    debug_assert_eq!(palette.len(), 6, "categorical palettes have six colours");
+    theme_profile(
+        name,
+        ThemeColors {
+            background: "#1c1c1c",
+            grid: "#3a3a3a",
+            box_color: "#555555",
+            axes: [palette[0], palette[1], palette[2]],
+            ramp: palette,
+        },
+    )
+}
+
+/// A seaborn sequential look: a dark-to-light ramp on the shared dark neutral
+/// viewport, with the light end of the ramp as the axes.
+fn seaborn_sequential(name: &str, ramp: &'static [&'static str]) -> AppearanceProfile {
+    debug_assert!(
+        ramp.len() >= 3,
+        "sequential ramps have at least three stops"
+    );
+    let count = ramp.len();
+    theme_profile(
+        name,
+        ThemeColors {
+            background: "#1c1c1c",
+            grid: "#3a3a3a",
+            box_color: "#555555",
+            axes: [ramp[count - 3], ramp[count - 2], ramp[count - 1]],
+            ramp,
+        },
+    )
 }
 
 fn default_color() -> ProfileColor {
@@ -399,7 +545,8 @@ struct ThemeColors {
     grid: &'static str,
     box_color: &'static str,
     axes: [&'static str; 3],
-    ramp: [&'static str; 3],
+    /// Two to sixteen sRGB hex stops sampled at evenly spaced positions.
+    ramp: &'static [&'static str],
 }
 
 fn theme_profile(name: &str, colors: ThemeColors) -> AppearanceProfile {
@@ -428,8 +575,15 @@ fn theme_profile(name: &str, colors: ThemeColors) -> AppearanceProfile {
     }
 }
 
-fn ramp_from_hex(colors: [&str; 3]) -> ColorRamp {
-    let last = (colors.len() - 1) as f32;
+/// Build a sequential ramp from any 2–16 hex stops, evenly spaced from `0.0`
+/// to `1.0` inclusive. Every shipped ramp is long enough to validate.
+fn ramp_from_hex(colors: &[&str]) -> ColorRamp {
+    debug_assert!(
+        (ColorRamp::MIN_STOPS..=ColorRamp::MAX_STOPS).contains(&colors.len()),
+        "shipped ramps carry 2 to {} stops",
+        ColorRamp::MAX_STOPS
+    );
+    let last = colors.len().saturating_sub(1).max(1) as f32;
     ColorRamp {
         stops: colors
             .iter()

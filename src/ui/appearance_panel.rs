@@ -109,6 +109,9 @@ pub struct AppearancePanelState {
     pub export_text: String,
     /// The name awaiting the second delete click.
     pub pending_delete: Option<String>,
+    /// The profile selected in the dropdown. Session-only: choosing an entry
+    /// never applies it; only the Apply button does.
+    pub selected_profile: Option<String>,
 }
 
 impl AppearancePanelState {
@@ -188,39 +191,76 @@ impl AppearancePanelState {
     ) {
         ui.separator();
         ui.label(egui::RichText::new("Profiles").strong());
+        ui.weak(
+            "Preset colours are teaching approximations inspired by seaborn and popular \
+             editor themes, not byte-exact reproductions.",
+        );
 
         let shipped = builtins();
         let builtin_count = shipped.len();
         let all = profiles.all();
-        for (index, profile) in all.iter().enumerate() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(&profile.name);
-                if ui
-                    .button("Apply")
-                    .on_hover_text("Apply this appearance profile")
-                    .clicked()
-                {
-                    self.apply_profile(state, profile);
-                    if self.error.is_none() {
-                        self.pending_delete = None;
-                    }
-                }
-                if index >= builtin_count {
-                    let label = if self.pending_delete.as_deref() == Some(profile.name.as_str()) {
-                        "Confirm delete"
-                    } else {
-                        "Delete"
-                    };
-                    if ui
-                        .button(label)
-                        .on_hover_text("Delete this user profile")
-                        .clicked()
-                    {
-                        self.delete_profile(profiles, &profile.name);
-                    }
+        // A selection can vanish when the user deletes it or an import replaces
+        // the user library; fall back to no selection instead of panicking.
+        if self
+            .selected_profile
+            .as_ref()
+            .is_some_and(|name| !all.iter().any(|profile| &profile.name == name))
+        {
+            self.selected_profile = None;
+        }
+
+        egui::ComboBox::from_id_salt("appearance_profile")
+            .selected_text(
+                self.selected_profile
+                    .as_deref()
+                    .unwrap_or("Select a profile"),
+            )
+            .show_ui(ui, |ui| {
+                for profile in &all {
+                    ui.selectable_value(
+                        &mut self.selected_profile,
+                        Some(profile.name.clone()),
+                        &profile.name,
+                    );
                 }
             });
-        }
+
+        let selected = self
+            .selected_profile
+            .as_ref()
+            .and_then(|name| all.iter().find(|profile| &profile.name == name))
+            .cloned();
+        let selected_is_user = selected.as_ref().is_some_and(|profile| {
+            all.iter()
+                .position(|candidate| candidate.name == profile.name)
+                .is_some_and(|index| index >= builtin_count)
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(selected.is_some(), egui::Button::new("Apply"))
+                .on_hover_text("Apply the selected appearance profile")
+                .clicked()
+                && let Some(profile) = selected.as_ref()
+            {
+                self.apply_profile(state, profile);
+                if self.error.is_none() {
+                    self.pending_delete = None;
+                }
+            }
+            let delete_label = match (self.pending_delete.as_deref(), selected.as_ref()) {
+                (Some(pending), Some(profile)) if pending == profile.name => "Confirm delete",
+                _ => "Delete",
+            };
+            if ui
+                .add_enabled(selected_is_user, egui::Button::new(delete_label))
+                .on_hover_text("Delete the selected user profile")
+                .clicked()
+                && let Some(profile) = selected.as_ref()
+            {
+                self.delete_profile(profiles, &profile.name);
+            }
+        });
 
         ui.horizontal_wrapped(|ui| {
             ui.label("Name");
@@ -315,6 +355,7 @@ impl AppearancePanelState {
         let before = profiles.len();
         match profiles.import_text(&self.import_text) {
             Ok(after) => {
+                self.pending_delete = None;
                 self.sync_export(profiles);
                 let added = after.saturating_sub(before);
                 let message = match added {
@@ -469,10 +510,9 @@ impl AppearancePanelState {
                     self.apply(state, AppearanceEdit::FamilyColor(family, None));
                 }
                 let effective = match overrides.color {
-                    Some(color) => format!(
-                        "#{:02x}{:02x}{:02x}",
-                        color.0[0], color.0[1], color.0[2]
-                    ),
+                    Some(color) => {
+                        format!("#{:02x}{:02x}{:02x}", color.0[0], color.0[1], color.0[2])
+                    }
                     None => "Default (drawable colour)".to_owned(),
                 };
                 ui.weak(effective);
