@@ -11,6 +11,7 @@ pub mod layout;
 pub mod material_panel;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod math_view;
+pub mod maxwell_learning_panel;
 pub mod maxwell_panel;
 pub mod menu;
 pub mod ode_panel;

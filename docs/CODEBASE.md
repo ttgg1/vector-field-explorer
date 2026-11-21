@@ -1388,6 +1388,7 @@ scene. The app branch in `src/app/simulation.rs` composes the outline at
 `0.004 * scene extent` width before the formula path; status/sampling errors flow
 to the existing status slot. Test seams are `maxwell_arrow_count`,
 `maxwell_line_count`, `maxwell_scene`, `maxwell_sampling`, `maxwell_sampling_error`,
+`maxwell_bem_solution` (read-only cache access for the learning panel),
 `maxwell_bem_solves`, its `maxwell_bem_solve_count` alias, and
 `test_assemble_viewport_scene`. `ViewRecord` persists the durable scene only
 (no sampling). `restore_maxwell_fields` validates it, then
@@ -4576,7 +4577,8 @@ thread.
 
 Declares `appearance_panel`, `branding`, native-only `cas_panel` and
 `math_view`, `formula_bar`, `help_overlay`, `induction_panel`,
-`interaction_panel`, `layout`, `material_panel`, `maxwell_panel`, `menu`,
+`interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
+`maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
@@ -4920,7 +4922,7 @@ viewport label, current-only warning, rail/sheet requests) and
 **Purpose.** The wide left rail/compact sheet body for `FieldMode::Maxwell`,
 plus case names, the formula-bar summary and the help rows.
 
-**Public API.** `MaxwellPanelState { draft, error, advanced }`,
+**Public API.** `MaxwellPanelState { draft, error, advanced, learning }`,
 `MaxwellPanelState::default`, `commit(&mut State) -> bool`, `sync_from(&State)`,
 `show(ui, &mut panel, &mut State, compact) -> Option<MaxwellPanelAction>`,
 `MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`, `case_label`, `summary`,
@@ -4947,6 +4949,10 @@ plus case names, the formula-bar summary and the help rows.
   finite `MaxwellStop::AccuracyNotMet`; `Unavailable` can never be shown.
 - Warnings come only from the sampling that belongs to the committed scene, so
   a valid scene edit cannot present a prior scene's warning as current.
+- A collapsed `Maxwell equations` section after the case controls embeds
+  [`maxwell_learning_panel`](../src/ui/maxwell_learning_panel.rs). It receives
+  the draft scene and the read-only cached BEM solution; it never commits a
+  scene edit and never samples the field on a plain frame.
 - Maxwell is arrows-only, with the exact note
   `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
   Coloring is hidden and CAS is disabled with
@@ -4955,7 +4961,60 @@ plus case names, the formula-bar summary and the help rows.
 **Pinned by.** `tests/maxwell_panel_test.rs` (wide/compact reflow, case-specific
 controls, rejection, current-only warning, accuracy opt-in, Switch to 2D
 camera/mode preservation, disabled Features/CAS, help rows, rail/sheet
-requests) and `tests/layout_test.rs` for `maxwell_expanded`/`maxwell_width`.
+requests), `tests/maxwell_learning_panel_test.rs` (the embedded section's
+equation/form, residual and limitation contracts) and `tests/layout_test.rs`
+for `maxwell_expanded`/`maxwell_width`.
+
+#### `src/ui/maxwell_learning_panel.rs` — Maxwell learning and residual section
+
+**Purpose.** Slice B of issue #94: a session-only teaching and diagnostics
+section for the four Maxwell equations. It shows both statement forms, the
+symbol table and the active-limit assumptions from
+[`maxwell_learning`](../src/maxwell_learning.rs), then optionally runs one
+bounded residual check through [`maxwell_residual`](../src/maxwell_residual.rs).
+
+**Public API.** `MaxwellLearningPanel { equation, form, probe, report, message }`
+with `Default` (Gauss electric, differential, probe `[0, 0, 0]`),
+`show(ui, &mut MaxwellScene, Option<&BemSolution>)`, `check(&MaxwellScene,
+Option<&BemSolution>)`, `ResidualReport { residual, terms, absolute }`,
+`TermExplanation { terms }`, `TermNote { symbol, central_difference, status }`,
+and the constants `MAXWELL_LEARNING_LIMITATION`,
+`MAXWELL_NORMALIZED_SCALE` and `MAXWELL_POINTWISE_NOTE`.
+
+**Invariants.**
+- Field work happens only on `Check residual`: one press does exactly twelve
+  `maxwell_field_with_bem` evaluations, six offsets at `h` and six at `h/2`
+  with `h = 1e-3 * case extent`. A plain frame never samples.
+- Divergence and curl come from the six-offset central differences; the error
+  is the largest absolute difference between the `h` and `h/2` stencils and is
+  reported per term as `TermStatus::Numerical`.
+- The teaching seam exposes one family per scene, so an electric case supplies
+  only `div_e`/`curl_e` and a magnetic case only `div_b`/`curl_b`. The other
+  family is never inferred or relabelled.
+- `rho`, `j`, `de_dt` and `db_dt` are never fabricated: every teaching case
+  leaves them `None`, and the model reports `Unsupported` with the exact symbol.
+  The always-visible limitation states that the teaching cases are static or
+  quasistatic, so the check is partial and not a full Maxwell verification.
+- A non-finite probe or offset evaluation is passed as non-finite, so the model
+  reports `Singular` with the offending symbol; the panel never paints NaN or
+  infinity. A `Conductor2D` scene without a matching cached BEM solution shows
+  the existing pending/stale warning and performs no residual check.
+- The report readout states that the numeric check is the pointwise differential
+  form at the probe point, so selecting `Integral` changes only the displayed
+  statement and is never mistaken for an integral check. The integral text stays
+  visible and the check stays enabled.
+
+**Pinned by.** `tests/maxwell_learning_panel_test.rs`:
+`panel_lists_every_equation_and_both_forms`,
+`selecting_an_equation_shows_its_symbols_and_assumptions`,
+`gauss_magnetic_residual_is_reported_against_a_zero_rhs`,
+`solenoid_interior_divergence_matches_the_analytic_zero`,
+`missing_time_derivative_terms_are_reported_unsupported_not_zero`,
+`non_finite_probe_point_is_reported_singular_and_never_nan`,
+`conductor_case_without_a_solution_skips_the_check_with_the_existing_warning`,
+`conductor_case_with_a_stale_solution_skips_the_check_with_the_stale_warning`,
+`residual_check_runs_only_on_press`, and
+`panel_never_claims_a_full_time_dependent_solution`.
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 
