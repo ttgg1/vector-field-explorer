@@ -30,6 +30,7 @@ mod camera_input_test;
 mod camera_pan_zoom_test;
 mod camera_test;
 mod camera_zoom_pan_test;
+mod cas_intent_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_panel_test;
 #[cfg(not(target_arch = "wasm32"))]

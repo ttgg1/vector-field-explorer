@@ -8,6 +8,7 @@ pub mod arrow_style;
 pub mod camera;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cas;
+pub mod cas_intent;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod colormap;
