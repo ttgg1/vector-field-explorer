@@ -1170,6 +1170,50 @@ table-driven setter invalidation.
 **Limitations.** One entry only; every miss replaces it. Time-dependent fields
 bypass it entirely, so animation never trades correctness for a hit.
 
+#### `src/field_bake.rs` — CPU-baked field lattice (P3 slice 1a)
+
+**Purpose.** Model a bounded, deterministic bake of a time-independent formula
+field so later slices can sample it instead of re-evaluating the formula per
+particle. Slice 1a is the model and lifecycle only; no default particle,
+streamline, `advance_exact`, animation or CLI call site reads it yet.
+
+**Public API.** `BakeAxis::{Volume3d, Plane2d}`, `BakeResolution::new` (with
+`axis`, `resolution`, `points`, `dims`), `BakeSpec` (formula, parameters,
+domain, axis, resolution, field mode, optional plane frame; exact
+`PartialEq`), `BakedField::{build, sample, spec, lattice, axis, resolution,
+accuracy_report}`, `BakeAccuracy`, `BakeAccuracyProbes`, `BakeError`
+(`TimeDependent`, `Resolution`, `Memory`, `EmptyDomain`), the resolution
+bounds, `MIN_/MAX_VOLUME_RESOLUTION`, `MIN_/MAX_PLANE_RESOLUTION`, and
+`MAX_LATTICE_BYTES = 3_145_728`.
+
+**Invariants.**
+- A time-dependent field is refused, never frozen at `t = 0`.
+- Resolutions are validated, never clamped: `16..=64` for a volume and
+  `32..=256` for a plane.
+- The byte budget is checked before the resolution bound, so an over-cap
+  request returns `Memory` without allocating. `64³ × 12` is exactly the cap.
+- An empty or non-finite active extent returns `EmptyDomain`.
+- `Volume3d` samples the full world box; `Plane2d` samples `(x, y)` on one z
+  layer and ignores the query's z, matching `FieldExpr`'s two-component
+  evaluation.
+- Sampling is trilinear (bilinear for a plane). Outside the sampled domain,
+  non-finite input, a non-finite contributing corner, or a non-finite
+  interpolated result all return `None`; a bad corner never becomes NaN motion.
+- The lattice is x-major then y then z, the same order as
+  `Domain::grid_points`; the same spec and field reproduce identical bytes.
+- `accuracy_report` leaves an unmeasured interpolation error or divergence
+  residual as `None`.
+
+**Pinned by.** `tests/field_bake_test.rs`: linear reproduction, bounded and
+reported quadratic error, outside-domain `None`, time-dependence refusal,
+non-finite corner handling, lattice determinism, memory/resolution/empty-domain
+rejections, setter invalidation, `ViewRecord`/history absence, byte-identical
+particle and streamline results with the bake absent or present, and baked plane
+projection matching `PlaneFlow`.
+
+**Limitations.** Model only. The opt-in call-site switch, UI note and export
+provenance belong to slice 1b; GPU compute advection is slice 2.
+
 #### `src/ode.rs` — bounded ODE workbench model and fixed-step RK4
 
 **Purpose.** Owns the pure ODE workbench seam: scene validation, typed-equation
@@ -2160,16 +2204,21 @@ and `restoring_invalid_probes_drops_them_without_dirtying`; the family record in
 **Purpose.** Give the streamline tracer one `Flow::eval(point, t)` seam over
 either the world field or a projected slice.
 
-**Public API.** `Flow`, `PlaneFlow { field, frame }`, `SceneFlow::{World,
-Plane}`; `FieldExpr` implements `Flow`.
+**Public API.** `Flow`, `PlaneFlow { field, frame }`, `BakedFlow { baked,
+plane }`, `SceneFlow::{World, Plane}`; `FieldExpr` implements `Flow`.
 
 **Invariants.**
 - `FieldExpr`'s flow delegates to `eval3_at` unchanged.
 - `PlaneFlow` lifts local `(u, v, 0)` points through `PlaneFrame::to_world`,
   evaluates the world field, then projects the velocity with
   `PlaneFrame::project`, so a trace never leaves the slice.
+- `BakedFlow` samples a world-coordinate `BakedField`: with a plane frame it
+  lifts, samples and projects exactly like `PlaneFlow`; without one it samples
+  the world point. Its ignored simulated time is safe because a bake exists
+  only for a non-time-dependent field.
 - `SceneFlow` selects world flow outside a plane slice and plane flow inside
-  one.
+  one. Slice 1a does not add a baked `SceneFlow` variant; callers can construct
+  `BakedFlow` explicitly in slice 1b.
 
 **Pinned by.** `tests/scene_flow_test.rs` and `tests/streamlines_test.rs`
 (`trace_at_accepts_projected_plane_flow`).

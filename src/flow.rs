@@ -9,6 +9,7 @@
 use glam::Vec3;
 
 use crate::field::FieldExpr;
+use crate::field_bake::BakedField;
 use crate::plane::PlaneFrame;
 
 /// A velocity field the streamline tracer can integrate.
@@ -54,6 +55,45 @@ impl Flow for PlaneFlow<'_> {
 
     fn zero_velocity_is_stationary(&self) -> bool {
         true
+    }
+}
+
+/// A baked lattice viewed through the same seam as [`FieldExpr`] or
+/// [`PlaneFlow`].
+///
+/// The lattice is stored in world coordinates. With `plane = Some(frame)`,
+/// evaluation lifts the local `(u, v, 0)` point through
+/// [`PlaneFrame::to_world`], samples the world bake, then projects the velocity
+/// with [`PlaneFrame::project`], so the result stays in the slice exactly like
+/// [`PlaneFlow`]. With `plane = None` it samples the world point directly.
+///
+/// The simulated time is ignored: a bake is only built for
+/// [`FieldExpr::is_time_dependent`] `== false`, so there is no time input to
+/// lose. Slice 1a adds this model only; no default particle, streamline or
+/// `advance_exact` call site selects it yet.
+#[derive(Debug, Clone, Copy)]
+pub struct BakedFlow<'a> {
+    pub baked: &'a BakedField,
+    pub plane: Option<PlaneFrame>,
+}
+
+impl Flow for BakedFlow<'_> {
+    fn eval(&self, point: Vec3, _t: f32) -> Option<Vec3> {
+        match self.plane {
+            Some(frame) => {
+                let world = frame.to_world(point);
+                self.baked
+                    .sample(world)
+                    .map(|velocity| frame.project(velocity))
+            }
+            None => self.baked.sample(point),
+        }
+    }
+
+    fn zero_velocity_is_stationary(&self) -> bool {
+        // Mirrors `PlaneFlow`: a lower-dimensional slice treats an exact zero
+        // in-plane velocity as stationary; the world flow keeps respawning.
+        self.plane.is_some()
     }
 }
 
