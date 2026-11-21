@@ -116,7 +116,8 @@ per-frame simulation state beside it.
         │ VfApp::rebuild_scene (app/simulation.rs)
          │  - compose_lines_with_frame(scene_domain, is_3d, plane_frame,
          │      reference lines + flow lines + click lines)
-        │  - in Sources mode, append source_glyph_lines after those lines
+        │  - in Sources mode, append glyph lines (full glyphs, or only
+        │    sign markers when mapped object bodies draw)
         │  - cache dots_range from the freshly sampled magnitudes
         │  - retrace click bursts on every dirty rebuild
         ▼
@@ -153,9 +154,15 @@ Why the seam matters:
   grid-seeded streamlines only. In `FieldMode::Sources` the app also appends the
   active scene's styled source glyph lines after the reference/flow/click lines,
   so markers follow the same selected `plane_frame` as the samples and resolve
-  the `Sources` layer with each glyph's family. In `FieldMode::Induction` it
-  appends exactly the selected conductor's glyph, resolving the `Induction`
-  layer, and no streamline/click geometry. `FieldMode::Materials` and
+  the `Sources` layer with each glyph's family. When the object style draws
+  bodies and `object_scene_for_state` maps at least one body, only the glyph's
+  polarity sign markers join the line pass; the object pass owns the body. An
+  empty object scene (the line-glyph fallback) keeps the legacy full glyph, and
+  the app SVG export always composes the full neutral blueprint through
+  `compose_vector_lines_blueprint`. In
+  `FieldMode::Induction` it appends exactly the selected conductor's glyph,
+  resolving the `Induction` layer and applying the same marker/body split, and
+  no streamline/click geometry. `FieldMode::Materials` and
   `FieldMode::Maxwell` resolve one `(TeachingScene, family)` record for both the
   mode's arrows and its outline segments, so an Arrows-layer override no longer
   changes those teaching scenes; the SVG blueprint keeps the neutral default.
@@ -917,8 +924,11 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   with the backdrop by `app::compose_vector_lines`, which also appends the
   probe wireframes and then the mode-owned glyphs and reports only the glyph
   count. The Formula branch appends no glyphs but still paints stored probes.
-  `source_glyph_line_count` and `viewport_line_count` expose the result to the
-  doc-hidden integration harness.
+  `app::compose_vector_lines_blueprint` is the sibling SVG entry point: same
+  single composition implementation, but neutral layer records and the full
+  legacy glyph expansion regardless of `ObjectStyle`. `source_glyph_line_count`
+  and `viewport_line_count` expose the live result to the doc-hidden
+  integration harness.
 - `advance_particles` calls `retarget` only with the current target. A changed
   target trims or spawns only the difference; a click burst above the count
   survives until the count changes. Off or a two-component field produces
@@ -1638,11 +1648,16 @@ positive or one-stroke negative sign marker.
 
 **Public API.** `GlyphSign`, `SourceGlyph`, `source_glyphs(scene, domain,
 plane)`, `source_glyph_lines(glyphs, domain)`,
-`source_glyph_lines_with(glyphs, domain, styles)` and
-`source_glyph_lines_with_layer(glyphs, domain, styles, layer)`. The legacy
-`source_glyph_lines` delegates with neutral [`LayerStyles`](../src/layer_style.rs);
-`source_glyph_lines_with` fixes the layer to `Sources`, and the induction
-conductor calls the layer-aware entry point with `Induction`.
+`source_glyph_lines_with(glyphs, domain, styles)`,
+`source_glyph_lines_with_layer(glyphs, domain, styles, layer)`, plus the #114
+split `source_body_lines`/`source_sign_marker_lines` and their `_with_layer`
+forms. The legacy `source_glyph_lines` delegates with neutral
+[`LayerStyles`](../src/layer_style.rs); `source_glyph_lines_with` fixes the layer
+to `Sources`, and the induction conductor calls the layer-aware entry point with
+`Induction`. The split functions apply the identical colours, widths, dashes and
+per-glyph layer/family resolution: the legacy expansion is each glyph's body
+followed by its marker, so `source_glyph_lines` stays byte-identical for SVG and
+line-glyph callers while the object-backed path can request only markers.
 
 **Invariants.** Electric kinds appear only for `Electric`/`Both` and magnetic
 kinds only for `Magnetic`/`Both`; disabled entries emit nothing. Family colours
@@ -1664,6 +1679,18 @@ coordinates, `center.z` is zero, and an out-of-plane source is flagged
 so a degenerate domain still produces finite segments. Glyphs are contextual
 overlays, not depth-tested surfaces.
 
+**Known limitation.** Body suppression is scene-level, not per-glyph: once
+`object_scene_for_state` maps any object, `compose_vector_lines_with` requests
+only sign markers for every glyph. A glyph whose own source produced no
+drawable object still loses its body lines, leaving a floating sign marker with
+no body and no legacy full-glyph fallback. The triggers are a source that
+`MeshScene::from_sources` skips (for example a non-finite centre in an otherwise
+mappable mixed scene) and a mapped transform that `ObjectInstance::from_object`
+rejects as degenerate. An all-unmappable scene is empty and still takes the
+full-glyph fallback, so the limitation needs at least one mapped object.
+Per-glyph truth requires carrying a glyph-to-object mapping/index through the
+scene and is outside this slice.
+
 **Pinned by.** [tests/source_glyph_test.rs](../tests/source_glyph_test.rs):
 `glyphs_cover_every_kind_with_family_colour_and_sign`,
 `negative_strengths_choose_the_minus_marker`,
@@ -1676,8 +1703,12 @@ overlays, not depth-tested surfaces.
 `family_colour_overrides_replace_the_fixed_family_colour`,
 `induction_layer_applies_to_the_conductor_glyph`,
 `layer_beats_family_per_attribute`,
-`out_of_range_or_non_finite_glyph_styles_are_defensively_repaired`, and
-`off_slice_alpha_still_multiplies`.
+`out_of_range_or_non_finite_glyph_styles_are_defensively_repaired`,
+`off_slice_alpha_still_multiplies`, `body_lines_contain_no_sign_marker`,
+`sign_markers_emit_two_segments_for_positive_and_one_for_negative`,
+`legacy_glyph_lines_equal_body_plus_markers_for_every_kind`,
+`off_slice_split_preserves_width_and_dash_expansion`, and
+`styled_body_and_marker_lines_apply_the_same_layer_override`.
 
 #### `src/sources/` — validated source model and bounded quadrature
 
@@ -4436,7 +4467,8 @@ otherwise the extent plus the sanitized draw list. `ObjectTargetKey` identifies
 target extent/format within one pass object.
 
 **Pipeline and shader.** `src/shaders.object.wgsl` holds both the geometry pair
-(`vs_object`/`fs_object`) and the composite pair (`vs_composite`/`fs_composite`).
+(`vs_object`/`fs_object`), the faint discarded-side entry
+(`fs_object_faint`) and the composite pair (`vs_composite`/`fs_composite`).
 Geometry reads a 36-byte `MeshVertex` vertex stream plus the 128-byte instance
 stream (bind group 0 is the `ObjectGlobals` uniform only; instances are vertex
 attributes at locations 3–10), tests and writes `Depth32Float` with `LessEqual`,
@@ -4444,9 +4476,12 @@ never culls (two-sided lighting flips the normal on back faces), and blends
 straight alpha. The fragment stage combines `0.25` ambient with one directional
 diffuse term, discards the world-space half `dot(p, n) - offset < 0` when the
 slice clip is active, and has a barycentric `fwidth` wireframe path selected by
-`params.x`. Composite binds the target texture and sampler at bindings 2/3 (no
-binding collision with the uniform), draws an oversized triangle and writes
-premultiplied alpha into egui's no-depth pass.
+`params.x`. When the slice clip is active the same instances are drawn once more
+with the faint pipeline: `fs_object_faint` keeps only the discarded half,
+forces the barycentric wireframe and multiplies alpha by `0.2`, without adding
+vertices, buffers or a depth write. Composite binds the target texture and
+sampler at bindings 2/3 (no binding collision with the uniform), draws an
+oversized triangle and writes premultiplied alpha into egui's no-depth pass.
 
 **Invariants.** Colour is `RENDER_ATTACHMENT | TEXTURE_BINDING`, depth is
 `Depth32Float` with `RENDER_ATTACHMENT` and clears to `1.0`. An empty scene or a
@@ -4477,16 +4512,21 @@ premultiply per object instead.
 **Pinned by.** `tests/object_gpu_test.rs` always runs the device-free contracts
 (empty scene and zero-area viewport plan nothing, the sphere plan is
 deterministic, the view/wireframe/clip values round-trip into `ObjectGlobals`,
-non-finite input is sanitized, and non-finite/singular instances are skipped) and
-prints `GPU not requested`. `scripts/test-object-gpu.sh` sets
+non-finite input is sanitized, and non-finite/singular instances are skipped),
+pins composed Solid/Wireframe line sets to sign markers for object-backed glyphs
+in both Sources and Induction modes (including the Induction layer override),
+the legacy full glyph for the empty-object fallback, and the app SVG blueprint's
+full bodies in both object styles, and prints `GPU not requested`. `scripts/test-object-gpu.sh` sets
 `VFE_OBJECT_GPU_PROBE=1` on its child process only and drives the real pass on a
 native adapter through `native_object_device_worker`: empty scene and zero-area
 viewport return `Ok` with no target, a 64×64 sphere frame allocates and renders
 (`2316/4096` non-clear pixels observed on the AMD RX 9070 XT / RADV probe), a
 repeated frame is byte-identical, the capture-style stage proves a default
 capture equals an explicit Solid capture while a Wireframe capture of the same
-scene differs in pixels (#115), and no validation/internal/out-of-memory error
-is reported. There is no noop backend or silent skip.
+scene differs in pixels (#115), an asymmetric clipped sphere proves both
+on-slice body pixels and attenuated discarded-side wireframe pixels rather than
+opaque body pixels (#114), and no validation/internal/out-of-memory error is
+reported. There is no noop backend or silent skip.
 
 #### `src/renderer.rs` — instanced wgpu renderer
 

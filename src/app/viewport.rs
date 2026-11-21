@@ -360,7 +360,7 @@ impl VfApp {
                 // SVG keeps the unstyled line blueprint (issue #84 contract):
                 // layer overrides belong to the live viewport and raster output.
                 let mut scene =
-                    self.assemble_viewport_scene_with_styles(&view, &LayerStyles::default());
+                    self.assemble_viewport_scene_with_styles(&view, &LayerStyles::default(), true);
                 // Vector output is the line blueprint: the scalar heatmap fill
                 // is raster-only (issue #92 contract).
                 scene.heatmap = None;
@@ -604,16 +604,18 @@ impl VfApp {
     /// two-component 2D simply has an empty list.
     fn assemble_viewport_scene(&mut self, view: &Mat4) -> SceneGPU {
         let styles = *self.state.layer_styles();
-        self.assemble_viewport_scene_with_styles(view, &styles)
+        self.assemble_viewport_scene_with_styles(view, &styles, false)
     }
 
     /// [`Self::assemble_viewport_scene`] with an explicit layer-style record.
     /// The live path passes the committed styles; SVG export passes the neutral
-    /// default so overrides never reach the vector output.
+    /// default and `svg_blueprint = true`, so overrides never reach the vector
+    /// output and the full line glyphs survive object-backed modes.
     fn assemble_viewport_scene_with_styles(
         &mut self,
         view: &Mat4,
         styles: &LayerStyles,
+        svg_blueprint: bool,
     ) -> SceneGPU {
         self.refresh_object_scene();
         // Ode markers are recomputed per frame and appended to copies: 2D uses
@@ -624,7 +626,7 @@ impl VfApp {
         } else {
             Vec::new()
         };
-        if *styles == *self.state.layer_styles() {
+        if !svg_blueprint && *styles == *self.state.layer_styles() {
             let cached = self.scene.as_vector_mut().expect("vector branch");
             return assemble_vector_scene(&self.state, cached, &ode_markers, view);
         }
@@ -654,11 +656,16 @@ impl VfApp {
             self.state.show_coordinate_system,
             &reference_style,
         );
-        // Source/induction glyphs are fixed-colour geometry and take no style.
-        // Reuse the app's own composition; it reports the glyph count, and the
-        // glyphs are the tail, so the neutral reference prefix is dropped
+        // SVG keeps the complete line-glyph blueprint even when the live object
+        // pass draws bodies: the vector export cannot composite meshes, so it
+        // must expand both the body and the sign marker with neutral styles.
+        // The glyphs are the tail, so the neutral reference prefix is dropped
         // without recomposing it.
-        let (composed, glyph_count) = compose_vector_lines(&self.state, &[], &[]);
+        let (composed, glyph_count) = if svg_blueprint {
+            compose_vector_lines_blueprint(&self.state, &[], &[])
+        } else {
+            compose_vector_lines(&self.state, &[], &[])
+        };
         let start = composed.len().saturating_sub(glyph_count);
         if let Some(glyphs) = composed.get(start..) {
             lines.extend_from_slice(glyphs);
@@ -725,7 +732,7 @@ impl VfApp {
     #[doc(hidden)]
     pub fn test_assemble_viewport_scene_with_styles(&mut self, styles: &LayerStyles) -> SceneGPU {
         let view = self.orbit.view();
-        self.assemble_viewport_scene_with_styles(&view, styles)
+        self.assemble_viewport_scene_with_styles(&view, styles, true)
     }
 }
 

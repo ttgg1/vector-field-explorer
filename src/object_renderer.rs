@@ -264,6 +264,7 @@ pub struct ObjectDrawState {
 
 struct ObjectPipelines {
     object: wgpu::RenderPipeline,
+    object_faint: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     scene_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -359,6 +360,45 @@ impl ObjectPipelines {
             multiview_mask: None,
             cache: None,
         });
+        // Same geometry, layout and depth target as the body pipeline; only the
+        // fragment stage flips the slice discard and attenuates the wireframe.
+        // It never writes depth, so it cannot hide the authoritative on-slice
+        // body or the composite.
+        let object_faint = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vfe object faint discarded-side pipeline"),
+            layout: Some(&scene_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_object"),
+                compilation_options: Default::default(),
+                buffers: &[Some(mesh_vertex_layout()), Some(instance_vertex_layout())],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_object_faint"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: OBJECT_DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let composite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("vfe object composite pipeline"),
             layout: Some(&composite_pipeline_layout),
@@ -396,6 +436,7 @@ impl ObjectPipelines {
 
         Self {
             object,
+            object_faint,
             composite,
             scene_layout,
             composite_layout,
@@ -775,6 +816,23 @@ impl ObjectPass {
             pass.set_vertex_buffer(0, mesh.slice(..));
             pass.set_vertex_buffer(1, instance_buf.slice(offset..));
             pass.draw(0..primitive.vertices() as u32, 0..1);
+        }
+
+        // Issue #114 slice 5: one extra attenuated wireframe draw over the same
+        // instances, keeping only the discarded side of the slice. No new
+        // vertices or buffers; the faint pipeline never writes depth.
+        if self.globals_cache.params[1] > 0.5 {
+            pass.set_pipeline(&self.pipelines.object_faint);
+            pass.set_bind_group(0, &self.scene_bind, &[]);
+            for (primitive, instance_index) in &self.draws {
+                let Some(mesh) = self.primitive_bufs[primitive.index() as usize].as_ref() else {
+                    continue;
+                };
+                let offset = u64::from(*instance_index) * instance_stride;
+                pass.set_vertex_buffer(0, mesh.slice(..));
+                pass.set_vertex_buffer(1, instance_buf.slice(offset..));
+                pass.draw(0..primitive.vertices() as u32, 0..1);
+            }
         }
     }
 

@@ -16,7 +16,7 @@ use crate::fly_camera::{
     sync_fly, sync_fly_mirror,
 };
 use crate::interaction::{self, InteractionProfile};
-use crate::layer_style::LayerId;
+use crate::layer_style::{LayerId, LayerStyles};
 use crate::object_scene::MeshScene;
 use crate::persistence::{self, AppSettings, PresetUiRecord, ViewRecord};
 use crate::plane::PlaneFrame;
@@ -739,6 +739,49 @@ pub fn compose_vector_lines(
     flow: &[LineInstanceGPU],
     clicks: &[LineInstanceGPU],
 ) -> (Vec<LineInstanceGPU>, usize) {
+    compose_vector_lines_with(
+        state,
+        flow,
+        clicks,
+        state.layer_styles(),
+        GlyphExpansion::ObjectBacked,
+    )
+}
+
+/// Compose the unstyled SVG/vector blueprint: neutral layer records and the
+/// full legacy glyph geometry, even when the live object pass is drawing bodies.
+/// The app's SVG export never composites objects, so it must keep the complete
+/// line-glyph representation regardless of [`crate::object_scene::ObjectStyle`].
+#[doc(hidden)]
+pub fn compose_vector_lines_blueprint(
+    state: &State,
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+) -> (Vec<LineInstanceGPU>, usize) {
+    compose_vector_lines_with(
+        state,
+        flow,
+        clicks,
+        &LayerStyles::default(),
+        GlyphExpansion::Full,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GlyphExpansion {
+    /// Suppress body glyphs when the object pass owns them; keep sign markers.
+    ObjectBacked,
+    /// Always expand the complete legacy glyph (the SVG blueprint contract).
+    Full,
+}
+
+fn compose_vector_lines_with(
+    state: &State,
+    flow: &[LineInstanceGPU],
+    clicks: &[LineInstanceGPU],
+    layers: &LayerStyles,
+    expansion: GlyphExpansion,
+) -> (Vec<LineInstanceGPU>, usize) {
     let mut lines = compose_lines_with_frame_style(
         flow,
         clicks,
@@ -747,8 +790,23 @@ pub fn compose_vector_lines(
         state.plane_frame(),
         state.show_grid,
         state.show_coordinate_system,
-        &state.reference_viewport_style(),
+        &state.reference_viewport_style_for(layers),
     );
+    // Issue #114 slice 5: when the object pass draws bodies, the line glyph's
+    // body is double geometry. Keep only the polarity marker for the glyphs
+    // that the object scene actually mapped; the empty-object line-glyph
+    // fallback and the full blueprint expansion keep the legacy glyph.
+    let draws_object_bodies = matches!(
+        state.object_style(),
+        crate::object_scene::ObjectStyle::Solid | crate::object_scene::ObjectStyle::Wireframe
+    );
+    let object_backed = expansion == GlyphExpansion::ObjectBacked
+        && draws_object_bodies
+        && !object_scene_for_state(state).objects().is_empty();
+    // The status readout keeps reporting the legacy full-glyph count while the
+    // vector scene carries only the markers, so the object-backed switch does
+    // not change the app's published glyph count.
+    let mut legacy_glyph_count = None;
     let glyphs = match state.field_mode {
         FieldMode::Sources => {
             let glyphs = crate::source_glyph::source_glyphs(
@@ -756,11 +814,28 @@ pub fn compose_vector_lines(
                 &state.scene_domain(),
                 state.plane_frame().as_ref(),
             );
-            crate::source_glyph::source_glyph_lines_with(
-                &glyphs,
-                &state.scene_domain(),
-                state.layer_styles(),
-            )
+            if object_backed {
+                let markers = crate::source_glyph::source_sign_marker_lines_with_layer(
+                    &glyphs,
+                    &state.scene_domain(),
+                    layers,
+                    LayerId::Sources,
+                );
+                // The legacy count is the body plus marker length; the split
+                // expansion is proven equal in `source_glyph_test`. Avoid a
+                // second full legacy expansion whose only use is `.len()`.
+                let body_len = crate::source_glyph::source_body_lines_with_layer(
+                    &glyphs,
+                    &state.scene_domain(),
+                    layers,
+                    LayerId::Sources,
+                )
+                .len();
+                legacy_glyph_count = Some(body_len + markers.len());
+                markers
+            } else {
+                crate::source_glyph::source_glyph_lines_with(&glyphs, &state.scene_domain(), layers)
+            }
         }
         FieldMode::Induction => {
             let mut scene = crate::source_scene::SourceScene::default();
@@ -773,24 +848,44 @@ pub fn compose_vector_lines(
                 &state.scene_domain(),
                 state.plane_frame().as_ref(),
             );
-            crate::source_glyph::source_glyph_lines_with_layer(
-                &glyphs,
-                &state.scene_domain(),
-                state.layer_styles(),
-                LayerId::Induction,
-            )
+            if object_backed {
+                let markers = crate::source_glyph::source_sign_marker_lines_with_layer(
+                    &glyphs,
+                    &state.scene_domain(),
+                    layers,
+                    LayerId::Induction,
+                );
+                // Same body + marker count as the legacy full expansion, with
+                // only the marker geometry retained for the line pass.
+                let body_len = crate::source_glyph::source_body_lines_with_layer(
+                    &glyphs,
+                    &state.scene_domain(),
+                    layers,
+                    LayerId::Induction,
+                )
+                .len();
+                legacy_glyph_count = Some(body_len + markers.len());
+                markers
+            } else {
+                crate::source_glyph::source_glyph_lines_with_layer(
+                    &glyphs,
+                    &state.scene_domain(),
+                    layers,
+                    LayerId::Induction,
+                )
+            }
         }
         FieldMode::Formula | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
             Vec::new()
         }
     };
-    let count = glyphs.len();
+    let count = legacy_glyph_count.unwrap_or(glyphs.len());
     lines.extend(glyphs);
     // Issue #95 slice B: probe wireframes ride the normal line collection, so
     // PNG, animation and SVG captures include them without a new pass. They
     // follow the mode glyphs so the styled-viewport tail recomposition keeps
     // them without widening the reported glyph count.
-    lines.extend(state.probe_overlay_lines(state.layer_styles()));
+    lines.extend(state.probe_overlay_lines(layers));
     (lines, count)
 }
 
