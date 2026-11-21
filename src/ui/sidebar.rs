@@ -3031,8 +3031,7 @@ fn variables_editor(ui: &mut egui::Ui, state: &mut State, controls: &mut Control
     let mut delete: Option<usize> = None;
 
     let row_count = variables.drafts.len();
-    for index in 0..row_count {
-        let entry = &mut variables.drafts[index];
+    for (index, entry) in variables.drafts.iter_mut().enumerate().take(row_count) {
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(&entry.name).strong());
             ui.label("Value");
