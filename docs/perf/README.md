@@ -142,6 +142,14 @@ Run logs stay under `/tmp/opencode/present-floor-<date>/`; the script refuses to
 overwrite an existing same-date baseline. It is a measurement record, not a CI
 threshold.
 
+## P1–P6 disposition
+
+[p1-p6-disposition.md](p1-p6-disposition.md) records the task-(c) decisions for
+the historical performance recommendations: P1 (bounded evaluation cache) and P4
+(trail ordering) are promoted, P2 is measure-before-more, P3 is deferred post-v1
+pending an ADR, P5 is not authorized, and P6 is unverifiable on this host. It
+changes no floor and promotes no code by itself.
+
 ## Per-feature reports
 
 - [animation-performance.md](animation-performance.md): animation export,
