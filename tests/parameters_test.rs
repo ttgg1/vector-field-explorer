@@ -1,6 +1,7 @@
 //! Issue #89 slice A: validated named-parameter records and the atomic commit
 //! seam. No parser or UI binding is exercised here.
 
+use glam::Vec2;
 use vector_field_explorer::parameters::{MAX_NAME_LEN, MAX_PARAMETERS, Parameter, ParameterSet};
 use vector_field_explorer::viewmodel::State;
 
@@ -242,4 +243,98 @@ fn equal_commit_is_a_no_op() {
         state.snapshot_if_dirty().is_none(),
         "committing an equal set requests no rebuild"
     );
+}
+
+fn u(state: &State) -> f32 {
+    state
+        .field
+        .eval2(Vec2::new(1.0, 0.0))
+        .expect("the field evaluates")
+        .x
+}
+
+#[test]
+fn committing_a_changed_value_re_evaluates_the_existing_formula() {
+    let mut state = State::new(false);
+    state.set_formula("(gain*x, 0)".to_string());
+    assert!(
+        !state.parse_error.is_empty(),
+        "before the parameter is committed the formula cannot bind"
+    );
+
+    state
+        .commit_parameters(set(vec![parameter("gain", 2.5)]))
+        .expect("the set commits");
+    assert_eq!(state.parse_error, "", "committing binds the formula");
+    assert!((u(&state) - 2.5).abs() < 1e-6);
+
+    assert!(state.snapshot_if_dirty().is_some());
+    state
+        .commit_parameters(set(vec![parameter("gain", 4.0)]))
+        .expect("a changed value commits");
+    assert!(
+        (u(&state) - 4.0).abs() < 1e-6,
+        "the existing formula re-evaluates with the new value"
+    );
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "a changed value requests exactly one rebuild"
+    );
+}
+
+#[test]
+fn formula_referencing_a_removed_parameter_keeps_the_last_valid_field() {
+    let mut state = State::new(false);
+    state
+        .commit_parameters(set(vec![parameter("gain", 2.5)]))
+        .expect("the set commits");
+    state.set_formula("(gain*x, 0)".to_string());
+    assert_eq!(state.parse_error, "");
+    assert!((u(&state) - 2.5).abs() < 1e-6);
+
+    state
+        .commit_parameters(set(Vec::new()))
+        .expect("the empty set is valid");
+    assert_eq!(
+        state.parameters,
+        set(Vec::new()),
+        "the new set stays committed"
+    );
+    assert!(
+        state.parse_error.contains("gain"),
+        "the parse error names the free parameter: {}",
+        state.parse_error
+    );
+    assert!(
+        (u(&state) - 2.5).abs() < 1e-6,
+        "the previous valid field is kept"
+    );
+
+    state.set_formula("(x, 0)".to_string());
+    assert_eq!(
+        state.parse_error, "",
+        "a formula that binds clears the error"
+    );
+    assert!((u(&state) - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn rejected_sets_leave_field_and_parse_error_untouched() {
+    let mut state = State::new(false);
+    state
+        .commit_parameters(set(vec![parameter("gain", 2.5)]))
+        .expect("the set commits");
+    state.set_formula("(gain*x, 0)".to_string());
+    assert_eq!(state.parse_error, "");
+    let previous = state.parameters.clone();
+    state.dirty = false;
+
+    let error = state
+        .commit_parameters(set(vec![parameter("x", 1.0)]))
+        .expect_err("a reserved name is rejected");
+    assert!(error.contains("x"));
+    assert_eq!(state.parameters, previous, "the previous set is kept");
+    assert_eq!(state.parse_error, "", "the parse error is untouched");
+    assert!((u(&state) - 2.5).abs() < 1e-6, "the field is untouched");
+    assert!(!state.dirty, "a rejected set does not dirty the scene");
 }

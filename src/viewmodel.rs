@@ -423,12 +423,31 @@ impl State {
     /// set is assigned once and requests exactly one scene rebuild. Committing
     /// a set equal to the committed one is a validated no-op: it leaves the
     /// dirty flag, generation counters and caches untouched.
+    ///
+    /// An accepted set re-parses the current formula against it. If the formula
+    /// no longer binds (a referenced parameter was removed) the previous valid
+    /// field is kept and [`parse_error`] records the reason; the new set stays
+    /// committed because its own values are valid.
     pub fn commit_parameters(self: &mut State, next: ParameterSet) -> Result<(), String> {
         next.validate()?;
         if next == self.parameters {
             return Ok(());
         }
         self.parameters = next;
+        let parsed = FieldExpr::parse_with_parameters(self.formula.as_str(), &self.parameters);
+        match parsed {
+            Ok(field) => {
+                let previous_grid = self.plane_grid();
+                self.field = field;
+                self.parse_error = String::new();
+                self.sync_plane(previous_grid);
+                self.mark_ode_current_field_dirty();
+            }
+            Err(error) => {
+                log::debug!("field parse failed after parameter commit: {error}");
+                self.parse_error = error.to_string();
+            }
+        }
         self.mark_dirty();
         Ok(())
     }
@@ -872,7 +891,7 @@ impl State {
         if self.formula == formula {
             return false;
         }
-        let parsed = FieldExpr::parse(formula.as_str());
+        let parsed = FieldExpr::parse_with_parameters(formula.as_str(), &self.parameters);
         self.formula = formula;
         match parsed {
             Ok(field) => {

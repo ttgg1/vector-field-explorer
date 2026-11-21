@@ -5,6 +5,8 @@
 
 use glam::{DVec3, Vec2, Vec3};
 
+use crate::parameters::{ParameterSet, RESERVED_NAMES};
+
 #[derive(Debug, Clone)]
 pub enum FieldError {
     Parse(String),
@@ -48,7 +50,30 @@ fn split_top_level(src: &str) -> Vec<&str> {
 }
 
 impl FieldExpr {
+    /// Parses a permissive formula: an unknown identifier is accepted here and
+    /// only fails at evaluation, which is the historical behaviour. Startup and
+    /// the formula editor use [`FieldExpr::parse_with_parameters`] instead.
     pub fn parse(src: &str) -> Result<Self, FieldError> {
+        Self::parse_components(src, &ParameterSet::default(), false)
+    }
+
+    /// Parses a formula with the committed named parameters bound.
+    ///
+    /// Every free identifier that exactly names a parameter is rewritten to a
+    /// parenthesised full-precision literal before `meval` sees it. Identifiers
+    /// in call position (`name(`), the coordinates/time, meval's constants and
+    /// builtin function names are never rewritten. An identifier still free
+    /// after substitution is reported against its component instead of being
+    /// silently accepted.
+    pub fn parse_with_parameters(src: &str, parameters: &ParameterSet) -> Result<Self, FieldError> {
+        Self::parse_components(src, parameters, true)
+    }
+
+    fn parse_components(
+        src: &str,
+        parameters: &ParameterSet,
+        reject_free_names: bool,
+    ) -> Result<Self, FieldError> {
         // The outer parentheses are list tokens, not part of a component.
         let body = src.trim();
         let body = if body.starts_with('(') && body.ends_with(')') {
@@ -70,13 +95,22 @@ impl FieldExpr {
         let mut time_dependent = false;
         for part in &parts {
             let component = part.trim();
-            let expr = component
+            let substituted = substitute_parameters(component, parameters);
+            let expr = substituted
                 .parse::<meval::Expr>()
                 .map_err(|e| FieldError::Parse(format!("in component `{component}`: {e}")))?;
-            // Detect time dependence at parse time by tokenizing the component
-            // and looking for a free variable named `t`. A `t(...)` call is a
-            // function, not a variable, so it does not count.
-            if component_time_dependent(component) {
+            // `meval` parses an unknown variable fine and only fails when it is
+            // bound. Binding here reports a still-free value name honestly,
+            // prefixed with the component. The permissive `parse` skips this.
+            if reject_free_names && let Err(e) = expr.clone().bind4("x", "y", "z", "t") {
+                return Err(FieldError::Parse(format!(
+                    "in component `{component}`: {e}"
+                )));
+            }
+            // Detect time dependence on the substituted component: a
+            // parameter value can never introduce `t`, and a `t(...)` call is a
+            // function, not a variable.
+            if component_time_dependent(&substituted) {
                 time_dependent = true;
             }
             components.push(expr);
@@ -166,6 +200,68 @@ impl FieldExpr {
         let out = Vec2::new(u as f32, v as f32);
         if out.is_finite() { Some(out) } else { None }
     }
+}
+
+/// Rewrites each free identifier that exactly names a committed parameter to
+/// its value as a parenthesised full-precision literal (`k*x` with `k = 2.5`
+/// becomes `(2.5)*x`).
+///
+/// An identifier followed by `(` is a function call, never a value. The
+/// coordinates, time, meval constants and builtin function names are left
+/// alone even when a raw set contains them, so a set that skipped validation
+/// can never shadow the formula environment. Numeric literals, including an
+/// exponent such as `1e5`, are copied verbatim.
+fn substitute_parameters(component: &str, parameters: &ParameterSet) -> String {
+    let bytes = component.as_bytes();
+    let mut out = String::with_capacity(component.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte.is_ascii_digit() || byte == b'.' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            // Consume an exponent only when it is well formed, so `2e` is not
+            // swallowed and `1e5` never becomes an identifier.
+            if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+                let mut end = i + 1;
+                if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                    end += 1;
+                }
+                if end < bytes.len() && bytes[end].is_ascii_digit() {
+                    i = end;
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+            }
+            out.push_str(&component[start..i]);
+        } else if byte.is_ascii_alphabetic() || byte == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let name = &component[start..i];
+            let is_call = component[i..].trim_start().starts_with('(');
+            match parameters.value(name) {
+                Some(value) if !is_call && !RESERVED_NAMES.contains(&name) => {
+                    out.push('(');
+                    out.push_str(&format!("{value}"));
+                    out.push(')');
+                }
+                _ => out.push_str(name),
+            }
+        } else {
+            // Copy any non-ASCII/operator character whole so a multi-byte
+            // char can never be split.
+            let ch = component[i..].chars().next().expect("valid char boundary");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
 }
 
 /// Whether a single component string references `t` as a free variable.

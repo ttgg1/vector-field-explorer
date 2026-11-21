@@ -132,6 +132,19 @@ fn default_preset_expanded() -> [bool; 4] {
 }
 
 impl AppSettings {
+    /// Restore the durable records into a live state in dependency order: the
+    /// parameter set is assigned first (a startup restore never dirties the
+    /// scene on its own), then the view, whose stored formula is parsed against
+    /// those committed values.
+    ///
+    /// This is the only supported startup order. Applying the view first would
+    /// parse a saved parameterised formula against the empty default set,
+    /// record a bogus parse error and keep the default field.
+    pub fn restore(&self, state: &mut State, controls: &mut Controls) {
+        state.parameters = self.parameters.clone();
+        self.view.restore(state, controls);
+    }
+
     /// Clamp corrupt numbers from storage into usable ranges: style into the
     /// Settings slider bounds, layout widths into the draggable range, and
     /// layer-style overrides into their multiplier bounds.
@@ -239,6 +252,10 @@ impl AppSettings {
         let seed_domain = {
             let mut probe = State::new(false);
             let mut probe_controls = Controls::new();
+            // Bind the saved formula the same way `AppSettings::restore` does;
+            // otherwise a parameterised formula records a bogus parse error
+            // here. The probe is discarded, only its scene domain is consumed.
+            probe.parameters = self.parameters.clone();
             self.view.restore(&mut probe, &mut probe_controls);
             probe.scene_domain()
         };

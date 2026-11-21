@@ -364,12 +364,11 @@ impl VfApp {
         let mut state = State::new(false);
         let mut controls = Controls::new();
         // Restore through the viewmodel setters so the first frame samples the
-        // saved field; a corrupt record cannot poison the grid.
-        settings.view.restore(&mut state, &mut controls);
-        // Restoring the durable parameter set is not a parameter edit: assign
-        // it directly so it never dirties the scene on its own. `load` already
-        // replaced an invalid stored set with the default.
-        state.parameters = settings.parameters;
+        // saved field; a corrupt record cannot poison the grid. The durable
+        // parameter set is assigned first by `AppSettings::restore` (and does
+        // not dirty the scene on its own), so a saved parameterised formula
+        // binds the saved values.
+        settings.restore(&mut state, &mut controls);
         // Same for the viewport style: startup assigns the loaded record
         // directly and does not dirty the scene on its own. `load` already
         // sanitized corrupt values.
