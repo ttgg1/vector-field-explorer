@@ -34,6 +34,7 @@ use crate::maxwell::{
     ConductorOutline, MaxwellCase, MaxwellError, MaxwellFamily, MaxwellScene, MaxwellView,
     maxwell_family, validate_maxwell,
 };
+use crate::maxwell_wave::WaveSpec;
 use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::parameters::ParameterSet;
@@ -863,6 +864,12 @@ pub struct ViewRecord {
     pub maxwell_elements: u32,
     #[serde(default, deserialize_with = "deserialize_bool_or_false")]
     pub maxwell_allow_inaccurate: bool,
+    /// Optional source-free plane wave (issue #97 slice B). Missing on older
+    /// records/scenes, which keep the selected Maxwell case. The spec is
+    /// self-contained; an invalid stored value is dropped with one warning on
+    /// restore rather than failing the envelope or dirtying the first scene.
+    #[serde(default, with = "wave_spec_serde")]
+    pub maxwell_wave: Option<WaveSpec>,
     /// Obsolete pre-ticket-26 trace speed. Read-only compatibility: old
     /// envelopes still carry the key, but the simulation clock owns speed now
     /// and streamlines use a fixed budget. New records never write it.
@@ -1008,6 +1015,7 @@ impl ViewRecord {
             maxwell_applied: state.maxwell.applied,
             maxwell_elements: state.maxwell.elements,
             maxwell_allow_inaccurate: state.maxwell.allow_inaccurate,
+            maxwell_wave: state.maxwell_wave(),
             // Never written; kept at the serde default for old-record
             // compatibility only.
             speed: 0.0,
@@ -1412,6 +1420,7 @@ impl ViewRecord {
     /// that stored error for tests and the caller.
     pub fn restore_maxwell_fields(&self, state: &mut State) -> Option<String> {
         let requested_maxwell = self.field_mode == FieldMode::Maxwell;
+        self.restore_maxwell_wave(state);
         match self.restored_maxwell_scene() {
             Ok(scene) => {
                 state.restore_maxwell_scene(scene);
@@ -1427,6 +1436,13 @@ impl ViewRecord {
                 }
             }
         }
+    }
+
+    /// Restore the optional plane wave through the non-dirtying state seam. An
+    /// invalid stored spec is dropped with one warning; the normal Maxwell case
+    /// sampling then remains available.
+    pub fn restore_maxwell_wave(&self, state: &mut State) {
+        state.restore_maxwell_wave(self.maxwell_wave);
     }
 
     /// Rebuild the persisted Maxwell scene. Every field is serde-defaulted, so
@@ -2031,4 +2047,60 @@ pub fn load(storage: Option<&dyn eframe::Storage>) -> AppSettings {
 /// Persist the settings envelope under eframe's app key.
 pub fn save(storage: &mut dyn eframe::Storage, settings: &AppSettings) {
     eframe::set_value(storage, eframe::APP_KEY, settings);
+}
+
+/// Serialize the plane wave as plain arrays, keeping `glam` out of the stored
+/// schema. Missing/corrupt members decode as zeros and are then dropped by the
+/// state restore's slice A validation.
+mod wave_spec_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::maxwell_wave::WaveSpec;
+
+    #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+    #[serde(default)]
+    struct WaveSpecWire {
+        amplitude: f64,
+        wavelength: f64,
+        direction: [f32; 3],
+        polarization: [f32; 3],
+        phase: f64,
+    }
+
+    impl From<WaveSpec> for WaveSpecWire {
+        fn from(spec: WaveSpec) -> Self {
+            Self {
+                amplitude: spec.amplitude,
+                wavelength: spec.wavelength,
+                direction: spec.direction.to_array(),
+                polarization: spec.polarization.to_array(),
+                phase: spec.phase,
+            }
+        }
+    }
+
+    impl From<WaveSpecWire> for WaveSpec {
+        fn from(spec: WaveSpecWire) -> Self {
+            Self {
+                amplitude: spec.amplitude,
+                wavelength: spec.wavelength,
+                direction: glam::Vec3::from_array(spec.direction),
+                polarization: glam::Vec3::from_array(spec.polarization),
+                phase: spec.phase,
+            }
+        }
+    }
+
+    pub fn serialize<S: Serializer>(
+        wave: &Option<WaveSpec>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        wave.map(WaveSpecWire::from).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<WaveSpec>, D::Error> {
+        Ok(Option::<WaveSpecWire>::deserialize(deserializer)?.map(WaveSpec::from))
+    }
 }

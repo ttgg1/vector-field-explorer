@@ -104,6 +104,7 @@ mod maxwell_persistence_test;
 mod maxwell_residual_test;
 mod maxwell_test;
 mod maxwell_wave_test;
+mod maxwell_wave_ui_test;
 mod menu_test;
 // POSIX shell scripts: `scripts/nightly-version.sh` and
 // `scripts/generate-notices.sh` do not run on the Windows runner.

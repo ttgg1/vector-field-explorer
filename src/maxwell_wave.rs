@@ -31,9 +31,11 @@
 
 use std::f64::consts::TAU;
 
-use glam::{DVec3, Vec3};
+use glam::{DVec3, UVec3, Vec3};
 
+use crate::domain::Domain;
 use crate::maxwell_residual::FieldTerms;
+use crate::plane::PlaneFrame;
 
 /// Speed of light in these normalized teaching units.
 ///
@@ -147,6 +149,42 @@ pub fn sample_wave(spec: &WaveSpec, point: Vec3, time: f64) -> Option<WaveSample
         b: b.as_vec3(),
         phase,
     })
+}
+
+/// Sample [`sample_wave`] over a viewport grid, returning finite samples only.
+///
+/// Without `plane`, the grid spans `domain` and each position is a world point.
+/// With `plane`, the grid spans the frame's local domain, the position is the
+/// plane-local point the caller draws at, and the world point is
+/// `frame.to_world(local)`. A sample the model rejects (invalid spec, non-finite
+/// point/time, non-finite field) is skipped rather than returned as NaN. The
+/// caller owns any further density cap; this helper adds none.
+pub fn sample_wave_grid(
+    spec: &WaveSpec,
+    domain: &Domain,
+    grid: UVec3,
+    plane: Option<&PlaneFrame>,
+    time: f64,
+) -> Vec<(Vec3, WaveSample)> {
+    let (effective_domain, effective_grid) = match plane {
+        Some(frame) => (frame.local_domain(), UVec3::new(grid.x, grid.y, 1)),
+        None => (*domain, grid),
+    };
+    let mut samples = Vec::new();
+    for local in effective_domain.grid_points(effective_grid) {
+        if !local.is_finite() {
+            continue;
+        }
+        let world = plane.map_or(local, |frame| frame.to_world(local));
+        if !world.is_finite() {
+            continue;
+        }
+        let Some(sample) = sample_wave(spec, world, time) else {
+            continue;
+        };
+        samples.push((local, sample));
+    }
+    samples
 }
 
 /// Closed-form field terms at one finite point and time, for

@@ -20,7 +20,9 @@ use super::renderer::{
     ArrowInstanceGPU, HeatmapGPU, HeatmapLegend, LineInstanceGPU, SceneGPU, heatmap_legend,
 };
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
-use super::source_scene::{FieldMode, SourceSampling, SourceScene, sample_source_scene};
+use super::source_scene::{
+    ELECTRIC_COLOR, FieldMode, MAGNETIC_COLOR, SourceSampling, SourceScene, sample_source_scene,
+};
 use super::streamlines::{
     CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
 };
@@ -46,6 +48,7 @@ use crate::maxwell::{
     MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family,
     maxwell_field_with_bem, maxwell_outline, sample_maxwell_with_bem, solve_bem, validate_maxwell,
 };
+use crate::maxwell_wave::{WaveSpec, sample_wave_grid};
 use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
@@ -344,6 +347,53 @@ struct ProbeReportsCache {
     generation: u64,
 }
 
+/// The two synchronized plane-wave arrow sets.
+///
+/// `E` and `B` stay separate: each carries its own fixed family colour and the
+/// sampler never adds them or routes either through the #83 colour mapping.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WaveArrowSets {
+    pub electric: Vec<ArrowData>,
+    pub magnetic: Vec<ArrowData>,
+}
+
+impl WaveArrowSets {
+    /// Total arrows in both sets.
+    pub fn len(&self) -> usize {
+        self.electric.len() + self.magnetic.len()
+    }
+
+    /// Whether both sets are empty.
+    pub fn is_empty(&self) -> bool {
+        self.electric.is_empty() && self.magnetic.is_empty()
+    }
+}
+
+/// Vectors below this magnitude are degenerate and not drawn, matching the
+/// Maxwell sampler's floor. A zero-crossing of the wave simply has no arrow.
+const WAVE_MIN_MAGNITUDE: f32 = 1e-6;
+
+/// Push one finite, non-degenerate fixed-colour wave arrow, or skip it.
+fn push_wave_arrow(arrows: &mut Vec<ArrowData>, position: Vec3, vector: Vec3, color: [u8; 3]) {
+    if !position.is_finite() || !vector.is_finite() {
+        return;
+    }
+    let magnitude = vector.length();
+    if !magnitude.is_finite() || magnitude < WAVE_MIN_MAGNITUDE {
+        return;
+    }
+    let direction = vector / magnitude;
+    if !direction.is_finite() {
+        return;
+    }
+    arrows.push(ArrowData {
+        position,
+        dir: direction,
+        mag: magnitude,
+        color,
+    });
+}
+
 /// A read-only field adapter built for one probe check. It is never stored.
 struct ProbeAdapter {
     family: FieldFamily,
@@ -593,6 +643,13 @@ pub struct State {
     pub maxwell: MaxwellScene,
     /// The last Maxwell sampling pass for the active 3D/2D view.
     pub maxwell_sampling: Option<MaxwellSampling>,
+    /// Optional source-free plane wave; while set it replaces the selected
+    /// case's sampling with two fixed-family E/B arrow sets.
+    maxwell_wave: Option<WaveSpec>,
+    /// The last plane-wave sampling pass, if a wave is enabled.
+    pub maxwell_wave_sampling: Option<WaveArrowSets>,
+    /// The last rejected wave edit, with the slice A validation message.
+    pub maxwell_wave_error: Option<String>,
     /// The last rejected Maxwell edit or sampling/solve problem.
     pub maxwell_error: Option<String>,
     /// Last successful 2D conductor BEM solve, keyed by its BEM scene. Private:
@@ -1366,9 +1423,15 @@ impl State {
                 // Ode owns a precomputed solution; playback time is mirrored
                 // only and must never re-integrate or dirty the scene.
                 FieldMode::Ode => {}
-                // Materials, Sources and Maxwell are static: the clock never
-                // dirties their scenes.
-                FieldMode::Sources | FieldMode::Materials | FieldMode::Maxwell => {}
+                // Materials and Sources are static. Maxwell is static for a
+                // case, but an enabled plane wave is a single-clock consumer:
+                // a running clock advances its phase and dirties the arrows.
+                FieldMode::Maxwell => {
+                    if self.maxwell_wave.is_some() {
+                        self.mark_dirty();
+                    }
+                }
+                FieldMode::Sources | FieldMode::Materials => {}
             }
         } else {
             self.scalar_time_changed();
@@ -1382,7 +1445,9 @@ impl State {
     pub fn has_time_dependent_consumer(self: &State) -> bool {
         if self.is_vector_mode() {
             match self.field_mode {
-                FieldMode::Sources | FieldMode::Materials | FieldMode::Maxwell => false,
+                FieldMode::Sources | FieldMode::Materials => false,
+                // A plane wave rides the one simulation clock; a case does not.
+                FieldMode::Maxwell => self.maxwell_wave.is_some(),
                 FieldMode::Induction => self.induction.is_animated(),
                 // A stored solution plays on the shared clock; a pending lazy
                 // solve keeps the clock alive long enough to produce it.
@@ -1490,6 +1555,9 @@ impl State {
             material_error: None,
             maxwell: MaxwellScene::default(),
             maxwell_sampling: None,
+            maxwell_wave: None,
+            maxwell_wave_sampling: None,
+            maxwell_wave_error: None,
             maxwell_error: None,
             maxwell_bem: None,
             maxwell_bem_failed: false,
@@ -1986,6 +2054,52 @@ impl State {
         self.mark_dirty()
     }
 
+    /// Validate and commit the optional plane wave.
+    ///
+    /// Slice A's [`WaveSpec::validate`] owns the messages and repairs the unit
+    /// vectors. A rejected spec leaves the committed wave, sampling and dirty
+    /// flag untouched and records the readable error. An equal spec is a no-op;
+    /// a changed one drops the wave samples and marks the scene dirty once.
+    pub fn set_maxwell_wave(self: &mut State, mut wave: Option<WaveSpec>) -> bool {
+        if wave == self.maxwell_wave {
+            self.maxwell_wave_error = None;
+            return false;
+        }
+        if let Some(spec) = wave.as_mut()
+            && let Err(error) = spec.validate()
+        {
+            self.maxwell_wave_error = Some(error);
+            return false;
+        }
+        self.maxwell_wave = wave;
+        self.maxwell_wave_sampling = None;
+        self.maxwell_wave_error = None;
+        self.mark_dirty()
+    }
+
+    /// The durable optional plane wave.
+    pub fn maxwell_wave(self: &State) -> Option<WaveSpec> {
+        self.maxwell_wave
+    }
+
+    /// Restore a stored wave without dirtying the first scene. The spec is
+    /// self-contained, so validation needs no external state; an invalid stored
+    /// spec is dropped with one warning and the case sampling stays available.
+    pub fn restore_maxwell_wave(self: &mut State, wave: Option<WaveSpec>) {
+        self.maxwell_wave = None;
+        self.maxwell_wave_sampling = None;
+        self.maxwell_wave_error = None;
+        let Some(mut spec) = wave else {
+            return;
+        };
+        match spec.validate() {
+            Ok(()) => self.maxwell_wave = Some(spec),
+            Err(error) => {
+                log::warn!("ignoring invalid persisted plane wave: {error}");
+            }
+        }
+    }
+
     /// Rebuild the Maxwell frame at the current domain, capped density and
     /// plane. Only this method may solve the 2D conductor BEM, and only when no
     /// matching cached solution exists; plane, sampling and camera changes
@@ -2014,6 +2128,37 @@ impl State {
             self.plane = self.plane.clamped(self.plane_grid());
         }
         let plane = self.plane_frame();
+        if let Some(spec) = self.maxwell_wave.as_ref() {
+            // A source-free plane wave replaces the selected case's field: the
+            // grid (or the active 2D plane) is sampled through slice A and E/B
+            // become two separate fixed-colour sets. Never summed, never mapped
+            // through the #83 colour pipeline.
+            //
+            // The wave also replaces the case's sampled field, so a case/BEM
+            // error from an earlier pass must not stay readable as if it still
+            // described the drawn wave.
+            self.maxwell_error = None;
+            let samples = sample_wave_grid(
+                spec,
+                &self.domain,
+                self.grid(),
+                plane.as_ref(),
+                f64::from(self.time),
+            );
+            let mut arrows = WaveArrowSets::default();
+            for (position, sample) in samples {
+                let (electric, magnetic) = match plane.as_ref() {
+                    Some(frame) => (frame.project(sample.e), frame.project(sample.b)),
+                    None => (sample.e, sample.b),
+                };
+                push_wave_arrow(&mut arrows.electric, position, electric, ELECTRIC_COLOR);
+                push_wave_arrow(&mut arrows.magnetic, position, magnetic, MAGNETIC_COLOR);
+            }
+            self.maxwell_wave_sampling = Some(arrows);
+            self.maxwell_sampling = None;
+            return;
+        }
+        self.maxwell_wave_sampling = None;
         let needs_bem =
             self.maxwell.case == crate::maxwell::MaxwellCase::Conductor2D && plane.is_some();
         if needs_bem {
@@ -2086,6 +2231,9 @@ impl State {
     pub fn reset_maxwell(self: &mut State) {
         self.maxwell = MaxwellScene::default();
         self.maxwell_sampling = None;
+        self.maxwell_wave = None;
+        self.maxwell_wave_sampling = None;
+        self.maxwell_wave_error = None;
         self.maxwell_bem = None;
         self.maxwell_bem_failed = false;
         self.maxwell_error = None;
@@ -3776,6 +3924,25 @@ impl State {
         arrows: &[ArrowData],
         styles: &LayerStyles,
     ) -> Vec<ArrowInstanceGPU> {
+        self.arrow_instances_with_family_color(arrows, styles, true)
+    }
+
+    /// Wave overlays keep each set's fixed family colour, so the teaching
+    /// scene's single-family colour override must not repaint one of them.
+    fn wave_arrow_instances(
+        self: &State,
+        arrows: &[ArrowData],
+        styles: &LayerStyles,
+    ) -> Vec<ArrowInstanceGPU> {
+        self.arrow_instances_with_family_color(arrows, styles, false)
+    }
+
+    fn arrow_instances_with_family_color(
+        self: &State,
+        arrows: &[ArrowData],
+        styles: &LayerStyles,
+        use_family_color: bool,
+    ) -> Vec<ArrowInstanceGPU> {
         let unit = self.arrow_scale * self.spacing();
         let max_mag = arrows.iter().fold(0.0_f32, |m, a| m.max(a.mag));
         let plane_active = self.plane_active();
@@ -3783,7 +3950,10 @@ impl State {
         let domain = self.domain;
         let resolved = self.arrow_layer_resolution(styles);
         let layer_opacity = sanitized_opacity(resolved.opacity);
-        let family_rgb = resolved.color.map(|color| color.0);
+        let family_rgb = use_family_color
+            .then_some(resolved.color)
+            .flatten()
+            .map(|color| color.0);
         arrows
             .iter()
             .map(|a| {
@@ -4127,12 +4297,22 @@ impl State {
         }
         if self.field_mode == FieldMode::Maxwell {
             // Arrows plus the case outline only. No particles, streamlines,
-            // click seeds, source glyphs or formula sampling.
+            // click seeds, source glyphs or formula sampling. An enabled plane
+            // wave contributes two separate fixed-family sets, both in the GPU
+            // scene so PNG, GUI screenshots and animation captures include them.
             let arrows = if self.arrows {
-                self.maxwell_sampling
-                    .as_ref()
-                    .map(|sampling| self.arrow_instances_with_styles(&sampling.arrows, styles))
-                    .unwrap_or_default()
+                match self.maxwell_wave_sampling.as_ref() {
+                    Some(wave) => {
+                        let mut arrows = self.wave_arrow_instances(&wave.electric, styles);
+                        arrows.extend(self.wave_arrow_instances(&wave.magnetic, styles));
+                        arrows
+                    }
+                    None => self
+                        .maxwell_sampling
+                        .as_ref()
+                        .map(|sampling| self.arrow_instances_with_styles(&sampling.arrows, styles))
+                        .unwrap_or_default(),
+                }
             } else {
                 Vec::new()
             };
