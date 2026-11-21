@@ -146,6 +146,16 @@ At most **two concurrent Cargo processes**, each with its own persistent
 `/home/paul/.cache/vector-field-explorer-targets/`; retain the configured
 **10-job cap**. Preserve shared/persistent targets; do not clean them as a shortcut.
 
+**Disk and workspace hygiene.** Before dispatch, check free space
+(`df -h /home`) and keep per-task Cargo targets bounded; a full filesystem
+aborts implementer gates and is not a task failure. When a slice merges,
+delete that slice's own `CARGO_TARGET_DIR`, which is the sanctioned exception
+to the preservation rule above; keep the shared post-merge-gate target
+`/home/paul/.cache/vector-field-explorer-targets/main-check`. Remove the
+merged worktree and branch and prune deleted remote branches at each merge
+boundary rather than in a later cleanup pass. Copy out any unmerged evidence
+before removing a worktree.
+
 **Current verification waiver:** dedicated web/wasm compatibility and browser/
 manual visual, screenshot and separate visual/painted-ink checks are owner-waived,
 not passed. Keep existing automated functional/layout tests and platform behavior.
