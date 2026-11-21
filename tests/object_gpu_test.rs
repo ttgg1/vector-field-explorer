@@ -17,7 +17,8 @@ use vector_field_explorer::{
         OBJECT_PROBE_ENV, ObjectGlobals, ObjectInstance, ObjectPass, ObjectView, object_draw_plan,
     },
     object_scene::{MeshObject, MeshPrimitive, MeshScene, SliceClip},
-    renderer, screenshot,
+    renderer::{self, DrawState, SceneGPU},
+    screenshot,
     source_scene::{SourceEntry, SourceKindTag, SourceScene},
 };
 
@@ -481,10 +482,93 @@ fn composite_frame(
     screenshot::to_rgba(format, pixels)
 }
 
+/// Proves the fully assembled offscreen capture path composites objects, not
+/// just `ObjectPass` in isolation (#113). `DrawState::render_offscreen_with_objects`
+/// is the native capture entry point; with the object encoder dropped the
+/// readback is all clear, so this fails unless the object pass is submitted
+/// with the screenshot pass.
+fn probe_offscreen_capture(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(), String> {
+    let viewport = [64u32, 64u32];
+    let view = probe_view(viewport);
+    let view_proj = Mat4::from_cols_array_2d(&view.view_proj);
+    let camera_pos = Vec3::from_array(view.eye);
+
+    let mut state = DrawState::new(&gpu.device, format);
+    let vector_scene = SceneGPU::default();
+    let capture = |state: &mut DrawState, objects: Option<&Arc<MeshScene>>| {
+        state
+            .render_offscreen_with_objects(
+                &gpu.device,
+                &gpu.queue,
+                &vector_scene,
+                objects,
+                view_proj,
+                camera_pos,
+                viewport[0],
+                viewport[1],
+                PROBE_CLEAR,
+            )
+            .map_err(|error| format!("offscreen capture failed: {error}"))
+    };
+
+    // An empty object scene must keep the capture deterministic and equal to
+    // the clear colour alone.
+    let empty_first = capture(&mut state, None)?;
+    let empty_second = capture(&mut state, None)?;
+    if empty_first != empty_second {
+        return Err("two empty-scene captures were not byte-identical".into());
+    }
+    let clear_pixel = pixel(&empty_first, viewport[0], 0, 0);
+    let expected_clear = expected_rgb(
+        format,
+        [
+            PROBE_CLEAR[0] as f32,
+            PROBE_CLEAR[1] as f32,
+            PROBE_CLEAR[2] as f32,
+        ],
+    );
+    assert_rgb("capture clear", clear_pixel, expected_clear);
+    if empty_first
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|candidate| *candidate != clear_pixel)
+    {
+        return Err("an empty object scene painted into the capture".into());
+    }
+
+    // A Sources-like sphere must reach the captured pixels.
+    let objects = Arc::new(sphere_scene());
+    let captured = capture(&mut state, Some(&objects))?;
+    let differing = captured
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|candidate| **candidate != clear_pixel)
+        .count();
+    if differing == 0 {
+        return Err(
+            "the offscreen capture contains only the clear colour; the object pass was not submitted"
+                .into(),
+        );
+    }
+    let centre = pixel(&captured, viewport[0], viewport[0] / 2, viewport[1] / 2);
+    if centre == clear_pixel {
+        return Err("the sphere did not cover the capture centre".into());
+    }
+    eprintln!(
+        "PROBE offscreen-capture: {differing} of {} pixels differ from the clear colour (centre {:?})",
+        viewport[0] * viewport[1],
+        centre
+    );
+    Ok(())
+}
+
 fn run_probe() -> Result<(), String> {
     let gpu = request_device()?;
     let scopes = gpu.begin_scopes("object pass");
-    let result = probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let result = probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb)
+        .and_then(|()| probe_offscreen_capture(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
     gpu.end_scopes(scopes)?;
     result
 }

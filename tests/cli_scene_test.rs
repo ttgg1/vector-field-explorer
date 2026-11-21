@@ -28,6 +28,53 @@ fn options(json: &str) -> CliOptions {
 }
 
 #[test]
+fn cli_scene_objects_match_the_source_mapping() {
+    let mut state = State::new(true);
+    let sources = vector_field_explorer::source_scene::SourceScene {
+        entries: vec![vector_field_explorer::source_scene::SourceEntry {
+            enabled: true,
+            source: vector_field_explorer::source_scene::SourceKindTag::PointCharge
+                .default_source(),
+        }],
+        ..Default::default()
+    };
+    assert!(state.set_source_scene(sources));
+    assert!(state.set_field_mode(vector_field_explorer::source_scene::FieldMode::Sources));
+    let expected = vector_field_explorer::object_scene::MeshScene::from_sources(
+        &state.sources,
+        &state.scene_domain(),
+        state.plane_frame().as_ref(),
+    );
+    assert!(
+        !expected.objects().is_empty(),
+        "the default source scene maps one object"
+    );
+
+    let actual = vector_field_explorer::app::object_scene_for_state(&state);
+    assert_eq!(actual.objects().len(), expected.objects().len());
+    assert_eq!(actual.generation(), expected.generation());
+    assert_eq!(
+        actual.objects()[0].primitive,
+        expected.objects()[0].primitive
+    );
+
+    // The CLI and live/export paths all map through this one helper, so a
+    // source scene has one object count everywhere.
+    let o = options(r#"{"formula":"(x, y, z)"}"#);
+    let prepared =
+        vector_field_explorer::cli::prepare_scene(&o, output_frame(&o).unwrap()).unwrap();
+    assert_eq!(prepared.frame.width, o.width);
+    assert!(
+        vector_field_explorer::app::object_scene_for_state(
+            &vector_field_explorer::viewmodel::State::new(true)
+        )
+        .objects()
+        .is_empty(),
+        "formula-only states map no object bodies"
+    );
+}
+
+#[test]
 fn prepared_scene_samples_requested_endpoint_without_particles() {
     for (start, duration) in [(2.0, 0.05), (2.0, 0.0), (0.0, 0.05)] {
         let mut o = options(r#"{"density":4,"formula":"(t, x+t)"}"#);

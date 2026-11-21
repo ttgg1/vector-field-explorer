@@ -70,7 +70,12 @@ The field is formula-driven:
 Native `cli` configuration exposes the pure `output_frame` seam implemented in
 `src/cli_scene.rs`. Its `OutputFrame` owns output dimensions, camera transforms,
 and straight-alpha sRGB/linear background values for both export backends;
-`PreparedScene` pairs that frame with renderer-ready `SceneGPU`. Geometry,
+`PreparedScene` pairs that frame with renderer-ready `SceneGPU`. The
+`app::object_scene_for_state` mapping feeds the live viewport and the animation
+snapshot (the CLI animation reaches it through `AnimationSnapshot::from_parts`),
+so a Sources/Induction state has one object count everywhere. The mapping is
+shared, but CLI PNG and CLI animation exports do not yet composite those objects
+into their output; that parity work is tracked by issue #192. Geometry,
 camera applicability and background conversion are covered by
 `tests/cli_scene_test.rs`. The same module's `prepare_scene` preflights an indexed
 f64 time schedule before seeded particle spawn/advection, then samples the final
@@ -360,11 +365,14 @@ video and browser runtime remain unverified. See
 #### `src/animation_scene.rs` — detached animation frame source
 
 **Purpose / API.** Owns the detached copy an animation export renders from:
-`AnimationSnapshot { state, particles, orbit, fly, clear }`,
-`AnimationFrame { scene, view_proj, eye }`,
+`AnimationSnapshot { state, particles, orbit, fly, clear, object_scene }`,
+`AnimationFrame { scene, object_scene, view_proj, eye }`,
 `AnimationSnapshot::{from_parts, capture, frame_at}`, and
 `VfApp::animation_snapshot`. `State: Clone` and `Particles: Clone` make the copy;
-`State` holds no GPU handles.
+`State` holds no GPU handles. `object_scene: Arc<MeshScene>` is the mapped
+source/induction bodies; `capture` shares the live app's cached `Arc` and every
+frame clones it, so the frame exporter composites the same bodies as the
+viewport without a per-frame rebuild.
 
 **Invariants.** `capture` clones the live app state, cloud, orbit/fly pose and
 theme background without mutating playback. `frame_at(time, dt, aspect, first)`
@@ -384,8 +392,9 @@ uses the caller's aspect for the snapshot camera.
 **Pinned by.** [tests/animation_scene_test.rs](../tests/animation_scene_test.rs):
 time-dependent Formula sampling changes the frame, a 0.5 s particle frame moves
 by 0.5 world units (not one GUI-clamped step), direct 60-substep advection
-matches each exact substep time, and the first frame renders the captured cloud's
-dots, trails and combined stream.
+matches each exact substep time, the first frame renders the captured cloud's
+dots, trails and combined stream, and an Induction snapshot's object scene is
+the same `Arc` (and generation) in the frame.
 
 **Limitations.** The snapshot does not capture transient click seeds or the live
 viewport aspect; the caller passes the export aspect to `frame_at`. Induction
@@ -4268,16 +4277,20 @@ primitive set, because `MAX_OBJECTS × largest primitive` is below
 #### `src/object_renderer.rs` — offscreen object pass and composite
 
 **Purpose / API.** The depth-enabled GPU pass for the mapped bodies from
-`src/object_scene.rs`; it is not yet wired into the live viewport, capture or
-animation. `ObjectDrawState { pass: ObjectPass }` is the future callback-resource
-owner. `ObjectPass::new(&Device, TextureFormat)` builds the pipelines, the
-composite sampler and the uniform buffer; the colour/depth target, instance
-buffer and primitive buffers stay unallocated until a drawable frame arrives.
+`src/object_scene.rs`, driven by `src/renderer.rs` before every vector draw in
+both the live callback and `submit_offscreen`, so the viewport, screenshots and
+animation frames share one object image. `ObjectDrawState { pass: ObjectPass }`
+is the callback-resource owner shape. `ObjectPass::new(&Device, TextureFormat)`
+builds the pipelines, the composite sampler and the uniform buffer; the
+colour/depth target, instance buffer and primitive buffers stay unallocated until
+a drawable frame arrives.
 `prepare(&Device, &Queue, &mut CommandEncoder, &MeshScene, &ObjectView)`
 allocates or reuses the target, uploads changed instances/uniforms and records
 the geometry pass into the caller's encoder (it never submits).
 `paint(&mut RenderPass, egui::Rect)` composites the prepared target as a
-fullscreen textured quad in physical-pixel screen coordinates.
+fullscreen textured quad over the pass's current viewport; it deliberately does
+not call `set_viewport`, because egui_wgpu already sets the pass viewport to the
+callback rect and restores the full surface before the next egui primitive.
 `texture_view() -> Option<&TextureView>` exposes the colour target.
 `OBJECT_PROBE_ENV = "VFE_OBJECT_GPU_PROBE"` gates the native device probe.
 `ObjectView { view_proj: [[f32; 4]; 4], eye: [f32; 3], viewport: [u32; 2],
@@ -4316,6 +4329,19 @@ as NaN. Draw order is scene-entry order with the same `MeshPrimitive::vertices()
 count per draw, so identical scene + view produces identical draw calls and
 target contents. No `unsafe`.
 
+**Shared-pass contract (carried from the #112 review).** `paint` never changes
+the render-pass viewport, so a callback cannot leave every later egui draw
+squeezed into the object rect. egui_wgpu sets the viewport to the callback rect
+immediately before `paint` and resets it to the full surface before the next
+primitive; wgpu exposes no viewport getter, so this host sequencing cannot be
+observed from a unit test. It is recorded here and in the module docs, and the
+full-target composite remains pinned by the device probe.
+
+**Alpha note.** The colour target accumulates bodies with straight-alpha
+blending; the composite premultiplies once. That is exact while every body's
+`opacity == 1.0` (the current mapping). A future transparent-object slice must
+premultiply per object instead.
+
 **Pinned by.** `tests/object_gpu_test.rs` always runs the device-free contracts
 (empty scene and zero-area viewport plan nothing, the sphere plan is
 deterministic, the view/wireframe/clip values round-trip into `ObjectGlobals`,
@@ -4349,11 +4375,19 @@ sorting, and the offscreen screenshot pass.
   (`is_empty`, `arrow_draw_plan`, `arrow_vertex_count`, `style_vertex_count`,
   `uses_flat_arrow`, `draw_passes`); `scene_vertex_count`,
   `combined_instances`, `camera_basis_from_view_proj`.
-- `DrawState` (pipelines, buffers, bind groups; `new`, `render_offscreen`,
-  `render_offscreen_async`), `DrawCallback`, and the sort helpers
+- Object compositing: `DrawStage { Objects, Vector(DrawPass) }`,
+  `paint_stages(&SceneGPU, object_count) -> Vec<DrawStage>`,
+  `ObjectSceneState` (`new`, `from_scene`, `set`, `clear`, `get`, `len`,
+  `is_empty`, `has_objects`), and `object_viewport_pixels(egui::Rect, f32)`.
+- `DrawState` (pipelines, buffers, bind groups; `new`, `set_object_scene`,
+  `object_scene`, `render_offscreen`, `render_offscreen_with_objects`,
+  `render_offscreen_async`, `render_offscreen_async_with_objects`),
+  `DrawCallback { scene, objects, screen, object_viewport, object_clear,
+  view_proj, camera_pos }`, and the sort helpers
   (`sort_scene_back_to_front`, `sort_lines_back_to_front`,
   `sorted_lines_back_to_front`, `sorted_arrows_back_to_front`,
-  `sort_back_to_front`).
+  `sort_back_to_front`). `object_style` is deferred to the persisted-style
+  slice; this slice always draws Solid bodies.
 - Native `OffscreenError::{Setup, Readback}` and `ReadbackError::{Map, Poll,
   CallbackLost, Range, Decode}` retain stage and typed causes. The doc-hidden
   production `readback_map_status` classifies the actual map callback. Native
@@ -4376,8 +4410,21 @@ sorting, and the offscreen screenshot pass.
 - `upload` writes `Globals` every frame; it rebuilds only non-empty storage
   buffers. Empty collections keep the one-instance placeholder bindings, because
   binding a zero-size storage buffer is invalid.
-- `record` follows `SceneGPU::draw_passes`: Lines → Trails → Scene3D (3D) or
-  Arrow2D → Dots (2D). There is no depth attachment; ordering is the CPU sort.
+- `record` follows `paint_stages`: `Objects` (only when the mapped scene has a
+  body) → Lines → Trails → Scene3D (3D) or Arrow2D → Dots (2D). The object image
+  is composited first; there is no depth attachment for the vector passes and
+  ordering is still the CPU sort. An empty object scene adds no stage, allocates
+  no target and leaves the vector order unchanged. `paint_stages` returns one
+  small bounded `Vec` per paint (at most seven stages, no per-instance growth);
+  that allocation is accepted rather than restructuring the pipeline around a
+  custom iterator.
+- `DrawCallback::prepare` uploads the vector scene, installs the object scene on
+  `DrawState`, then runs `ObjectPass::prepare` into the egui encoder; `paint`
+  composites the object target before `record_draw`. `submit_offscreen` runs the
+  same prepare and painting into the capture texture, with
+  `render_offscreen_with_objects` (native and wasm) forwarding the frame's
+  object scene. The object target/instances are uploaded only when the scene
+  fingerprint changes; an unchanged frame touches no object buffer.
 
 **Invariants.**
 - 3D uses one combined draw for arrows and particles, at the fixed 186-vertex

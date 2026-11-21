@@ -1,10 +1,16 @@
-//! Offscreen, depth-enabled object pass for mapped source bodies (#112).
+//! Offscreen, depth-enabled object pass for mapped source bodies (#112/#113).
 //!
-//! This slice builds the GPU pass only: it owns a colour + `Depth32Float`
-//! target, uploads the mapped `MeshScene` instances, records the lit object
-//! pass into a caller-supplied encoder, and composites the result with a
-//! fullscreen textured quad. It is not wired into the live viewport, capture or
-//! animation yet, and it does not touch `SceneGPU` or the vector draw plans.
+//! This module owns a colour + `Depth32Float` target, uploads the mapped
+//! `MeshScene` instances, records the lit object pass into a caller-supplied
+//! encoder, and composites the result with a fullscreen textured quad. The
+//! renderer's `DrawCallback` and `submit_offscreen` drive it before the existing
+//! vector draws, so the live viewport, screenshots and animation frames share
+//! one image. It does not touch `SceneGPU` or the vector draw plans.
+//!
+//! The composite writes premultiplied alpha. The target is accumulated with
+//! straight-alpha blending while bodies are accumulated, so premultiplying once
+//! at composite time is only exact while every object's `opacity == 1.0`; a
+//! later transparent-object slice must premultiply per object instead.
 //!
 //! Like the scalar plot pass, `prepare` is device-forward: the caller supplies
 //! the egui command encoder, so this module never submits work itself.
@@ -773,9 +779,17 @@ impl ObjectPass {
     }
 
     /// Composite the prepared target into the incoming egui pass as a
-    /// fullscreen textured quad. `screen` is the viewport rect in physical
-    /// pixels; nothing is drawn without a successful `prepare` or with a
-    /// zero/negative/inverted rect.
+    /// fullscreen textured quad over the pass's *current* viewport.
+    ///
+    /// `paint` deliberately never calls `set_viewport`: egui_wgpu sets the pass
+    /// viewport to the callback rect before invoking a paint callback and
+    /// resets it to the full surface before the next egui primitive, so the
+    /// composite already lands on the object rect and the shared pass state is
+    /// left exactly as the host set it. wgpu exposes no render-pass viewport
+    /// getter, so that host contract cannot be observed from a unit test; it is
+    /// recorded here and in `docs/CODEBASE.md`, and `tests/object_gpu_test.rs`
+    /// pins the full-target composite. Nothing is drawn without a successful
+    /// `prepare` or with a zero/negative/inverted rect.
     pub fn paint(&self, pass: &mut wgpu::RenderPass<'_>, screen: egui::Rect) {
         if self.prepared.is_none() {
             return;
@@ -793,7 +807,6 @@ impl ObjectPass {
         {
             return;
         }
-        pass.set_viewport(screen.min.x, screen.min.y, width, height, 0.0, 1.0);
         pass.set_pipeline(&self.pipelines.composite);
         pass.set_bind_group(0, &target.composite_bind, &[]);
         pass.draw(0..3, 0..1);

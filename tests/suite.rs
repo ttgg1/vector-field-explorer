@@ -133,6 +133,7 @@ mod plot_examples_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod plot_gpu_test;
 mod plot_renderer_test;
+mod renderer_test;
 mod plot_state_test;
 mod plot_surface_test;
 mod plot_ui_test;
