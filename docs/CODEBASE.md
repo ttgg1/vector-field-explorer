@@ -1448,6 +1448,73 @@ constant-panel infinite-cylinder approximation, not a 3D finite conductor. The
 responsive panel/selector/help, persistence, export and the benchmark land in
 later tasks.
 
+#### `src/maxwell_learning.rs` — Maxwell equation teaching text
+
+**Purpose.** Pure teaching model for the four Maxwell equations: Gauss's law
+for electricity, Gauss's law for magnetism, Faraday's law of induction, and the
+Ampere-Maxwell law. Each record carries both the integral and differential
+statement in normalized teaching units, the symbol glossary and the limit that
+applies. There is no solver, sampling, renderer or persistence in this module.
+
+**Public API.** `MaxwellEquation` (`GaussElectric`, `GaussMagnetic`, `Faraday`,
+`AmpereMaxwell`) with `ALL` and `title()`, `EquationForm::{Integral,
+Differential}`, `EquationSpec { equation, form, title, integral, differential,
+symbols, assumptions }`, and `spec(equation)`. Both text fields are always
+populated; `form` is the canonical integral form returned by `spec`.
+
+**Invariants.** Every integral and differential statement names normalized
+teaching units and says the catalogue is not a solver. `symbols` names every
+symbol used in the statement, including the closed surface `S` for both Gauss
+laws. `assumptions` names electrostatic, magnetostatic, quasistatic or full
+time-dependent limits explicitly, and the Gauss-electric and Ampere-Maxwell
+assumptions state the unit convention `eps0 = 1` and `mu0 = 1` that the
+residual diagnostics rely on. No text claims a general time-dependent solve.
+
+**Pinned by.** [tests/maxwell_learning_test.rs](../tests/maxwell_learning_test.rs):
+`all_four_equations_have_integral_and_differential_text`,
+`specs_name_every_symbol_used_in_the_statement`,
+`gauss_surfaces_are_named_in_the_symbol_tables`, and
+`assumptions_state_the_unit_conventions_used_by_the_residuals`.
+
+#### `src/maxwell_residual.rs` — Maxwell residual diagnostics
+
+**Purpose.** One-sample-point residual check for the four equations, fed by
+already-evaluated terms in normalized teaching units. It separates
+sources-to-fields evaluation from user-specified-field diagnostics and never
+claims a full time-dependent solve.
+
+**Public API.** `TermStatus::{Analytic, Numerical, Unsupported, Singular}`,
+`FieldTerms` (optional `div_e`, `div_b`, `curl_e`, `curl_b`, `rho`, `j`,
+`de_dt`, `db_dt`), `Residual { equation, lhs, rhs, vector_residual, normalized,
+status, explanation }`, and `residual(equation, &FieldTerms)`.
+
+**Invariants.** Status precedence is fixed: a missing input is checked before a
+non-finite one, and the left term before the right term, so a missing term
+reports `Unsupported` even when another supplied term is non-finite. A missing
+input is `Unsupported` naming the exact symbol and is never substituted with
+zero. A non-finite input is `Singular` naming the offending symbol and no value
+is reported. Gauss's law for magnetism always has `rhs = 0`. The Ampere-Maxwell
+displacement term is included only when `de_dt` is supplied; otherwise the check
+is `Unsupported("displacement current (de_dt)")`. The scalar scale is
+`|residual| / max(1, |lhs|, |rhs|)`; `vector_residual` and its normalized value
+divide every term by `max(1, |largest component|)` before adding or subtracting,
+so both stay finite for every finite input even when the raw sum would overflow.
+`TermStatus::Numerical` is reserved for slice B sampling estimates and is never
+reported by this one-sample-point slice. An `Unsupported` term can never produce
+a satisfied verdict, and every explanation states that only one sample point
+was checked and the coupled time-dependent system was not solved.
+
+**Pinned by.** [tests/maxwell_residual_test.rs](../tests/maxwell_residual_test.rs):
+`gauss_magnetic_residual_uses_a_zero_rhs`,
+`consistent_terms_give_zero_residual`,
+`missing_terms_are_reported_as_unsupported_not_zero`,
+`non_finite_terms_are_singular_and_never_nan`,
+`ampere_maxwell_requires_the_displacement_term`,
+`normalized_residual_is_finite_and_bounded`,
+`huge_same_sign_finite_vectors_keep_both_fields_finite`,
+`unsupported_takes_precedence_over_singular`, and
+`residual_does_not_claim_a_full_time_dependent_solve`.
+
 #### `src/source_presets.rs` — built-in source-scene presets
 
 **Purpose.** The seventeen illustrative source scenes offered above the saved
