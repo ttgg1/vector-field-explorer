@@ -32,6 +32,7 @@ use crate::color_mapping::{ClipCounts, ColorMapping, ColorQuantity, ColorStats};
 use crate::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb, ScaleMode};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
+use crate::parameters::{MAX_PARAMETERS, PARAMETER_VERSION, Parameter, ParameterSet};
 use crate::particles::{
     MAX_PARTICLE_OPACITY, MAX_PARTICLES, MAX_STAGNATION_SECONDS, MAX_TRAIL_FADE, MAX_TRAIL_LEN,
     MAX_TRAIL_WIDTH, MIN_PARTICLE_OPACITY, MIN_STAGNATION_SECONDS, MIN_TRAIL_FADE, MIN_TRAIL_WIDTH,
@@ -291,6 +292,14 @@ pub fn streamline_count_enabled(streamlines: bool, seed_mode: StreamlineSeedMode
 /// Maxwell or Ode modes that own their own seeding.
 pub fn seed_layout_visible(field_mode: FieldMode, streamlines: bool, vector_mode: bool) -> bool {
     vector_mode && streamlines && field_mode == FieldMode::Formula
+}
+
+/// Whether the Variables editor belongs in the Controls panel (issue #89 slice
+/// C): it edits the formula field's named parameters, so it hides with the
+/// other formula-only vector sections (sources, induction, materials, Maxwell,
+/// Ode) and never appears while plotting.
+pub fn variables_visible(field_mode: FieldMode, vector_mode: bool) -> bool {
+    vector_mode && field_mode == FieldMode::Formula
 }
 
 /// Whether the automatic streamline-count control applies. An explicit layout
@@ -753,6 +762,73 @@ impl Default for SeedGeneratorControls {
     }
 }
 
+/// Session-only Variables editor drafts (issue #89 slice C). `drafts` is the
+/// working copy the row widgets edit; `synced` is the committed set it was
+/// seeded from, so an external commit (preset restore, Edit > Reset) refreshes
+/// the drafts without cloning the set on every unchanged frame. `name` is the
+/// Add-parameter text field and `error` keeps the model's last rejection.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VariablesControls {
+    pub drafts: Vec<Parameter>,
+    pub name: String,
+    pub error: String,
+    synced: ParameterSet,
+}
+
+impl VariablesControls {
+    /// Follow the committed set only when it actually changed: a rejected
+    /// edit leaves the committed set equal to `synced`, so its drafts (and the
+    /// other rows' values) survive.
+    fn sync(&mut self, committed: &ParameterSet) {
+        if self.synced != *committed {
+            self.synced = committed.clone();
+            self.drafts = self.synced.entries.clone();
+            self.error.clear();
+        }
+    }
+
+    /// Commit the drafts through the atomic model seam. A rejected draft set
+    /// keeps the drafts and records the model's message; an accepted one
+    /// re-seeds the drafts from the committed set.
+    fn commit(&mut self, state: &mut State) -> bool {
+        let next = ParameterSet {
+            version: PARAMETER_VERSION,
+            entries: self.drafts.clone(),
+        };
+        // A no-op edit must still clear a stale inline error without asking the model to rebuild.
+        if next == state.parameters {
+            self.error.clear();
+            return true;
+        }
+        match state.commit_parameters(next) {
+            Ok(()) => {
+                self.synced = state.parameters.clone();
+                self.drafts = self.synced.entries.clone();
+                self.error.clear();
+                true
+            }
+            Err(message) => {
+                self.error = message;
+                false
+            }
+        }
+    }
+
+    /// The section's Reset: commit an empty set and clear the session drafts.
+    fn reset(&mut self, state: &mut State) {
+        self.drafts.clear();
+        self.name.clear();
+        let _ = self.commit(state);
+    }
+}
+
+/// Commit the session Variables drafts through the atomic model seam. The
+/// widget path and the headless tests share this one handoff.
+#[doc(hidden)]
+pub fn commit_variables(state: &mut State, controls: &mut Controls) -> bool {
+    controls.variables.commit(state)
+}
+
 /// The knobs the widgets edit between frames. Starts at the same defaults as
 /// a fresh 2D [`State`] so an untouched first sidebar frame never marks the
 /// scene dirty (and the status bar counts the scene the user actually sees).
@@ -808,6 +884,8 @@ pub struct Controls {
     /// One-shot request consumed by [`apply`] to install the draft (or clear
     /// the override when the draft is `None`).
     pub palette_apply_requested: bool,
+    /// Session-only named-parameter drafts for the Variables section.
+    pub variables: VariablesControls,
     pub streamlines: bool,
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
@@ -899,6 +977,7 @@ impl Controls {
             palette_text: String::new(),
             palette_message: String::new(),
             palette_apply_requested: false,
+            variables: VariablesControls::default(),
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             streamline_count: 0,
@@ -2032,6 +2111,12 @@ fn show_inner(
         });
     }
 
+    // Issue #89 slice C: the named-parameter editor lives beside the formula
+    // sections and only exists for the formula field in a vector view.
+    if variables_visible(state.field_mode, vector_mode) {
+        variables_section(ui, state, controls);
+    }
+
     if state.field_mode != crate::source_scene::FieldMode::Ode
         && state.field_mode != crate::source_scene::FieldMode::Materials
         && state.field_mode != crate::source_scene::FieldMode::Maxwell
@@ -2343,6 +2428,144 @@ fn domain_axis_row(ui: &mut egui::Ui, axis: &str, min: &mut f32, max: &mut f32) 
     })
     .response
     .on_hover_text(format!("Sampled {axis} extent, world units"));
+}
+
+/// The Variables section: collapsed by default, seeded from the committed set,
+/// and rendered only where [`variables_visible`] allows it.
+fn variables_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    controls.variables.sync(&state.parameters);
+    egui::CollapsingHeader::new("Variables")
+        .default_open(false)
+        .show(ui, |ui| variables_editor(ui, state, controls));
+}
+
+/// One optional min/max bound: a checkbox toggles the blank/unbounded state
+/// and a positive-width DragValue edits the value while it is bounded. The
+/// returned flag reports a widget change that should commit.
+fn optional_variable_bound(ui: &mut egui::Ui, label: &str, bound: &mut Option<f64>) -> bool {
+    let mut changed = false;
+    ui.label(label);
+    let mut unbounded = bound.is_none();
+    if ui.checkbox(&mut unbounded, "unbounded").changed() {
+        *bound = if unbounded { None } else { Some(0.0) };
+        changed = true;
+    }
+    if let Some(value) = bound {
+        changed |= ui
+            .add(egui::DragValue::new(value).speed(0.1))
+            .on_hover_text("Inclusive bound; leave unbounded for no limit")
+            .changed();
+    }
+    changed
+}
+
+/// Draw the draft rows and hand every edit to the atomic model seam. Drafts
+/// stay session-only on [`Controls`]; a rejected commit keeps them and shows
+/// the model's message inline.
+fn variables_editor(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    let variables = &mut controls.variables;
+    let mut edited = false;
+    let mut delete: Option<usize> = None;
+
+    let row_count = variables.drafts.len();
+    for index in 0..row_count {
+        let entry = &mut variables.drafts[index];
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(&entry.name).strong());
+            ui.label("Value");
+            edited |= ui
+                .add(egui::DragValue::new(&mut entry.value).speed(0.1))
+                .on_hover_text("The value formula references bind to")
+                .changed();
+            if ui
+                .button("Delete")
+                .on_hover_text("Remove this parameter from the committed set")
+                .clicked()
+            {
+                delete = Some(index);
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            edited |= optional_variable_bound(ui, "Min", &mut entry.min);
+            edited |= optional_variable_bound(ui, "Max", &mut entry.max);
+            ui.label("Step");
+            edited |= ui
+                .add(
+                    egui::DragValue::new(&mut entry.step)
+                        .speed(0.05)
+                        .range(0.0001..=1.0e9),
+                )
+                .on_hover_text("Positive increment used by the drag value")
+                .changed();
+        });
+        // A blank bound is the unbounded state; a typed/derived non-finite
+        // value must never reach the draft as NaN.
+        if entry.min.is_some_and(|value| !value.is_finite()) {
+            entry.min = None;
+            edited = true;
+        }
+        if entry.max.is_some_and(|value| !value.is_finite()) {
+            entry.max = None;
+            edited = true;
+        }
+    }
+
+    if let Some(index) = delete {
+        variables.drafts.remove(index);
+        edited = true;
+    }
+
+    let add = ui
+        .horizontal_wrapped(|ui| {
+            ui.label("New");
+            ui.add(
+                egui::TextEdit::singleline(&mut variables.name)
+                    .hint_text("name")
+                    .desired_width(90.0),
+            );
+            let enabled =
+                !variables.name.trim().is_empty() && variables.drafts.len() < MAX_PARAMETERS;
+            ui.add_enabled(enabled, egui::Button::new("Add parameter"))
+                .on_hover_text("Validate and add a named parameter")
+                .clicked()
+        })
+        .inner;
+    if add {
+        let name = variables.name.trim().to_owned();
+        variables.drafts.push(Parameter {
+            name,
+            value: 0.0,
+            min: None,
+            max: None,
+            step: 1.0,
+        });
+        if variables.commit(state) {
+            variables.name.clear();
+        } else {
+            // The model rejected the set: keep the name draft for correction
+            // but do not leave the invalid row in the editor.
+            variables.drafts.pop();
+        }
+    }
+
+    if ui
+        .button("Reset variables")
+        .on_hover_text("Commit an empty parameter set")
+        .clicked()
+    {
+        variables.reset(state);
+    } else if edited {
+        variables.commit(state);
+    }
+
+    if !variables.error.is_empty() {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(&variables.error).color(ui.visuals().error_fg_color),
+            )
+            .wrap(),
+        );
+    }
 }
 
 /// One collapsible section with a reset-to-defaults button in its header.

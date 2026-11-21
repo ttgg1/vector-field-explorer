@@ -2642,8 +2642,9 @@ accepted expressions and delegates scene construction to `plot_scene`.
 
 #### `src/parameters.rs` — shared named-parameter records
 
-**Purpose.** Validated, durable named numbers (issue #89 slice A) with no parser
-or UI binding yet.
+**Purpose.** Validated, durable named numbers (issue #89 slice A) that formula
+parsing substitutes (slice B) and the sidebar Variables editor commits through
+`State::commit_parameters` (slice C).
 
 **Public API.** `MAX_PARAMETERS = 32`, `MAX_NAME_LEN = 32`,
 `PARAMETER_VERSION = 1`, `RESERVED_NAMES`; `Parameter { name, value, min, max,
@@ -4656,8 +4657,9 @@ hand-edited values.
 
 #### `src/ui/sidebar.rs` — the Controls panel
 
-**Purpose.** Every scene knob (Display, Camera, Features, Coloring, Domain),
-with a local mirror and a single `apply` handoff.
+**Purpose.** Every scene knob (Display, Camera, Features, Coloring, Domain)
+plus the formula's collapsed Variables editor, with a local mirror and a single
+`apply` handoff.
 
 **Public API.** `Section` + `SECTIONS`, `domain_summary`, `DomainAxis`,
 `domain_axes`, `PlaneControlMode`, `plane_control_mode`,
@@ -4666,7 +4668,9 @@ with a local mirror and a single `apply` handoff.
 `sides_control_enabled`, `head_control_enabled`, `seed_mode_enabled`,
 `seed_layout_visible`, `streamline_count_enabled_with_layout`,
 `seed_layout_count_label`, `SEED_LAYOUT_DENSITY_INACTIVE_NOTE`,
-`SeedGeneratorControls`, `particle_size_enabled`, `particle_fixed_color_enabled`,
+`SeedGeneratorControls`, `variables_visible`, `VariablesControls`,
+`commit_variables` (test seam), `particle_size_enabled`,
+`particle_fixed_color_enabled`,
 `fixed_color_rgb`,
 `fixed_color_opaque`, `trail_fade_enabled`, `trail_width_enabled`,
 `stagnation_seconds_enabled`, `particle_count_label`, `BOTH_COLORING_NOTE`,
@@ -4720,6 +4724,18 @@ with a local mirror and a single `apply` handoff.
   `State` helpers; the editor never mutates the committed layout directly. The
   armed "Place seed" flag is cleared on every frame the editor is hidden, so
   re-enabling it cannot silently plant a seed later.
+- The collapsed-by-default Variables section exists only for the formula field
+  in a vector view (`variables_visible`), so Sources, Induction, Materials,
+  Maxwell, Ode and plots hide it. One row per committed parameter shows its
+  name, `Value`, optional `Min`/`Max` (an `unbounded` checkbox blanks a bound;
+  non-finite values become blank), positive `Step` and a `Delete` button. The
+  Add row validates through `State::commit_parameters`; a rejected add rolls
+  the draft row back and keeps the typed name, while a rejected edit keeps every
+  row's draft and shows the model's message inline. `Reset variables` commits an
+  empty set. Drafts live in `VariablesControls` on `Controls`, are never
+  persisted or mutated into `State.parameters`, and are refreshed only when the
+  committed set changed. An edit equal to the committed set is not committed,
+  so it requests no rebuild.
 - Coloring keeps the palette row first, then Quantity, Scale, freeze and the
   legend, then auto-fit and the manual range, then the collapsed "Custom
   palette" editor. Direction is disabled in 3D. Signed log uses a validated,
@@ -4763,7 +4779,7 @@ with a local mirror and a single `apply` handoff.
   disabled with explanations and retain their values. Only shared plot controls
   (grid/axes, domain, palette) reach the seam, and Fit is returned to the app.
 
-**Pinned by.** `tests/sidebar_controls_test.rs` (63), including
+**Pinned by.** `tests/sidebar_controls_test.rs` (71), including
 `untouched_frame_rebuilds_nothing_through_apply`,
 `synced_controls_never_redirty_the_scene`,
 `density_clamp_keys_to_sampled_dimension_through_apply`,
@@ -4777,7 +4793,14 @@ with a local mirror and a single `apply` handoff.
 `saving_current_seeds_rejects_empty_builtin_and_oversized_names`,
 `saving_twice_with_one_name_replaces_in_place`,
 `deleting_a_user_layout_needs_two_clicks_and_clears_on_other_actions`,
-`export_copy_and_import_report_deltas_and_reject_bad_documents_atomically`;
+`export_copy_and_import_report_deltas_and_reject_bad_documents_atomically`,
+`variables_section_lists_parameters_and_hides_outside_formula_vector_mode`,
+`editing_a_value_commits_and_reparses_the_formula`,
+`adding_an_invalid_name_reports_the_model_message_and_changes_nothing`,
+`duplicate_and_reserved_names_are_rejected_without_mutation`,
+`deleting_rows_commits_the_smaller_set_and_deleting_all_commits_empty`,
+`reset_variables_commits_an_empty_set`,
+`committing_an_unchanged_set_is_a_rebuild_no_op`;
 `tests/sidebar_sections_test.rs` (order/reset isolation),
 `tests/sidebar_camera_ui_test.rs`, `tests/sidebar_colormap_ui_test.rs`
 (`quantity_selector_applies_component_colouring`,
