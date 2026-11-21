@@ -39,6 +39,10 @@ use crate::particles::{
     ParticleAppearance, ParticleColorMode,
 };
 use crate::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, plane_coordinate};
+use crate::scalar_analysis::{
+    ComparisonSeries, ComparisonSet, GradientSpec, MAX_COMPARISON_SERIES, MAX_SERIES_LABEL_BYTES,
+    MAX_STEP, MIN_STEP, SeriesId, SeriesRole, SeriesStyle,
+};
 use crate::scalar_view::{MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, scalar_view_expr};
 use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedLayout, SeedPoint, circle_seeds,
@@ -995,6 +999,9 @@ pub struct Controls {
     pub scalar_place_probe: bool,
     /// The last Scalar view rejection, shown inline under the controls.
     pub scalar_message: String,
+    /// Session-only comparison-series and gradient drafts (issue #93 slice B).
+    /// Committed records live in `State`; these buffers never persist.
+    pub scalar_analysis: ScalarAnalysisControls,
 }
 
 impl Controls {
@@ -1062,6 +1069,7 @@ impl Controls {
             scalar_contour_levels: DEFAULT_SCALAR_CONTOUR_LEVELS,
             scalar_place_probe: false,
             scalar_message: String::new(),
+            scalar_analysis: ScalarAnalysisControls::default(),
         }
     }
 
@@ -1146,6 +1154,168 @@ impl Controls {
     }
 }
 
+/// One session-only comparison-series draft (issue #93 slice B). The committed
+/// record lives in `State::comparison_series`; a rejected commit keeps the
+/// draft so the user can fix it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesDraft {
+    /// Stable record id shared with the committed series.
+    pub id: SeriesId,
+    pub label: String,
+    pub expr: String,
+    pub style: SeriesStyle,
+}
+
+/// Session-only gradient draft. The committed request lives in
+/// `State::gradient`; the source defaults to the current scalar formula.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GradientDraft {
+    pub enabled: bool,
+    pub role: SeriesRole,
+    pub expr: String,
+    pub step: f32,
+    pub max_error: f32,
+}
+
+/// Session-only drafts for the Scalar analysis subsection. Every edit is
+/// committed once per frame through `State::set_comparison_series` and
+/// `State::set_gradient`; a rejection keeps the draft and shows the model's
+/// message. Nothing here is persisted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScalarAnalysisControls {
+    pub series: Vec<SeriesDraft>,
+    pub series_error: String,
+    pub gradient: GradientDraft,
+    pub gradient_error: String,
+    synced_series: ComparisonSet,
+    synced_gradient: Option<GradientSpec>,
+    initialized: bool,
+}
+
+impl Default for ScalarAnalysisControls {
+    fn default() -> Self {
+        Self {
+            series: Vec::new(),
+            series_error: String::new(),
+            gradient: GradientDraft {
+                enabled: false,
+                role: SeriesRole::Scalar,
+                expr: String::new(),
+                step: 1e-3,
+                max_error: 5e-2,
+            },
+            gradient_error: String::new(),
+            synced_series: ComparisonSet::new(),
+            synced_gradient: None,
+            initialized: false,
+        }
+    }
+}
+
+impl ScalarAnalysisControls {
+    /// Follow the committed records only when they actually changed: a
+    /// rejected edit leaves the drafts (and its message) in place.
+    fn sync(&mut self, state: &State) {
+        if state.comparison_series != self.synced_series {
+            self.synced_series = state.comparison_series.clone();
+            self.series = self
+                .synced_series
+                .iter()
+                .map(|series| SeriesDraft {
+                    id: series.id,
+                    label: series.label.clone(),
+                    expr: series.expr.clone(),
+                    style: series.style,
+                })
+                .collect();
+        }
+        if state.gradient != self.synced_gradient {
+            self.synced_gradient = state.gradient.clone();
+            match &state.gradient {
+                Some(spec) => {
+                    self.gradient.enabled = true;
+                    self.gradient.role = spec.role;
+                    self.gradient.expr = spec.expr.clone();
+                    self.gradient.step = spec.step;
+                    self.gradient.max_error = spec.max_error;
+                }
+                None => self.gradient.enabled = false,
+            }
+        }
+        if !self.initialized {
+            // The gradient source is surface-context: default to the current
+            // scalar formula, once, without overwriting a typed draft.
+            if self.gradient.expr.is_empty() {
+                self.gradient.expr = state.plot.surface.source.clone();
+            }
+            self.initialized = true;
+        }
+    }
+
+    /// Commit the draft list through the atomic model seam. Returns whether the
+    /// document changed. A rejection leaves the committed set untouched.
+    fn commit_series(&mut self, state: &mut State) -> bool {
+        let next = ComparisonSet::from_series(
+            self.series
+                .iter()
+                .map(|draft| {
+                    ComparisonSeries::new(
+                        draft.id,
+                        draft.label.clone(),
+                        draft.expr.clone(),
+                        draft.style,
+                    )
+                })
+                .collect(),
+        );
+        if next == state.comparison_series {
+            self.synced_series = next;
+            self.series_error.clear();
+            return false;
+        }
+        match state.set_comparison_series(next.clone()) {
+            Ok(()) => {
+                self.synced_series = next;
+                self.series_error.clear();
+                true
+            }
+            Err(error) => {
+                self.series_error = error;
+                false
+            }
+        }
+    }
+
+    /// Commit the gradient draft through the same seam. The frame always comes
+    /// from the current scalar view, so the request is surface-context.
+    fn commit_gradient(&mut self, state: &mut State) -> bool {
+        let before = state.gradient.clone();
+        let result = if self.gradient.enabled {
+            let frame = state.scalar_view_frame();
+            state.set_gradient(Some(GradientSpec {
+                role: self.gradient.role,
+                expr: self.gradient.expr.clone(),
+                frame,
+                step: self.gradient.step,
+                max_error: self.gradient.max_error,
+            }))
+        } else {
+            state.set_gradient(None)
+        };
+        match result {
+            Ok(()) => {
+                self.synced_gradient = state.gradient.clone();
+                self.gradient_error.clear();
+                state.gradient != before
+            }
+            Err(error) => {
+                self.gradient_error = error;
+                false
+            }
+        }
+    }
+}
+
 /// The collapsed-by-default Scalar view section (issue #92 slice B1): the
 /// bounded grid/contour controls, the point-probe list and the click-arming
 /// toggle. It refreshes the scalar cache only while its body is open.
@@ -1210,6 +1380,8 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
                 heatmap_legend_line(ui, state);
             }
 
+            scalar_analysis_section(ui, state, controls);
+
             ui.checkbox(&mut controls.scalar_place_probe, "Place probe")
                 .on_hover_text("Click the viewport plane to add one point probe");
 
@@ -1237,6 +1409,167 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
                 ui.label(&controls.scalar_message);
             }
         });
+}
+
+/// The collapsed-by-default Scalar analysis subsection (issue #93 slice B):
+/// comparison series and the potential-gradient overlay. Only an open body
+/// samples, through `State::refresh_scalar_analysis`.
+fn scalar_analysis_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    egui::CollapsingHeader::new("Scalar analysis")
+        .id_salt("scalar_analysis_section")
+        .default_open(false)
+        .show(ui, |ui| {
+            scalar_analysis_editor(ui, state, controls);
+            // The open body is the only sampler; a collapsed header never
+            // reaches this call.
+            state.refresh_scalar_analysis(true);
+        });
+}
+
+/// Three-significant-digit step formatting: normal decimals down to 1e-3 and
+/// scientific notation below, so the accepted `1e-6` endpoint stays readable.
+fn format_gradient_step(value: f64) -> String {
+    if value == 0.0 {
+        "0".to_owned()
+    } else if value.abs() >= 1e-3 {
+        format!("{value:.3}")
+    } else {
+        format!("{value:.1e}")
+    }
+}
+
+/// Draw the comparison list and gradient controls. Every widget edits the
+/// session draft; `apply` commits the drafts through the atomic model seams.
+fn scalar_analysis_editor(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+    let analysis = &mut controls.scalar_analysis;
+    analysis.sync(state);
+
+    if analysis.series.is_empty() {
+        ui.label("No comparison series");
+    }
+    let series_count = analysis.series.len();
+    let mut remove: Option<usize> = None;
+    for (index, draft) in analysis.series.iter_mut().enumerate() {
+        ui.push_id(("scalar_series", draft.id.0), |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut draft.label).desired_width(72.0))
+                    .on_hover_text(format!(
+                        "Series label; at most {MAX_SERIES_LABEL_BYTES} bytes"
+                    ));
+                if ui
+                    .button("Remove series")
+                    .on_hover_text("Remove this display-only curve")
+                    .clicked()
+                {
+                    remove = Some(index);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft.expr)
+                        .desired_width(120.0)
+                        .hint_text("f(x)"),
+                )
+                .on_hover_text(
+                    "Curve expression in x; parsed in curve context, so it does not see \
+                     named parameters; display-only and never a gradient source",
+                );
+            });
+            ui.horizontal(|ui| {
+                let mut rgb = draft.style.color.0;
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    draft.style.color = Rgb(rgb);
+                }
+                ui.checkbox(&mut draft.style.dashed, "Dashed")
+                    .on_hover_text("Dash this series independently of the others");
+            });
+        });
+    }
+    if let Some(index) = remove
+        && index < analysis.series.len()
+    {
+        analysis.series.remove(index);
+    }
+    ui.horizontal(|ui| {
+        let at_cap = analysis.series.len() >= MAX_COMPARISON_SERIES;
+        let add = ui
+            .add_enabled(!at_cap, egui::Button::new("Add series"))
+            .on_hover_text(if at_cap {
+                format!("at most {MAX_COMPARISON_SERIES} comparison series are allowed")
+            } else {
+                "Append a display-only curve with the next palette colour".to_owned()
+            });
+        if add.clicked() {
+            let id = analysis
+                .series
+                .iter()
+                .map(|draft| draft.id.0)
+                .max()
+                .map_or(0, |max| max.saturating_add(1));
+            analysis.series.push(SeriesDraft {
+                id: SeriesId(id),
+                label: format!("Series {}", series_count + 1),
+                expr: "x".to_owned(),
+                style: SeriesStyle::fallback(series_count),
+            });
+        }
+    });
+    if !analysis.series_error.is_empty() {
+        ui.label(&analysis.series_error);
+    }
+
+    ui.separator();
+    ui.checkbox(&mut analysis.gradient.enabled, "Show gradient")
+        .on_hover_text("Paint the scaled finite-difference field on this slice");
+    ui.add_enabled_ui(analysis.gradient.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Role");
+            egui::ComboBox::from_id_salt("scalar_gradient_role")
+                .selected_text(analysis.gradient.role.label())
+                .show_ui(ui, |ui| {
+                    for role in [SeriesRole::Scalar, SeriesRole::ElectricPotential] {
+                        ui.selectable_value(&mut analysis.gradient.role, role, role.label());
+                    }
+                })
+                .response
+                .on_hover_text("E = -grad V is only for an electric potential");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Source");
+            ui.add(egui::TextEdit::singleline(&mut analysis.gradient.expr).desired_width(120.0))
+                .on_hover_text(
+                    "Surface-context formula in x/y and the committed parameters; \
+                 comparison curves never feed it",
+                );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Step");
+            ui.add(
+                egui::DragValue::new(&mut analysis.gradient.step)
+                    .speed(1e-5)
+                    .custom_formatter(|value, _| format_gradient_step(value)),
+            )
+            .on_hover_text(format!(
+                "Finite-difference step; {MIN_STEP}..={MAX_STEP}, rejected outside, never clamped"
+            ));
+            ui.label("Max error");
+            ui.add(egui::DragValue::new(&mut analysis.gradient.max_error).speed(1e-3))
+                .on_hover_text(
+                    "Samples above this refinement disagreement are hidden, never trusted",
+                );
+        });
+    });
+    let counts = state.scalar_analysis_counts();
+    ui.label(format!(
+        "{} arrows, {} hidden (unusable), {} one-sided",
+        counts.arrows, counts.hidden, counts.one_sided
+    ));
+    if let Some(error) = state.scalar_analysis_error() {
+        ui.label(error);
+    }
+    if !analysis.gradient_error.is_empty() {
+        ui.label(&analysis.gradient_error);
+    }
 }
 
 /// Palette strip, effective range and clipping note for the painted heatmap
@@ -2979,6 +3312,14 @@ pub fn apply(state: &mut State, controls: &mut Controls) {
         extent_or_previous(controls.domain_max.z, state.domain.max.z),
     );
     state.set_domain(domain_min, domain_max);
+    // The Scalar analysis drafts belong to the vector Scalar view. A plot kind
+    // where the scalar view is inert must not rewrite the persisted gradient
+    // frame or commit display-only drafts as a side effect.
+    if state.scalar_view_applicable() {
+        controls.scalar_analysis.sync(state);
+        controls.scalar_analysis.commit_series(state);
+        controls.scalar_analysis.commit_gradient(state);
+    }
     apply_scalar_controls(state, controls);
 
     controls.density = state.density;

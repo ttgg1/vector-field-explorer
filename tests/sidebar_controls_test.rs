@@ -17,6 +17,9 @@ use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, Partic
 use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneView};
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::scalar_analysis::{
+    ComparisonSeries, ComparisonSet, SeriesId, SeriesRole, SeriesStyle,
+};
 use vector_field_explorer::scalar_view::UNSUPPORTED_Z_REASON;
 use vector_field_explorer::seed_layout::{SeedLayout, SeedPoint};
 use vector_field_explorer::seed_layout_library::{
@@ -26,13 +29,13 @@ use vector_field_explorer::seed_layout_library::{
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::sidebar::{
     self, ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, SEED_LAYOUT_DENSITY_INACTIVE_NOTE,
-    apply, arrow_scale_enabled, arrow_style_set, commit_variables, domain_axes, domain_summary,
-    fixed_color_opaque, fixed_color_rgb, head_control_enabled, magnitude_scale_enabled,
-    particle_count_label, particle_fixed_color_enabled, particle_size_enabled, plane_control_mode,
-    proportional_exponent_enabled, seed_layout_count_label, seed_layout_visible, seed_mode_enabled,
-    sides_control_enabled, stagnation_seconds_enabled, streamline_count_enabled,
-    streamline_count_enabled_with_layout, streamline_count_label, trail_fade_enabled,
-    trail_width_enabled, variables_visible,
+    SeriesDraft, apply, arrow_scale_enabled, arrow_style_set, commit_variables, domain_axes,
+    domain_summary, fixed_color_opaque, fixed_color_rgb, head_control_enabled,
+    magnitude_scale_enabled, particle_count_label, particle_fixed_color_enabled,
+    particle_size_enabled, plane_control_mode, proportional_exponent_enabled,
+    seed_layout_count_label, seed_layout_visible, seed_mode_enabled, sides_control_enabled,
+    stagnation_seconds_enabled, streamline_count_enabled, streamline_count_enabled_with_layout,
+    streamline_count_label, trail_fade_enabled, trail_width_enabled, variables_visible,
 };
 use vector_field_explorer::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_PARTICLE_SIZE, LeftClickAction, MAX_ARROW_OPACITY,
@@ -2893,5 +2896,239 @@ fn hidden_section_keeps_the_cache_without_resampling() {
     assert!(
         h.state.scalar_view_cache().record().is_some(),
         "the last record is retained"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #93 slice B: the Scalar analysis subsection.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scalar_analysis_section_lists_series_and_reports_validation_errors() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.open_header("Scalar view");
+    let _ = h.idle();
+    assert_eq!(
+        h.state.scalar_analysis_resamples(),
+        0,
+        "the closed Scalar analysis subsection performs no sampling"
+    );
+    h.open_header("Scalar analysis");
+    let _ = h.idle();
+    assert!(
+        h.state.scalar_analysis_resamples() > 0,
+        "opening the subsection samples once"
+    );
+    let out = h.idle();
+    assert!(
+        painted_texts(&out)
+            .iter()
+            .any(|text| text.contains("No comparison series")),
+        "the empty list shows the honest empty state: {:?}",
+        painted_texts(&out)
+    );
+
+    let mut set = ComparisonSet::new();
+    set.push(ComparisonSeries::new(
+        SeriesId(0),
+        "Potential".into(),
+        "x*x".into(),
+        SeriesStyle::default(),
+    ))
+    .expect("room for one series");
+    h.state.set_comparison_series(set).expect("valid set");
+    // One frame syncs the drafts from the committed set, the next paints them.
+    let _ = h.idle();
+    let out = h.idle();
+    let labels = accesskit_labels(&out);
+    assert!(
+        labels.iter().any(|label| label.contains("Potential")),
+        "the committed label is listed: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| label.contains("x*x")),
+        "the committed formula is editable in place: {labels:?}"
+    );
+
+    // A rejected edit keeps the honest model message and leaves the committed
+    // record untouched.
+    let commitment = h.state.comparison_series.clone();
+    h.controls.scalar_analysis.series[0].label.clear();
+    let _ = h.idle();
+    let out = h.idle();
+    assert!(
+        painted_texts(&out)
+            .iter()
+            .chain(accesskit_labels(&out).iter())
+            .any(|text| text.contains("label must not be empty")),
+        "the model's rejection is shown inline: {:?}",
+        painted_texts(&out)
+    );
+    assert_eq!(
+        h.state.comparison_series, commitment,
+        "a rejected edit never reaches the document"
+    );
+}
+
+#[test]
+fn adding_and_removing_series_uses_the_bounded_commit_seam() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.open_header("Scalar view");
+    h.open_header("Scalar analysis");
+
+    let _ = h.click_button("Add series");
+    assert_eq!(h.state.comparison_series.len(), 1);
+    let first = &h.state.comparison_series.as_slice()[0];
+    assert_eq!(first.label, "Series 1");
+    assert_eq!(first.expr, "x");
+    assert_eq!(first.style, SeriesStyle::fallback(0));
+
+    let _ = h.click_button("Add series");
+    assert_eq!(h.state.comparison_series.len(), 2);
+    let second = &h.state.comparison_series.as_slice()[1];
+    assert_eq!(second.label, "Series 2");
+    assert_eq!(
+        second.style,
+        SeriesStyle::fallback(1),
+        "each Add takes the next palette colour"
+    );
+
+    let _ = h.click_nth_button("Remove series", 0);
+    assert_eq!(h.state.comparison_series.len(), 1);
+    assert_eq!(
+        h.state.comparison_series.as_slice()[0].label,
+        "Series 2",
+        "Remove removes exactly the clicked row"
+    );
+
+    // Fill the cap through the same Add seam, then prove a fifth draft is
+    // rejected by the bounded model instead of growing the document.
+    while h.state.comparison_series.len() < 4 {
+        let _ = h.click_button("Add series");
+    }
+    assert_eq!(h.state.comparison_series.len(), 4);
+    h.controls.scalar_analysis.series.push(SeriesDraft {
+        id: SeriesId(99),
+        label: "Overflow".into(),
+        expr: "x".into(),
+        style: SeriesStyle::default(),
+    });
+    let _ = h.idle();
+    let out = h.idle();
+    assert_eq!(
+        h.state.comparison_series.len(),
+        4,
+        "the document stays at the cap"
+    );
+    assert!(
+        painted_texts(&out)
+            .iter()
+            .chain(accesskit_labels(&out).iter())
+            .any(|text| text.contains("at most 4")),
+        "the bounded commit seam reports the cap: {:?}",
+        painted_texts(&out)
+    );
+}
+
+#[test]
+fn gradient_controls_apply_role_step_and_max_error() {
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    controls.scalar_analysis.gradient.enabled = true;
+    controls.scalar_analysis.gradient.role = SeriesRole::ElectricPotential;
+    controls.scalar_analysis.gradient.expr = "x + y".into();
+    controls.scalar_analysis.gradient.step = 1e-3;
+    controls.scalar_analysis.gradient.max_error = 0.25;
+    apply(&mut state, &mut controls);
+
+    let spec = state.gradient.clone().expect("the gradient is committed");
+    assert_eq!(spec.role, SeriesRole::ElectricPotential);
+    assert_eq!(spec.expr, "x + y");
+    assert_eq!(spec.step, 1e-3);
+    assert_eq!(spec.max_error, 0.25);
+    assert_eq!(
+        spec.frame,
+        state.scalar_view_frame(),
+        "the panel commits the surface-context frame"
+    );
+
+    // An out-of-range step is rejected before sampling, never clamped.
+    controls.scalar_analysis.gradient.step = 5.0;
+    apply(&mut state, &mut controls);
+    let kept = state.gradient.clone().expect("the previous spec survives");
+    assert_eq!(
+        kept.step, 1e-3,
+        "the rejected edit leaves the document alone"
+    );
+    assert!(
+        controls.scalar_analysis.gradient_error.contains("outside"),
+        "the model's step bound is shown: {:?}",
+        controls.scalar_analysis.gradient_error
+    );
+
+    // Unchecking enable clears the request through the same seam.
+    controls.scalar_analysis.gradient.enabled = false;
+    apply(&mut state, &mut controls);
+    assert!(state.gradient.is_none());
+}
+
+#[test]
+fn scalar_analysis_commits_only_while_the_scalar_view_is_applicable() {
+    let mut state = State::new(false);
+    let mut controls = Controls::new();
+    assert!(
+        state.scalar_view_applicable(),
+        "the default vector formula view hosts scalar analysis"
+    );
+    let _ = state.snapshot_if_dirty();
+
+    controls.scalar_analysis.gradient.enabled = true;
+    controls.scalar_analysis.gradient.expr = "x + y".into();
+    controls.scalar_analysis.series.push(SeriesDraft {
+        id: SeriesId(0),
+        label: "draft".into(),
+        expr: "x".into(),
+        style: SeriesStyle::default(),
+    });
+
+    // Curve2D/Surface3D make the scalar view inert. `apply` must not rewrite
+    // the persisted gradient frame or commit the retained drafts.
+    assert!(state.set_plot_kind(PlotKind::Curve2D));
+    let _ = state.snapshot_if_dirty();
+    apply(&mut state, &mut controls);
+    assert!(
+        state.gradient.is_none(),
+        "a scalar plot mode never commits a gradient draft"
+    );
+    assert!(
+        state.comparison_series.is_empty(),
+        "a scalar plot mode never commits a series draft"
+    );
+    assert!(!state.dirty, "the inert drafts leave the document alone");
+    apply(&mut state, &mut controls);
+    assert!(
+        !state.dirty,
+        "repeated inert frames still leave the document alone"
+    );
+    assert!(
+        controls.scalar_analysis.gradient.enabled,
+        "the draft survives"
+    );
+
+    // Returning to the vector formula view commits the retained drafts.
+    assert!(state.set_plot_kind(PlotKind::VectorField));
+    let _ = state.snapshot_if_dirty();
+    apply(&mut state, &mut controls);
+    let gradient = state.gradient.as_ref().expect("the gradient commits");
+    assert_eq!(gradient.expr, "x + y");
+    assert_eq!(
+        gradient.frame,
+        state.scalar_view_frame(),
+        "the committed frame is the applicable scalar view"
+    );
+    assert_eq!(
+        state.comparison_series.len(),
+        1,
+        "the retained series draft commits"
     );
 }

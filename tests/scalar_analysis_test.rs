@@ -5,17 +5,23 @@
 //! invalidating cache and persistence of series/gradient settings.
 
 use glam::{UVec3, Vec3};
+use vector_field_explorer::animation_scene::AnimationSnapshot;
+use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_ramp::Rgb;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::particles::Particles;
 use vector_field_explorer::persistence::ViewRecord;
 use vector_field_explorer::plane::{PlaneFrame, PlaneView};
+use vector_field_explorer::renderer::LineInstanceGPU;
 use vector_field_explorer::scalar_analysis::{
-    sample_gradient, ComparisonSeries, ComparisonSet, GradientCache, GradientCacheKey,
-    GradientSpec, SeriesId, SeriesRole, SeriesStyle, MAX_COMPARISON_SERIES, MAX_GRADIENT_SAMPLES,
-    MAX_SERIES_LABEL_BYTES, MAX_STEP, MIN_STEP,
+    ComparisonSeries, ComparisonSet, GradientCache, GradientCacheKey, GradientSpec,
+    MAX_COMPARISON_SERIES, MAX_GRADIENT_SAMPLES, MAX_SERIES_LABEL_BYTES, MAX_STEP, MIN_STEP,
+    SeriesId, SeriesRole, SeriesStyle, sample_gradient,
 };
 use vector_field_explorer::scalar_view::UNSUPPORTED_Z_REASON;
+use vector_field_explorer::screenshot::scene_to_svg;
+use vector_field_explorer::source_scene::ELECTRIC_COLOR;
 use vector_field_explorer::ui::sidebar::Controls;
 use vector_field_explorer::viewmodel::State;
 
@@ -460,12 +466,16 @@ fn invalid_or_non_finite_steps_are_rejected_before_sampling() {
             "max_error {max_error} is rejected"
         );
     }
-    assert!(spec("x*x", SeriesRole::Scalar, MIN_STEP, 0.0)
-        .validate()
-        .is_ok());
-    assert!(spec("x*x", SeriesRole::Scalar, MAX_STEP, 0.0)
-        .validate()
-        .is_ok());
+    assert!(
+        spec("x*x", SeriesRole::Scalar, MIN_STEP, 0.0)
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        spec("x*x", SeriesRole::Scalar, MAX_STEP, 0.0)
+            .validate()
+            .is_ok()
+    );
 }
 
 #[test]
@@ -656,5 +666,437 @@ fn samples_over_the_error_budget_are_marked_unusable() {
             .iter()
             .all(|sample| sample.gradient.is_none() || sample.usable),
         "a generous budget trusts every defined sample"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #93 slice B: comparison-curve and gradient-arrow geometry.
+// ---------------------------------------------------------------------------
+
+fn rgba(color: [u8; 3]) -> [f32; 4] {
+    [
+        f32::from(color[0]) / 255.0,
+        f32::from(color[1]) / 255.0,
+        f32::from(color[2]) / 255.0,
+        1.0,
+    ]
+}
+
+fn line_length(line: &LineInstanceGPU) -> f32 {
+    let a = Vec3::new(line.a[0], line.a[1], line.a[2]);
+    let b = Vec3::new(line.b[0], line.b[1], line.b[2]);
+    (b - a).length()
+}
+
+fn with_color(lines: &[LineInstanceGPU], color: [f32; 4]) -> Vec<&LineInstanceGPU> {
+    lines.iter().filter(|line| line.color == color).collect()
+}
+
+#[test]
+fn hidden_section_does_not_sample_the_gradient() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    let frame = state.scalar_view_frame();
+    state
+        .set_gradient(Some(GradientSpec {
+            role: SeriesRole::Scalar,
+            expr: "x".into(),
+            frame,
+            step: 1e-3,
+            max_error: 1.0,
+        }))
+        .expect("valid gradient");
+
+    // A hidden panel performs no sampling and paints no overlay fed by one.
+    state.refresh_scalar_analysis(false);
+    assert_eq!(state.scalar_analysis_resamples(), 0);
+    assert!(state.scalar_overlay_lines().is_empty());
+
+    state.refresh_scalar_analysis(true);
+    assert_eq!(state.scalar_analysis_resamples(), 1);
+    assert!(!state.scalar_overlay_lines().is_empty());
+
+    // An unchanged key (same formula, frame, domain, parameters and the same
+    // 100 ms clock bucket) is a cache hit.
+    state.refresh_scalar_analysis(true);
+    assert_eq!(state.scalar_analysis_resamples(), 1);
+    state.set_time(0.05);
+    state.refresh_scalar_analysis(true);
+    assert_eq!(
+        state.scalar_analysis_resamples(),
+        1,
+        "the same 100 ms bucket does not resample"
+    );
+
+    // The next bucket invalidates the cache through the #92 10 Hz rule.
+    state.set_time(0.2);
+    state.refresh_scalar_analysis(true);
+    assert_eq!(state.scalar_analysis_resamples(), 2);
+}
+
+#[test]
+fn comparison_curves_render_in_their_own_styles() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    let solid_style = SeriesStyle {
+        color: Rgb([250, 10, 20]),
+        dashed: false,
+    };
+    let dashed_style = SeriesStyle {
+        color: Rgb([10, 250, 20]),
+        dashed: true,
+    };
+    let mut set = ComparisonSet::new();
+    set.push(ComparisonSeries::new(
+        SeriesId(0),
+        "solid".into(),
+        "x".into(),
+        solid_style,
+    ))
+    .expect("room for the first series");
+    set.push(ComparisonSeries::new(
+        SeriesId(1),
+        "dashed".into(),
+        "x".into(),
+        dashed_style,
+    ))
+    .expect("room for the second series");
+    state.set_comparison_series(set).expect("valid set");
+
+    state.refresh_scalar_analysis(true);
+    let lines = state.scalar_overlay_lines();
+    let solid = with_color(&lines, rgba(solid_style.color.0));
+    let dashed = with_color(&lines, rgba(dashed_style.color.0));
+    assert!(!solid.is_empty(), "the solid series paints lines");
+    assert!(!dashed.is_empty(), "the dashed series paints lines");
+    assert!(
+        dashed.len() < solid.len(),
+        "dashing leaves gaps instead of painting every edge"
+    );
+    let solid_total: f32 = solid.iter().map(|line| line_length(line)).sum();
+    let dashed_total: f32 = dashed.iter().map(|line| line_length(line)).sum();
+    assert!(
+        dashed_total < solid_total * 0.9,
+        "the dashed pattern covers less of the curve: {dashed_total} vs {solid_total}"
+    );
+    let solid_len = line_length(solid[0]);
+    assert!(
+        dashed
+            .iter()
+            .all(|line| line_length(line) <= solid_len + 1e-6),
+        "no dash is longer than one sampled edge"
+    );
+
+    // The curve samples the shared plane locally: for `f(x) = x` the first
+    // edge lies on the 45° line through the frame origin.
+    let first = solid[0];
+    assert!(
+        (first.a[0] - first.a[1]).abs() < 1e-6 && (first.b[0] - first.b[1]).abs() < 1e-6,
+        "f(x) = x maps onto the frame diagonal: {first:?}"
+    );
+
+    // Independent styles: distinct colours on the same geometry.
+    assert_ne!(
+        solid[0].color, dashed[0].color,
+        "each series keeps its own colour"
+    );
+}
+
+#[test]
+fn unparseable_comparison_series_surfaces_an_error_and_paints_nothing() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    let mut set = ComparisonSet::new();
+    set.push(ComparisonSeries::new(
+        SeriesId(7),
+        "bad series".into(),
+        "a*x + q".into(),
+        SeriesStyle::default(),
+    ))
+    .expect("slice-A accepts any non-empty expression text");
+    state
+        .set_comparison_series(set)
+        .expect("slice-A validation is unchanged");
+
+    state.refresh_scalar_analysis(true);
+    let error = state
+        .scalar_analysis_error()
+        .expect("the parse failure is surfaced in the panel");
+    assert!(
+        error.contains("bad series"),
+        "the message names the series: {error}"
+    );
+    assert!(
+        error.to_lowercase().contains("parse"),
+        "the message reports a parse failure: {error}"
+    );
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "an unparseable series paints no geometry"
+    );
+    assert_eq!(
+        state.comparison_series.as_slice()[0].expr,
+        "a*x + q",
+        "the rejected text stays in the committed draft for editing"
+    );
+}
+
+#[test]
+fn unusable_gradient_samples_are_omitted_and_counted() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    let frame = state.scalar_view_frame();
+    state
+        .set_gradient(Some(GradientSpec {
+            role: SeriesRole::Scalar,
+            // Undefined for x < 0: those samples are holes and never filled.
+            expr: "sqrt(x)".into(),
+            frame,
+            step: 1e-3,
+            max_error: 1e9,
+        }))
+        .expect("valid gradient");
+
+    state.refresh_scalar_analysis(true);
+    let counts = state.scalar_analysis_counts();
+    assert!(counts.arrows > 0, "the defined half paints arrows");
+    assert!(counts.hidden > 0, "the hole half is reported as hidden");
+    assert!(counts.one_sided > 0, "domain edges use one-sided stencils");
+    assert_eq!(
+        counts.arrows + counts.hidden,
+        MAX_GRADIENT_SAMPLES,
+        "every sample is either drawn or reported hidden"
+    );
+
+    let lines = state.scalar_overlay_lines();
+    assert!(!lines.is_empty(), "usable samples paint arrow glyphs");
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.a.iter().chain(line.b.iter()).all(|v| v.is_finite())),
+        "a hole is never replaced by fabricated geometry"
+    );
+    assert!(
+        lines.iter().all(|line| line.a[0] > 0.0 && line.b[0] > 0.0),
+        "the undefined x < 0 half is omitted"
+    );
+}
+
+#[test]
+fn gradient_arrows_carry_the_electric_label_colour_only_for_that_role() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    state.set_scalar_text_color([0.9, 0.8, 0.7, 1.0]);
+    let frame = state.scalar_view_frame();
+    let make = |role| GradientSpec {
+        role,
+        expr: "x".into(),
+        frame,
+        step: 1e-3,
+        max_error: 1.0,
+    };
+
+    state
+        .set_gradient(Some(make(SeriesRole::Scalar)))
+        .expect("valid scalar gradient");
+    state.refresh_scalar_analysis(true);
+    let scalar_lines = state.scalar_overlay_lines();
+    assert!(!scalar_lines.is_empty());
+    assert!(
+        scalar_lines
+            .iter()
+            .all(|line| line.color == state.scalar_text_color()),
+        "a generic gradient uses the scalar text colour and is never called electric"
+    );
+
+    state
+        .set_gradient(Some(make(SeriesRole::ElectricPotential)))
+        .expect("valid potential gradient");
+    state.refresh_scalar_analysis(true);
+    let electric_lines = state.scalar_overlay_lines();
+    assert!(!electric_lines.is_empty());
+    assert!(
+        electric_lines
+            .iter()
+            .all(|line| line.color == rgba(ELECTRIC_COLOR)),
+        "E = -grad V uses the electric-family colour"
+    );
+    assert!(
+        electric_lines
+            .iter()
+            .all(|line| line.color != state.scalar_text_color()),
+        "the electric role does not reuse the scalar text colour"
+    );
+}
+
+#[test]
+fn comparison_and_gradient_geometry_do_not_change_arrows_mapping_or_probes() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    state
+        .add_point_probe(Vec3::new(0.1, 0.2, 0.0), None)
+        .expect("room for one probe");
+    let arrows_before = state.sample();
+    let mapping_before = state.color_mapping();
+    let probes_before = state.probes.clone();
+
+    let mut set = ComparisonSet::new();
+    set.push(ComparisonSeries::new(
+        SeriesId(0),
+        "reference".into(),
+        "x".into(),
+        SeriesStyle::default(),
+    ))
+    .expect("room for one series");
+    state.set_comparison_series(set).expect("valid set");
+    let frame = state.scalar_view_frame();
+    state
+        .set_gradient(Some(GradientSpec {
+            role: SeriesRole::ElectricPotential,
+            expr: "x".into(),
+            frame,
+            step: 1e-3,
+            max_error: 1.0,
+        }))
+        .expect("valid gradient");
+    state.refresh_scalar_analysis(true);
+    assert!(!state.scalar_overlay_lines().is_empty());
+
+    assert_eq!(
+        state.sample(),
+        arrows_before,
+        "comparison/gradient geometry never feeds vector arrows"
+    );
+    assert_eq!(
+        state.color_mapping(),
+        mapping_before,
+        "comparison/gradient geometry never feeds the colour mapping"
+    );
+    assert_eq!(
+        state.probes, probes_before,
+        "comparison/gradient geometry never feeds probes"
+    );
+}
+
+#[test]
+fn svg_export_keeps_curves_and_gradient_as_lines() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    let style = SeriesStyle {
+        color: Rgb([31, 119, 180]),
+        dashed: false,
+    };
+    let mut set = ComparisonSet::new();
+    set.push(ComparisonSeries::new(
+        SeriesId(0),
+        "curve".into(),
+        "x".into(),
+        style,
+    ))
+    .expect("room for one series");
+    state.set_comparison_series(set).expect("valid set");
+    let frame = state.scalar_view_frame();
+    state
+        .set_gradient(Some(GradientSpec {
+            role: SeriesRole::ElectricPotential,
+            expr: "x".into(),
+            frame,
+            step: 1e-3,
+            max_error: 1.0,
+        }))
+        .expect("valid gradient");
+    state.refresh_scalar_analysis(true);
+
+    let scene = state.snapshot();
+    let svg = scene_to_svg(&scene, glam::Mat4::IDENTITY, 256, 256, [0.0, 0.0, 0.0, 1.0]);
+    assert!(svg.contains("<line"), "the line blueprint survives");
+    assert!(
+        svg.contains("#1f77b4"),
+        "the comparison curve keeps its own style colour in SVG"
+    );
+    assert!(
+        svg.contains("#ffb040"),
+        "the electric gradient keeps the electric colour in SVG"
+    );
+    assert!(
+        !svg.contains("heatmap") && !svg.contains("<polygon class=\"heatmap"),
+        "scalar analysis geometry never becomes filled heatmap cells"
+    );
+}
+
+#[test]
+fn capture_and_animation_include_the_overlay() {
+    let mut state = State::new(false);
+    state
+        .set_scalar_contour_levels(0)
+        .expect("0 hides contours");
+    let style = SeriesStyle {
+        color: Rgb([200, 30, 60]),
+        dashed: false,
+    };
+    let mut set = ComparisonSet::new();
+    set.push(ComparisonSeries::new(
+        SeriesId(0),
+        "curve".into(),
+        "x".into(),
+        style,
+    ))
+    .expect("room for one series");
+    state.set_comparison_series(set).expect("valid set");
+    let frame = state.scalar_view_frame();
+    state
+        .set_gradient(Some(GradientSpec {
+            role: SeriesRole::ElectricPotential,
+            expr: "x".into(),
+            frame,
+            step: 1e-3,
+            max_error: 1.0,
+        }))
+        .expect("valid gradient");
+    state.refresh_scalar_analysis(true);
+
+    // The PNG capture path paints the app's cached scene lines.
+    let scene = state.snapshot();
+    assert!(
+        !with_color(&scene.lines, rgba(style.color.0)).is_empty(),
+        "the screenshot scene carries the comparison curve"
+    );
+    assert!(
+        !with_color(&scene.lines, rgba(ELECTRIC_COLOR)).is_empty(),
+        "the screenshot scene carries the gradient arrows"
+    );
+
+    // The animation snapshot composes the same line collection.
+    let mut snapshot = AnimationSnapshot::from_parts(
+        state,
+        Particles::default(),
+        OrbitCamera::default(),
+        None,
+        [0.0, 0.0, 0.0, 1.0],
+    );
+    let frame = snapshot
+        .frame_at(0.0, 0.0, 1.0, true)
+        .expect("animation frame");
+    assert!(
+        !with_color(&frame.scene.lines, rgba(style.color.0)).is_empty(),
+        "the animation frame carries the comparison curve"
+    );
+    assert!(
+        !with_color(&frame.scene.lines, rgba(ELECTRIC_COLOR)).is_empty(),
+        "the animation frame carries the gradient arrows"
     );
 }
