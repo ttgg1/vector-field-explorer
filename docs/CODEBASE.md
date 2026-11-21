@@ -1843,6 +1843,49 @@ probes.
 series/gradient envelope and corrupt-record pins in `tests/persistence_test.rs`,
 and the scene JSON round-trip/legacy pins in `tests/scene_document_test.rs`.
 
+**Slice B UI/render seam.** The Scalar view's collapsed "Scalar analysis"
+subsection owns session-only `Controls` drafts (`ScalarAnalysisControls`,
+`SeriesDraft`, `GradientDraft`) that are committed once per frame through
+`State::set_comparison_series`/`set_gradient`; a rejection keeps the draft and
+shows the model's message, and the drafts are cleared by `Controls::new` (never
+persisted). `sidebar::apply` commits those drafts only while
+`State::scalar_view_applicable()`: a scalar plot kind (`Curve2D`/`Surface3D`) or
+another inapplicable view leaves `State::gradient`, `State::comparison_series`
+and the dirty flag untouched, so an inert feature cannot rewrite the persisted
+gradient frame. The list is capped at four and `Add series` uses the next palette
+fallback (`Series N`, formula `x`). `State::refresh_scalar_analysis(visible)`
+samples only while that body is open and the scalar view is applicable, and only
+when its identity changed (series, gradient request, committed parameters,
+domain, plane frame, curve sample count, theme text colour, or the 100 ms
+clock); hidden or unchanged frames sample nothing. Comparison curves reuse
+`plot::sample_curve_at`/`curve_edges_at` in Curve context over the frame's local
+domain, map through `PlaneFrame::to_world`, and honour each `SeriesStyle` colour
+and a phase-continuous dash pattern. A series expression that fails
+`ScalarExpr::parse` paints nothing but reports a reason naming the series through
+`State::scalar_analysis_error` (the same slot as a gradient failure, which takes
+precedence); the rejected text stays in the draft. Gradient arrows are three
+`LineInstanceGPU` segments per usable sample (shaft + two head segments), fixed
+length `0.8 ×` sample spacing, coloured with
+`source_scene::ELECTRIC_COLOR` for `E = -∇V` and the scalar text colour for
+`∇f`; unusable/hole samples are omitted and counted. Both collections are
+appended by `State::scalar_overlay_lines`, after contours/probes, so
+`State::snapshot`/PNG/SVG/animation captures carry them with no new capture
+path; they never touch vector arrows, the colour mapping or probes. Counts are
+exposed by `scalar_analysis_counts`, `scalar_analysis_error` and
+`scalar_analysis_resamples`.
+
+**Slice B tests.** `comparison_curves_render_in_their_own_styles`,
+`unparseable_comparison_series_surfaces_an_error_and_paints_nothing`,
+`unusable_gradient_samples_are_omitted_and_counted`,
+`gradient_arrows_carry_the_electric_label_colour_only_for_that_role`,
+`comparison_and_gradient_geometry_do_not_change_arrows_mapping_or_probes`,
+`svg_export_keeps_curves_and_gradient_as_lines`,
+`capture_and_animation_include_the_overlay` and
+`hidden_section_does_not_sample_the_gradient` in `tests/scalar_analysis_test.rs`;
+the panel list/add/remove/bounds/step and
+`scalar_analysis_commits_only_while_the_scalar_view_is_applicable` tests in
+`tests/sidebar_controls_test.rs`.
+
 #### `src/plot.rs` — pure bounded scalar geometry and plot types
 
 **Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable

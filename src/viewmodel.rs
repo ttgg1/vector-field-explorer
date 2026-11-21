@@ -43,8 +43,12 @@ use crate::particles::{
     DOT_SPACING_FRACTION, FlowLayerStyle, MAX_PARTICLES, ParticleAppearance,
     effective_particle_count,
 };
+use crate::plot::{curve_edges_at, sample_curve_at};
 use crate::reference::{sanitized_opacity, scaled_viewport_style};
-use crate::scalar_analysis::{ComparisonSet, GradientSpec};
+use crate::scalar::{ScalarContext, ScalarExpr};
+use crate::scalar_analysis::{
+    ComparisonSeries, ComparisonSet, GradientSample, GradientSpec, SeriesRole, sample_gradient,
+};
 use crate::scalar_view::{
     MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MIN_GRID_SIDE, PointProbe, ProbeSet,
     SCALAR_RESAMPLE_INTERVAL, ScalarViewCache, ScalarViewError, ScalarViewIdentity,
@@ -380,6 +384,10 @@ pub struct State {
     /// slice B1). Keyed by the state identity without level values, so a
     /// visible but idle frame does not re-evaluate the 32² preview.
     scalar_preview_levels: Option<(ScalarViewIdentity, Vec<f32>)>,
+    /// One-entry comparison-curve and gradient-arrow cache (issue #93 slice B).
+    /// Runtime only; [`State::refresh_scalar_analysis`] is its only sampler and
+    /// it runs only while the Scalar analysis subsection is open.
+    scalar_analysis: ScalarAnalysisRuntime,
     /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
     /// it and always run their own action.
     pub left_click_action: LeftClickAction,
@@ -452,6 +460,251 @@ pub struct State {
     pub dirty: bool,
     /// Transient simulated time mirrored from the clock. Not persisted.
     pub time: f32,
+}
+
+/// Runtime readout for the gradient overlay: what the last refresh drew and
+/// what it honestly omitted. The counts are zero until the panel samples.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScalarAnalysisCounts {
+    /// Arrow glyphs painted for usable samples.
+    pub arrows: usize,
+    /// Samples the overlay omitted because they were unusable or holes.
+    pub hidden: usize,
+    /// Samples whose stencil fell back to an inward one-sided difference.
+    pub one_sided: usize,
+}
+
+/// Cache identity for the comparison curves and gradient arrows: every input
+/// that changes the geometry, with the clock quantised to the #92 10 Hz rule.
+#[derive(Debug, Clone, PartialEq)]
+struct ScalarAnalysisKey {
+    series: ComparisonSet,
+    gradient: Option<GradientSpec>,
+    parameters: ParameterSet,
+    domain: Domain,
+    frame: PlaneFrame,
+    curve_samples: usize,
+    text_color: [f32; 4],
+    quantized_time: i64,
+}
+
+impl ScalarAnalysisKey {
+    fn new(state: &State) -> Self {
+        Self {
+            series: state.comparison_series.clone(),
+            gradient: state.gradient.clone(),
+            parameters: state.parameters.clone(),
+            domain: state.domain,
+            frame: state.scalar_view_frame(),
+            curve_samples: state.plot.settings.curve_samples,
+            text_color: state.scalar_text_color,
+            quantized_time: scalar_analysis_quantized_time(f64::from(state.time)),
+        }
+    }
+}
+
+/// One-entry, invalidating geometry cache for the scalar analysis overlay.
+/// Hidden or unchanged frames reuse it; the overlay never samples.
+#[derive(Debug, Clone, Default)]
+struct ScalarAnalysisRuntime {
+    key: Option<ScalarAnalysisKey>,
+    curves: Vec<LineInstanceGPU>,
+    gradient: Vec<LineInstanceGPU>,
+    counts: ScalarAnalysisCounts,
+    error: Option<String>,
+    resamples: u64,
+}
+
+fn scalar_analysis_quantized_time(time: f64) -> i64 {
+    if time.is_finite() {
+        (time / SCALAR_RESAMPLE_INTERVAL).floor() as i64
+    } else {
+        i64::MIN
+    }
+}
+
+fn series_color(color: crate::color_ramp::Rgb) -> [f32; 4] {
+    [
+        f32::from(color.0[0]) / 255.0,
+        f32::from(color.0[1]) / 255.0,
+        f32::from(color.0[2]) / 255.0,
+        1.0,
+    ]
+}
+
+fn fixed_color(color: [u8; 3]) -> [f32; 4] {
+    [
+        f32::from(color[0]) / 255.0,
+        f32::from(color[1]) / 255.0,
+        f32::from(color[2]) / 255.0,
+        1.0,
+    ]
+}
+
+fn finite_line(a: Vec3, b: Vec3, width: f32, color: [f32; 4]) -> Option<LineInstanceGPU> {
+    (a.is_finite() && b.is_finite() && a != b).then_some(LineInstanceGPU {
+        a: [a.x, a.y, a.z, 1.0],
+        b: [b.x, b.y, b.z, width],
+        color,
+    })
+}
+
+/// Push one curve edge. Solid series keep it whole; a dashed series carries a
+/// phase across edges so the pattern stays continuous along the polyline even
+/// where an edge was rejected.
+#[allow(clippy::too_many_arguments)]
+fn push_curve_edge(
+    out: &mut Vec<LineInstanceGPU>,
+    a: Vec3,
+    b: Vec3,
+    width: f32,
+    color: [f32; 4],
+    dash: f32,
+    gap: f32,
+    phase: &mut f32,
+) {
+    if dash <= 0.0 || gap < 0.0 {
+        if let Some(line) = finite_line(a, b, width, color) {
+            out.push(line);
+        }
+        return;
+    }
+    let span = b - a;
+    let length = span.length();
+    if !length.is_finite() || length <= f32::EPSILON {
+        return;
+    }
+    let direction = span / length;
+    let cycle = dash + gap;
+    let mut start = 0.0;
+    while start < length {
+        let position = (*phase + start) % cycle;
+        if position < dash {
+            let end = (start + (dash - position).min(length - start)).min(length);
+            if end - start > f32::EPSILON
+                && let Some(line) =
+                    finite_line(a + direction * start, a + direction * end, width, color)
+            {
+                out.push(line);
+            }
+            start = end;
+        } else {
+            start += (cycle - position).min(length - start);
+        }
+    }
+    *phase = (*phase + length) % cycle;
+}
+
+/// Build one comparison series' polyline on the shared plane frame.
+///
+/// A parse failure is returned with the series' label instead of silently
+/// painting nothing, so the panel can surface the same honest reason as the
+/// gradient source.
+fn comparison_curve_lines(
+    series: &ComparisonSeries,
+    frame: &PlaneFrame,
+    curve_samples: usize,
+    time: f32,
+) -> Result<Vec<LineInstanceGPU>, String> {
+    // Comparison series are Curve-context display geometry: the same parser
+    // and machinery as the existing Curve plot. They never become gradients.
+    let expr = ScalarExpr::parse(&series.expr, ScalarContext::Curve).map_err(|error| {
+        format!(
+            "comparison series `{}` could not be parsed: {error}",
+            series.label
+        )
+    })?;
+    let local_domain = frame.local_domain();
+    let slots = sample_curve_at(&expr, &local_domain, curve_samples, time);
+    let edges = curve_edges_at(&expr, &local_domain, &slots, time);
+    let color = series_color(series.style.color);
+    let width = crate::reference::EDGE_WIDTH;
+    let extent = (frame.half_u.max(frame.half_v) * 2.0).max(f32::EPSILON);
+    let dash = if series.style.dashed {
+        extent * 0.03
+    } else {
+        0.0
+    };
+    let gap = if series.style.dashed {
+        extent * 0.02
+    } else {
+        0.0
+    };
+    let mut lines = Vec::with_capacity(edges.segments.len());
+    let mut phase = 0.0;
+    for [a, b] in edges.segments {
+        push_curve_edge(
+            &mut lines,
+            frame.to_world(a),
+            frame.to_world(b),
+            width,
+            color,
+            dash,
+            gap,
+            &mut phase,
+        );
+    }
+    Ok(lines)
+}
+
+/// Build the gradient arrow glyphs: one shaft plus two head segments per
+/// usable sample, at a fixed length scaled from the sample spacing.
+fn gradient_arrow_lines(
+    samples: &[GradientSample],
+    frame: &PlaneFrame,
+    color: [f32; 4],
+) -> (Vec<LineInstanceGPU>, ScalarAnalysisCounts) {
+    let mut counts = ScalarAnalysisCounts {
+        hidden: samples.iter().filter(|sample| !sample.usable).count(),
+        one_sided: samples.iter().filter(|sample| sample.one_sided).count(),
+        ..ScalarAnalysisCounts::default()
+    };
+    let side = (samples.len() as f64).sqrt().round() as usize;
+    if side < 2 {
+        return (Vec::new(), counts);
+    }
+    let spacing_u = (2.0 * f64::from(frame.half_u) / (side - 1) as f64) as f32;
+    let spacing_v = (2.0 * f64::from(frame.half_v) / (side - 1) as f64) as f32;
+    let spacing = spacing_u.max(spacing_v).max(f32::EPSILON);
+    let length = spacing * 0.8;
+    let head = length * 0.35;
+    // The head opens 25° from the shaft on both sides.
+    let (sin, cos) = 25.0f32.to_radians().sin_cos();
+    let width = crate::reference::EDGE_WIDTH;
+    let mut lines = Vec::new();
+    for sample in samples {
+        if !sample.usable {
+            continue;
+        }
+        let Some(gradient) = sample.gradient else {
+            continue;
+        };
+        if !sample.position.is_finite() || !gradient.is_finite() {
+            continue;
+        }
+        let magnitude = gradient.length();
+        if !magnitude.is_finite() || magnitude <= f32::EPSILON {
+            // A zero gradient has no direction; there is no honest arrow to
+            // paint, and it is not a "hidden" sample.
+            continue;
+        }
+        let dir = gradient / magnitude;
+        // An in-plane perpendicular, so both head segments stay on the slice.
+        let perp = frame.normal.cross(dir).normalize_or_zero();
+        if perp == Vec3::ZERO {
+            continue;
+        }
+        let tip = sample.position + dir * length;
+        let left = tip - (dir * cos + perp * sin) * head;
+        let right = tip - (dir * cos - perp * sin) * head;
+        for (a, b) in [(sample.position, tip), (tip, left), (tip, right)] {
+            if let Some(line) = finite_line(a, b, width, color) {
+                lines.push(line);
+            }
+        }
+        counts.arrows += 1;
+    }
+    (lines, counts)
 }
 
 impl State {
@@ -905,6 +1158,7 @@ impl State {
             scalar_text_color: DEFAULT_SCALAR_TEXT_COLOR,
             scalar_view_cache: ScalarViewCache::default(),
             scalar_preview_levels: None,
+            scalar_analysis: ScalarAnalysisRuntime::default(),
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -2474,6 +2728,12 @@ impl State {
                 });
             }
         }
+        // Issue #93 slice B: comparison curves and gradient arrows ride the
+        // same line collection as contours/probes, so PNG/SVG/animation
+        // captures include them without a new capture path. The cache is only
+        // sampled by the visible panel; this composition never evaluates.
+        lines.extend_from_slice(&self.scalar_analysis.curves);
+        lines.extend_from_slice(&self.scalar_analysis.gradient);
         lines
     }
 
@@ -2513,6 +2773,87 @@ impl State {
     /// The runtime scalar-view cache (records, failure reason, resample count).
     pub fn scalar_view_cache(self: &State) -> &ScalarViewCache {
         &self.scalar_view_cache
+    }
+
+    /// Refresh the comparison-curve and gradient-arrow geometry while the
+    /// Scalar analysis subsection is visible.
+    ///
+    /// A hidden panel performs no sampling and keeps the previous geometry.
+    /// A visible refresh samples only when its identity changed: the series,
+    /// gradient request, committed parameters, domain, plane frame, curve
+    /// sample count, text colour or the 100 ms-quantised clock (the #92 10 Hz
+    /// rule). An unchanged identity is a cache hit and does not dirty.
+    pub fn refresh_scalar_analysis(self: &mut State, visible: bool) {
+        if !visible || !self.scalar_view_applicable() {
+            return;
+        }
+        let key = ScalarAnalysisKey::new(self);
+        if self.scalar_analysis.key.as_ref() == Some(&key) {
+            return;
+        }
+        self.scalar_analysis.key = Some(key);
+        self.scalar_analysis.resamples += 1;
+
+        let frame = self.scalar_view_frame();
+        let time = self.time;
+        let mut curves = Vec::new();
+        let mut series_error = None;
+        for series in self.comparison_series.iter() {
+            match comparison_curve_lines(series, &frame, self.plot.settings.curve_samples, time) {
+                Ok(lines) => curves.extend(lines),
+                Err(reason) => {
+                    series_error.get_or_insert(reason);
+                }
+            }
+        }
+
+        let (gradient, counts, error) = match &self.gradient {
+            Some(spec) => {
+                let base = if spec.role == SeriesRole::ElectricPotential {
+                    fixed_color(crate::source_scene::ELECTRIC_COLOR)
+                } else {
+                    self.scalar_text_color
+                };
+                match sample_gradient(spec, &self.parameters, f64::from(time), &self.domain) {
+                    Ok(samples) => {
+                        let (lines, counts) = gradient_arrow_lines(&samples, &spec.frame, base);
+                        (lines, counts, None)
+                    }
+                    Err(reason) => (Vec::new(), ScalarAnalysisCounts::default(), Some(reason)),
+                }
+            }
+            None => (Vec::new(), ScalarAnalysisCounts::default(), None),
+        };
+        let error = error.or(series_error);
+
+        let had_geometry =
+            !self.scalar_analysis.curves.is_empty() || !self.scalar_analysis.gradient.is_empty();
+        let has_geometry = !curves.is_empty() || !gradient.is_empty();
+        self.scalar_analysis.curves = curves;
+        self.scalar_analysis.gradient = gradient;
+        self.scalar_analysis.counts = counts;
+        self.scalar_analysis.error = error;
+        // An empty overlay (no series, no gradient) needs no scene rebuild; a
+        // real geometry change or a removal does.
+        if had_geometry || has_geometry {
+            self.mark_dirty();
+        }
+    }
+
+    /// The gradient readout from the most recent visible refresh.
+    pub fn scalar_analysis_counts(self: &State) -> ScalarAnalysisCounts {
+        self.scalar_analysis.counts
+    }
+
+    /// The last unsupported/parse reason for the gradient source or a
+    /// comparison series, if any. A gradient failure takes precedence.
+    pub fn scalar_analysis_error(self: &State) -> Option<&str> {
+        self.scalar_analysis.error.as_deref()
+    }
+
+    /// Number of visible analysis rebuilds; hidden panels never increment it.
+    pub fn scalar_analysis_resamples(self: &State) -> u64 {
+        self.scalar_analysis.resamples
     }
 
     /// The domain the visible scene covers. A plane slice uses its flat local
