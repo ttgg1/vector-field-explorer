@@ -2058,6 +2058,45 @@ context binding.
 **Limitations.** Only the explicitly approved grammar is supported; this is not
 a general-purpose CAS, and it makes no global domain-preservation guarantee.
 
+#### `src/cas_intent.rs` — tolerant CAS input grammar and intent
+
+**Purpose.** Bound, normalise and classify a CAS input line before any engine
+call, so the panel can echo the normalised text and show the inferred operation
+while the dropdown remains an override.
+
+**Public API.** `classify(&str) -> Result<CasParse, CasIntentError>`,
+`normalize(&str) -> String`, `CasIntent` (derivative, gradient, divergence,
+curl, integral, solve, simplify, evaluate, plain) with `operation_label()`,
+`CasParse { intent, normalized }`, and `CasIntentError` (`Empty`, `TooLong`,
+`TooDeep`, `MissingExpression`, `BadVariable`, `BadArity`,
+`UnbalancedDelimiters`, `Unknown`). `MAX_INPUT_BYTES = 512`,
+`MAX_NESTING = 32`, `MAX_ASSIGNMENTS = 8`.
+
+**Invariants.** Input is limited to 512 UTF-8 bytes and 32 bracket levels;
+classification is total and never panics on user text. Normalisation trims and
+collapses whitespace; rewrites `\frac`, `\sqrt`, `\cdot`, `\times`, `\partial`,
+`\nabla`, `\left`, `\right`, single-token superscripts (bare `^{n}` only when
+the exponent is one `[A-Za-z0-9_]+` token), `·`, `×`, `∂`, `−` and `∗`; and is
+idempotent. The `·`→`*` rewrite is why `∇* F` classifies as divergence, exactly
+like `∇· F`. `\frac`/`\sqrt` group rewriting is skipped beyond 32 brace levels
+so the public `normalize` cannot recurse without bound. Exactly one
+`[A-Za-z][A-Za-z0-9_]*` variable is accepted where a variable is part of the
+form. Recognised operators with missing or malformed
+arguments return an error rather than silently becoming plain text; only
+unrecognised leading text is `Plain`. `at name=value` assignments cap at eight.
+The module performs no evaluation, backend call, UI mutation or application
+state access.
+
+**Pinned by.** `tests/cas_intent_test.rs`: every intent and alias, unicode and
+LaTeX-lite rewrites, normalisation idempotence, definite/indefinite integrals,
+the assignment cap, every rejection path, and multibyte/adversarial input
+without panic.
+
+**Limitations.** The grammar is intentionally shallow: expressions are carried
+as text and not validated as meval or CAS expressions, LaTeX support is the
+listed subset, and nested calls are left to the backend after the delimiter
+checks.
+
 #### `src/domain.rs` — sampling box and grid iterator
 
 **Purpose.** Axis-aligned sampling domain and the exact lattice used everywhere
