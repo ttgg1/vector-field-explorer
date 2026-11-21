@@ -1170,26 +1170,31 @@ table-driven setter invalidation.
 **Limitations.** One entry only; every miss replaces it. Time-dependent fields
 bypass it entirely, so animation never trades correctness for a hit.
 
-#### `src/field_bake.rs` — CPU-baked field lattice (P3 slice 1a)
+#### `src/field_bake.rs` — CPU-baked field lattice (P3 slice 1b)
 
-**Purpose.** Model a bounded, deterministic bake of a time-independent formula
-field so later slices can sample it instead of re-evaluating the formula per
-particle. Slice 1a is the model and lifecycle only; no default particle,
-streamline, `advance_exact`, animation or CLI call site reads it yet.
+**Purpose.** Bake a bounded, deterministic lattice of a time-independent
+formula field and sample it instead of re-evaluating the formula per particle
+when the opt-in is on. Slice 1b wires `SceneFlow::Baked`, the accuracy readout,
+runtime lifecycle and persisted opt-in; the exact flow remains the default.
 
 **Public API.** `BakeAxis::{Volume3d, Plane2d}`, `BakeResolution::new` (with
 `axis`, `resolution`, `points`, `dims`), `BakeSpec` (formula, parameters,
 domain, axis, resolution, field mode, optional plane frame; exact
 `PartialEq`), `BakedField::{build, sample, spec, lattice, axis, resolution,
-accuracy_report}`, `BakeAccuracy`, `BakeAccuracyProbes`, `BakeError`
-(`TimeDependent`, `Resolution`, `Memory`, `EmptyDomain`), the resolution
-bounds, `MIN_/MAX_VOLUME_RESOLUTION`, `MIN_/MAX_PLANE_RESOLUTION`, and
-`MAX_LATTICE_BYTES = 3_145_728`.
+accuracy}`, `BakeAccuracy { probes, max_abs_error, max_rel_error,
+divergence_residual, tolerance }`, `BakeSettings { enabled, resolution_3d,
+resolution_2d }`, `BakeError` (`TimeDependent`, `UnsupportedMode`,
+`Resolution`, `Memory`, `EmptyDomain`), the resolution bounds,
+`MIN_/MAX_VOLUME_RESOLUTION`, `MIN_/MAX_PLANE_RESOLUTION`,
+`DEFAULT_BAKE_RESOLUTION_3D = 48`, `DEFAULT_BAKE_RESOLUTION_2D = 128`,
+`BAKE_TOLERANCE = 1e-3`, and `MAX_LATTICE_BYTES = 3_145_728`.
 
 **Invariants.**
-- A time-dependent field is refused, never frozen at `t = 0`.
-- Resolutions are validated, never clamped: `16..=64` for a volume and
-  `32..=256` for a plane.
+- A time-dependent field is refused, never frozen at `t = 0`; a non-`Formula`
+  adapter is refused as `UnsupportedMode`.
+- Resolutions are validated, never clamped by `build`: `16..=64` for a volume
+  and `32..=256` for a plane. `BakeSettings::sanitized` clamps persisted
+  requests into those bounds.
 - The byte budget is checked before the resolution bound, so an over-cap
   request returns `Memory` without allocating. `64³ × 12` is exactly the cap.
 - An empty or non-finite active extent returns `EmptyDomain`.
@@ -1201,15 +1206,19 @@ bounds, `MIN_/MAX_VOLUME_RESOLUTION`, `MIN_/MAX_PLANE_RESOLUTION`, and
   interpolated result all return `None`; a bad corner never becomes NaN motion.
 - The lattice is x-major then y then z, the same order as
   `Domain::grid_points`; the same spec and field reproduce identical bytes.
-- `accuracy_report` leaves an unmeasured interpolation error or divergence
-  residual as `None`.
+- `build` measures accuracy against the exact field on at most 512 cell-centre
+  probes plus at most `8³` interior divergence nodes. Each metric is finite or
+  `None`; zero is never fabricated. `exceeds_tolerance` reports a measured
+  error above `BAKE_TOLERANCE` instead of hiding it.
 
 **Pinned by.** `tests/field_bake_test.rs`: linear reproduction, bounded and
-reported quadratic error, outside-domain `None`, time-dependence refusal,
-non-finite corner handling, lattice determinism, memory/resolution/empty-domain
-rejections, setter invalidation, `ViewRecord`/history absence, byte-identical
-particle and streamline results with the bake absent or present, and baked plane
-projection matching `PlaneFlow`.
+reported quadratic error, tolerance exceedance, outside-domain `None`,
+time-dependence refusal, non-finite corner handling, lattice determinism,
+memory/resolution/empty-domain rejections, setter invalidation,
+`ViewRecord`/history absence, a coarse bake changing particles and streamlines
+while disabling restores exact bytes, the current-frame plane rule after a
+density re-clamp, and baked plane projection matching `PlaneFlow`.
+`tests/bake_ui_test.rs` pins the accuracy caption and refusal status copy.
 
 **Limitations.** Model only. The opt-in call-site switch, UI note and export
 provenance belong to slice 1b; GPU compute advection is slice 2.
@@ -2205,7 +2214,7 @@ and `restoring_invalid_probes_drops_them_without_dirtying`; the family record in
 either the world field or a projected slice.
 
 **Public API.** `Flow`, `PlaneFlow { field, frame }`, `BakedFlow { baked,
-plane }`, `SceneFlow::{World, Plane}`; `FieldExpr` implements `Flow`.
+plane }`, `SceneFlow::{World, Plane, Baked}`; `FieldExpr` implements `Flow`.
 
 **Invariants.**
 - `FieldExpr`'s flow delegates to `eval3_at` unchanged.
@@ -2215,10 +2224,14 @@ plane }`, `SceneFlow::{World, Plane}`; `FieldExpr` implements `Flow`.
 - `BakedFlow` samples a world-coordinate `BakedField`: with a plane frame it
   lifts, samples and projects exactly like `PlaneFlow`; without one it samples
   the world point. Its ignored simulated time is safe because a bake exists
-  only for a non-time-dependent field.
+  only for a non-time-dependent field. Both views report an exact zero as
+  stationary, matching `SceneFlow::Baked`.
 - `SceneFlow` selects world flow outside a plane slice and plane flow inside
-  one. Slice 1a does not add a baked `SceneFlow` variant; callers can construct
-  `BakedFlow` explicitly in slice 1b.
+  one. When the opt-in is on and a matching bake is present, it selects
+  `SceneFlow::Baked`; its exact-zero rule is stationary, like a plane slice.
+  The `BakedFlow` plane is always the CURRENT `plane_frame()`, never the frame
+  stored in the bake spec, so a re-clamped slice index cannot sample the wrong
+  plane.
 
 **Pinned by.** `tests/scene_flow_test.rs` and `tests/streamlines_test.rs`
 (`trace_at_accepts_projected_plane_flow`).
@@ -4055,7 +4068,9 @@ migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-seed_layouts, preset_ui, object_style, up_axis }`, `AppSettings::sanitized`;
+seed_layouts, preset_ui, object_style, up_axis, bake }`,
+`BakeSettings { enabled, resolution_3d, resolution_2d }`,
+`AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `restore_maxwell_wave`, `Default`); `finite_or`;
 `load`, `save`; private serde helpers.
@@ -4075,6 +4090,7 @@ seed_layouts, preset_ui, object_style, up_axis }`, `AppSettings::sanitized`;
 | `seed_layouts: Vec<SeedLayoutProfile>` | user named seed layouts only (the built-in empty `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized against the restored view domain, an entry whose trimmed name is empty or `DEFAULT_LAYOUT_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_LAYOUTS = 16` are dropped with a warning |
 | `object_style: ObjectStyle` | `Solid` or `Wireframe` | `#[serde(default)]`; an absent key loads `Solid`; an unknown token is repaired to `Solid` with one warning by the enum decoder, and a non-string stored value is repaired to `Solid` by the field wrapper, leaving every other field intact |
 | `up_axis: UpAxis` | display-only `Z` (default), `X` or `Y`, stored lowercase as `z`, `x`, `y` | `#[serde(default)]`; an absent key loads `Z`; an unknown token is repaired to `Z` with one warning by the enum decoder, and a non-string stored value is repaired to `Z` by the field wrapper. The default is genuinely Z-up (physics convention); the token `y` selects the old historical Y-up view. It is assigned at the startup seam without dirtying and never appears in `ViewRecord`, scenes, appearance profiles or edit history |
+| `bake: BakeSettings` | `enabled` (default false), `resolution_3d` (default 48), `resolution_2d` (default 128) | `#[serde(default)]`; an absent key loads the disabled record; out-of-range resolutions clamp into `16..=64` / `32..=256` with one warning. Only the settings are stored; the lattice is runtime-only and never enters `ViewRecord`, scenes, profiles or history. An enabled startup build is bounded and non-dirtying; a refusal records the reason instead of failing startup |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -6274,6 +6290,8 @@ plus the formula's collapsed Variables editor, with a local mirror and a single
 `fixed_color_rgb`,
 `fixed_color_opaque`, `trail_fade_enabled`, `trail_width_enabled`,
 `stagnation_seconds_enabled`, `particle_count_label`, `BOTH_COLORING_NOTE`,
+`bake_resolution_label`, `bake_resolution_bounds`, `bake_accuracy_caption`,
+`bake_provenance_line`, `bake_status_text`,
 `DIRECTION_3D_EXPLANATION`, `MIN_SIGNED_LOG_HALF_WIDTH`,
 `MAX_SIGNED_LOG_HALF_WIDTH`, `Controls` (+ `new`, per-section resets,
 `Default`), `show`, `show_with_plot_action`, `show_compact`,
@@ -6303,6 +6321,16 @@ plus the formula's collapsed Variables editor, with a local mirror and a single
   visible explanation). The streamline count is disabled when an explicit seed
   layout exists and a note explains that the automatic count/grid is inactive
   until "Clear all".
+- The Features section hosts a collapsed-by-default "Baked flow" area: an
+  enable checkbox (building once), the current axis's resolution selector and
+  Rebuild, the measured accuracy caption naming the resolution, trilinear
+  interpolation, `max |Δv|`, max relative error, divergence residual and the
+  normalized-teaching-units caveat, plus the verbatim refusal or a stale
+  prompt. Outside Formula the area stays reachable with disabled controls and a
+  short "only available for Formula fields" explanation, so a recorded refusal
+  remains visible. While a bake is active the streamline block also shows the
+  baked provenance line; changing any field-affecting input makes it stale
+  rather than silently rebuilding.
 - The Seed layout editor ends with a collapsed-by-default nested "Named
   layouts" area, always available while the editor is visible even with zero
   explicit seeds. It lists the built-in `Default (generated grid)` first, then

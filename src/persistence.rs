@@ -22,6 +22,7 @@ use crate::colormap::Colormap;
 use crate::custom_density::{
     DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw, validate_time_law_combination,
 };
+pub use crate::field_bake::BakeSettings;
 use crate::field_probe::{
     CirculationLoop, GaussianSurface, LoopKind, MAX_LOOPS, MAX_SURFACES, SurfaceKind,
 };
@@ -137,6 +138,13 @@ pub struct AppSettings {
     /// [`ViewRecord`], scenes, appearance profiles or history.
     #[serde(default, deserialize_with = "deserialize_up_axis")]
     pub up_axis: UpAxis,
+    /// The opt-in baked-flow lattice settings (P3 slice 1b). Missing on older
+    /// envelopes, which load disabled at 48³ / 128². Out-of-range resolutions
+    /// are repaired by [`AppSettings::sanitized`] with one warning. Only this
+    /// record is stored; the lattice itself is runtime-only and never enters a
+    /// [`ViewRecord`], scene, profile or history snapshot.
+    #[serde(default)]
+    pub bake: BakeSettings,
 }
 
 /// Persisted Presets-panel state. Only the per-group expansion is durable; the
@@ -185,12 +193,27 @@ impl AppSettings {
         // and never enters a `ViewRecord`.
         state.up_axis = self.up_axis;
         self.view.restore(state, controls);
+        // P3 slice 1b: the bake opt-in is runtime-only once loaded. Applying it
+        // last builds at most one bounded lattice against the restored field and
+        // never dirties the first scene; a refusal is recorded, not fatal.
+        state.apply_bake_settings(self.bake);
     }
 
     /// Clamp corrupt numbers from storage into usable ranges: style into the
     /// Settings slider bounds, layout widths into the draggable range, and
     /// layer-style overrides into their multiplier bounds.
     pub fn sanitized(mut self) -> Self {
+        // Repair the bake record before the rest: an old or hand-edited
+        // resolution must clamp instead of failing the envelope. One warning
+        // covers both axes.
+        let repaired_bake = self.bake.sanitized();
+        if repaired_bake != self.bake {
+            log::warn!(
+                "persisted bake settings are out of range ({:?}); repairing them",
+                self.bake
+            );
+            self.bake = repaired_bake;
+        }
         // Repair the newest style record first: an older or hand-edited
         // envelope must not fail on an out-of-range multiplier.
         if let Err(error) = self.layer_styles.validate() {

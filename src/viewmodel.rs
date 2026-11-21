@@ -10,13 +10,13 @@ use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
 use super::field::FieldExpr;
-use super::field_bake::{BakeAxis, BakeError, BakeSpec, BakedField};
+use super::field_bake::{BakeAccuracy, BakeAxis, BakeError, BakeSettings, BakeSpec, BakedField};
 use super::field_cache::{FieldSampleCache, FieldSampleKey};
 use super::field_probe::{
     CirculationLoop, CirculationReport, FluxReport, GaussianSurface, IntegralStatus, LoopKind,
     ProbeField, SurfaceKind, circulation, flux,
 };
-use super::flow::{Flow, SceneFlow};
+use super::flow::{BakedFlow, Flow, SceneFlow};
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
 use super::renderer::{
     ArrowInstanceGPU, HeatmapGPU, HeatmapLegend, LineInstanceGPU, SceneGPU, heatmap_legend,
@@ -692,17 +692,28 @@ pub struct State {
     /// reuses the previous pass. Cloning a state resets it, and it never reaches
     /// history, documents or scenes.
     field_sample_cache: RefCell<FieldSampleCache>,
-    /// Optional CPU-baked lattice (P3 slice 1a). Runtime-only: built only by
+    /// Optional CPU-baked lattice (P3 slice 1b). Runtime-only: built only by
     /// [`State::rebuild_field_bake`], dropped by every field-affecting setter
     /// and by [`crate::persistence::ViewRecord::restore`], and never written to
-    /// a `ViewRecord`, history snapshot or scene document. No default particle,
-    /// streamline, `advance_exact`, animation or CLI path reads it in this
-    /// slice; the opt-in switch is slice 1b.
+    /// a `ViewRecord`, history snapshot or scene document. When present and
+    /// matching the live inputs, [`State::scene_flow`] traces it.
     ///
     /// `State` derives `Clone`, so cloning copies this lattice deliberately.
     /// The copied bake stays valid for the copied state because it is a pure
     /// function of the copied formula, parameters, domain and plane inputs.
     field_bake: Option<BakedField>,
+    /// The durable opt-in mirrored at runtime. A field-affecting edit drops
+    /// the lattice but keeps this on, so the panel can say the bake is stale
+    /// and offer Rebuild without silently re-baking per frame.
+    field_bake_enabled: bool,
+    /// Requested volume resolution, kept while the field is two-component so
+    /// switching back restores the user's choice.
+    bake_resolution_3d: u32,
+    /// Requested plane resolution, kept while the field is three-component.
+    bake_resolution_2d: u32,
+    /// The verbatim reason the last requested build was refused. Runtime only;
+    /// cleared by the next successful build.
+    field_bake_error: Option<String>,
     /// Counts fresh (uncached) sampling passes; a doc-hidden test seam.
     field_sample_passes: Cell<u64>,
 }
@@ -1604,6 +1615,10 @@ impl State {
             time: 0.0,
             field_sample_cache: RefCell::new(FieldSampleCache::default()),
             field_bake: None,
+            field_bake_enabled: false,
+            bake_resolution_3d: crate::field_bake::DEFAULT_BAKE_RESOLUTION_3D,
+            bake_resolution_2d: crate::field_bake::DEFAULT_BAKE_RESOLUTION_2D,
+            field_bake_error: None,
             field_sample_passes: Cell::new(0),
         }
     }
@@ -2346,6 +2361,7 @@ impl State {
         if self.density == density {
             return false;
         }
+        self.clear_field_bake();
         self.clear_field_sample_cache();
         let previous_grid = self.plane_grid();
         self.density = density;
@@ -3811,6 +3827,21 @@ impl State {
     /// field onto its local frame; every other view traces the world field
     /// over [`scene_domain`](State::scene_domain).
     pub fn scene_flow(self: &State) -> SceneFlow<'_> {
+        if self.field_bake_enabled
+            && let Some(baked) = self
+                .field_bake
+                .as_ref()
+                .filter(|baked| self.bake_matches_live(baked))
+        {
+            return SceneFlow::Baked(BakedFlow {
+                baked,
+                // Always the CURRENT frame: a density or grid edit can
+                // re-clamp the slice index after a bake was built, and the
+                // stored spec frame must never be sampled (slice 1a review
+                // finding).
+                plane: self.plane_frame(),
+            });
+        }
         match self.plane_frame() {
             Some(frame) => SceneFlow::Plane(super::flow::PlaneFlow {
                 field: &self.field,
@@ -3820,17 +3851,142 @@ impl State {
         }
     }
 
+    /// Whether a bake is present, enabled and still describes the live inputs,
+    /// so [`State::scene_flow`] traces it.
+    pub fn baked_flow_active(self: &State) -> bool {
+        self.field_bake_enabled
+            && self
+                .field_bake
+                .as_ref()
+                .is_some_and(|baked| self.bake_matches_live(baked))
+    }
+
+    /// Whether the stored bake still describes the live field inputs. The
+    /// plane frame is deliberately excluded: the lattice is world-space and
+    /// `scene_flow` reads the current frame, while every setter that moves the
+    /// slice already drops the bake.
+    fn bake_matches_live(self: &State, baked: &BakedField) -> bool {
+        let spec = baked.spec();
+        self.field_mode == FieldMode::Formula
+            && spec.field_mode == FieldMode::Formula
+            && spec.formula == self.formula
+            && spec.parameters == self.parameters
+            && spec.domain == self.domain
+            && spec.axis == self.bake_axis()
+            && spec.resolution == baked.resolution()
+    }
+
+    /// The lattice axis the current field needs: a two-component field bakes a
+    /// genuine 2D plane, a three-component field bakes a world volume (a 2D
+    /// slice projects that same volume through its current frame).
+    pub fn bake_axis(self: &State) -> BakeAxis {
+        if self.field.dimension == 2 {
+            BakeAxis::Plane2d
+        } else {
+            BakeAxis::Volume3d
+        }
+    }
+
+    /// The requested resolution for the current field's axis.
+    pub fn bake_resolution(self: &State) -> u32 {
+        match self.bake_axis() {
+            BakeAxis::Volume3d => self.bake_resolution_3d,
+            BakeAxis::Plane2d => self.bake_resolution_2d,
+        }
+    }
+
+    /// The live durable bake record, captured when settings are saved.
+    pub fn bake_settings(self: &State) -> BakeSettings {
+        BakeSettings {
+            enabled: self.field_bake_enabled,
+            resolution_3d: self.bake_resolution_3d,
+            resolution_2d: self.bake_resolution_2d,
+        }
+    }
+
+    /// Whether the user's opt-in is on, regardless of whether a lattice is
+    /// currently built (stale/failed states keep it on).
+    pub fn field_bake_enabled(self: &State) -> bool {
+        self.field_bake_enabled
+    }
+
     /// The optional CPU-baked lattice built by
-    /// [`State::rebuild_field_bake`]. Runtime-only; `None` means every caller
-    /// keeps today's direct flow.
+    /// [`State::rebuild_field_bake`]. Runtime-only; `None` means the exact flow
+    /// runs unless a stale/failed bake is waiting for Rebuild.
     pub fn field_bake(self: &State) -> Option<&BakedField> {
         self.field_bake.as_ref()
     }
 
-    /// Drop the runtime bake. This never changes any particle or streamline
-    /// result: slice 1a has no default call site reading the bake.
+    /// The build-time accuracy statement for the active lattice, if built.
+    pub fn field_bake_accuracy(self: &State) -> Option<BakeAccuracy> {
+        self.field_bake.as_ref().map(BakedField::accuracy)
+    }
+
+    /// The verbatim reason the last requested build was refused, if any.
+    pub fn field_bake_error(self: &State) -> Option<&str> {
+        self.field_bake_error.as_deref()
+    }
+
+    /// Drop the runtime lattice but keep the user's opt-in. The UI then shows a
+    /// stale bake and offers Rebuild; nothing re-bakes per frame.
     pub fn clear_field_bake(self: &mut State) {
         self.field_bake = None;
+        self.field_bake_error = None;
+    }
+
+    /// Turn the opt-in on (building once at the current resolution) or off
+    /// (clearing the lattice so the exact flow resumes byte-identically).
+    pub fn set_field_bake_enabled(self: &mut State, enabled: bool) {
+        self.field_bake_enabled = enabled;
+        if enabled {
+            let resolution = self.bake_resolution();
+            let _ = self.rebuild_field_bake(resolution);
+        } else {
+            self.clear_field_bake();
+        }
+    }
+
+    /// Choose the current axis's resolution. A real change drops the lattice
+    /// but keeps the opt-in on, so the user must explicitly Rebuild.
+    pub fn set_bake_resolution(self: &mut State, resolution: u32) -> bool {
+        let (min, max) = match self.bake_axis() {
+            BakeAxis::Volume3d => (
+                crate::field_bake::MIN_VOLUME_RESOLUTION,
+                crate::field_bake::MAX_VOLUME_RESOLUTION,
+            ),
+            BakeAxis::Plane2d => (
+                crate::field_bake::MIN_PLANE_RESOLUTION,
+                crate::field_bake::MAX_PLANE_RESOLUTION,
+            ),
+        };
+        let resolution = resolution.clamp(min, max);
+        let slot = match self.bake_axis() {
+            BakeAxis::Volume3d => &mut self.bake_resolution_3d,
+            BakeAxis::Plane2d => &mut self.bake_resolution_2d,
+        };
+        if *slot == resolution {
+            return false;
+        }
+        *slot = resolution;
+        self.clear_field_bake();
+        true
+    }
+
+    /// Apply a loaded [`BakeSettings`] once at startup. The build is bounded
+    /// and non-dirtying; a refusal keeps the opt-in on and records the reason
+    /// without failing startup.
+    pub fn apply_bake_settings(self: &mut State, settings: BakeSettings) {
+        // A direct `restore` must be as safe as `load`, which sanitises first.
+        let settings = settings.sanitized();
+        self.bake_resolution_3d = settings.resolution_3d;
+        self.bake_resolution_2d = settings.resolution_2d;
+        self.field_bake_enabled = settings.enabled;
+        self.field_bake = None;
+        self.field_bake_error = None;
+        if settings.enabled {
+            let resolution = self.bake_resolution();
+            let _ = self.rebuild_field_bake(resolution);
+        }
     }
 
     /// Explicitly build (or replace) the runtime bake for the current field.
@@ -3839,31 +3995,46 @@ impl State {
     /// so an idle frame or an unrelated display edit cannot pay baking cost.
     /// A 2-component field bakes on [`BakeAxis::Plane2d`]; a 3-component field
     /// bakes a world [`BakeAxis::Volume3d`] lattice (a 2D plane slice projects
-    /// that world bake later). A failed build leaves no stale bake behind.
+    /// that world bake later). A failed build leaves no stale bake behind and
+    /// records the refusal verbatim.
     pub fn rebuild_field_bake(self: &mut State, resolution: u32) -> Result<(), BakeError> {
         self.field_bake = None;
         if self.field_mode != FieldMode::Formula {
-            return Err(BakeError::UnsupportedMode {
+            let error = BakeError::UnsupportedMode {
                 mode: self.field_mode,
-            });
+            };
+            self.field_bake_error = Some(error.to_string());
+            return Err(error);
         }
-        let axis = if self.field.dimension == 2 {
-            BakeAxis::Plane2d
-        } else {
-            BakeAxis::Volume3d
-        };
         let spec = BakeSpec {
             formula: self.formula.clone(),
             parameters: self.parameters.clone(),
             domain: self.domain,
-            axis,
+            axis: self.bake_axis(),
             resolution,
             field_mode: self.field_mode,
             plane_frame: self.plane_frame(),
         };
-        let baked = BakedField::build(spec, &self.field)?;
+        match BakedField::build(spec, &self.field) {
+            Ok(baked) => {
+                self.field_bake = Some(baked);
+                self.field_bake_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.field_bake_error = Some(error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    /// Test seam: install a prebuilt lattice, including one whose stored spec
+    /// frame is deliberately stale, to pin that `scene_flow` reads the current
+    /// frame.
+    #[doc(hidden)]
+    pub fn install_field_bake_for_tests(self: &mut State, baked: BakedField) {
         self.field_bake = Some(baked);
-        Ok(())
+        self.field_bake_error = None;
     }
 
     /// The sampling grid for the density: `n`×`n` (one z slice) in 2D mode,
