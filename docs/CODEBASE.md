@@ -5856,8 +5856,10 @@ Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`,
   `Unsupported (j)` for a source-free wave), plus the SVG no-arrow note.
 - A collapsed `Maxwell equations` section after the case controls embeds
   [`maxwell_learning_panel`](../src/ui/maxwell_learning_panel.rs). It receives
-  the draft scene and the read-only cached BEM solution; it never commits a
-  scene edit and never samples the field on a plain frame.
+  the committed scene and the read-only cached BEM solution; it never commits a
+  scene edit and never samples the field on a plain frame. `sync_from` (mode
+  entry, restore and Reset) clears the learning report and message while keeping
+  the equation and probe selections.
 - Maxwell is arrows-only, with the exact note
   `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
   Coloring is hidden and CAS is disabled with
@@ -5881,16 +5883,27 @@ bounded residual check through [`maxwell_residual`](../src/maxwell_residual.rs).
 
 **Public API.** `MaxwellLearningPanel { equation, form, probe, report, message }`
 with `Default` (Gauss electric, differential, probe `[0, 0, 0]`),
-`show(ui, &mut MaxwellScene, Option<&BemSolution>)`, `check(&MaxwellScene,
-Option<&BemSolution>)`, `ResidualReport { residual, terms, absolute }`,
+`show(ui, &MaxwellScene, Option<&BemSolution>)`, `check(&MaxwellScene,
+Option<&BemSolution>)`, `clear_report()`, `ResidualReport { residual, terms,
+absolute, inputs }`, `ReportInputs { scene, equation, probe }`,
 `TermExplanation { terms }`, `TermNote { symbol, central_difference, status }`,
-and the constants `MAXWELL_LEARNING_LIMITATION`,
-`MAXWELL_NORMALIZED_SCALE` and `MAXWELL_POINTWISE_NOTE`.
+and the constants `MAXWELL_LEARNING_LIMITATION`, `MAXWELL_NORMALIZED_SCALE`,
+`MAXWELL_POINTWISE_NOTE` and `MAXWELL_REPORT_STALE`.
 
 **Invariants.**
 - Field work happens only on `Check residual`: one press does exactly twelve
   `maxwell_field_with_bem` evaluations, six offsets at `h` and six at `h/2`
   with `h = 1e-3 * case extent`. A plain frame never samples.
+- Every report records the exact committed `MaxwellScene`, equation and probe it
+  was computed for. Before painting, a plain frame compares those inputs with
+  the committed scene and current selection; on any mismatch it clears the
+  report and shows `MAXWELL_REPORT_STALE` without evaluating the field. The
+  display form is not compared because the numeric check is always the
+  pointwise differential form, so switching Integral/Differential keeps the
+  report. `sync_from` clears the report and message on mode entry, restore and
+  Reset and keeps the equation/probe selections.
+- The report always names the committed case and probe it belongs to, so a
+  rejected draft can never make the on-screen result look like the draft's.
 - Divergence and curl come from the six-offset central differences; the error
   is the largest absolute difference between the `h` and `h/2` stencils and is
   reported per term as `TermStatus::Numerical`.
@@ -5919,7 +5932,13 @@ and the constants `MAXWELL_LEARNING_LIMITATION`,
 `non_finite_probe_point_is_reported_singular_and_never_nan`,
 `conductor_case_without_a_solution_skips_the_check_with_the_existing_warning`,
 `conductor_case_with_a_stale_solution_skips_the_check_with_the_stale_warning`,
-`residual_check_runs_only_on_press`, and
+`residual_check_runs_only_on_press`,
+`report_clears_when_the_committed_case_changes`,
+`report_clears_when_a_geometry_parameter_changes`,
+`report_clears_after_a_scene_reset_or_restore`,
+`report_names_the_committed_scene_and_probe`,
+`a_rejected_draft_keeps_the_report_labelled_with_the_on_screen_scene`,
+`plain_frames_do_not_re_evaluate_after_a_check`, and
 `panel_never_claims_a_full_time_dependent_solution`.
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
