@@ -30,6 +30,7 @@ use crate::renderer::{
     sort_scene_back_to_front, sorted_arrows_back_to_front, sorted_lines_back_to_front,
 };
 use crate::screenshot::{self, Instant, Screenshot};
+use crate::seed_layout_library::SeedLayoutLibrary;
 use crate::sim_clock::SimClock;
 use crate::source_scene::FieldMode;
 use crate::streamlines::click_seed;
@@ -209,6 +210,11 @@ pub struct VfApp {
     /// profile and written back in [`eframe::App::save`]. The Interaction panel
     /// edits it in slice A2b.
     pub interaction_profiles: interaction::ProfileLibrary,
+    /// The persisted user seed-layout library (issue #87 slice S3a); the
+    /// built-in empty `Default` is not stored. Restored from eframe storage
+    /// without applying a layout or dirtying the scene, and written back in
+    /// [`eframe::App::save`]. The Flow-section UI edits it in slice S3b.
+    pub seed_layouts: SeedLayoutLibrary,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
     /// It lives app-side and never touches the viewmodel `State`.
@@ -444,6 +450,16 @@ impl VfApp {
                 log::warn!("persisted interaction profiles could not be loaded: {error}");
                 interaction::ProfileLibrary::default()
             });
+        // The persisted named seed-layout library (issue #87 slice S3a). `load`
+        // has already sanitised, de-duplicated and capped the stored records
+        // against the restored view domain, so construction only fails on an
+        // internal bug; start empty rather than panic. Restoring the library
+        // never applies a layout or dirties the scene.
+        let seed_layouts = SeedLayoutLibrary::new(settings.seed_layouts, &state.scene_domain())
+            .unwrap_or_else(|error| {
+                log::warn!("persisted seed layouts could not be loaded: {error}");
+                SeedLayoutLibrary::default()
+            });
         Self {
             state,
             bar: FormulaBarState::new(),
@@ -474,6 +490,7 @@ impl VfApp {
             profiles,
             interaction,
             interaction_profiles,
+            seed_layouts,
             style: settings.style,
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,

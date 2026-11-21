@@ -28,6 +28,10 @@ use vector_field_explorer::preset_library::PresetGroup;
 use vector_field_explorer::profile_library::{MAX_USER_PROFILES, ProfileLibrary};
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint};
+use vector_field_explorer::seed_layout_library::{
+    DEFAULT_LAYOUT_NAME as DEFAULT_SEED_LAYOUT_NAME, MAX_USER_LAYOUTS as MAX_USER_SEED_LAYOUTS,
+    SeedLayoutLibrary, SeedLayoutProfile,
+};
 use vector_field_explorer::source_scene::{
     FieldMode, SourceDisplay, SourceKindTag, SourceRecord, SourceScene,
 };
@@ -517,6 +521,7 @@ fn sample_settings() -> AppSettings {
         appearance_profiles: Vec::new(),
         interaction: InteractionProfile::default(),
         interaction_profiles: Vec::new(),
+        seed_layouts: Vec::new(),
     }
 }
 
@@ -3350,5 +3355,204 @@ fn startup_seed_layout_restore_is_non_dirtying() {
     assert!(
         app.state.snapshot_if_dirty().is_none(),
         "the restored seed layout does not keep redirtying the scene"
+    );
+}
+
+// Issue #87 slice S3a: the named seed-layout library lives in the envelope.
+
+fn seed_layout_profile(name: &str, seeds: Vec<SeedPoint>) -> SeedLayoutProfile {
+    SeedLayoutProfile {
+        name: name.to_owned(),
+        seeds: SeedLayout { seeds },
+    }
+}
+
+fn seed_layout_named(name: &str) -> SeedLayoutProfile {
+    seed_layout_profile(
+        name,
+        vec![SeedPoint {
+            position: Vec3::ZERO,
+            anchor: None,
+        }],
+    )
+}
+
+#[test]
+fn seed_layout_profiles_round_trip_through_the_envelope() {
+    let profiles = vec![
+        seed_layout_named("Alpha"),
+        seed_layout_profile(
+            "Beta",
+            vec![
+                SeedPoint {
+                    position: Vec3::new(0.25, -0.5, 0.0),
+                    anchor: Some(SeedAnchor {
+                        axis: PlaneAxis::Z,
+                        index: 2,
+                        u: 0.25,
+                        v: -0.5,
+                    }),
+                },
+                SeedPoint {
+                    position: Vec3::new(-0.25, 0.5, 0.0),
+                    anchor: None,
+                },
+            ],
+        ),
+    ];
+    let settings = AppSettings {
+        seed_layouts: profiles.clone(),
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.seed_layouts, profiles,
+        "the envelope round-trips the user seed layouts"
+    );
+    assert_eq!(
+        SeedLayoutLibrary::new(
+            loaded.seed_layouts.clone(),
+            &State::new(false).scene_domain()
+        )
+        .expect("the loaded profiles validate")
+        .user(),
+        profiles.as_slice(),
+        "the loaded profiles build the library unchanged"
+    );
+}
+
+#[test]
+fn startup_restore_of_seed_layouts_is_non_applying_and_non_dirtying() {
+    let profiles = vec![
+        seed_layout_profile(
+            "Alpha",
+            vec![SeedPoint {
+                position: Vec3::new(0.25, -0.5, 0.0),
+                anchor: None,
+            }],
+        ),
+        seed_layout_named("Beta"),
+    ];
+    let settings = AppSettings {
+        seed_layouts: profiles.clone(),
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+
+    let mut app = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        app.seed_layouts.user(),
+        profiles.as_slice(),
+        "startup builds the library from the envelope"
+    );
+    assert!(
+        app.state.seed_layout.is_empty(),
+        "restoring the library never applies a layout"
+    );
+    assert_eq!(
+        app.state.seed_layout,
+        SeedLayout::default(),
+        "the current explicit seeds stay untouched"
+    );
+    assert!(
+        app.state.snapshot_if_dirty().is_some(),
+        "the view restore asks for its one scene rebuild"
+    );
+    assert!(!app.state.dirty, "the startup rebuild leaves a clean scene");
+    assert!(
+        app.state.snapshot_if_dirty().is_none(),
+        "restoring the seed-layout library never redirties the scene"
+    );
+}
+
+#[test]
+fn corrupt_seed_layout_profiles_are_sanitised_on_load() {
+    let profiles = vec![
+        // Empty after trimming: dropped rather than replaced.
+        seed_layout_profile("   ", vec![]),
+        // The built-in name is never stored.
+        seed_layout_named(DEFAULT_SEED_LAYOUT_NAME),
+        seed_layout_profile(
+            "  Good  ",
+            vec![
+                SeedPoint {
+                    position: Vec3::ZERO,
+                    anchor: None,
+                },
+                // Non-finite and out-of-domain seeds drop.
+                SeedPoint {
+                    position: Vec3::new(f32::NAN, 0.0, 0.0),
+                    anchor: None,
+                },
+                SeedPoint {
+                    position: Vec3::new(99.0, 0.0, 0.0),
+                    anchor: None,
+                },
+                // Off the collapsed 2D scene plane: the stored view domain is
+                // the authority, so this is dropped too.
+                SeedPoint {
+                    position: Vec3::new(0.0, 0.0, 0.75),
+                    anchor: None,
+                },
+            ],
+        ),
+        // Duplicate after sanitising: the first occurrence wins.
+        seed_layout_named("Dup"),
+        seed_layout_named(" Dup "),
+    ];
+    let settings = AppSettings {
+        seed_layouts: profiles,
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+
+    assert_eq!(
+        loaded
+            .seed_layouts
+            .iter()
+            .map(|layout| layout.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Good", "Dup"],
+        "corrupt names are repaired or dropped and the first duplicate wins"
+    );
+    assert_eq!(
+        loaded.seed_layouts[0].seeds.seeds,
+        vec![SeedPoint {
+            position: Vec3::ZERO,
+            anchor: None,
+        }],
+        "invalid seed positions are dropped against the stored view domain"
+    );
+    for layout in &loaded.seed_layouts {
+        layout
+            .validate(&State::new(false).scene_domain())
+            .expect("every loaded profile validates");
+    }
+
+    // Excess entries are truncated to the cap, keeping the first 16.
+    let too_many: Vec<_> = (0..MAX_USER_SEED_LAYOUTS + 4)
+        .map(|index| seed_layout_named(&format!("Layout {index}")))
+        .collect();
+    let settings = AppSettings {
+        seed_layouts: too_many,
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    let loaded = load(Some(&storage));
+    assert_eq!(
+        loaded.seed_layouts.len(),
+        MAX_USER_SEED_LAYOUTS,
+        "excess stored layouts are truncated"
+    );
+    assert_eq!(loaded.seed_layouts[0].name, "Layout 0");
+    assert_eq!(
+        loaded.seed_layouts[MAX_USER_SEED_LAYOUTS - 1].name,
+        format!("Layout {}", MAX_USER_SEED_LAYOUTS - 1)
     );
 }

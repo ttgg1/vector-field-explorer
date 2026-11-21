@@ -136,6 +136,7 @@ mod scene_document_test;
 mod scene_flow_test;
 mod scene_store_test;
 mod screenshot_test;
+mod seed_layout_library_test;
 mod seed_layout_test;
 mod shortcut_test;
 mod sidebar_camera_ui_test;

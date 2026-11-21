@@ -38,6 +38,7 @@ use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::profile_library::MAX_USER_PROFILES;
 use crate::seed_layout::SeedLayout;
+use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, MAX_USER_LAYOUTS, SeedLayoutProfile};
 use crate::source_scene::{
     FieldMode, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceRecord, SourceScene,
 };
@@ -94,6 +95,13 @@ pub struct AppSettings {
     /// restoring the library never applies a profile.
     #[serde(default)]
     pub interaction_profiles: Vec<InteractionProfile>,
+    /// User named seed layouts (issue #87 slice S3a). Missing on older
+    /// envelopes, which start with an empty library; corrupt records, the
+    /// built-in name, duplicate names and excess entries are repaired by
+    /// [`AppSettings::sanitized`]. The built-in `Default` is never stored, and
+    /// restoring the library never applies a layout.
+    #[serde(default)]
+    pub seed_layouts: Vec<SeedLayoutProfile>,
     /// Persisted Presets-panel expansion (issue #90 slice B). Missing on older
     /// envelopes, which open every group; a corrupt record falls back to the
     /// all-expanded default without failing the envelope.
@@ -220,6 +228,49 @@ impl AppSettings {
             interaction_profiles.push(profile);
         }
         self.interaction_profiles = interaction_profiles;
+        // User seed layouts are records too. Their seeds are only meaningful
+        // against the view the envelope restores, so recover that domain by
+        // running the same `ViewRecord::restore` repair the app will run: a 2D
+        // view collapses z to the domain midpoint and a plane slice uses its
+        // local domain. Then repair each layout, drop entries whose trimmed
+        // name is empty or names the built-in, keep the first occurrence of a
+        // case-sensitive duplicate and the first `MAX_USER_LAYOUTS` entries.
+        // A damaged layout must never fail the envelope or apply itself.
+        let seed_domain = {
+            let mut probe = State::new(false);
+            let mut probe_controls = Controls::new();
+            self.view.restore(&mut probe, &mut probe_controls);
+            probe.scene_domain()
+        };
+        let mut seed_names =
+            std::collections::HashSet::with_capacity(self.seed_layouts.len().min(MAX_USER_LAYOUTS));
+        let mut seed_layouts = Vec::with_capacity(self.seed_layouts.len().min(MAX_USER_LAYOUTS));
+        for profile in self.seed_layouts.drain(..) {
+            let trimmed = profile.name.trim();
+            if trimmed.is_empty() || trimmed == DEFAULT_LAYOUT_NAME {
+                log::warn!(
+                    "persisted seed layout name {:?} is empty or the built-in name; dropping it",
+                    profile.name
+                );
+                continue;
+            }
+            let profile = profile.sanitized(&seed_domain);
+            if !seed_names.insert(profile.name.clone()) {
+                log::warn!(
+                    "persisted seed layout {:?} duplicates an earlier name; dropping it",
+                    profile.name
+                );
+                continue;
+            }
+            if seed_layouts.len() == MAX_USER_LAYOUTS {
+                log::warn!(
+                    "more than {MAX_USER_LAYOUTS} persisted seed layouts; dropping the rest"
+                );
+                break;
+            }
+            seed_layouts.push(profile);
+        }
+        self.seed_layouts = seed_layouts;
         // `preset_ui` is four bools, so every persisted value is valid; the
         // lenient decoder has already replaced a corrupt record.
         if let Err(error) = self.parameters.validate() {
