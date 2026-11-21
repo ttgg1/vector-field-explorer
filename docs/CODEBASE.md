@@ -1410,7 +1410,24 @@ densifies the input grid.
 **State and app integration.** `FieldMode::Maxwell` samples the durable
 `State::maxwell: MaxwellScene` through `refresh_maxwell_sampling`; the app keeps
 `maxwell_sampling: Option<MaxwellSampling>`, `maxwell_error: Option<String>` and
-a private BEM cache. `set_maxwell_scene` validates before replacing anything, so
+a private BEM cache. Issue #97 slice B adds an optional self-contained
+`maxwell_wave: Option<WaveSpec>`: `set_maxwell_wave` validates through
+`WaveSpec::validate`, no-ops on an equal spec and dirties once on a change;
+`restore_maxwell_wave` assigns a validated stored spec without dirtying and
+drops an invalid one with one warning. While a wave is enabled,
+`refresh_maxwell_sampling` clears any earlier `maxwell_error` so a stale
+case/BEM failure cannot be read against the wave arrows; it then samples the
+grid (or the selected 2D plane) through `maxwell_wave::sample_wave_grid` and
+stores two separate fixed-family sets in `maxwell_wave_sampling`: E in the
+electric colour and B in the magnetic colour.
+The sets are never summed and never pass through the #83 colour mapping; the
+`SceneGPU` arrow list concatenates both so PNG, GUI screenshots and animation
+captures include them. An enabled wave replaces the selected case's field arrows
+while the selected case's outline geometry remains drawn, and its equation
+statuses are evaluated at the current clock time. The SVG blueprint carries no
+arrows, so the panel states that limit rather than changing SVG output.
+`maxwell_wave()` reads the durable
+spec and `set_maxwell_wave(None)` restores the normal case sampling exactly. `set_maxwell_scene` validates before replacing anything, so
 an invalid edit keeps the last valid scene and sampling; a valid edit clears the
 cache, sampling and error. `refresh_maxwell_sampling` is the only path that may
 call `solve_bem`, at most once for a matching scene cache; plane, camera and
@@ -1419,19 +1436,23 @@ edit/reset. The 3D grid is capped at `40^3` and the 2D plane at `200^2`, with th
 visible `MAXWELL_DENSITY_CAP_WARNING` when a request is reduced. Two-dimensional
 sampling uses the selected `PlaneFrame`; three-dimensional sampling uses the
 durable domain. Maxwell is arrows plus the case outline only: no formula
-streamlines, particles, trails, dots, click seeds, source/induction glyphs or
-clock consumer, and entering the mode preserves the camera and every durable
-scene. The app branch in `src/app/simulation.rs` composes the outline at
+streamlines, particles, trails, dots, click seeds or source/induction glyphs,
+and entering the mode preserves the camera and every durable scene. A Maxwell
+case is not a clock consumer, but an enabled plane wave is: `set_time` dirties
+the scene only while a wave is present, so the one simulation clock animates or
+freezes it and no second clock exists. The app branch in `src/app/simulation.rs` composes the outline at
 `0.004 * scene extent` width before the formula path; status/sampling errors flow
 to the existing status slot. Test seams are `maxwell_arrow_count`,
 `maxwell_line_count`, `maxwell_scene`, `maxwell_sampling`, `maxwell_sampling_error`,
 `maxwell_bem_solution` (read-only cache access for the learning panel),
 `maxwell_bem_solves`, its `maxwell_bem_solve_count` alias, and
-`test_assemble_viewport_scene`. `ViewRecord` persists the durable scene only
-(no sampling). `restore_maxwell_fields` validates it, then
-`State::restore_maxwell_scene` clears sampling/BEM/error and marks the first
-frame dirty without sampling or solving; a malformed payload falls back to the
-default scene and reports only for a stored Maxwell mode. Global Reset calls
+`test_assemble_viewport_scene`. `ViewRecord` persists the durable scene and the
+optional wave only (no sampling). `restore_maxwell_fields` validates the scene,
+restores the self-contained wave through the non-dirtying seam (dropping an
+invalid spec with one warning), then `State::restore_maxwell_scene` clears
+sampling/BEM/error and marks the first frame dirty without sampling or solving;
+a malformed scene payload falls back to the default scene and reports only for a
+stored Maxwell mode. Global Reset calls
 `reset_maxwell` and returns to Formula. PNG/SVG requests derive
 `maxwell_export_provenance` from the scene and cached sampling at request time.
 
@@ -1555,22 +1576,25 @@ was checked and the coupled time-dependent system was not solved.
 
 #### `src/maxwell_wave.rs` — bounded source-free plane-wave teaching model
 
-**Purpose.** Bounded analytic full-wave illustration for #97 slice A: a single
-source-free plane wave in normalized teaching units with `c = 1` by
+**Purpose.** Bounded analytic full-wave illustration for #97 slices A and B: a
+single source-free plane wave in normalized teaching units with `c = 1` by
 construction. `E = A p̂ cos(k·r − ωt + φ)` and `B = (1/c) k̂ × E` are evaluated
 together, and closed-form `FieldTerms` feed [`maxwell_residual`](../src/maxwell_residual.rs)
 so both Gauss laws and Faraday's law report `Analytic` while Ampere–Maxwell
 honestly reports `Unsupported`. This is not an SI measurement, not a
 boundary-value solution, and not a solver for arbitrary sources or current
-distributions; no panel, persistence, renderer, capture or clock state lives
-here.
+distributions. Slice B adds only the grid helper used by the viewmodel; the
+durable spec, panel, persistence, renderer arrows and clock wiring live in
+`viewmodel`, `persistence`, `ui/maxwell_panel` and the app scene path.
 
 **Public API.** `TEACHING_SPEED` (`1.0`), `MIN_WAVELENGTH` (`1e-6`),
 `MAX_AMPLITUDE` (`1e6`), `MIN_AXIS_LENGTH` (`1e-9`),
 `WaveSpec { amplitude, wavelength, direction, polarization, phase }` with
 `validate`, `omega` and `k`; `WaveSample { e, b, phase }`;
-`sample_wave(spec, point, time) -> Option<WaveSample>`; and
-`equation_terms(spec, point, time) -> Option<FieldTerms>`.
+`sample_wave(spec, point, time) -> Option<WaveSample>`;
+`sample_wave_grid(spec, domain, grid, plane, time) -> Vec<(Vec3, WaveSample)>`
+(slice B: the viewport grid or the active 2D plane, with rejected samples
+skipped); and `equation_terms(spec, point, time) -> Option<FieldTerms>`.
 
 **Invariants.** `validate` rejects a non-finite or out-of-range
 amplitude/wavelength/phase, a degenerate direction, and a polarization
@@ -1592,8 +1616,12 @@ rounded values and may shift unit vectors by `f32` rounding (not bit-idempotent,
 but within teaching tolerance). `k` returns `Vec3::ZERO` for an unusable stored
 direction as a deliberate no-direction sentinel, not a substitute axis; callers
 validate first, and reject-without-substitution remains `validate`'s rule.
+`sample_wave_grid` adds no density cap and returns only finite samples: an
+invalid spec, non-finite point/time or non-finite field is skipped, never drawn
+as NaN.
 
-**Pinned by.** [tests/maxwell_wave_test.rs](../tests/maxwell_wave_test.rs):
+**Pinned by.** Slice A:
+[tests/maxwell_wave_test.rs](../tests/maxwell_wave_test.rs):
 `wavelength_and_amplitude_validation_rejects_non_finite_and_out_of_range`,
 `polarization_is_projected_perpendicular_to_propagation`,
 `wave_is_transverse_and_b_is_orthogonal_to_e_and_k`,
@@ -1602,7 +1630,18 @@ validate first, and reject-without-substitution remains `validate`'s rule.
 `faraday_residual_stays_within_the_analytic_tolerance`,
 `ampere_maxwell_reports_unsupported_without_sources`,
 `non_finite_point_or_time_yields_no_sample`, and
-`samples_are_deterministic_and_repeatable`.
+`samples_are_deterministic_and_repeatable`. Slice B:
+[tests/maxwell_wave_ui_test.rs](../tests/maxwell_wave_ui_test.rs):
+`wave_state_round_trips_through_the_settings_envelope`,
+`invalid_stored_wave_is_dropped_on_restore_without_dirtying`,
+`set_wave_is_a_noop_for_an_equal_spec_and_dirties_once_on_change`,
+`wave_sampling_emits_separate_electric_and_magnetic_arrow_sets`,
+`wave_arrows_follow_the_clock_and_freeze_when_paused`,
+`wave_arrows_skip_non_finite_samples`,
+`wave_panel_shows_validation_messages_and_equation_statuses`,
+`wave_capture_includes_the_arrows` (a `SceneGPU`-level assertion, which pins the
+same geometry the GUI/PNG/animation paths consume), and
+`disabling_the_wave_restores_the_case_sampling`.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
@@ -3762,8 +3801,8 @@ migration and corruption tolerance.
 layer_styles, appearance_profiles, interaction, interaction_profiles,
 seed_layouts, preset_ui, object_style }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
-`restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
-helpers.
+`restore_maxwell_fields`, `restore_maxwell_wave`, `Default`); `finite_or`;
+`load`, `save`; private serde helpers.
 
 **Schema (all under `eframe::APP_KEY`).**
 
@@ -3771,7 +3810,7 @@ helpers.
 | --- | --- | --- |
 | `AppStyle` | `theme_dark`, `accent: Color32`, `rounding`, `spacing`, `font_size` | required in the envelope so a bare ticket-07 style fails to decode and is migrated |
 | `LayoutState` | `controls_expanded`, `presets_expanded`, `sources_expanded`, `induction_expanded`, `ode_expanded`, `materials_expanded`, `maxwell_expanded`, matching widths (including `maxwell_width`), `help_visible`, native `cas_expanded`, `cas_width` | `#[serde(default)]`; widths sanitized; Sources defaults collapsed/280, Maxwell 300 |
-| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, explicit seed layout, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `typeset_output`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy; `typeset_output` defaults to true |
+| `ViewRecord` | formula, mode, domain min/max, density, arrow scale/opacity/length mode/magnitude scale/proportional exponent, colormap, custom colour ramp, colour mode, colour quantity, auto-fit and range, `show_grid`, `show_coordinate_system`, arrows, 3D/2D arrow style, arrow params, streamlines, seed mode, explicit seed layout, left-click action, particles, particle size/count/appearance (8 flat fields), `field_mode`, `typeset_output`, `source_entries`, `source_display`, `source_softening`, `source_allow_inaccurate`, `induction_case`, `induction_center`, `induction_axis`, `induction_radius`, `induction_length`, `induction_turns`, `induction_amplitude`, `induction_frequency`, `induction_display`, `induction_allow_inaccurate`, `ode_source`, `ode_dimension`, `ode_equations`, `ode_seeds`, `ode_duration`, `ode_chart`, `ode_variables`, `material_case`, `material_background_epsilon_r`, `material_background_mu_r`, `material_material_epsilon_r`, `material_material_mu_r`, `material_radius`, `material_interface_axis`, `material_interface_offset`, `material_applied`, `material_view`, `maxwell_case`, `maxwell_e0`, `maxwell_b0`, `maxwell_separation`, `maxwell_radius`, `maxwell_outer_radius`, `maxwell_charge`, `maxwell_charge_height`, `maxwell_outline`, `maxwell_applied`, `maxwell_elements`, `maxwell_allow_inaccurate`, `maxwell_wave`, legacy `normalize`, legacy `speed` | `#[serde(default)]` + per-field defaults/aliases; both reference flags have explicit field-level true-on-missing serde defaults (a missing bool otherwise becomes false); source fields default to Formula/empty/Both/`0.1`/false and the opt-in only accepts an exact `true`; induction fields default to the valid current-loop scene (`current_loop`, origin, +Z axis, radius 1, length 0, turns 1, amplitude 1, frequency 0.25, Both, opt-in false) and the opt-in only accepts an exact `true`; ODE fields default to the valid typed harmonic scene (`equations`, dimension 2, `y`/`-x`/`0`, one seed at `[1,0,0]`, duration 20, `phase`, `[true,true,false]`); Material fields default to the valid dielectric sphere (`dielectric_sphere`, εr 1/4, μr 1/1, radius 1, axis `z`, offset 0, applied `[1,0,0]`, view `total`); Maxwell fields default to the valid parallel-plate scene (`parallel_plates`, E0/B0 1, separation/radius/charge/charge-height 1, outer radius 2, outline `circle:1`, applied `[1,0]`, 128 elements, opt-in false) with the opt-in accepting only an exact `true`; `maxwell_wave` is serde-default `None` and stores the self-contained spec as plain arrays (no `glam` in the schema), while an invalid stored spec drops on restore with one warning; `maxwell_outline` round-trips both cross-sections as `circle:<radius>` or `square:<half-extent>`; issue #83 colour fields default to `None`/linear/magnitude and an invalid ramp/mode is dropped on restore without losing the record; `normalize` and `speed` are read-only legacy; `typeset_output` defaults to true |
 | `ParameterSet` | `version`, `entries` (`Parameter { name, value, min, max, step }`) | `#[serde(default)]`; an absent key loads version 1 with no entries; an invalid set sanitizes to the default |
 | `LayerStyles` | `layers: [LayerOverride; 6]` in `LayerId::ALL` order, `families: [LayerOverride; 2]` in `PhysicsFamily::ALL` order; each override has optional `opacity`, `width`, `color` | `#[serde(default)]`; an absent key loads the neutral record; an invalid record is repaired by `sanitized` with a warning and never fails the envelope |
 | `appearance_profiles: Vec<AppearanceProfile>` | user profile records (`name`, `viewport`, `layer_styles`, `color`) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 32` are dropped with a warning |
@@ -5436,12 +5475,14 @@ viewport label, current-only warning, rail/sheet requests) and
 **Purpose.** The wide left rail/compact sheet body for `FieldMode::Maxwell`,
 plus case names, the formula-bar summary and the help rows.
 
-**Public API.** `MaxwellPanelState { draft, error, advanced, learning }`,
-`MaxwellPanelState::default`, `commit(&mut State) -> bool`, `sync_from(&State)`,
-`show(ui, &mut panel, &mut State, compact) -> Option<MaxwellPanelAction>`,
-`MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`, `case_label`, `summary`,
-`MAXWELL_HELP_ROWS`, `maxwell_help_rows`, `MAXWELL_ONLY_NOTE`,
-`MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`.
+**Public API.** `MaxwellPanelState { draft, error, advanced, wave, wave_error,
+wave_open, learning }`, `MaxwellPanelState::default`,
+`commit(&mut State) -> bool`, `commit_wave(&mut State) -> bool`,
+`sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
+Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`,
+`case_label`, `summary`, `MAXWELL_HELP_ROWS`, `maxwell_help_rows`,
+`MAXWELL_ONLY_NOTE`, `MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`,
+`WAVE_SCOPE_NOTE`, `WAVE_NORMALIZED_NOTE`, `WAVE_AMPERE_NOTE`, `WAVE_SVG_NOTE`.
 
 **Invariants.**
 - `commit` calls `State::set_maxwell_scene`; an invalid draft keeps the last
@@ -5463,6 +5504,13 @@ plus case names, the formula-bar summary and the help rows.
   finite `MaxwellStop::AccuracyNotMet`; `Unavailable` can never be shown.
 - Warnings come only from the sampling that belongs to the committed scene, so
   a valid scene edit cannot present a prior scene's warning as current.
+- A collapsed `Plane wave` section adds enable/disable, amplitude, wavelength,
+  phase, propagation axis with sign, and a polarization axis. Edits commit
+  through `State::set_maxwell_wave`; a rejection keeps the committed wave and
+  shows slice A's validation message verbatim. When a wave is enabled it also
+  states the normalized `c = 1` scope and the four analytic equation-term
+  statuses (Gauss-E, Gauss-B and Faraday `Analytic`; Ampere-Maxwell
+  `Unsupported (j)` for a source-free wave), plus the SVG no-arrow note.
 - A collapsed `Maxwell equations` section after the case controls embeds
   [`maxwell_learning_panel`](../src/ui/maxwell_learning_panel.rs). It receives
   the draft scene and the read-only cached BEM solution; it never commits a
@@ -5476,8 +5524,9 @@ plus case names, the formula-bar summary and the help rows.
 controls, rejection, current-only warning, accuracy opt-in, Switch to 2D
 camera/mode preservation, disabled Features/CAS, help rows, rail/sheet
 requests), `tests/maxwell_learning_panel_test.rs` (the embedded section's
-equation/form, residual and limitation contracts) and `tests/layout_test.rs`
-for `maxwell_expanded`/`maxwell_width`.
+equation/form, residual and limitation contracts), `tests/maxwell_wave_ui_test.rs`
+(the plane-wave controls, verbatim validation, equation statuses and export
+notes) and `tests/layout_test.rs` for `maxwell_expanded`/`maxwell_width`.
 
 #### `src/ui/maxwell_learning_panel.rs` — Maxwell learning and residual section
 
