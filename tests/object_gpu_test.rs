@@ -9,17 +9,27 @@
 use std::sync::{Arc, Mutex};
 
 use eframe::{egui, wgpu};
-use glam::{Mat4, Vec3};
+use glam::{DVec3, Mat4, UVec3, Vec3};
 
 use vector_field_explorer::{
+    VfApp,
+    app::{compose_vector_lines, compose_vector_lines_blueprint},
     domain::Domain,
+    layer_style::{LayerId, LayerOverride, LayerStyles},
     object_renderer::{
         OBJECT_PROBE_ENV, ObjectGlobals, ObjectInstance, ObjectPass, ObjectView, object_draw_plan,
     },
     object_scene::{MeshObject, MeshPrimitive, MeshScene, ObjectStyle, SliceClip},
-    renderer::{self, DrawState, SceneGPU},
+    plane::{PlaneAxis, PlaneFrame, PlaneView},
+    renderer::{self, DrawState, LineInstanceGPU, SceneGPU},
     screenshot,
-    source_scene::{SourceEntry, SourceKindTag, SourceScene},
+    source_glyph::{
+        source_body_lines, source_glyph_lines, source_glyph_lines_with_layer, source_glyphs,
+        source_sign_marker_lines, source_sign_marker_lines_with_layer,
+    },
+    source_scene::{FieldMode, SourceEntry, SourceKindTag, SourceScene},
+    sources::{Source, SourceKind},
+    viewmodel::State,
 };
 
 const PROBE_CLEAR: [f64; 4] = [0.05, 0.06, 0.08, 1.0];
@@ -172,6 +182,236 @@ fn cpu_contract_checks() {
     );
 
     eprintln!("GPU not requested: object device probe did not run");
+}
+
+fn point_glyph_state() -> State {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut scene = SourceScene::default();
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: Source {
+            center: DVec3::ZERO,
+            axis: DVec3::Z,
+            kind: SourceKind::PointCharge { charge: 1.0 },
+        },
+    });
+    state.set_source_scene(scene);
+    state
+}
+
+/// Compare every exposed line field. `b[3]` is the line width, so the full
+/// `a.b == b.b` comparison pins width as well as the endpoint; the dash pattern
+/// is realised as emitted segment splits, so equal endpoints and count also pin
+/// the dashed geometry.
+fn same_line(a: &LineInstanceGPU, b: &LineInstanceGPU) -> bool {
+    a.a == b.a && a.b == b.b && a.color == b.color
+}
+
+fn assert_tail_is_markers(composed: &[LineInstanceGPU], expected: &[LineInstanceGPU]) {
+    let tail = &composed[composed.len() - expected.len()..];
+    assert_eq!(tail.len(), expected.len());
+    assert!(
+        tail.iter().zip(expected).all(|(a, b)| same_line(a, b)),
+        "object-backed glyphs contribute only their sign markers"
+    );
+}
+
+#[test]
+fn composed_lines_keep_only_sign_markers_for_object_backed_glyphs() {
+    let mut state = point_glyph_state();
+    let domain = state.scene_domain();
+    let glyphs = source_glyphs(&state.sources, &domain, state.plane_frame().as_ref());
+    assert_eq!(glyphs.len(), 1);
+    let bodies = source_body_lines(&glyphs, &domain);
+    let markers = source_sign_marker_lines(&glyphs, &domain);
+    let legacy_count = source_glyph_lines(&glyphs, &domain).len();
+    assert!(!bodies.is_empty() && !markers.is_empty());
+    assert!(
+        !vector_field_explorer::app::object_scene_for_state(&state)
+            .objects()
+            .is_empty(),
+        "the live Sources scene maps a body for this glyph"
+    );
+
+    for style in [ObjectStyle::Solid, ObjectStyle::Wireframe] {
+        state.set_object_style(style);
+        let (composed, count) = compose_vector_lines(&state, &[], &[]);
+        assert_eq!(
+            count, legacy_count,
+            "the status count stays the legacy full-glyph count"
+        );
+        assert_tail_is_markers(&composed, &markers);
+        assert!(
+            composed
+                .iter()
+                .all(|line| !bodies.iter().any(|body| same_line(line, body))),
+            "{style:?} must suppress the body line glyphs"
+        );
+
+        let (blueprint, blueprint_count) = compose_vector_lines_blueprint(&state, &[], &[]);
+        assert!(
+            blueprint.len() > composed.len(),
+            "{style:?} blueprint composition must keep the extra body lines"
+        );
+        assert_eq!(blueprint_count, legacy_count);
+        let legacy = source_glyph_lines(&glyphs, &domain);
+        let blueprint_tail = &blueprint[blueprint.len() - blueprint_count..];
+        assert_eq!(blueprint_tail.len(), legacy.len());
+        assert!(
+            blueprint_tail
+                .iter()
+                .zip(&legacy)
+                .all(|(a, b)| same_line(a, b))
+        );
+    }
+}
+
+#[test]
+fn induction_object_backed_glyphs_keep_only_markers_with_the_induction_override() {
+    let mut state = State::new(true);
+    assert!(state.set_field_mode(FieldMode::Induction));
+    state.set_object_style(ObjectStyle::Solid);
+    let domain = state.scene_domain();
+    let mut scene = SourceScene::default();
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: state.induction.unit_source(),
+    });
+    let glyphs = source_glyphs(&scene, &domain, state.plane_frame().as_ref());
+    assert!(!glyphs.is_empty(), "the induction conductor emits a glyph");
+    assert!(
+        !vector_field_explorer::app::object_scene_for_state(&state)
+            .objects()
+            .is_empty(),
+        "the induction conductor maps an object body"
+    );
+
+    let slot = LayerId::ALL
+        .iter()
+        .position(|layer| *layer == LayerId::Induction)
+        .expect("Induction is a layer");
+    let mut styles = LayerStyles::default();
+    styles.layers[slot] = LayerOverride {
+        opacity: Some(0.5),
+        width: Some(2.0),
+        color: None,
+    };
+    state
+        .commit_layer_styles(styles)
+        .expect("the test induction style is valid");
+
+    let bodies = source_body_lines(&glyphs, &domain);
+    let neutral_markers = source_sign_marker_lines(&glyphs, &domain);
+    let styled_markers =
+        source_sign_marker_lines_with_layer(&glyphs, &domain, &styles, LayerId::Induction);
+    let legacy = source_glyph_lines_with_layer(&glyphs, &domain, &styles, LayerId::Induction);
+    assert!(!bodies.is_empty() && !styled_markers.is_empty());
+    assert_eq!(
+        legacy.len(),
+        bodies.len() + styled_markers.len(),
+        "the legacy full glyph is the body plus marker length"
+    );
+
+    let (composed, count) = compose_vector_lines(&state, &[], &[]);
+    assert_eq!(count, legacy.len(), "the full-glyph count is preserved");
+    assert_tail_is_markers(&composed, &styled_markers);
+    assert!(
+        composed
+            .iter()
+            .all(|line| !bodies.iter().any(|body| same_line(line, body))),
+        "the Induction object-backed path suppresses the body glyph"
+    );
+    assert!(
+        styled_markers.iter().any(|marker| neutral_markers
+            .iter()
+            .all(|neutral| !same_line(marker, neutral))),
+        "the Induction layer override reaches the emitted markers"
+    );
+}
+
+#[test]
+fn empty_object_scene_keeps_the_legacy_line_glyphs() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut scene = SourceScene::default();
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: Source {
+            // The glyph model repairs a non-finite centre, but the object
+            // mapper rejects it, so this exercises the line-glyph fallback.
+            center: DVec3::new(f64::NAN, 0.0, 0.0),
+            axis: DVec3::Z,
+            kind: SourceKind::PointCharge { charge: 1.0 },
+        },
+    });
+    state.set_source_scene(scene);
+    let domain = state.scene_domain();
+    assert!(
+        vector_field_explorer::app::object_scene_for_state(&state)
+            .objects()
+            .is_empty(),
+        "the malformed source maps no object"
+    );
+    let glyphs = source_glyphs(&state.sources, &domain, state.plane_frame().as_ref());
+    let legacy = source_glyph_lines(&glyphs, &domain);
+    let (composed, count) = compose_vector_lines(&state, &[], &[]);
+    assert_eq!(count, legacy.len());
+    let tail = &composed[composed.len() - count..];
+    assert_eq!(tail.len(), legacy.len());
+    assert!(tail.iter().zip(&legacy).all(|(a, b)| same_line(a, b)));
+}
+
+#[test]
+fn app_svg_blueprint_keeps_full_body_glyphs_when_objects_draw() {
+    let mut app = VfApp::new();
+    app.state.set_mode(false);
+    app.state.set_field_mode(FieldMode::Sources);
+    let mut scene = SourceScene::default();
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: Source {
+            center: DVec3::ZERO,
+            axis: DVec3::Z,
+            kind: SourceKind::PointCharge { charge: 1.0 },
+        },
+    });
+    app.state.set_source_scene(scene);
+
+    for style in [ObjectStyle::Solid, ObjectStyle::Wireframe] {
+        app.state.set_object_style(style);
+        app.test_harness().advance_simulation();
+        let blueprint = app.test_assemble_viewport_scene_with_styles(&LayerStyles::default());
+        let live = app.test_assemble_viewport_scene();
+        assert!(
+            blueprint.lines.len() > live.lines.len(),
+            "{style:?} SVG blueprint must carry the full line glyph, not just the \
+             live marker: blueprint {}, live {}",
+            blueprint.lines.len(),
+            live.lines.len()
+        );
+
+        let domain = app.state.scene_domain();
+        let glyphs = source_glyphs(
+            &app.state.sources,
+            &domain,
+            app.state.plane_frame().as_ref(),
+        );
+        let bodies = source_body_lines(&glyphs, &domain);
+        assert!(!bodies.is_empty());
+        assert!(
+            bodies
+                .iter()
+                .all(|body| blueprint.lines.iter().any(|line| same_line(line, body))),
+            "{style:?}: every body segment is present in the SVG blueprint"
+        );
+        assert!(
+            bodies
+                .iter()
+                .all(|body| !live.lines.iter().any(|line| same_line(line, body))),
+            "{style:?}: the live object-backed scene still suppresses the body glyphs"
+        );
+    }
 }
 
 #[test]
@@ -632,12 +872,121 @@ fn probe_capture_object_style(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<
     Ok(())
 }
 
+/// An asymmetric sphere: its centre sits above the `y = 0` slice, so the
+/// visible cap and the discarded cap have different silhouettes. A probe that
+/// merely swapped the two clip comparisons could not pass by symmetry.
+fn sphere_scene_at_y(center_y: f64, plane: Option<&PlaneFrame>) -> MeshScene {
+    let domain = Domain::new(Vec3::splat(-2.0), Vec3::splat(2.0));
+    let mut source = SourceKindTag::SolidSphere.default_source();
+    source.center = DVec3::new(0.0, center_y, 0.0);
+    let scene = SourceScene {
+        entries: vec![SourceEntry {
+            enabled: true,
+            source,
+        }],
+        ..SourceScene::default()
+    };
+    MeshScene::from_sources(&scene, &domain, plane)
+}
+
+fn clipped_sphere_scene() -> MeshScene {
+    let domain = Domain::new(Vec3::splat(-2.0), Vec3::splat(2.0));
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            enabled: true,
+            axis: PlaneAxis::Y,
+            index: 2,
+        },
+        UVec3::new(5, 5, 5),
+    );
+    sphere_scene_at_y(0.5, Some(&frame))
+}
+
+/// Issue #114 slice 5 pixel evidence: the on-slice half is drawn by the normal
+/// body pipeline, and the discarded half appears once as the attenuated
+/// wireframe. The slice is world `y = 0` with the `+Y` half visible, so the
+/// screen's lower half can only contain faint discarded-side pixels. An
+/// unclipped reference frame of the same asymmetric sphere lets the probe
+/// assert that those pixels are attenuated blends, not opaque body pixels that
+/// a broken clip comparison would leave behind.
+fn probe_slice_faint_side(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(), String> {
+    const EDGE: u32 = 128;
+    let scene = clipped_sphere_scene();
+    if scene.clip().is_none() {
+        return Err("the clipped sphere scene carries no slice plane".into());
+    }
+    let view = probe_view([EDGE, EDGE]);
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(EDGE as f32, EDGE as f32));
+
+    let mut pass = ObjectPass::new(&gpu.device, format);
+    submit_prepare(gpu, &mut pass, &scene, &view)?;
+    let frame = composite_frame(gpu, &pass, format, [EDGE, EDGE], rect)?;
+
+    // The same sphere without the slice clip draws opaque bodies on both
+    // halves; its lower-half pixels are the "body would have drawn here"
+    // reference for the faint-pixel comparison.
+    let mut reference = ObjectPass::new(&gpu.device, format);
+    submit_prepare(gpu, &mut reference, &sphere_scene_at_y(0.5, None), &view)?;
+    let full = composite_frame(gpu, &reference, format, [EDGE, EDGE], rect)?;
+
+    let clear = pixel(&frame, EDGE, 0, 0);
+    let mut on_slice = 0usize;
+    let mut discarded = 0usize;
+    let mut attenuated = 0usize;
+    for y in 0..EDGE {
+        for x in 0..EDGE {
+            let current = pixel(&frame, EDGE, x, y);
+            if current == clear {
+                continue;
+            }
+            // World +Y maps to the top of the image.
+            if y <= EDGE / 2 {
+                on_slice += 1;
+            } else {
+                discarded += 1;
+                let opaque = pixel(&full, EDGE, x, y);
+                if opaque == clear {
+                    return Err(format!(
+                        "the unclipped reference has no body under the faint pixel ({x}, {y})"
+                    ));
+                }
+                if current == opaque {
+                    return Err(format!(
+                        "the discarded-side pixel ({x}, {y}) is opaque body colour, not an attenuated faint pixel"
+                    ));
+                }
+                attenuated += 1;
+            }
+        }
+    }
+    if on_slice == 0 {
+        return Err("the on-slice half of the clipped sphere is missing".into());
+    }
+    if discarded == 0 {
+        return Err(
+            "the discarded side has no faint wireframe pixels; the extra attenuation draw did not record"
+                .into(),
+        );
+    }
+    if attenuated != discarded {
+        return Err(format!(
+            "only {attenuated} of {discarded} discarded-side pixels are attenuated; the rest are opaque body pixels"
+        ));
+    }
+    eprintln!(
+        "PROBE slice-faint: {on_slice} on-slice pixels, {discarded} attenuated discarded-side wireframe pixels"
+    );
+    Ok(())
+}
+
 fn run_probe() -> Result<(), String> {
     let gpu = request_device()?;
     let scopes = gpu.begin_scopes("object pass");
     let result = probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb)
         .and_then(|()| probe_offscreen_capture(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
-        .and_then(|()| probe_capture_object_style(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
+        .and_then(|()| probe_capture_object_style(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
+        .and_then(|()| probe_slice_faint_side(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
     gpu.end_scopes(scopes)?;
     result
 }

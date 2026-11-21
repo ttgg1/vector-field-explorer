@@ -101,6 +101,36 @@ fn fs_object(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @locati
     return vec4<f32>(rgb, clamp(v.color.a, 0.0, 1.0));
 }
 
+// Issue #114 slice 5: the 2D slice keeps the on-slice body authoritative but
+// shows the discarded side once as a faint barycentric wireframe. This entry
+// reuses the same vertices and instance buffer; only the fragment side flips.
+@fragment
+fn fs_object_faint(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    if (globals.params.y <= 0.5) {
+        discard;
+    }
+    let distance = dot(v.world, globals.clip_plane.xyz) - globals.clip_plane.w;
+    if (distance >= 0.0) {
+        discard;
+    }
+
+    let grid = fwidth(v.barycentric);
+    let edges = v.barycentric / max(grid, vec3<f32>(1e-5));
+    let nearest = min(min(edges.x, edges.y), edges.z);
+    if (nearest > 1.5) {
+        discard;
+    }
+
+    var normal = normalize(v.normal);
+    if (!front_facing) {
+        normal = -normal;
+    }
+    let light = normalize(globals.light_dir.xyz);
+    let diffuse = max(dot(normal, light), 0.0);
+    let rgb = clamp(v.color.rgb * (0.25 + 0.75 * diffuse), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(rgb, clamp(v.color.a, 0.0, 1.0) * 0.2);
+}
+
 @group(0) @binding(2)
 var object_color: texture_2d<f32>;
 

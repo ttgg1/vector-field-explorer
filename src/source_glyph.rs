@@ -118,6 +118,10 @@ pub fn source_glyphs(
 }
 
 /// Expand glyphs into line instances for the existing line pass.
+///
+/// This is the legacy full expansion: each glyph's body is followed by its
+/// [`source_sign_marker_lines`] marker, exactly as before the #114 split. SVG
+/// and line-glyph callers keep that byte-for-byte sequence.
 pub fn source_glyph_lines(glyphs: &[SourceGlyph], domain: &Domain) -> Vec<LineInstanceGPU> {
     source_glyph_lines_with(glyphs, domain, &LayerStyles::default())
 }
@@ -146,55 +150,125 @@ pub fn source_glyph_lines_with_layer(
     layer: LayerId,
 ) -> Vec<LineInstanceGPU> {
     let extent = scene_extent(domain);
-    let on_width = ON_SLICE_WIDTH * extent;
-    let off_width = OFF_SLICE_WIDTH * extent;
     let mut lines = Vec::new();
 
     for glyph in glyphs {
-        let resolved = styles.resolve(layer, Some(physics_family(glyph.family)));
-        let base_alpha = if glyph.off_slice {
-            OFF_SLICE_ALPHA
-        } else {
-            ON_SLICE_ALPHA
-        };
-        let opacity = crate::reference::sanitized_opacity(resolved.opacity);
-        let alpha = (base_alpha * opacity).clamp(0.0, 1.0);
-        let base_width = if glyph.off_slice { off_width } else { on_width };
-        let mut emitter = LineEmitter {
-            lines: &mut lines,
-            color: family_color(glyph.family, alpha, resolved.color.map(|color| color.0)),
-            width: base_width * sanitized_width_multiplier(resolved.width),
-            dash: glyph
-                .off_slice
-                .then_some((DASH_ON * glyph.domain_scale, DASH_OFF * glyph.domain_scale)),
-        };
-        let basis = Basis::new(glyph.axis);
-
-        match glyph.kind {
-            SourceKindTag::PointCharge => emit_point_cross(glyph, &basis, &mut emitter),
-            SourceKindTag::FiniteLineCharge => emit_finite_line(glyph, &basis, &mut emitter),
-            SourceKindTag::ChargedRing => {
-                emit_circle(
-                    glyph.center,
-                    basis.right,
-                    basis.up,
-                    glyph.radius,
-                    &mut emitter,
-                );
-            }
-            SourceKindTag::ChargedDisc => {
-                emit_disc(glyph, &basis, &mut emitter);
-            }
-            SourceKindTag::SolidSphere => emit_sphere(glyph, &basis, &mut emitter),
-            SourceKindTag::StraightWire => emit_wire(glyph, &basis, extent, &mut emitter),
-            SourceKindTag::CurrentLoop => emit_current_loop(glyph, &basis, &mut emitter),
-            SourceKindTag::Solenoid => emit_solenoid(glyph, &basis, &mut emitter),
-        }
-
-        emit_sign_marker(glyph, &basis, &mut emitter);
+        emit_body(glyph, extent, styles, layer, &mut lines);
+        emit_marker(glyph, extent, styles, layer, &mut lines);
     }
 
     lines
+}
+
+/// Expand only the body geometry of each glyph, with neutral layer styles.
+pub fn source_body_lines(glyphs: &[SourceGlyph], domain: &Domain) -> Vec<LineInstanceGPU> {
+    source_body_lines_with_layer(glyphs, domain, &LayerStyles::default(), LayerId::Sources)
+}
+
+/// Expand only the body geometry, resolving overrides from `layer`.
+pub fn source_body_lines_with_layer(
+    glyphs: &[SourceGlyph],
+    domain: &Domain,
+    styles: &LayerStyles,
+    layer: LayerId,
+) -> Vec<LineInstanceGPU> {
+    let extent = scene_extent(domain);
+    let mut lines = Vec::new();
+    for glyph in glyphs {
+        emit_body(glyph, extent, styles, layer, &mut lines);
+    }
+    lines
+}
+
+/// Expand only the polarity sign markers, with neutral layer styles.
+pub fn source_sign_marker_lines(glyphs: &[SourceGlyph], domain: &Domain) -> Vec<LineInstanceGPU> {
+    source_sign_marker_lines_with_layer(glyphs, domain, &LayerStyles::default(), LayerId::Sources)
+}
+
+/// Expand only the polarity sign markers, resolving overrides from `layer`.
+pub fn source_sign_marker_lines_with_layer(
+    glyphs: &[SourceGlyph],
+    domain: &Domain,
+    styles: &LayerStyles,
+    layer: LayerId,
+) -> Vec<LineInstanceGPU> {
+    let extent = scene_extent(domain);
+    let mut lines = Vec::new();
+    for glyph in glyphs {
+        emit_marker(glyph, extent, styles, layer, &mut lines);
+    }
+    lines
+}
+
+fn glyph_emitter<'a>(
+    glyph: &SourceGlyph,
+    extent: f32,
+    styles: &LayerStyles,
+    layer: LayerId,
+    lines: &'a mut Vec<LineInstanceGPU>,
+) -> LineEmitter<'a> {
+    let resolved = styles.resolve(layer, Some(physics_family(glyph.family)));
+    let base_alpha = if glyph.off_slice {
+        OFF_SLICE_ALPHA
+    } else {
+        ON_SLICE_ALPHA
+    };
+    let opacity = crate::reference::sanitized_opacity(resolved.opacity);
+    let alpha = (base_alpha * opacity).clamp(0.0, 1.0);
+    let base_width = if glyph.off_slice {
+        OFF_SLICE_WIDTH * extent
+    } else {
+        ON_SLICE_WIDTH * extent
+    };
+    LineEmitter {
+        lines,
+        color: family_color(glyph.family, alpha, resolved.color.map(|color| color.0)),
+        width: base_width * sanitized_width_multiplier(resolved.width),
+        dash: glyph
+            .off_slice
+            .then_some((DASH_ON * glyph.domain_scale, DASH_OFF * glyph.domain_scale)),
+    }
+}
+
+fn emit_body(
+    glyph: &SourceGlyph,
+    extent: f32,
+    styles: &LayerStyles,
+    layer: LayerId,
+    lines: &mut Vec<LineInstanceGPU>,
+) {
+    let basis = Basis::new(glyph.axis);
+    let mut emitter = glyph_emitter(glyph, extent, styles, layer, lines);
+    match glyph.kind {
+        SourceKindTag::PointCharge => emit_point_cross(glyph, &basis, &mut emitter),
+        SourceKindTag::FiniteLineCharge => emit_finite_line(glyph, &basis, &mut emitter),
+        SourceKindTag::ChargedRing => {
+            emit_circle(
+                glyph.center,
+                basis.right,
+                basis.up,
+                glyph.radius,
+                &mut emitter,
+            );
+        }
+        SourceKindTag::ChargedDisc => emit_disc(glyph, &basis, &mut emitter),
+        SourceKindTag::SolidSphere => emit_sphere(glyph, &basis, &mut emitter),
+        SourceKindTag::StraightWire => emit_wire(glyph, &basis, extent, &mut emitter),
+        SourceKindTag::CurrentLoop => emit_current_loop(glyph, &basis, &mut emitter),
+        SourceKindTag::Solenoid => emit_solenoid(glyph, &basis, &mut emitter),
+    }
+}
+
+fn emit_marker(
+    glyph: &SourceGlyph,
+    extent: f32,
+    styles: &LayerStyles,
+    layer: LayerId,
+    lines: &mut Vec<LineInstanceGPU>,
+) {
+    let basis = Basis::new(glyph.axis);
+    let mut emitter = glyph_emitter(glyph, extent, styles, layer, lines);
+    emit_sign_marker(glyph, &basis, &mut emitter);
 }
 
 fn physics_family(family: FieldFamily) -> PhysicsFamily {

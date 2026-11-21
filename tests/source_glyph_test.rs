@@ -5,8 +5,9 @@ use vector_field_explorer::layer_style::{LayerId, LayerOverride, LayerStyles, Ph
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::renderer::LineInstanceGPU;
 use vector_field_explorer::source_glyph::{
-    GlyphSign, SourceGlyph, source_glyph_lines, source_glyph_lines_with,
-    source_glyph_lines_with_layer, source_glyphs,
+    GlyphSign, SourceGlyph, source_body_lines, source_body_lines_with_layer, source_glyph_lines,
+    source_glyph_lines_with, source_glyph_lines_with_layer, source_glyphs,
+    source_sign_marker_lines, source_sign_marker_lines_with_layer,
 };
 use vector_field_explorer::source_scene::{
     ELECTRIC_COLOR, MAGNETIC_COLOR, SourceDisplay, SourceEntry, SourceKindTag, SourceScene,
@@ -502,9 +503,11 @@ fn out_of_range_or_non_finite_glyph_styles_are_defensively_repaired() {
             assert!(legacy.iter().any(|line| (line.color[3] - 0.9).abs() < 1e-6));
         } else {
             assert!(glyphs.iter().all(|glyph| glyph.off_slice));
-            assert!(legacy
-                .iter()
-                .all(|line| (line.color[3] - 0.45).abs() < 1e-6));
+            assert!(
+                legacy
+                    .iter()
+                    .all(|line| (line.color[3] - 0.45).abs() < 1e-6)
+            );
         }
         for (legacy, styled) in legacy.iter().zip(&styled) {
             assert!(styled.color[3].is_finite());
@@ -514,6 +517,203 @@ fn out_of_range_or_non_finite_glyph_styles_are_defensively_repaired() {
                 "a non-finite opacity repairs to the neutral multiplier, so the \
                  styled alpha equals the legacy base alpha"
             );
+        }
+    }
+}
+
+// Issue #114 slice 5: bodies and sign markers are separately requestable.
+// `source_glyph_lines` remains the exact per-glyph body-then-marker sum.
+
+#[test]
+fn body_lines_contain_no_sign_marker() {
+    let domain = Domain::default();
+    let glyphs = source_glyphs(&point(1.0, DVec3::ZERO), &domain, None);
+    let body = source_body_lines(&glyphs, &domain);
+    let markers = source_sign_marker_lines(&glyphs, &domain);
+
+    assert_eq!(body.len(), 3, "a point glyph body is the three-axis cross");
+    assert_eq!(markers.len(), 2, "a positive sign marker adds a plus");
+    assert!(
+        body.iter()
+            .all(|line| !markers.iter().any(|marker| same_line(line, marker))),
+        "the body must not contain any marker segment"
+    );
+    assert!(
+        source_glyph_lines(&glyphs, &domain)
+            .iter()
+            .any(|line| markers.iter().any(|marker| same_line(line, marker))),
+        "the full legacy expansion still contains the marker"
+    );
+}
+
+#[test]
+fn sign_markers_emit_two_segments_for_positive_and_one_for_negative() {
+    let domain = Domain::default();
+    for tag in SourceKindTag::ALL {
+        let mut scene = SourceScene::default();
+        scene.entries.push(SourceEntry {
+            enabled: true,
+            source: tag.default_source(),
+        });
+        let positive = source_glyphs(&scene, &domain, None);
+        assert_eq!(
+            source_sign_marker_lines(&positive, &domain).len(),
+            2,
+            "{tag:?} positive marker is a plus"
+        );
+
+        let mut negative = tag.default_source();
+        negative.kind = match negative.kind {
+            SourceKind::PointCharge { .. } => SourceKind::PointCharge { charge: -1.0 },
+            SourceKind::FiniteLineCharge { length, .. } => SourceKind::FiniteLineCharge {
+                charge: -1.0,
+                length,
+            },
+            SourceKind::ChargedRing { radius, .. } => SourceKind::ChargedRing {
+                charge: -1.0,
+                radius,
+            },
+            SourceKind::ChargedDisc { radius, .. } => SourceKind::ChargedDisc {
+                charge: -1.0,
+                radius,
+            },
+            SourceKind::SolidSphere { radius, .. } => SourceKind::SolidSphere {
+                charge: -1.0,
+                radius,
+            },
+            SourceKind::StraightWire { .. } => SourceKind::StraightWire { current: -1.0 },
+            SourceKind::CurrentLoop { radius, .. } => SourceKind::CurrentLoop {
+                current: -1.0,
+                radius,
+            },
+            SourceKind::Solenoid {
+                radius,
+                length,
+                turns,
+                ..
+            } => SourceKind::Solenoid {
+                current: -1.0,
+                radius,
+                length,
+                turns,
+            },
+        };
+        let mut scene = SourceScene::default();
+        scene.entries.push(SourceEntry {
+            enabled: true,
+            source: negative,
+        });
+        let negative = source_glyphs(&scene, &domain, None);
+        assert_eq!(
+            source_sign_marker_lines(&negative, &domain).len(),
+            1,
+            "{tag:?} negative marker is a minus"
+        );
+    }
+}
+
+#[test]
+fn legacy_glyph_lines_equal_body_plus_markers_for_every_kind() {
+    let domain = Domain::default();
+    let glyphs = source_glyphs(&all_kinds(), &domain, None);
+    assert_eq!(glyphs.len(), SourceKindTag::ALL.len());
+    for glyph in &glyphs {
+        let one = std::slice::from_ref(glyph);
+        let legacy = source_glyph_lines(one, &domain);
+        let mut split = source_body_lines(one, &domain);
+        split.extend(source_sign_marker_lines(one, &domain));
+        assert_eq!(
+            legacy.len(),
+            split.len(),
+            "{:?} legacy expansion is body + markers",
+            glyph.kind
+        );
+        assert!(
+            legacy.iter().zip(&split).all(|(a, b)| same_line(a, b)),
+            "{:?} body + markers reproduces the legacy sequence",
+            glyph.kind
+        );
+    }
+}
+
+#[test]
+fn off_slice_split_preserves_width_and_dash_expansion() {
+    let domain = Domain::default();
+    let frame = plane_frame();
+    let glyphs = source_glyphs(&all_kinds_at(2.0), &domain, Some(&frame));
+    assert!(glyphs.iter().all(|glyph| glyph.off_slice));
+
+    for glyph in &glyphs {
+        let one = std::slice::from_ref(glyph);
+        let legacy = source_glyph_lines(one, &domain);
+        let body = source_body_lines(one, &domain);
+        let markers = source_sign_marker_lines(one, &domain);
+        let mut split = body.clone();
+        split.extend(&markers);
+
+        assert_eq!(legacy.len(), split.len());
+        assert!(legacy.iter().zip(&split).all(|(a, b)| same_line(a, b)));
+        // `b[3]` is the width slot, not an endpoint component. The split keeps
+        // the single off-slice width everywhere, including the dashed marker.
+        let width = legacy[0].b[3];
+        assert!(width.is_finite() && width > 0.0);
+        assert!(split.iter().all(|line| line.b[3] == width));
+    }
+
+    // The off-slice emitter dashes whole segments. A straight wire has one
+    // long axis plus four short chevron strokes (five base segments), so the
+    // dash path must expand it beyond five emitted lines; a split that bypassed
+    // the dash path would stop at five.
+    let wire = glyphs
+        .iter()
+        .find(|glyph| glyph.kind == SourceKindTag::StraightWire)
+        .expect("straight wire present");
+    assert!(
+        source_body_lines(std::slice::from_ref(wire), &domain).len() > 5,
+        "the off-slice straight-wire body is dash-expanded"
+    );
+}
+
+#[test]
+fn styled_body_and_marker_lines_apply_the_same_layer_override() {
+    let domain = Domain::default();
+    let glyphs = source_glyphs(&all_kinds(), &domain, None);
+    let styles = styles_with(
+        LayerId::Sources,
+        LayerOverride {
+            opacity: Some(0.5),
+            width: Some(2.0),
+            color: None,
+        },
+    );
+    for glyph in &glyphs {
+        let one = std::slice::from_ref(glyph);
+        let body = source_body_lines(one, &domain);
+        let markers = source_sign_marker_lines(one, &domain);
+        let styled_body = source_body_lines_with_layer(one, &domain, &styles, LayerId::Sources);
+        let styled_markers =
+            source_sign_marker_lines_with_layer(one, &domain, &styles, LayerId::Sources);
+        let styled_legacy = source_glyph_lines_with(one, &domain, &styles);
+        let mut styled_split = styled_body.clone();
+        styled_split.extend_from_slice(&styled_markers);
+
+        assert_eq!(styled_body.len(), body.len());
+        assert_eq!(styled_markers.len(), markers.len());
+        assert_eq!(styled_legacy.len(), styled_split.len());
+        assert!(
+            styled_legacy
+                .iter()
+                .zip(&styled_split)
+                .all(|(a, b)| same_line(a, b))
+        );
+        for (neutral, styled) in body
+            .iter()
+            .chain(&markers)
+            .zip(styled_body.iter().chain(&styled_markers))
+        {
+            assert!((styled.color[3] - neutral.color[3] * 0.5).abs() < 1e-6);
+            assert!((styled.b[3] - neutral.b[3] * 2.0).abs() < 1e-6);
+            assert_eq!(rgb(styled.color), rgb(neutral.color));
         }
     }
 }
