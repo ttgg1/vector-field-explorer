@@ -58,12 +58,6 @@ trail setting without changing visuals. Acceptance: identical instance order
 where it matters visually, measured improvement on `worst-particles`, and a test
 pinning the ordering contract.
 
-### P5 — browser performance harness: NOT AUTHORIZED
-
-The owner tests the web build manually and files issues as needed; no browser
-harness is authorized. The web floor stays unverified, not passed, and this
-record does not claim otherwise.
-
 ### P6 — integrated-GPU validation: UNVERIFIABLE HERE
 
 This host exposes no integrated GPU. The integrated floor stays unverified; do
@@ -73,7 +67,7 @@ available.
 ## Order and guardrails
 
 P1 then P4 (recommended order), each under its own claim, TDD and independent review; P2 only if P1
-shows it is worth doing; P3, P5 and P6 remain deferred with the reasons above.
+shows it is worth doing; P3 and P6 remain deferred with the reasons above.
 No task in this group may lower a documented floor, add a CI performance
 threshold, or claim visual verification, which remains owner-waived.
 
