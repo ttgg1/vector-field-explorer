@@ -26,7 +26,7 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MAX_SIDES, MIN_S
 use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorStats};
 use crate::color_ramp::ScaleMode;
 use crate::object_renderer::{ObjectPass, ObjectView};
-use crate::object_scene::MeshScene;
+use crate::object_scene::{MeshScene, ObjectStyle};
 use crate::scalar_view::ScalarGrid;
 
 /// Native capture failures retain the readback stage and its original cause.
@@ -875,6 +875,11 @@ pub struct DrawState {
     object_pass: ObjectPass,
     /// This frame's mapped object scene, installed by the draw callback.
     object_scene: ObjectSceneState,
+    /// The object style the offscreen capture path draws with. The live
+    /// callback carries its own copy; every capture call site sets this to the
+    /// committed style so a screenshot or animation frame matches the viewport.
+    /// Defaults to Solid, the pre-style capture behaviour.
+    object_style: ObjectStyle,
     /// The surface format the pipelines were built for. An offscreen capture
     /// renders in the same format, so the image matches the screen and the
     /// readback only needs the channel-order fix-up.
@@ -1311,6 +1316,7 @@ impl DrawState {
             light_dir: LIGHT_DIR,
             object_pass: ObjectPass::new(device, format),
             object_scene: ObjectSceneState::new(),
+            object_style: ObjectStyle::default(),
             format,
         }
     }
@@ -1319,6 +1325,18 @@ impl DrawState {
     /// `Arc`; its content fingerprint is never rewritten here.
     pub fn set_object_scene(&mut self, scene: Arc<MeshScene>) {
         self.object_scene.set(scene);
+    }
+
+    /// Select the object style the next offscreen capture draws with. Capture
+    /// call sites set the committed style; the default is Solid.
+    pub fn set_object_style(&mut self, style: ObjectStyle) {
+        self.object_style = style;
+    }
+
+    /// The object style the next offscreen capture uses.
+    #[must_use]
+    pub fn object_style(&self) -> ObjectStyle {
+        self.object_style
     }
 
     /// The object scene installed for the current frame, if any.
@@ -1596,7 +1614,9 @@ impl DrawState {
     /// re-derived one. The texture borrows the surface format (the pipelines
     /// were created for it) and lives only for this submission: the live
     /// surface textures are never touched. `clear` is the viewport background
-    /// in linear space, matching what egui paints behind the field.
+    /// in linear space, matching what egui paints behind the field. Objects are
+    /// drawn with [`Self::object_style`], which the capture call site sets to
+    /// the committed style.
     #[allow(clippy::too_many_arguments)]
     fn submit_offscreen(
         &mut self,
@@ -1634,7 +1654,7 @@ impl DrawState {
                 view_proj: view_proj.to_cols_array_2d(),
                 eye: camera_pos.to_array(),
                 viewport: [width, height],
-                wireframe: false,
+                wireframe: self.object_style.is_wireframe(),
                 clear,
             };
             self.object_pass
@@ -1870,13 +1890,15 @@ pub(crate) fn readback_result(
 /// Per-frame draw: carries the scene to upload, the object scene to composite
 /// first, and the camera matrices.
 ///
-/// `object_style` is deferred to the persisted-style slice (#115): this slice
-/// always renders the shipped Solid bodies.
+/// `object_style` comes from the live state every frame (issue #115); the
+/// callback maps it to [`ObjectView::wireframe`] at prepare time.
 pub struct DrawCallback {
     pub scene: SceneGPU,
     /// This frame's mapped source/induction bodies. `Arc` so a capture and the
     /// live callback share one fingerprint without a rebuild.
     pub objects: Arc<MeshScene>,
+    /// The committed global object style.
+    pub object_style: ObjectStyle,
     /// The callback rect in egui points (used for the composite guard).
     pub screen: egui::Rect,
     /// The callback rect in physical pixels; the object target's extent.
@@ -1909,7 +1931,7 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
             view_proj: self.view_proj.to_cols_array_2d(),
             eye: self.camera_pos.to_array(),
             viewport: self.object_viewport,
-            wireframe: false,
+            wireframe: self.object_style.is_wireframe(),
             clear: self.object_clear,
         };
         if let Err(error) =

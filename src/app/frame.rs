@@ -62,6 +62,7 @@ impl eframe::App for VfApp {
             parameters: self.state.parameters.clone(),
             viewport_style: self.state.viewport_style,
             layer_styles: self.state.layer_styles,
+            object_style: self.state.object_style(),
             appearance_profiles: self.profiles.user().to_vec(),
             interaction: self.interaction.clone(),
             interaction_profiles: self.interaction_profiles.user().to_vec(),

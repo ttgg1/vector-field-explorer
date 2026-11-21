@@ -9,12 +9,18 @@
 use eframe::egui;
 use glam::DVec3;
 
+use crate::object_scene::ObjectStyle;
 use crate::source_scene::{
     MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag,
     SourceSampling, SourceScene, error_message, scene_error_message, validate_source,
 };
 use crate::sources::{MAX_SOURCES, Source, SourceKind};
 use crate::viewmodel::State;
+
+/// The persistent help line under the object-style pair. It names both modes
+/// and keeps the vector-export boundary explicit.
+pub const OBJECT_STYLE_HELP: &str = "Solid draws filled bodies; Wireframe draws edge outlines. \
+     SVG exports keep the line blueprint.";
 
 /// One editable source row. `committed` is always the last valid source; the
 /// numeric mirrors may be invalid or non-finite while the user types.
@@ -481,6 +487,21 @@ fn show_display(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelSt
             );
         });
     }
+    ui.horizontal(|ui| {
+        ui.label("Object style");
+        for (style, label) in [
+            (ObjectStyle::Solid, "Solid"),
+            (ObjectStyle::Wireframe, "Wireframe"),
+        ] {
+            if ui
+                .selectable_label(state.object_style() == style, label)
+                .clicked()
+            {
+                state.set_object_style(style);
+            }
+        }
+    });
+    ui.label(OBJECT_STYLE_HELP);
 }
 
 fn show_add(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelState) {

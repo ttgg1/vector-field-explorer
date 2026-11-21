@@ -12,7 +12,7 @@ use glam::{Mat4, Vec3};
 use crate::animation::AnimationError;
 use crate::camera::{OrbitCamera, ViewCamera};
 use crate::fly_camera::FlyCamera;
-use crate::object_scene::MeshScene;
+use crate::object_scene::{MeshScene, ObjectStyle};
 use crate::particles::{AdvectSettings, Particles, advance_exact};
 use crate::renderer::SceneGPU;
 use crate::source_scene::FieldMode;
@@ -25,6 +25,9 @@ pub struct AnimationFrame {
     /// The detached snapshot's mapped source/induction bodies. The same `Arc`
     /// is carried by every frame, so no mesh is rebuilt per frame.
     pub object_scene: Arc<MeshScene>,
+    /// The snapshot's committed object style; an animation frame draws its
+    /// bodies the same way the live viewport does.
+    pub object_style: ObjectStyle,
     pub view_proj: Mat4,
     pub eye: Vec3,
 }
@@ -162,6 +165,7 @@ impl AnimationSnapshot {
         Ok(AnimationFrame {
             scene,
             object_scene: Arc::clone(&self.object_scene),
+            object_style: self.state.object_style(),
             view_proj,
             eye,
         })

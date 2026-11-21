@@ -394,6 +394,8 @@ impl VfApp {
         // not dirty the scene on its own), so a saved parameterised formula
         // binds the saved values.
         settings.restore(&mut state, &mut controls);
+        // `AppSettings::restore` also applies the persisted object style through
+        // `State::restore_object_style`, which never dirties the first frame.
         // Same for the viewport style: startup assigns the loaded record
         // directly and does not dirty the scene on its own. `load` already
         // sanitized corrupt values.

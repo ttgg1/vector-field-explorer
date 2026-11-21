@@ -366,13 +366,15 @@ video and browser runtime remain unverified. See
 
 **Purpose / API.** Owns the detached copy an animation export renders from:
 `AnimationSnapshot { state, particles, orbit, fly, clear, object_scene }`,
-`AnimationFrame { scene, object_scene, view_proj, eye }`,
+`AnimationFrame { scene, object_scene, object_style, view_proj, eye }`,
 `AnimationSnapshot::{from_parts, capture, frame_at}`, and
 `VfApp::animation_snapshot`. `State: Clone` and `Particles: Clone` make the copy;
 `State` holds no GPU handles. `object_scene: Arc<MeshScene>` is the mapped
 source/induction bodies; `capture` shares the live app's cached `Arc` and every
 frame clones it, so the frame exporter composites the same bodies as the
-viewport without a per-frame rebuild.
+viewport without a per-frame rebuild. `object_style` is the snapshot's committed
+[`ObjectStyle`], applied to the capture `DrawState` before each frame so an
+exported GIF matches the viewport.
 
 **Invariants.** `capture` clones the live app state, cloud, orbit/fly pose and
 theme background without mutating playback. `frame_at(time, dt, aspect, first)`
@@ -3074,6 +3076,10 @@ decisions that do not need a window.
   `layer_styles()` and `commit_layer_styles` (validate, equal-set no-op, assign,
   exactly one dirty request; a rejected record leaves the previous styles and
   dirty untouched).
+- Issue #115 object style: private `object_style: ObjectStyle` with
+  `object_style()`, `set_object_style(style) -> bool` (equal value is a false
+  no-op; a change assigns once and marks dirty once) and
+  `restore_object_style(style)` (startup assignment that never dirties).
 - Issue #87 seed field: `seed_layout: SeedLayout` with `seed_layout()`,
   `commit_seed_layout` (validate against the visible scene domain, equal-set
   no-op, assign, exactly one dirty request; a rejected layout leaves the
@@ -3615,7 +3621,7 @@ migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-seed_layouts, preset_ui }`, `AppSettings::sanitized`;
+seed_layouts, preset_ui, object_style }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `Default`); `finite_or`; `load`, `save`; private serde
 helpers.
@@ -3633,6 +3639,7 @@ helpers.
 | `interaction: InteractionProfile` | active bindings (`name`, one chord per remappable action) and camera feel (`orbit_sensitivity`, `zoom_speed`, three invert flags) | `#[serde(default)]`; an absent key loads `InteractionProfile::default()` (today's chords, neutral feel); an invalid record is repaired by `InteractionProfile::sanitized` with a warning and resets to the default if it still fails validation |
 | `interaction_profiles: Vec<InteractionProfile>` | user interaction profiles only (the built-in `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry named `DEFAULT_PROFILE_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 16` are dropped with a warning |
 | `seed_layouts: Vec<SeedLayoutProfile>` | user named seed layouts only (the built-in empty `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized against the restored view domain, an entry whose trimmed name is empty or `DEFAULT_LAYOUT_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_LAYOUTS = 16` are dropped with a warning |
+| `object_style: ObjectStyle` | `Solid` or `Wireframe` | `#[serde(default)]`; an absent key loads `Solid`; an unknown token is repaired to `Solid` with one warning by the enum decoder, and a non-string stored value is repaired to `Solid` by the field wrapper, leaving every other field intact |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -3734,7 +3741,7 @@ helpers.
     failing startup. Startup never applies a layout or dirties the scene, and
     save writes `seed_layouts.user()`.
 
-**Tested by.** `tests/persistence_test.rs` (81 tests):
+**Tested by.** `tests/persistence_test.rs` (103 tests):
 `settings_round_trip_through_eframe_storage`,
 `a_ticket_07_style_only_record_still_loads_its_style`,
 `corrupt_storage_falls_back_to_defaults`, `absent_storage_falls_back_to_defaults`,
@@ -3772,6 +3779,12 @@ named seed-layout envelope is pinned by
 `seed_layout_profiles_round_trip_through_the_envelope`,
 `startup_restore_of_seed_layouts_is_non_applying_and_non_dirtying` and
 `corrupt_seed_layout_profiles_are_sanitised_on_load`. The
+object-style field is pinned by
+`object_style_defaults_to_solid_when_the_field_is_missing`,
+`wireframe_object_style_round_trips_through_storage`,
+`corrupt_object_style_falls_back_to_solid_without_losing_the_envelope`,
+`non_string_object_style_is_repaired_without_losing_the_envelope` and
+`object_style_setter_and_restore_own_the_dirty_flag`. The
 layer-style record is pinned by
 [tests/layer_style_test.rs](../tests/layer_style_test.rs): neutral resolution,
 per-attribute precedence, validation and sanitising, envelope round-trip,
@@ -4229,8 +4242,9 @@ annotation, and no plane-mode dimming.
 object bodies are generated once per process and reused by every instance:
 `MeshPrimitive::{Sphere, Cylinder, Torus, Tube, Disc}`. `MeshScene::from_sources`
 maps the enabled, displayed source entries to instances with a slice clip and a
-content fingerprint. The module has no renderer, app, persistence or `wgpu`
-dependency; the offscreen pass lives in `src/object_renderer.rs`.
+content fingerprint. The module has no renderer, app, wgpu or persistence-module
+dependency; the offscreen pass lives in `src/object_renderer.rs`, and the one
+storage type here is `ObjectStyle`.
 
 **Public API.** `MeshPrimitive` with `ALL`, `triangles()`, `vertices()`,
 `index()` and `from_index(u32) -> Option<MeshPrimitive>`; `MeshVertex {
@@ -4242,8 +4256,14 @@ constants `STATIC_TRIANGLES = 2_832`, `STATIC_VERTICES = 8_496`,
 `MeshObject { primitive, transform: [[f32; 4]; 4], color: [f32; 3], opacity,
 sign: i8 }`; `MeshScene` with `empty()`, `from_sources(&SourceScene, &Domain,
 Option<&PlaneFrame>)`, `objects()`, `drawn_triangles()`, `generation()` and
-`clip()`; `SliceClip { normal: [f32; 3], offset: f32 }`; and `object_transform(
-center: Vec3, axis: Vec3, scale: Vec3) -> [[f32; 4]; 4]`.
+`clip()`; `SliceClip { normal: [f32; 3], offset: f32 }`; `object_transform(
+center: Vec3, axis: Vec3, scale: Vec3) -> [[f32; 4]; 4]`; and
+`ObjectStyle { Solid, Wireframe }` with `Default = Solid` and
+`is_wireframe()`. The style serializes as the stable unit-variant tokens
+`Solid`/`Wireframe`; a missing field loads `Solid`, a custom enum decoder
+repairs an unknown stored name to `Solid` with one warning, and an untagged
+wrapper repairs a non-string value the same way, so neither corrupt form fails
+the whole settings envelope.
 
 **Invariants.** Every mesh is non-indexed, three vertices per triangle, with
 exactly `[1,0,0]`, `[0,1,0]`, `[0,0,1]` barycentrics. Normals are outward unit
@@ -4409,11 +4429,13 @@ deterministic, the view/wireframe/clip values round-trip into `ObjectGlobals`,
 non-finite input is sanitized, and non-finite/singular instances are skipped) and
 prints `GPU not requested`. `scripts/test-object-gpu.sh` sets
 `VFE_OBJECT_GPU_PROBE=1` on its child process only and drives the real pass on a
-native adapter: empty scene and zero-area viewport return `Ok` with no target, a
-64×64 sphere frame allocates and renders (`2316/4096` non-clear pixels observed on
-the AMD RX 9070 XT / RADV probe), a repeated frame is byte-identical, and no
-validation/internal/out-of-memory error is reported. There is no noop backend or
-silent skip.
+native adapter through `native_object_device_worker`: empty scene and zero-area
+viewport return `Ok` with no target, a 64×64 sphere frame allocates and renders
+(`2316/4096` non-clear pixels observed on the AMD RX 9070 XT / RADV probe), a
+repeated frame is byte-identical, the capture-style stage proves a default
+capture equals an explicit Solid capture while a Wireframe capture of the same
+scene differs in pixels (#115), and no validation/internal/out-of-memory error
+is reported. There is no noop backend or silent skip.
 
 #### `src/renderer.rs` — instanced wgpu renderer
 
@@ -4441,14 +4463,15 @@ sorting, and the offscreen screenshot pass.
   `ObjectSceneState` (`new`, `from_scene`, `set`, `clear`, `get`, `len`,
   `is_empty`, `has_objects`), and `object_viewport_pixels(egui::Rect, f32)`.
 - `DrawState` (pipelines, buffers, bind groups; `new`, `set_object_scene`,
-  `object_scene`, `render_offscreen`, `render_offscreen_with_objects`,
-  `render_offscreen_async`, `render_offscreen_async_with_objects`),
-  `DrawCallback { scene, objects, screen, object_viewport, object_clear,
-  view_proj, camera_pos }`, and the sort helpers
+  `object_scene`, `set_object_style`, `object_style`, `render_offscreen`,
+  `render_offscreen_with_objects`, `render_offscreen_async`,
+  `render_offscreen_async_with_objects`),
+  `DrawCallback { scene, objects, object_style, screen, object_viewport,
+  object_clear, view_proj, camera_pos }`, and the sort helpers
   (`sort_scene_back_to_front`, `sort_lines_back_to_front`,
   `sorted_lines_back_to_front`, `sorted_arrows_back_to_front`,
-  `sort_back_to_front`). `object_style` is deferred to the persisted-style
-  slice; this slice always draws Solid bodies.
+  `sort_back_to_front`). `object_style` comes from the live state every frame;
+  `prepare` maps it to `ObjectView::wireframe`.
 - Native `OffscreenError::{Setup, Readback}` and `ReadbackError::{Map, Poll,
   CallbackLost, Range, Decode}` retain stage and typed causes. The doc-hidden
   production `readback_map_status` classifies the actual map callback. Native
@@ -4480,9 +4503,12 @@ sorting, and the offscreen screenshot pass.
   that allocation is accepted rather than restructuring the pipeline around a
   custom iterator.
 - `DrawCallback::prepare` uploads the vector scene, installs the object scene on
-  `DrawState`, then runs `ObjectPass::prepare` into the egui encoder; `paint`
+  `DrawState`, maps the live `object_style` to `ObjectView::wireframe`, then
+  runs `ObjectPass::prepare` into the egui encoder; `paint`
   composites the object target before `record_draw`. `submit_offscreen` runs the
-  same prepare and painting into the capture texture, with
+  same prepare and painting into the capture texture, drawing objects with the
+  capture `DrawState`'s object style (set by every capture call site to the
+  committed style; the default is Solid, the pre-style behaviour), with
   `render_offscreen_with_objects` (native and wasm) forwarding the frame's
   object scene. The object target/instances are uploaded only when the scene
   fingerprint changes; an unchanged frame touches no object buffer.
@@ -5116,7 +5142,8 @@ plot-section reset.
 #### `src/ui/sources_panel.rs` — editable source scene
 
 **Purpose.** The dedicated Sources rail/sheet: display selector (Electric /
-Magnetic / Both with the E amber / B cyan legend), Add combo and button,
+Magnetic / Both with the E amber / B cyan legend), global object-style pair
+(Solid / Wireframe) with its SVG-boundary help line, Add combo and button,
 per-entry enable, kind, center/axis and kind parameters, Remove, Reset this
 source, a collapsible Advanced area with softening, the model note, the exact
 accuracy opt-in and the sampling status, plus the formula-field help line.
@@ -5133,6 +5160,9 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
   replace only that entry. `Add` is disabled at `MAX_SOURCES = 64`.
 - Softening uses the scene range `1e-6..=1.0`; the opt-in and display go through
   the committed scene setters. Any valid source edit clears `source_notice`.
+- The object-style pair lives in the existing display section, not a new panel.
+  It writes `State::set_object_style`; `OBJECT_STYLE_HELP` names both modes and
+  states that SVG exports keep the line blueprint.
 - `status_text` reports hidden versus shown accuracy and unavailable counts per
   family without inventing counters; a scene validation error is shown readably.
 - The Sources help line explains that streamlines/particles remain formula
@@ -5143,7 +5173,8 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
 `invalid_draft_does_not_replace_the_committed_source`,
 `source_notice_is_rendered_and_survives_until_dismissed`,
 `scene_error_text_names_the_displayed_row_and_parameter`,
-`add_is_disabled_at_the_source_limit`), and
+`add_is_disabled_at_the_source_limit`,
+`object_style_control_writes_the_enum_and_names_both_modes`), and
 `tests/button_sizing_test.rs::compact_sources_panel_buttons_keep_touch_targets`.
 
 #### `src/ui/induction_panel.rs` — the dedicated induction editor
