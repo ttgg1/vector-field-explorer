@@ -19,6 +19,7 @@ use vector_field_explorer::maxwell::MaxwellScene;
 use vector_field_explorer::maxwell_wave::WaveSpec;
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::presets::presets;
+use vector_field_explorer::renderer::sorted_lines_back_to_front;
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::source_presets::{load_source_preset, source_preset};
 use vector_field_explorer::source_scene::FieldMode;
@@ -136,6 +137,41 @@ fn run_baseline_with_gate(enabled: bool, mut now: impl FnMut() -> Instant) -> bo
                 });
                 report(scene.name, "style_rebuild", &samples);
             }
+            Extra::TrailSort => {
+                // Issue #245: `snapshot`/`sample` never build or sort trails;
+                // the app's per-frame assembly does. Prepare the real scene
+                // once outside the clock, then price only the painter-order
+                // copy over that scene's real trail list. Scramble it once so
+                // the measurement is not flattered by an already-sorted input
+                // (the adaptive stable sort would otherwise take its best
+                // case; live trails arrive in chronological, effectively
+                // arbitrary depth order).
+                // The harness options leave the simulation duration at zero,
+                // which builds no trail history. Preadvance one second at the
+                // shipped fixed step so the measurement sees the scene's real
+                // ~96k-segment trail list (4000 particles x 24 segments).
+                let mut options = scene.options.clone();
+                if options.duration_seconds <= 0.0 {
+                    options.duration_seconds = 1.0;
+                }
+                if options.fixed_step_seconds <= 0.0 {
+                    options.fixed_step_seconds = 0.01;
+                }
+                let frame =
+                    cli::output_frame(&options).expect("benchmark output frame must be valid");
+                let prepared = cli::prepare_scene_with_state(&options, frame, scene.state.clone())
+                    .expect("benchmark worst-particles scene must prepare");
+                let view = prepared.frame.view;
+                let trails = shuffled(prepared.scene.trails.as_ref());
+                assert!(
+                    !trails.is_empty(),
+                    "trail_sort scene must actually contain trail segments"
+                );
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(sorted_lines_back_to_front(&trails, &view))
+                });
+                report(scene.name, "trail_sort", &samples);
+            }
         }
     }
 
@@ -185,6 +221,9 @@ enum Extra {
     /// Toggle the arrow family between rebuilds: a style-only change that must
     /// reuse the previous sampling pass (issue #240 hit path).
     StyleRebuild,
+    /// Time the per-frame trail painter sort (#245); the snapshot path leaves
+    /// trails empty, so this prepares the scene once and sorts its real list.
+    TrailSort,
 }
 
 struct Scene {
@@ -257,7 +296,7 @@ fn build_scenes() -> Vec<Scene> {
         name: "worst-particles",
         options: cli_options(Mode::ThreeD, 16, true, 4000, 32),
         state,
-        extra: Extra::None,
+        extra: Extra::TrailSort,
     });
 
     let mut state = State::new(true);
@@ -380,6 +419,22 @@ fn harmonic_density() -> DensitySpec {
         },
         charge_formula: Some("-sin(t)".to_string()),
     }
+}
+
+/// Deterministic shuffle so the trail-sort measurement does not benefit from
+/// an already-sorted list. The sort cost depends on the key multiset, not on
+/// this particular order; live trails are effectively arbitrary in depth.
+fn shuffled<T: Copy>(items: &[T]) -> Vec<T> {
+    let mut out = items.to_vec();
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    for index in (1..out.len()).rev() {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let pick = ((state >> 33) as usize) % (index + 1);
+        out.swap(index, pick);
+    }
+    out
 }
 
 fn time_iterations<T>(

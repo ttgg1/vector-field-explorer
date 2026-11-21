@@ -132,6 +132,7 @@ per-frame simulation state beside it.
         ├─ 3D: combined_instances(arrows, dots) + sort_scene_back_to_front
         ├─ 2D: sorted_arrows_back_to_front(arrows); combined stays empty
         ├─ trails: sorted_lines_back_to_front(trails) (3D and 2D plane slices)
+        │    (each depth transformed once, then a stable decorate–sort–undecorate)
         ▼
  SceneGPU + view_proj + eye_position
         │  egui_wgpu::Callback::new_paint_callback(rect, DrawCallback)
@@ -4916,7 +4917,9 @@ sorting, and the offscreen screenshot pass.
   object_clear, view_proj, camera_pos }`, and the sort helpers
   (`sort_scene_back_to_front`, `sort_lines_back_to_front`,
   `sorted_lines_back_to_front`, `sorted_arrows_back_to_front`,
-  `sort_back_to_front`). `object_style` comes from the live state every frame;
+  `sort_back_to_front`) plus the pure depth-key helpers
+  (`scene_view_depths`, `line_view_depths`) they consume. `object_style` comes
+  from the live state every frame;
   `prepare` maps it to `ObjectView::wireframe`.
 - Native `OffscreenError::{Setup, Readback}` and `ReadbackError::{Map, Poll,
   CallbackLost, Range, Decode}` retain stage and typed causes. The doc-hidden
@@ -4969,7 +4972,11 @@ sorting, and the offscreen screenshot pass.
 - 2D uses the independent 2D family's 9/6 vertices and never reads `combined`.
 - Empty scenes draw nothing; `SceneGPU::default()` is 3D with the cone family.
 - Sort is stable far-to-near; a non-finite view depth becomes `NEG_INFINITY`
-  (far group) instead of painting in front or panicking.
+  (far group) instead of painting in front or panicking. Each depth (trail
+  midpoint or arrow origin) is transformed once by `line_view_depths` /
+  `scene_view_depths`, then a stable index permutation reorders the instances
+  (decorate–sort–undecorate, #245); no view multiply runs inside a comparator.
+  The observable order is unchanged, including `-0.0`/`0.0` ties.
 - `arrow_style.x` is mode-dependent: the 3D family id while 3D paints, the 2D
   family id while 2D paints.
 - `sides` is sanitized and re-clamped to 4..=16 before the uniform.
@@ -4984,6 +4991,12 @@ sorting, and the offscreen screenshot pass.
 `dot_pipeline_blends_straight_alpha`,
 `trails_draw_between_lines_and_the_combined_scene`,
 `trails_sort_far_to_near_by_their_midpoint`, `two_d_never_draws_trails`;
+`tests/renderer_sort_test.rs` (#245):
+`lines_sort_byte_identically_to_the_legacy_comparator`,
+`arrows_sort_byte_identically_to_the_legacy_comparator`,
+`equal_depths_keep_chronological_order`,
+`line_view_depths_evaluates_one_transform_per_element`,
+`scene_view_depths_evaluates_one_transform_per_element`;
 `tests/arrow_style_test.rs`: `three_d_draw_passes_are_lines_then_one_combined_scene`,
 `two_d_draw_passes_keep_arrows_then_dots_and_ignore_combined`,
 `scene_vertex_count_multiplies_instances_by_the_budget`,

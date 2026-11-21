@@ -152,6 +152,7 @@ mod presets_test;
 mod probe_state_test;
 mod profile_library_test;
 mod reference_lines_test;
+mod renderer_sort_test;
 mod renderer_test;
 mod responsive_test;
 mod sampling_test;
