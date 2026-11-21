@@ -4449,6 +4449,8 @@ tab-bar/sheet plan.
 `CompactPlan`, `compact_plan`, `sheet_height`, `formula_field_width`,
 `RailSide`, `rail_text_angle`, `rail_chevron`, `collapse_chevron`,
 `rail_label_band`, `rail_chevron_pos`, `rail_tooltip`, `RailLabel`,
+`rail_entry_height`, `rail_entry_interaction`, `paint_rail_entry_state`,
+`paint_rail_entry`,
 `LayoutState`, `clamp_width`, `rail`, `RailPanel`, `rail_panel`,
 `collapse_button`, `collapse_button_named`.
 
@@ -4471,6 +4473,11 @@ tab-bar/sheet plan.
 - Rails: left label reads bottom-to-top, right top-to-bottom; chevrons point
   outward on a rail and inward on a collapse button; the rail is the only
   restore affordance; the real content band is narrower than the outer width.
+- Both rails share `rail_entry_height` and `paint_rail_entry`: a collapsed
+  right-side panel paints one rounded, label-sized entry top-aligned in its
+  content band, matching one entry of the ordered left strip instead of a
+  full-height strip. `RailPanel::content_rect` is that entry tile (the click
+  target); its width is still the real content band.
 - `LayoutState::sanitized` clamps widths; `reset` restores first-launch layout
   (Controls/Presets expanded, Sources collapsed, native CAS closed, help
   visible).
@@ -4499,10 +4506,12 @@ tab was open; rail content band is deliberately narrow.
 
 `RailEntry`, `RailEntryResponse`, `RailStripResponse` and `show_rail_strip` provide
 an ordered, vertically scrolling 32pt strip with stable entry IDs, independent
-visibility and measured rotated-label bounds. `fit_panel_widths` fits requested
-widths by minimums and proportional excess without mutating persisted widths.
-Production widget interaction, third-entry extensibility and width allocation
-are pinned by `tests/panel_rails_test.rs`.
+visibility and measured rotated-label bounds. Each entry sizes itself with
+`layout::rail_entry_height` and paints through `layout::paint_rail_entry`, the
+same helpers the collapsed right rail uses, so the two rails cannot drift.
+`fit_panel_widths` fits requested widths by minimums and proportional excess
+without mutating persisted widths. Production widget interaction, third-entry
+extensibility and width allocation are pinned by `tests/panel_rails_test.rs`.
 
 #### `src/ui/menu.rs` — the pure menu and shortcut tables
 

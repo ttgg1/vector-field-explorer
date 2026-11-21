@@ -15,6 +15,7 @@ use vector_field_explorer::ui::layout::{
     RAIL_LABEL_SIZE, RAIL_WIDTH, RailLabel, RailSide, clamp_width, collapse_chevron, compact_plan,
     layout_mode, rail_chevron, rail_chevron_pos, rail_text_angle, rail_tooltip,
 };
+use vector_field_explorer::ui::panel_rails::{RailEntry, show_rail_strip};
 
 // The rail must stay narrower than any expanded panel.
 const _: () = assert!(RAIL_WIDTH < MIN_PANEL_WIDTH);
@@ -430,6 +431,257 @@ fn rail_pass(
     (panel.expect("the pass shows the panel"), text, rects)
 }
 
+/// Run one headless pass that shows a single-entry strip through the app's
+/// [`show_rail_strip`] seam. Returns the entry's clickable rect and the text
+/// and rectangle shapes the pass painted, so its tile can be compared with the
+/// right rail's entry directly.
+fn strip_entry_pass(
+    ctx: &egui::Context,
+    side: RailSide,
+    label: &'static str,
+) -> (
+    egui::Rect,
+    Vec<egui::epaint::TextShape>,
+    Vec<egui::epaint::RectShape>,
+) {
+    let screen = screen_rect();
+    let mut expanded = false;
+    let mut entry_rect = egui::Rect::NOTHING;
+    let mut output = ctx.run_pass(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(0.0),
+            ..Default::default()
+        },
+        |ctx| {
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("strip_test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            let mut entries = [RailEntry {
+                id: "entry",
+                label,
+                shortcut: Some("Ctrl+B"),
+                expanded: &mut expanded,
+            }];
+            let strip = show_rail_strip(&mut ui, "strip", side, &mut entries);
+            entry_rect = strip.entries[0].response.rect;
+        },
+    );
+    output.textures_delta.clear();
+    let text = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) => Some(shape.clone()),
+            _ => None,
+        })
+        .collect();
+    let rects = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape) => Some(shape.clone()),
+            _ => None,
+        })
+        .collect();
+    (entry_rect, text, rects)
+}
+
+fn label_font_size(shapes: &[egui::epaint::TextShape], label: &str) -> f32 {
+    shapes
+        .iter()
+        .find(|shape| shape.galley.text() == label)
+        .unwrap_or_else(|| panic!("no painted {label:?} label"))
+        .galley
+        .job
+        .sections[0]
+        .format
+        .font_id
+        .size
+}
+
+#[test]
+fn right_rail_entry_matches_a_left_strip_entry() {
+    // One left strip entry and one right rail panel at the same style and
+    // label must paint the same tile: the right rail is an entry like any
+    // other, not one full-height strip.
+    let left_ctx = support::context();
+    let right_ctx = support::context();
+    for ctx in [&left_ctx, &right_ctx] {
+        vector_field_explorer::ui::style_panel::apply(
+            ctx,
+            &vector_field_explorer::ui::style_panel::AppStyle {
+                rounding: 6.0,
+                ..Default::default()
+            },
+        );
+    }
+
+    let (left_rect, left_text, left_rects) =
+        strip_entry_pass(&left_ctx, RailSide::Left, "Controls");
+    let (panel, right_text, right_rects) =
+        rail_pass(&right_ctx, RailSide::Right, "Controls", None, 0.0);
+
+    let left_tile = left_rects
+        .iter()
+        .find(|shape| shape.rect == left_rect)
+        .expect("the left strip paints its entry tile");
+    let right_tile = right_rects
+        .iter()
+        .find(|shape| shape.rect == panel.content_rect)
+        .unwrap_or_else(|| {
+            panic!(
+                "the right rail paints no tile at its content rect {:?}",
+                panel.content_rect
+            )
+        });
+
+    assert!(
+        (left_tile.rect.height() - right_tile.rect.height()).abs() < 0.5,
+        "right rail tile is {} tall, left strip tile is {} tall",
+        right_tile.rect.height(),
+        left_tile.rect.height()
+    );
+    assert_eq!(
+        left_tile.fill, right_tile.fill,
+        "the two rails must share the interact-selectable fill"
+    );
+    assert_eq!(
+        left_tile.corner_radius, right_tile.corner_radius,
+        "the two rails must share the configured corner radius"
+    );
+    assert_eq!(
+        label_font_size(&left_text, "Controls"),
+        label_font_size(&right_text, "Controls"),
+        "the two rails must share the rotated label type size"
+    );
+    assert_eq!(
+        label_font_size(&right_text, "Controls"),
+        RAIL_LABEL_SIZE,
+        "the right rail label keeps the rail type size"
+    );
+}
+
+#[test]
+fn right_rail_entry_mirrors_label_angle_and_chevron() {
+    let ctx = support::context();
+    for label in ["Presets", "Appearance", "Interaction"] {
+        let (panel, text, _) = rail_pass(&ctx, RailSide::Right, label, None, 0.0);
+        let placed = text
+            .iter()
+            .find(|shape| shape.galley.text() == label)
+            .unwrap_or_else(|| panic!("the right rail paints {label}"));
+        assert!(
+            (placed.angle - rail_text_angle(RailSide::Right)).abs() < 1e-6,
+            "{label} is rotated to {:?}, expected {:?}",
+            placed.angle,
+            rail_text_angle(RailSide::Right)
+        );
+        let chevron = text
+            .iter()
+            .find(|shape| shape.galley.text() == rail_chevron(RailSide::Right))
+            .unwrap_or_else(|| {
+                panic!("{label}: the collapsed right rail paints its outward chevron")
+            });
+        assert!(
+            !text
+                .iter()
+                .any(|shape| shape.galley.text() == collapse_chevron(RailSide::Right)),
+            "{label}: a collapsed rail must not paint the collapse chevron"
+        );
+
+        // The chevron is part of the painted entry tile, not stranded at the
+        // bottom of a full-height panel. Containment alone would also hold for
+        // the old full-strip rail (whose content rect was the whole band), so
+        // also require the chevron ink to sit clear of the panel's bottom edge.
+        let ink = chevron.visual_bounding_rect();
+        assert!(
+            panel.content_rect.contains_rect(ink),
+            "{label}: chevron ink {ink:?} escapes the entry tile {:?}",
+            panel.content_rect
+        );
+        assert!(
+            ink.max.y < panel.outer_rect.bottom() - RAIL_CHEVRON_ZONE,
+            "{label}: chevron ink ends at {} on the panel bottom edge, not inside the tile",
+            ink.max.y
+        );
+    }
+}
+
+#[test]
+fn right_rail_click_target_covers_the_tile() {
+    let ctx = support::context();
+    let galley = measure_galley("Controls");
+    let expected_height = (galley.mesh_bounds.width() + RAIL_CHEVRON_ZONE + 8.0).max(40.0);
+    let (panel, _, rects) = rail_pass(&ctx, RailSide::Right, "Controls", None, 0.0);
+    let tile = rects
+        .iter()
+        .find(|shape| shape.rect == panel.content_rect)
+        .unwrap_or_else(|| {
+            panic!(
+                "the right rail paints no tile at its click target {:?}",
+                panel.content_rect
+            )
+        });
+    assert!(
+        (tile.rect.height() - expected_height).abs() < 0.5,
+        "the right rail tile is {} tall, a rail entry is {expected_height}",
+        tile.rect.height()
+    );
+
+    // The label's own click still pins the panel.
+    let target = tile.rect.center();
+    let (_, _, _) = rail_pass(&ctx, RailSide::Right, "Controls", Some((target, None)), 0.1);
+    let (press, _, _) = rail_pass(
+        &ctx,
+        RailSide::Right,
+        "Controls",
+        Some((target, Some(true))),
+        0.2,
+    );
+    let (release, _, _) = rail_pass(
+        &ctx,
+        RailSide::Right,
+        "Controls",
+        Some((target, Some(false))),
+        0.3,
+    );
+    assert!(!press.clicked, "the press alone does not report a click");
+    assert!(release.clicked, "the release over the tile pins the panel");
+
+    // A point below the tile is outside the click target even though it is
+    // inside the panel's full-height content band.
+    let below = egui::pos2(target.x, tile.rect.bottom() + 60.0);
+    let ctx = support::context();
+    let (panel, _, _) = rail_pass(&ctx, RailSide::Right, "Controls", None, 0.0);
+    assert!(
+        below.y < panel.outer_rect.bottom(),
+        "the below-tile probe must stay inside the panel"
+    );
+    let (_, _, _) = rail_pass(&ctx, RailSide::Right, "Controls", Some((below, None)), 0.1);
+    let (press, _, _) = rail_pass(
+        &ctx,
+        RailSide::Right,
+        "Controls",
+        Some((below, Some(true))),
+        0.2,
+    );
+    let (release, _, _) = rail_pass(
+        &ctx,
+        RailSide::Right,
+        "Controls",
+        Some((below, Some(false))),
+        0.3,
+    );
+    assert!(!press.clicked, "pressing below the tile does not click it");
+    assert!(
+        !release.clicked,
+        "the click target stops at the tile, not the whole panel height"
+    );
+}
+
 #[test]
 fn rail_panel_paints_the_configured_corner_radius() {
     for (rounding, expected) in [
@@ -528,9 +780,12 @@ fn rail_panel_is_outer_width_and_the_label_band_is_narrower() {
 fn rotated_labels_fit_inside_the_real_rail_band() {
     let ctx = support::context();
     for side in [RailSide::Left, RailSide::Right] {
-        let (panel, _, _) = rail_pass(&ctx, side, "Controls", None, 0.0);
-        let band = panel.content_rect;
         for label in ["Controls", "Presets", "Appearance"] {
+            // Each rail entry is now sized to its own label, so use that
+            // label's panel tile as the band. The old full-height rect made
+            // one band fit every label; a single tile no longer pretends to.
+            let (panel, _, _) = rail_pass(&ctx, side, label, None, 0.0);
+            let band = panel.content_rect;
             let galley = measure_galley(label);
             let ink = galley.mesh_bounds;
             let placed = RailLabel::place(band, ink, side);
@@ -613,9 +868,24 @@ fn chevron_stays_at_the_bottom_pointing_outward() {
 }
 
 #[test]
-fn rail_tooltip_is_unchanged() {
-    assert_eq!(rail_tooltip("Controls", "Ctrl+B"), "Show Controls (Ctrl+B)");
-    assert_eq!(rail_tooltip("Presets", "Ctrl+P"), "Show Presets (Ctrl+P)");
+fn rail_tooltip_matches_the_entry_state() {
+    assert_eq!(
+        rail_tooltip("Controls", Some("Ctrl+B"), false),
+        "Show Controls (Ctrl+B)"
+    );
+    assert_eq!(
+        rail_tooltip("Presets", Some("Ctrl+P"), false),
+        "Show Presets (Ctrl+P)"
+    );
+    assert_eq!(
+        rail_tooltip("Controls", Some("Ctrl+B"), true),
+        "Hide Controls (Ctrl+B)"
+    );
+    assert_eq!(
+        rail_tooltip("Sources", None, false),
+        "Show Sources",
+        "a shortcut-less rail omits the parenthesised shortcut"
+    );
 }
 
 #[test]

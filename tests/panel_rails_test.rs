@@ -1,6 +1,6 @@
 use eframe::egui;
 use vector_field_explorer::ui::{
-    layout::RailSide,
+    layout::{RailSide, collapse_chevron, rail_chevron},
     panel_rails::{RailEntry, RailStripResponse, fit_panel_widths, show_rail_strip},
 };
 
@@ -30,14 +30,18 @@ fn pass(
     pass_recording(ctx, flags, order, events, time).0
 }
 
-/// As [`pass`], also returning the rectangle shapes the pass painted.
+/// As [`pass`], also returning the rectangle and text shapes the pass painted.
 fn pass_recording(
     ctx: &egui::Context,
     flags: &mut [bool; 3],
     order: [usize; 3],
     events: Vec<egui::Event>,
     time: f64,
-) -> (RailStripResponse, Vec<egui::epaint::RectShape>) {
+) -> (
+    RailStripResponse,
+    Vec<egui::epaint::RectShape>,
+    Vec<egui::epaint::TextShape>,
+) {
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 240.0));
     let mut result = None;
     let mut output = ctx.run_pass(
@@ -95,7 +99,15 @@ fn pass_recording(
             _ => None,
         })
         .collect();
-    (result.unwrap(), rects)
+    let text = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) => Some(shape.clone()),
+            _ => None,
+        })
+        .collect();
+    (result.unwrap(), rects, text)
 }
 
 #[test]
@@ -113,7 +125,7 @@ fn rail_entries_paint_the_configured_corner_radius() {
             },
         );
         let mut flags = [false; 3];
-        let (strip, rects) = pass_recording(&ctx, &mut flags, [0, 1, 2], vec![], 0.0);
+        let (strip, rects, _) = pass_recording(&ctx, &mut flags, [0, 1, 2], vec![], 0.0);
         for entry in &strip.entries {
             let shape = rects
                 .iter()
@@ -151,6 +163,71 @@ fn click(ctx: &egui::Context, flags: &mut [bool; 3], pos: egui::Pos2, time: f64)
             time + i as f64 * 0.02,
         );
     }
+}
+
+#[test]
+fn click_frame_paints_the_toggled_entry_state() {
+    // The strip used to toggle `expanded` before painting, so the click frame
+    // already showed the new selection and collapse chevron. The shared painter
+    // must not reintroduce a one-frame stale visual.
+    let ctx = crate::support::context();
+    let mut flags = [false; 3];
+    let first = pass(&ctx, &mut flags, [0, 1, 2], vec![], 0.0);
+    let target = first.entries[0].response.rect.center();
+
+    pass(
+        &ctx,
+        &mut flags,
+        [0, 1, 2],
+        vec![egui::Event::PointerMoved(target)],
+        0.1,
+    );
+    pass(
+        &ctx,
+        &mut flags,
+        [0, 1, 2],
+        vec![
+            egui::Event::PointerMoved(target),
+            egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+        0.12,
+    );
+    let (strip, _, text) = pass_recording(
+        &ctx,
+        &mut flags,
+        [0, 1, 2],
+        vec![
+            egui::Event::PointerMoved(target),
+            egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+        0.14,
+    );
+
+    assert_eq!(flags, [true, false, false], "the release toggles the entry");
+    let tile = strip.entries[0].response.rect;
+    let paints_in_tile = |glyph: &str| {
+        text.iter().any(|shape| {
+            shape.galley.text() == glyph && tile.contains_rect(shape.visual_bounding_rect())
+        })
+    };
+    assert!(
+        paints_in_tile(collapse_chevron(RailSide::Left)),
+        "the click frame paints the new collapse chevron"
+    );
+    assert!(
+        !paints_in_tile(rail_chevron(RailSide::Left)),
+        "the click frame must not still paint the old outward chevron"
+    );
 }
 
 #[test]
