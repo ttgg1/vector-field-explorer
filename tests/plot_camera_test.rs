@@ -9,6 +9,7 @@ use vector_field_explorer::plot_camera::{PlotCamera, PlotFrame};
 use vector_field_explorer::view_command::{
     ViewCommand, ViewContext, apply_view_command, command_for_key, fit_distance,
 };
+use vector_field_explorer::view_orientation::UpAxis;
 use vector_field_explorer::viewmodel::ORBIT_SENSITIVITY;
 use vector_field_explorer::viewmodel::{PLANE_MARGIN, ViewGesture, apply_camera_input};
 
@@ -298,8 +299,18 @@ fn ordinary_gestures_match_vector_input_conventions() {
         viewport_height: 600.0,
     };
     for (kind, mode_3d) in [(PlotKind::Curve2D, false), (PlotKind::Surface3D, true)] {
-        let vector =
-            apply_camera_input(OrbitCamera::default(), mode_3d, 2.0 * PLANE_MARGIN, gesture);
+        // The scalar plot camera keeps its own fixed +Y-up convention. Compare
+        // it to the vector camera's old Y-up option, not the new #208 Z-up
+        // default; the 2D case ignores orientation either way.
+        let vector = apply_camera_input(
+            OrbitCamera {
+                up_axis: UpAxis::Y,
+                ..OrbitCamera::default()
+            },
+            mode_3d,
+            2.0 * PLANE_MARGIN,
+            gesture,
+        );
         let mut plot = PlotCamera::default();
         plot.apply_gesture(kind, gesture, 600.0).unwrap();
         assert!((plot.target - vector.target.as_dvec3()).length() < 1e-6);

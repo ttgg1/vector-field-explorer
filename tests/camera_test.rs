@@ -14,7 +14,10 @@ use vector_field_explorer::view_command::{
 
 #[test]
 fn world_to_ndc_basic() {
-    let cam = Camera { position: [0.0, 0.0], scale: 1.0 };
+    let cam = Camera {
+        position: [0.0, 0.0],
+        scale: 1.0,
+    };
     let ndc = cam.world_to_ndc([1.0, 2.0]);
     assert!((ndc[0] - 1.0).abs() < 1e-6);
     assert!((ndc[1] - 2.0).abs() < 1e-6);
@@ -86,6 +89,7 @@ fn recentre_on_targets_the_domain_centre_without_changing_the_pose() {
         target: Vec3::new(9.0, -4.0, 2.0),
         fov_y: 0.8,
         ortho_zoom: 4.0,
+        up_axis: Default::default(),
     };
     let before = camera;
     // Asymmetric on every axis so a centre that only follows x/y cannot pass.
@@ -93,12 +97,25 @@ fn recentre_on_targets_the_domain_centre_without_changing_the_pose() {
 
     camera.recentre_on(&domain);
 
-    assert_eq!(camera.target, Vec3::new(-1.0, 4.0, 1.5), "the target is the box centre");
+    assert_eq!(
+        camera.target,
+        Vec3::new(-1.0, 4.0, 1.5),
+        "the target is the box centre"
+    );
     assert_eq!(camera.yaw, before.yaw, "recentring keeps yaw");
     assert_eq!(camera.pitch, before.pitch, "recentring keeps pitch");
-    assert_eq!(camera.distance, before.distance, "recentring keeps the orbit distance");
-    assert_eq!(camera.fov_y, before.fov_y, "recentring keeps the field of view");
-    assert_eq!(camera.ortho_zoom, before.ortho_zoom, "recentring keeps the 2D zoom");
+    assert_eq!(
+        camera.distance, before.distance,
+        "recentring keeps the orbit distance"
+    );
+    assert_eq!(
+        camera.fov_y, before.fov_y,
+        "recentring keeps the field of view"
+    );
+    assert_eq!(
+        camera.ortho_zoom, before.ortho_zoom,
+        "recentring keeps the 2D zoom"
+    );
 }
 
 #[test]
@@ -112,8 +129,15 @@ fn recentre_on_2d_follows_x_and_y_but_leaves_z_and_panning_still_works() {
 
     camera.recentre_on_2d(&domain);
 
-    assert_eq!(camera.target, Vec3::new(-1.0, 4.0, 0.75), "2D keeps the depth target untouched");
-    assert_eq!(camera.ortho_zoom, 2.5, "2D recentring keeps the ortho zoom unchanged");
+    assert_eq!(
+        camera.target,
+        Vec3::new(-1.0, 4.0, 0.75),
+        "2D keeps the depth target untouched"
+    );
+    assert_eq!(
+        camera.ortho_zoom, 2.5,
+        "2D recentring keeps the ortho zoom unchanged"
+    );
 
     // The 2D pan is a world X/Y shift through the command seam; it must still
     // move the recentred target and keep the zoom.
@@ -122,8 +146,15 @@ fn recentre_on_2d_follows_x_and_y_but_leaves_z_and_panning_still_works() {
         ViewContext::new(false, domain, 1.5),
         ViewCommand::Pan { dx: 0.5, dy: -0.25 },
     );
-    assert_eq!(panned.target, Vec3::new(-0.5, 3.75, 0.75), "a 2D pan still moves the target");
-    assert_eq!(panned.ortho_zoom, camera.ortho_zoom, "a 2D pan keeps the zoom");
+    assert_eq!(
+        panned.target,
+        Vec3::new(-0.5, 3.75, 0.75),
+        "a 2D pan still moves the target"
+    );
+    assert_eq!(
+        panned.ortho_zoom, camera.ortho_zoom,
+        "a 2D pan keeps the zoom"
+    );
 }
 
 #[test]

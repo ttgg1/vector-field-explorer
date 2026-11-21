@@ -58,6 +58,7 @@ use crate::sources::FieldFamily;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
+use crate::view_orientation::UpAxis;
 use crate::viewmodel::{
     ArrowLengthMode, LeftClickAction, MAX_DENSITIES, State, StreamlineSeedMode,
 };
@@ -129,6 +130,13 @@ pub struct AppSettings {
     /// failing the whole envelope.
     #[serde(default, deserialize_with = "deserialize_object_style")]
     pub object_style: ObjectStyle,
+    /// Display-only vertical world axis (issue #208). Missing on older
+    /// envelopes, which load the Z default; an unknown stored token is repaired
+    /// to Z with one warning and a non-string value is repaired by the field
+    /// wrapper. Restoring it never dirties the scene and it is never stored in
+    /// [`ViewRecord`], scenes, appearance profiles or history.
+    #[serde(default, deserialize_with = "deserialize_up_axis")]
+    pub up_axis: UpAxis,
 }
 
 /// Persisted Presets-panel state. Only the per-group expansion is durable; the
@@ -172,6 +180,10 @@ impl AppSettings {
         // A display-only startup assignment: the object style never dirties
         // the first scene, and the field decoder already repaired bad values.
         state.restore_object_style(self.object_style);
+        // Issue #208: orientation is display-only. Assign it at the startup
+        // seam so it never dirties the document, matches the history baseline,
+        // and never enters a `ViewRecord`.
+        state.up_axis = self.up_axis;
         self.view.restore(state, controls);
     }
 
@@ -1992,6 +2004,30 @@ where
         StyleOrSolid::Invalid(_) => {
             log::warn!("persisted object style is unreadable; using the Solid default");
             ObjectStyle::Solid
+        }
+    })
+}
+
+/// Decode the persisted up axis field by field: a valid token goes through
+/// [`UpAxis`]'s lenient decoder (which repairs an unknown name to `Z`), while
+/// any other stored shape — for example a number — consumes its own value and
+/// becomes `Z` with one warning. Neither case can fail the envelope.
+fn deserialize_up_axis<'de, D>(deserializer: D) -> Result<UpAxis, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum AxisOrZ {
+        Axis(UpAxis),
+        Invalid(serde::de::IgnoredAny),
+    }
+
+    Ok(match AxisOrZ::deserialize(deserializer)? {
+        AxisOrZ::Axis(axis) => axis,
+        AxisOrZ::Invalid(_) => {
+            log::warn!("persisted up axis is unreadable; using the Z default");
+            UpAxis::Z
         }
     })
 }

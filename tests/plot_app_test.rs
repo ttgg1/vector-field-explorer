@@ -167,6 +167,7 @@ fn kind_change_releases_pointer_and_preserves_camera() {
         target: Vec3::new(0.25, -0.5, 0.75),
         fov_y: 0.9,
         ortho_zoom: 2.5,
+        up_axis: Default::default(),
     };
     step(&mut app, 0.01);
     let pose = app.orbit;

@@ -598,12 +598,16 @@ fn dropdown_scroll_pos(output: &egui::FullOutput) -> Option<egui::Pos2> {
 
 fn combo_center(output: &egui::FullOutput) -> Option<egui::Pos2> {
     let update = output.platform_output.accesskit_update.as_ref()?;
-    update.nodes.iter().find_map(|(_, node)| {
-        (node.role() == egui::Role::ComboBox)
-            .then(|| node_rect(node))
-            .flatten()
-            .map(|rect| rect.center())
-    })
+    // The panel has more than one ComboBox (the profile picker and the #208 up
+    // axis). AccessKit's node order is not layout order, so select the topmost
+    // one: the profile picker is painted first in the panel.
+    update
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == egui::Role::ComboBox)
+        .filter_map(|(_, node)| node_rect(node))
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .map(|rect| rect.center())
 }
 
 fn button_disabled(output: &egui::FullOutput, label: &str) -> Option<bool> {
@@ -1236,6 +1240,29 @@ fn compact_width_keeps_the_profile_section_usable() {
             "the compact panel renders {label:?}:\n{text}"
         );
     }
+}
+
+#[test]
+fn appearance_panel_offers_one_display_only_up_axis_control() {
+    let mut state = State::new(true);
+    let mut panel = AppearancePanelState::default();
+    let output = render_panel(&mut panel, &mut state);
+    let text = painted_texts(&output)
+        .into_iter()
+        .chain(accesskit_labels(&output))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Up axis"), "the control is labelled:\n{text}");
+    assert!(
+        text.contains("Z up (default)"),
+        "the default selection is shown:\n{text}"
+    );
+    assert!(
+        text.contains(
+            "Changes only how the view is drawn; coordinates and saved scenes are unchanged."
+        ),
+        "the honest display-only note is present:\n{text}"
+    );
 }
 
 #[test]
