@@ -877,3 +877,153 @@ fn source_mode_disables_apply_and_explains_the_formula_scope() {
         "Sources mode must explain the formula-only CAS scope"
     );
 }
+
+fn checkbox_bounds(output: &egui::PlatformOutput, label: &str) -> Option<egui::Rect> {
+    output
+        .accesskit_update
+        .as_ref()?
+        .nodes
+        .iter()
+        .find_map(|(_, node)| {
+            (node.role() == egui::Role::CheckBox && node.label() == Some(label))
+                .then(|| {
+                    node.bounds().map(|r| {
+                        egui::Rect::from_min_max(
+                            egui::pos2(r.x0 as f32, r.y0 as f32),
+                            egui::pos2(r.x1 as f32, r.y1 as f32),
+                        )
+                    })
+                })
+                .flatten()
+        })
+}
+
+fn has_katex_text(shapes: &[egui::epaint::ClippedShape]) -> bool {
+    shapes.iter().any(|shape| match &shape.shape {
+        egui::Shape::Text(text) => text.galley.job.sections.iter().any(|section| {
+            matches!(
+                &section.format.font_id.family,
+                egui::FontFamily::Name(name) if name.starts_with("KaTeX_")
+            )
+        }),
+        _ => false,
+    })
+}
+
+#[test]
+fn typeset_toggle_persists_and_restores_without_dirtying() {
+    #[derive(Default)]
+    struct Storage(std::collections::HashMap<String, String>);
+    impl eframe::Storage for Storage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    let baseline = vector_field_explorer::VfApp::new_with_storage(None);
+    let mut app = vector_field_explorer::VfApp::new();
+    assert!(app.cas.typeset_output, "typeset is on by default");
+    app.cas.typeset_output = false;
+    let mut storage = Storage::default();
+    eframe::App::save(&mut app, &mut storage);
+    let loaded = vector_field_explorer::VfApp::new_with_storage(Some(&storage));
+    assert!(!loaded.cas.typeset_output, "the toggle is restored");
+    assert_eq!(
+        loaded.state.dirty, baseline.state.dirty,
+        "restoring the toggle must not add dirtying"
+    );
+
+    app.cas.typeset_output = true;
+    eframe::App::save(&mut app, &mut storage);
+    let loaded = vector_field_explorer::VfApp::new_with_storage(Some(&storage));
+    assert!(loaded.cas.typeset_output);
+    assert_eq!(loaded.state.dirty, baseline.state.dirty);
+}
+
+#[test]
+fn typeset_falls_back_to_linear_on_printer_failure() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    let mut panel = CasPanelState::default();
+    panel.input = "(x*y, x^2)".into();
+    panel.operation = Operation::Differentiate;
+    panel.variable = Variable::X;
+    assert!(panel.typeset_output);
+    let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert!(
+        has_text(&output.platform_output, "Showing linear result"),
+        "an unsupported linear expression must fall back with a note"
+    );
+    assert!(!has_katex_text(&output.shapes));
+}
+
+#[test]
+fn copy_always_copies_the_linear_string() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    let mut panel = CasPanelState::default();
+    panel.input = "x*y".into();
+    assert!(panel.typeset_output);
+    let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert!(has_katex_text(&output.shapes), "the result is typeset");
+    let copy = button_bounds(&output.platform_output, "Copy").expect("Copy button");
+    let output = click_panel(&ctx, 460.0, copy.center(), &mut state, &mut panel);
+    assert!(
+        output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::CopyText(text) if text == "y")
+        }),
+        "Copy must yield the canonical linear string: {:?}",
+        output.platform_output.commands
+    );
+    assert_eq!(panel.copy_text(), Some("y"));
+}
+
+#[test]
+fn structured_errors_are_never_typeset() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    let mut panel = CasPanelState::default();
+    panel.input = "abs(x)".into();
+    panel.operation = Operation::Gradient;
+    let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert!(has_text(&output.platform_output, "Error:"));
+    assert!(!has_text(&output.platform_output, "Showing linear result"));
+    assert!(!has_katex_text(&output.shapes));
+}
+
+#[test]
+fn typeset_toggle_changes_the_painted_result_for_a_supported_expression() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    let mut panel = CasPanelState::default();
+    panel.input = "x*y".into();
+    let mut output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert!(panel.typeset_output);
+    assert!(
+        has_katex_text(&output.shapes),
+        "a supported expression is painted with a KaTeX face"
+    );
+    let toggle = checkbox_bounds(&output.platform_output, "Typeset result")
+        .expect("Typeset result toggle is exposed");
+    output = click_panel(&ctx, 460.0, toggle.center(), &mut state, &mut panel);
+    assert!(!panel.typeset_output, "the toggle changes the setting");
+    assert!(
+        !has_katex_text(&output.shapes),
+        "turning typeset off restores the linear editor"
+    );
+}

@@ -55,6 +55,15 @@
       ]
     },
     {
+      "file": "mit-katex-rs.txt",
+      "sha256": "e79670d561aaafba502fac287e478bfcd2cd8e56f444ef5fb30c8f885f109fe4",
+      "provenance": "https://github.com/katex-rs/katex-rs@f9d93892c39424ba24cef0be18105a1629b66357/LICENSE",
+      "note": "The published katex-rs 0.3.0 crate archive ships no LICENSE file even though its manifest declares MIT; this is the verbatim upstream text at the crate's recorded commit.",
+      "packages": [
+        "katex-rs 0.3.0"
+      ]
+    },
+    {
       "file": "mit-simd-helpers.txt",
       "sha256": "d69f24ad84ec2ade64c0b68bdb31b41170e997b158370342056918329cc9af1e",
       "provenance": "https://github.com/lu-zero/simd_helpers@82040194cd05affb060bf94d6f19f82a771d07fb/LICENSE",

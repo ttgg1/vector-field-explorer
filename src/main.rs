@@ -25,7 +25,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             vector_field_explorer::fonts::install(&cc.egui_ctx);
-            Ok(Box::new(VfApp::new_with_storage(cc.storage)))
+            Ok(Box::new(VfApp::new_with_storage_and_context(
+                cc.storage,
+                &cc.egui_ctx,
+            )))
         }),
     )
 }
@@ -80,7 +83,8 @@ pub async fn start() -> Result<(), wasm_bindgen::JsValue> {
 
 #[cfg(target_arch = "wasm32")]
 async fn start_app() -> Result<(), JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("browser window unavailable"))?;
+    let window =
+        web_sys::window().ok_or_else(|| JsValue::from_str("browser window unavailable"))?;
 
     // Ticket 54 pre-start gate: navigator.gpu must exist and requestAdapter()
     // must yield an adapter before WebRunner is constructed. An unsupported
@@ -112,7 +116,9 @@ async fn start_app() -> Result<(), JsValue> {
             eframe::WebOptions::default(),
             Box::new(|cc| {
                 vector_field_explorer::fonts::install(&cc.egui_ctx);
-                Ok(Box::new(vector_field_explorer::VfApp::new_with_storage(cc.storage)))
+                Ok(Box::new(vector_field_explorer::VfApp::new_with_storage(
+                    cc.storage,
+                )))
             }),
         )
         .await?;
@@ -195,9 +201,7 @@ fn call_vfe_webgpu(function: &str, reason: &str) -> bool {
 /// the full WebGPU-unavailable guidance; this is the generic failure path.
 #[cfg(target_arch = "wasm32")]
 fn show_startup_error(error: &JsValue) {
-    let message = error
-        .as_string()
-        .unwrap_or_else(|| format!("{error:?}"));
+    let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
     log::error!("Vector Field Explorer failed to start: {message}");
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;

@@ -53,7 +53,12 @@ impl eframe::App for VfApp {
         let settings = AppSettings {
             style: self.style.clone(),
             layout: self.layout.clone(),
-            view: ViewRecord::capture(&self.state),
+            view: {
+                let view = ViewRecord::capture(&self.state);
+                #[cfg(not(target_arch = "wasm32"))]
+                let view = view.with_typeset_output(self.cas.typeset_output);
+                view
+            },
             parameters: self.state.parameters.clone(),
             viewport_style: self.state.viewport_style,
             layer_styles: self.state.layer_styles,

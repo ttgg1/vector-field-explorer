@@ -133,6 +133,11 @@ fn default_preset_expanded() -> [bool; 4] {
     [true; 4]
 }
 
+/// Typeset CAS results are on unless an older or explicit record says otherwise.
+fn default_typeset_output() -> bool {
+    true
+}
+
 impl AppSettings {
     /// Restore the durable records into a live state in dependency order: the
     /// parameter set is assigned first (a startup restore never dirties the
@@ -461,6 +466,10 @@ pub struct ViewRecord {
     /// in Formula mode with an empty source scene.
     #[serde(default)]
     pub field_mode: FieldMode,
+    /// CAS result display preference (issue #171). Missing on older records and
+    /// defaults to typeset; restoring it never dirties the scene.
+    #[serde(default = "default_typeset_output")]
+    pub typeset_output: bool,
     /// The durable source scene in list order. Each record is validated again
     /// on restore; malformed entries are skipped.
     #[serde(default, deserialize_with = "deserialize_source_entries")]
@@ -593,6 +602,13 @@ impl Default for ViewRecord {
 }
 
 impl ViewRecord {
+    /// Carry the CAS-panel display preference into the persisted envelope. The
+    /// view record itself has no live state to capture it from.
+    pub fn with_typeset_output(mut self, typeset_output: bool) -> Self {
+        self.typeset_output = typeset_output;
+        self
+    }
+
     /// Snapshot the effective view state (the state's clamped/swapped values,
     /// not the widgets' in-flight mirror).
     pub fn capture(state: &State) -> Self {
@@ -657,6 +673,7 @@ impl ViewRecord {
             particle_loop_on_stagnation: state.particle_appearance.loop_on_stagnation,
             particle_stagnation_seconds: state.particle_appearance.stagnation_seconds,
             field_mode: state.field_mode,
+            typeset_output: true,
             source_entries: state.sources.to_records(),
             source_display: state.sources.display,
             source_softening: state.sources.softening,
