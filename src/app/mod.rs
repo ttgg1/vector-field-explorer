@@ -506,6 +506,7 @@ impl VfApp {
                 trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
+                heatmap: None,
                 arrow_style,
                 arrow_style_2d,
                 arrow_params,
@@ -916,6 +917,7 @@ pub(crate) fn assemble_vector_scene(
     let arrow_style = cached.arrow_style;
     let arrow_style_2d = cached.arrow_style_2d;
     let arrow_params = cached.arrow_params;
+    let heatmap = cached.heatmap.clone();
     if state.field_mode != FieldMode::Ode {
         cached.combined = Arc::clone(&combined);
     }
@@ -925,6 +927,7 @@ pub(crate) fn assemble_vector_scene(
         trails,
         dots,
         combined,
+        heatmap,
         arrow_style,
         arrow_style_2d,
         arrow_params,

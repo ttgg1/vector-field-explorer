@@ -12,7 +12,9 @@ use super::domain::Domain;
 use super::field::FieldExpr;
 use super::flow::{Flow, SceneFlow};
 use super::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame, PlaneView, dim_color, on_plane};
-use super::renderer::{ArrowInstanceGPU, LineInstanceGPU, SceneGPU};
+use super::renderer::{
+    ArrowInstanceGPU, HeatmapGPU, HeatmapLegend, LineInstanceGPU, SceneGPU, heatmap_legend,
+};
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
 use super::source_scene::{FieldMode, SourceSampling, SourceScene, sample_source_scene};
 use super::streamlines::{
@@ -364,6 +366,9 @@ pub struct State {
     /// The explicit contour-level count the panel generates (issue #92 slice
     /// B1). `0` hides contours.
     scalar_contour_levels: u32,
+    /// Persisted Scalar view toggle (issue #92 slice B2). `false` keeps the
+    /// historical scene with no heatmap draw or upload.
+    show_scalar_heatmap: bool,
     /// The active theme's text colour, mirrored by the sidebar each frame so
     /// contour and probe lines match the panel text in captures.
     scalar_text_color: [f32; 4],
@@ -896,6 +901,7 @@ impl State {
             gradient: None,
             scalar_grid_side: DEFAULT_SCALAR_GRID_SIDE,
             scalar_contour_levels: DEFAULT_SCALAR_CONTOUR_LEVELS,
+            show_scalar_heatmap: false,
             scalar_text_color: DEFAULT_SCALAR_TEXT_COLOR,
             scalar_view_cache: ScalarViewCache::default(),
             scalar_preview_levels: None,
@@ -2241,6 +2247,63 @@ impl State {
         self.scalar_contour_levels
     }
 
+    /// Whether the Scalar view paints the filled heatmap (issue #92 slice B2).
+    pub fn show_scalar_heatmap(self: &State) -> bool {
+        self.show_scalar_heatmap
+    }
+
+    /// Commit the heatmap toggle. A real change dirties the scene so the next
+    /// snapshot adds or drops the GPU pass; assigning the same value is free.
+    pub fn set_show_scalar_heatmap(self: &mut State, show: bool) -> bool {
+        if self.show_scalar_heatmap == show {
+            return false;
+        }
+        self.show_scalar_heatmap = show;
+        self.mark_dirty();
+        true
+    }
+
+    /// Startup restore seam: assign the persisted toggle without adding a
+    /// dirty request beyond the enclosing restore's documented one.
+    pub(crate) fn restore_show_scalar_heatmap(self: &mut State, show: bool) {
+        self.show_scalar_heatmap = show;
+    }
+
+    /// The bounded heatmap for the current scene, or `None` when the toggle is
+    /// off, the scalar view is unsupported, or the cached grid no longer
+    /// matches the current formula/frame/clock. Colours reuse the active
+    /// [`ColorMapping`]; the cache supplies the one evaluator.
+    pub fn scalar_heatmap(self: &State) -> Option<Arc<HeatmapGPU>> {
+        if !self.scalar_view_applicable() || !self.show_scalar_heatmap {
+            return None;
+        }
+        if !self
+            .scalar_view_cache
+            .record_matches_grid(&self.scalar_view_identity())
+        {
+            return None;
+        }
+        let grid = &self.scalar_view_cache.record()?.grid;
+        HeatmapGPU::from_grid(grid, &self.color_mapping()).map(Arc::new)
+    }
+
+    /// Legend facts for the heatmap currently on screen. Mirrors the exact
+    /// [`Self::scalar_heatmap`] gate so the panel cannot describe a different
+    /// field from the one painted.
+    pub fn scalar_heatmap_legend(self: &State) -> Option<HeatmapLegend> {
+        if !self.scalar_view_applicable() || !self.show_scalar_heatmap {
+            return None;
+        }
+        if !self
+            .scalar_view_cache
+            .record_matches_grid(&self.scalar_view_identity())
+        {
+            return None;
+        }
+        let grid = &self.scalar_view_cache.record()?.grid;
+        heatmap_legend(grid, &self.color_mapping())
+    }
+
     /// Validate and commit the Scalar view grid side. A rejected value leaves
     /// the committed side untouched; the layout key picks the change up on the
     /// next visible refresh.
@@ -2948,6 +3011,7 @@ impl State {
                 trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
+                heatmap: None,
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
                 arrow_params: self.effective_arrow_params_for(styles),
@@ -2970,6 +3034,7 @@ impl State {
                 trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
+                heatmap: None,
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
                 arrow_params: self.effective_arrow_params_for(styles),
@@ -2991,6 +3056,7 @@ impl State {
                 trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
+                heatmap: None,
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
                 arrow_params: self.effective_arrow_params_for(styles),
@@ -3043,6 +3109,7 @@ impl State {
                 trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
+                heatmap: None,
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
                 arrow_params: self.effective_arrow_params_for(styles),
@@ -3088,6 +3155,7 @@ impl State {
                 trails: Arc::new(Vec::new()),
                 dots: Arc::new(Vec::new()),
                 combined: Arc::new(Vec::new()),
+                heatmap: None,
                 arrow_style: self.arrow_style,
                 arrow_style_2d: self.arrow_style_2d,
                 arrow_params: self.effective_arrow_params_for(styles),
@@ -3116,6 +3184,7 @@ impl State {
             // arrow + particle stream, because dots advect every frame. The
             // viewmodel's arrows stay frame-invariant in sampling order.
             combined: Arc::new(Vec::new()),
+            heatmap: self.scalar_heatmap(),
             arrow_style: self.arrow_style,
             arrow_style_2d: self.arrow_style_2d,
             arrow_params: self.effective_arrow_params_for(styles),

@@ -52,6 +52,7 @@ impl VfApp {
             trails: Arc::new(Vec::new()),
             dots: Arc::new(Vec::new()),
             combined: Arc::new(Vec::new()),
+            heatmap: None,
             arrow_style: self.state.arrow_style,
             arrow_style_2d: self.state.arrow_style_2d,
             arrow_params: self.state.arrow_params,

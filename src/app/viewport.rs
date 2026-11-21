@@ -357,8 +357,11 @@ impl VfApp {
             if self.take_svg_export_route() == super::plot::SvgExportRoute::Allowed {
                 // SVG keeps the unstyled line blueprint (issue #84 contract):
                 // layer overrides belong to the live viewport and raster output.
-                let scene =
+                let mut scene =
                     self.assemble_viewport_scene_with_styles(&view, &LayerStyles::default());
+                // Vector output is the line blueprint: the scalar heatmap fill
+                // is raster-only (issue #92 contract).
+                scene.heatmap = None;
                 #[cfg(not(target_arch = "wasm32"))]
                 let over_cap = screenshot::exceeds_svg_element_cap(&scene);
                 let element_count = screenshot::svg_element_count(&scene);
@@ -693,10 +696,7 @@ impl VfApp {
 
     /// Integration-test seam for the neutral blueprint assembly.
     #[doc(hidden)]
-    pub fn test_assemble_viewport_scene_with_styles(
-        &mut self,
-        styles: &LayerStyles,
-    ) -> SceneGPU {
+    pub fn test_assemble_viewport_scene_with_styles(&mut self, styles: &LayerStyles) -> SceneGPU {
         let view = self.orbit.view();
         self.assemble_viewport_scene_with_styles(&view, styles)
     }
