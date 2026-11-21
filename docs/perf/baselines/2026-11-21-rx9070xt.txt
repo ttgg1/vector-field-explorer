@@ -1,0 +1,34 @@
+PERF cold_start_ms=0.775
+PERF default-2d snapshot p50_us=523.043 p95_us=529.255 p99_us=530.270 n=30
+PERF default-2d sample p50_us=503.269 p95_us=533.106 p99_us=597.118 n=30
+PERF densest-3d snapshot p50_us=5400.267 p95_us=5474.135 p99_us=5509.073 n=30
+PERF densest-3d sample p50_us=5424.827 p95_us=5531.964 p99_us=5633.150 n=30
+PERF dipole-3d snapshot p50_us=9324.855 p95_us=9358.007 p99_us=9366.320 n=30
+PERF dipole-3d sample p50_us=9301.335 p95_us=9312.564 p99_us=9315.332 n=30
+PERF grid-stress snapshot p50_us=87328.897 p95_us=88538.125 p99_us=88752.646 n=30
+PERF grid-stress sample p50_us=87136.027 p95_us=87294.059 p99_us=87356.279 n=30
+PERF worst-particles snapshot p50_us=5596.237 p95_us=5639.307 p99_us=5648.284 n=30
+PERF worst-particles sample p50_us=5560.747 p95_us=5574.815 p99_us=5577.857 n=30
+PERF scalar-heatmap snapshot p50_us=5591.417 p95_us=5600.286 p99_us=5604.965 n=30
+PERF scalar-heatmap sample p50_us=5562.747 p95_us=5583.466 p99_us=5587.607 n=30
+PERF scalar-heatmap scalar_view p50_us=12102.871 p95_us=12502.461 p99_us=12530.586 n=30
+PERF custom-density snapshot p50_us=5434.807 p95_us=5517.124 p99_us=5689.559 n=30
+PERF custom-density sample p50_us=5444.942 p95_us=5458.255 p99_us=5463.583 n=30
+PERF custom-density continuity_report p50_us=192995.730 p95_us=194384.312 p99_us=195069.547 n=30
+PERF field-probe snapshot p50_us=10.880 p95_us=10.915 p99_us=10.934 n=30
+PERF field-probe sample p50_us=5121.439 p95_us=5295.501 p99_us=5298.887 n=30
+PERF field-probe source_sample p50_us=692.838 p95_us=698.988 p99_us=700.730 n=30
+PERF field-probe probe_report p50_us=465.334 p95_us=469.887 p99_us=470.972 n=30
+PERF plane-wave snapshot p50_us=27.880 p95_us=28.200 p99_us=30.611 n=30
+PERF plane-wave sample p50_us=5426.618 p95_us=5438.292 p99_us=5440.371 n=30
+PERF plane-wave maxwell_sample p50_us=192.874 p95_us=197.331 p99_us=201.636 n=30
+PERF default-2d gpu_frame p50_us=262.519 p95_us=405.508 p99_us=621.852 n=15
+PERF densest-3d gpu_frame p50_us=378.169 p95_us=497.457 p99_us=680.106 n=15
+PERF dipole-3d gpu_frame p50_us=357.878 p95_us=520.276 p99_us=744.477 n=15
+PERF grid-stress gpu_frame p50_us=1902.144 p95_us=2051.508 p99_us=2245.256 n=15
+PERF worst-particles gpu_frame p50_us=478.428 p95_us=592.972 p99_us=748.473 n=15
+PERF scalar-heatmap gpu_frame p50_us=377.929 p95_us=556.496 p99_us=816.313 n=15
+PERF custom-density gpu_frame p50_us=376.458 p95_us=535.551 p99_us=713.356 n=15
+PERF field-probe gpu_frame p50_us=371.068 p95_us=527.974 p99_us=718.345 n=15
+PERF plane-wave gpu_frame p50_us=499.569 p95_us=614.337 p99_us=795.625 n=15
+PERF host=AMD_Ryzen_9_7950X_16-Core_Processor gpu=AMD_Radeon_RX_9070_XT_(RADV_GFX1201) backend=Vulkan build=release date=2026-11-21
