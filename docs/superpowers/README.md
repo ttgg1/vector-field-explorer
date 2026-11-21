@@ -7,6 +7,7 @@ and gate lists do not override newer owner rulings or authorize redispatch.
 
 | Record | Purpose/evidence |
 | --- | --- |
+| [Beamline mode design](specs/2026-11-21-beamline-design.md) | Proposed accelerator physics workspace, transport model and first focusing investigation. |
 | [Customization and physics design](specs/2026-11-18-customization-physics-design.md) | Draft scope for #80/#81 and onboarding child #99; awaiting written approval, no product implementation authorized. |
 | [Visualization customization plan](plans/2026-11-18-visualization-customization.md) | Draft task/dependency plan for #82–#88; planning only, not executable authorization. |
 | [Physics exploration plan](plans/2026-11-18-physics-exploration.md) | Draft task/dependency plan for #89–#99; numerical/UX design gates remain open, planning only. |

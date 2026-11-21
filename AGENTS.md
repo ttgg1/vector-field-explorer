@@ -3,6 +3,15 @@
 Rust eframe/egui vector-field explorer, native and WebAssembly. **GPL-3.0-only**;
 keep dependencies compatible.
 
+## Product vision
+
+Help physics students and enthusiasts turn a question into an editable model, a plot, and a measurement they can use to check their reasoning. Keep free exploration available throughout guided work.
+
+- For a user-facing change, name one question the user can answer and the observable result that would answer it. Connect the feature to the relevant existing scene, CAS expression, probe, plot, or lesson.
+- Give users control over the inputs and the consequences of an action. Show what is selected, what will change, and how to revise or undo it. Make it clear when a result follows live parameters and when it captures a fixed prediction.
+- Keep the physics legible. Identify quantities, units or normalization, model assumptions, and meaningful limits where the result is read. Distinguish analytic predictions from sampled measurements and show when a check is unavailable.
+- Verify the interaction through its normal entry point. A useful acceptance case is a student changing one physical input, reading the effect, and recovering the starting experiment.
+
 ## Start here
 
 1. Read [Workflow](references/workflow.md) before dispatch, implementation,
