@@ -336,10 +336,10 @@ writing, and `restart` returns to the first stop and clears the tour-opened
 panel list. The tour table is immutable; only `TourProgress` changes, and
 nothing is persisted.
 
-**Slice A boundary.** This slice ships the model only. The tour overlay, the app
-wiring and a Help-menu tour entry (including restart-from-Help) are slice B; the
-done-stop body therefore promises only that the tour can be restarted, not
-where. UI code must not yet assume a menu anchor exists.
+**Slice A boundary.** Slice A shipped the model only; slice B adds the overlay
+and app wiring documented in `src/ui/tour_overlay.rs` below. The done-stop body
+promises that the tour can be restarted, and the Help menu now carries the
+"Start or restart tour" entry.
 
 **Pinned by.** [tests/tour_test.rs](../tests/tour_test.rs):
 `tour_table_has_unique_non_empty_ids_and_text`,
@@ -353,6 +353,44 @@ where. UI code must not yet assume a menu anchor exists.
 `opened_panels_are_recorded_once_per_panel`,
 `current_stop_follows_the_index_and_never_panics_after_finish`, and
 `full_tour_run_opens_each_target_panel_exactly_once`.
+
+#### `src/ui/tour_overlay.rs` — guided-tour card, anchoring and advance rule
+
+**Purpose.** The UI half of #99: record the real panel/viewport rectangles the
+app painted this frame, resolve a stop's semantic target against them, draw the
+anchored card plus non-colour-only highlight, and evaluate `AdvanceRule`.
+
+**Public API.** `advance_ready(rule, captured, current)` is the pure `Changed`
+comparison; `control_panel(target)` names the panel that owns a control;
+`TourFrameRects::{record_panel, record_viewport, anchor_rect}` hold one frame of
+painted rectangles; `place_card(target, screen, size)` places a card near but
+not over the target inside the screen; `show(ctx, rects, progress, ready)`
+paints the card and returns `TourOutcome { action, card_rect, target_rect }`.
+
+**Invariants / notes.** `ControlId` anchors resolve to their owning panel's
+recorded rectangle (the app's panel code does not expose independent stable
+control ids); a panel body that is not visible this frame yields no rectangle,
+so the card still draws and the highlight is omitted rather than invented.
+`AdvanceRule::Changed` compares this frame's value with the snapshot captured
+when that stop became current; an unavailable value never satisfies it. The
+card has a title and body and uses a `UiKind::Modal` stack kind for an
+accessible dialog role without blocking viewport pointer input. There is no
+pulsing, timer or auto-advance. `VfApp::tour` is the only new state: it is
+session-only, never in `ViewRecord`/`AppSettings`, and start/advance/back/
+dismiss/finish never touch `dirty`, the document or the edit history. Collapsed
+targets open through `LayoutState::toggle_*` in wide layout and the existing
+compact sheet in compact layout; a second layout path does not exist.
+
+**Pinned by.** [tests/tour_overlay_test.rs](../tests/tour_overlay_test.rs):
+`starting_the_tour_records_no_document_or_history_change`,
+`next_and_back_follow_the_stop_table`,
+`escape_dismisses_and_the_menu_restarts_at_the_first_stop`,
+`changed_rule_advances_only_after_the_control_changes`,
+`opening_a_collapsed_panel_uses_the_normal_layout_toggle`,
+`unresolved_anchor_still_shows_the_card_without_a_highlight`,
+`compact_layout_keeps_the_card_on_screen`,
+`tour_keys_do_not_reach_viewport_handlers_but_text_editing_still_works`, and
+`help_menu_entry_is_labelled_start_or_restart_truthfully`.
 
 #### `src/main.rs` — native and wasm bootstrap
 

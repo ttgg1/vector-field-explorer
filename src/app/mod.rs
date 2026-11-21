@@ -35,6 +35,7 @@ use crate::seed_layout_library::SeedLayoutLibrary;
 use crate::sim_clock::SimClock;
 use crate::source_scene::FieldMode;
 use crate::streamlines::click_seed;
+use crate::tour::{PanelId, TourProgress};
 use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogState};
 use crate::ui::appearance_panel::AppearancePanelState;
 use crate::ui::formula_bar::FormulaBarState;
@@ -53,6 +54,7 @@ use crate::ui::sources_panel::SourcesPanelState;
 use crate::ui::status_bar::{FpsMeter, advance_hint, restart_hint};
 use crate::ui::style_panel::{self, AppStyle};
 use crate::ui::top_bar;
+use crate::ui::tour_overlay::TourFrameRects;
 use crate::view_command::{self, ViewCommand, ViewContext};
 use crate::viewmodel::{
     CapturedClickOutcome, ClickOutcome, DragButtons, DragChannel, LastClickSeed, LeftClickAction,
@@ -243,6 +245,28 @@ pub struct VfApp {
     /// Whether the Help > Keyboard & mouse window is up (ticket 18): the full
     /// help table, sharing `HELP_SECTIONS` with the viewport overlay.
     help_open: bool,
+    /// Session-only guided-tour progress (#99 slice B). `Some` keeps the tour
+    /// active or finished so the Help entry can restart it; nothing here is
+    /// persisted or recorded in history.
+    pub tour: Option<TourProgress>,
+    /// The value snapshotted for an `AdvanceRule::Changed` stop, keyed by the
+    /// stop index so it is recaptured exactly when that stop becomes current.
+    tour_snapshot: Option<(usize, Option<String>)>,
+    /// Real panel/viewport rectangles recorded during this frame. Transient;
+    /// cleared at the start of every frame.
+    tour_rects: TourFrameRects,
+    /// The card rectangle painted this frame, for compact-layout coverage.
+    tour_card_rect: Option<egui::Rect>,
+    /// The real target rectangle, or `None` when the anchor did not resolve.
+    tour_target_rect: Option<egui::Rect>,
+    /// The stop index whose target panel the tour has already opened. A stop
+    /// opens its panel once; if the user closes it, it stays closed until the
+    /// stop changes.
+    tour_prepared_index: Option<usize>,
+    /// How many times `Fit` was applied to the orbit camera. The viewport stop
+    /// waits on this rather than the camera pose, so orbit, pan and zoom stay
+    /// free exploration while pressing Fit continues, as the card says.
+    camera_fit_generation: u64,
     /// The viewport rect from this frame (set in the central panel) so the help
     /// overlay can anchor to its bottom-left corner.
     last_viewport_rect: Option<egui::Rect>,
@@ -534,6 +558,13 @@ impl VfApp {
             appearance_open: false,
             about_open: false,
             help_open: false,
+            tour: None,
+            tour_snapshot: None,
+            tour_rects: TourFrameRects::new(),
+            tour_card_rect: None,
+            tour_target_rect: None,
+            tour_prepared_index: None,
+            camera_fit_generation: 0,
             last_viewport_rect: None,
             scene: ViewportScene::Vector(SceneGPU {
                 arrows: Arc::new(Vec::new()),
@@ -590,6 +621,283 @@ impl VfApp {
 impl Default for VfApp {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl VfApp {
+    /// Start the guided tour, or return a running/finished tour to its first
+    /// stop. Session-only: no settings, document or history record is touched.
+    pub fn start_or_restart_tour(&mut self) {
+        match self.tour.as_mut() {
+            Some(progress) => progress.restart(),
+            None => self.tour = Some(TourProgress::new()),
+        }
+        self.tour_snapshot = None;
+        self.tour_rects.clear();
+        self.tour_card_rect = None;
+        self.tour_target_rect = None;
+        self.tour_prepared_index = None;
+    }
+
+    /// Frame phase, before any panel draws: clear last frame's recorded rects
+    /// and open the current stop's collapsed target through the existing layout
+    /// toggle or compact sheet. A target that still cannot be shown this frame
+    /// is simply left unresolved.
+    ///
+    /// The target is opened once per stop (and again when the stop changes), not
+    /// every frame: a user who closes the panel keeps it closed while that stop
+    /// is current. The panel is recorded through [`TourProgress::mark_opened`].
+    pub(super) fn prepare_tour_frame(&mut self) {
+        self.tour_rects.clear();
+        self.tour_card_rect = None;
+        self.tour_target_rect = None;
+        let Some(progress) = self.tour.as_ref() else {
+            self.tour_prepared_index = None;
+            return;
+        };
+        let Some(stop) = progress.current() else {
+            self.tour_prepared_index = None;
+            return;
+        };
+        let index = progress.index();
+        if self.tour_prepared_index != Some(index) {
+            if let Some(panel) = crate::ui::tour_overlay::control_panel(stop.target) {
+                self.open_tour_panel(panel);
+                if let Some(progress) = self.tour.as_mut() {
+                    progress.mark_opened(panel);
+                }
+            }
+            self.tour_prepared_index = Some(index);
+        }
+        self.sync_tour_snapshot();
+    }
+
+    /// Open one tour target through the shipped layout path only. In compact
+    /// layout that is the existing bottom sheet; in wide layout it is the
+    /// panel's own `LayoutState` toggle.
+    fn open_tour_panel(&mut self, panel: PanelId) {
+        if self.layout_mode == LayoutMode::Compact {
+            let sheet = match panel {
+                PanelId::Controls => Some(SheetState::Controls),
+                PanelId::Presets => Some(SheetState::Presets),
+                PanelId::Appearance => Some(SheetState::Appearance),
+                PanelId::Interaction => Some(SheetState::Interaction),
+                PanelId::Sources => Some(SheetState::Sources),
+                PanelId::Induction => Some(SheetState::Induction),
+                PanelId::Ode => Some(SheetState::Ode),
+                PanelId::Materials => Some(SheetState::Materials),
+                PanelId::Maxwell => Some(SheetState::Maxwell),
+                PanelId::FormulaBar | PanelId::TopBar | PanelId::StatusBar => None,
+            };
+            if let Some(sheet) = sheet {
+                self.sheet.open(sheet);
+                self.sheet_expanded = SheetSize::Default;
+            }
+            return;
+        }
+
+        let expanded = match panel {
+            PanelId::Controls => self.layout.controls_expanded,
+            PanelId::Presets => self.layout.presets_expanded,
+            PanelId::Appearance => self.layout.appearance_expanded,
+            PanelId::Interaction => self.layout.interaction_expanded,
+            PanelId::Sources => self.layout.sources_expanded,
+            PanelId::Induction => self.layout.induction_expanded,
+            PanelId::Ode => self.layout.ode_expanded,
+            PanelId::Materials => self.layout.materials_expanded,
+            PanelId::Maxwell => self.layout.maxwell_expanded,
+            PanelId::FormulaBar | PanelId::TopBar | PanelId::StatusBar => return,
+        };
+        if expanded {
+            return;
+        }
+        match panel {
+            PanelId::Controls => self.layout.toggle_controls(),
+            PanelId::Presets => self.layout.toggle_presets(),
+            PanelId::Appearance => self.layout.toggle_appearance(),
+            PanelId::Interaction => self.layout.toggle_interaction(),
+            PanelId::Sources => self.layout.toggle_sources(),
+            PanelId::Induction => self.layout.toggle_induction(),
+            PanelId::Ode => self.layout.toggle_ode(),
+            PanelId::Materials => self.layout.toggle_materials(),
+            PanelId::Maxwell => self.layout.toggle_maxwell(),
+            PanelId::FormulaBar | PanelId::TopBar | PanelId::StatusBar => {}
+        }
+    }
+
+    /// Record a panel's real painted rectangle for this frame's tour anchor.
+    pub(super) fn record_tour_panel(&mut self, panel: PanelId, rect: egui::Rect) {
+        self.tour_rects.record_panel(panel, rect);
+    }
+
+    /// Record the central viewport's real rectangle.
+    pub(super) fn record_tour_viewport(&mut self, rect: egui::Rect) {
+        self.tour_rects.record_viewport(rect);
+    }
+
+    /// The observable value behind a `Changed` key. Only shipped controls that
+    /// a stop waits on need a value; an unknown key stays unresolved.
+    fn tour_control_value(&self, key: &str) -> Option<String> {
+        Some(match key {
+            // Only an applied Fit counts, not the camera pose: orbit, pan and
+            // zoom are free exploration, and pressing Fit again on an already
+            // framed view still continues. The card says to press Fit domain.
+            "camera_fit" => self.camera_fit_generation.to_string(),
+            "play" => self.clock.playing.to_string(),
+            "maxwell_case" => format!("{:?}", self.state.maxwell.case),
+            "formula_input" => self.state.formula.clone(),
+            "parameters" => format!("{:?}", self.state.parameters),
+            "colormap" => format!("{:?}", self.state.colormap),
+            "streamlines" => self.state.streamlines.to_string(),
+            "particles" => self.state.particles.to_string(),
+            "color_quantity" => format!("{:?}", self.state.color_quantity),
+            "view_2d" | "view_3d" => self.state.mode_3d.to_string(),
+            _ => return None,
+        })
+    }
+
+    /// Capture the `Changed` snapshot when the current stop becomes current.
+    fn sync_tour_snapshot(&mut self) {
+        let Some(progress) = self.tour.as_ref() else {
+            self.tour_snapshot = None;
+            return;
+        };
+        let Some(stop) = progress.current() else {
+            self.tour_snapshot = None;
+            return;
+        };
+        let index = progress.index();
+        let stale = self
+            .tour_snapshot
+            .as_ref()
+            .is_none_or(|(snapshot_index, _)| *snapshot_index != index);
+        if stale {
+            let value = match stop.advance {
+                crate::tour::AdvanceRule::Changed(key) => self.tour_control_value(key),
+                crate::tour::AdvanceRule::Next => None,
+            };
+            self.tour_snapshot = Some((index, value));
+        }
+    }
+
+    /// Whether the current stop's Next button/key may advance.
+    fn tour_advance_ready(&self) -> bool {
+        let Some(progress) = self.tour.as_ref() else {
+            return false;
+        };
+        let Some(stop) = progress.current() else {
+            return false;
+        };
+        match stop.advance {
+            crate::tour::AdvanceRule::Next => true,
+            crate::tour::AdvanceRule::Changed(key) => {
+                let captured = self
+                    .tour_snapshot
+                    .as_ref()
+                    .filter(|(index, _)| *index == progress.index())
+                    .and_then(|(_, value)| value.as_deref());
+                let current = self.tour_control_value(key);
+                crate::ui::tour_overlay::advance_ready(stop.advance, captured, current.as_deref())
+            }
+        }
+    }
+
+    fn tour_next(&mut self) {
+        if !self.tour_advance_ready() {
+            return;
+        }
+        if let Some(progress) = self.tour.as_mut() {
+            progress.advance();
+        }
+        self.tour_snapshot = None;
+    }
+
+    fn tour_back(&mut self) {
+        if let Some(progress) = self.tour.as_mut() {
+            progress.back();
+        }
+        self.tour_snapshot = None;
+    }
+
+    fn tour_dismiss(&mut self) {
+        if let Some(progress) = self.tour.as_mut() {
+            progress.dismiss();
+        }
+        self.tour_snapshot = None;
+    }
+
+    /// Consume the tour's keys before the menu, viewport or camera handlers.
+    /// A focused text field keeps every key, including Escape, so editing is
+    /// never interrupted; the card's own buttons remain available.
+    pub(super) fn handle_tour_keys(&mut self, ctx: &egui::Context) {
+        if self
+            .tour
+            .as_ref()
+            .is_none_or(|progress| progress.current().is_none())
+            || ctx.text_edit_focused()
+        {
+            return;
+        }
+        let mut action = None;
+        ctx.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                action = Some(crate::ui::tour_overlay::TourAction::Dismiss);
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                | input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
+            {
+                action = Some(crate::ui::tour_overlay::TourAction::Next);
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) {
+                action = Some(crate::ui::tour_overlay::TourAction::Back);
+            }
+        });
+        match action {
+            Some(crate::ui::tour_overlay::TourAction::Next) => self.tour_next(),
+            Some(crate::ui::tour_overlay::TourAction::Back) => self.tour_back(),
+            Some(crate::ui::tour_overlay::TourAction::Dismiss) => self.tour_dismiss(),
+            Some(crate::ui::tour_overlay::TourAction::None) | None => {}
+        }
+    }
+
+    /// Frame phase, last: draw the anchored card and highlight, then apply its
+    /// one-shot button action.
+    pub(super) fn frame_tour_overlay(&mut self, ctx: &egui::Context) {
+        self.sync_tour_snapshot();
+        if let Some(rect) = self.last_viewport_rect {
+            self.record_tour_viewport(rect);
+        }
+        let Some(progress) = self.tour.as_ref() else {
+            self.tour_card_rect = None;
+            self.tour_target_rect = None;
+            return;
+        };
+        if progress.current().is_none() {
+            self.tour_card_rect = None;
+            self.tour_target_rect = None;
+            return;
+        }
+        let ready = self.tour_advance_ready();
+        let outcome = crate::ui::tour_overlay::show(ctx, &self.tour_rects, progress, ready);
+        self.tour_card_rect = outcome.card_rect;
+        self.tour_target_rect = outcome.target_rect;
+        match outcome.action {
+            crate::ui::tour_overlay::TourAction::Next => self.tour_next(),
+            crate::ui::tour_overlay::TourAction::Back => self.tour_back(),
+            crate::ui::tour_overlay::TourAction::Dismiss => self.tour_dismiss(),
+            crate::ui::tour_overlay::TourAction::None => {}
+        }
+    }
+
+    /// Test seam: the card rectangle painted this frame, if any.
+    #[doc(hidden)]
+    pub fn tour_card_rect_for_test(&self) -> Option<egui::Rect> {
+        self.tour_card_rect
+    }
+
+    /// Test seam: the resolved highlight rectangle, or `None` when the anchor
+    /// did not resolve this frame.
+    #[doc(hidden)]
+    pub fn tour_highlight_rect_for_test(&self) -> Option<egui::Rect> {
+        self.tour_target_rect
     }
 }
 

@@ -93,6 +93,7 @@ menu_actions! {
     ResetCamera,
     ToggleHelp,
     ShowHelpTable,
+    StartTour,
     OpenAppearance,
     OpenDownloadPage,
     About,
@@ -110,6 +111,8 @@ pub enum SideEffect {
     ShowAbout,
     /// Show the full keyboard & mouse window (all three help groups).
     ShowHelp,
+    /// Start the guided tour, or restart it at the first stop.
+    StartTour,
     /// Show the animation export dialog.
     Animation,
     /// Ask the screenshot capture for one frame.
@@ -253,6 +256,12 @@ pub const MENUS: &[Menu] = &[
             MenuItem {
                 label: "Keyboard & mouse",
                 action: MenuAction::ShowHelpTable,
+            },
+            // One truthful label for both states: the action starts an idle
+            // tour and restarts a running or finished one at the first stop.
+            MenuItem {
+                label: "Start or restart tour",
+                action: MenuAction::StartTour,
             },
             MenuItem {
                 label: "Download desktop app",
@@ -549,6 +558,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
             SideEffect::None
         }
         MenuAction::ShowHelpTable => SideEffect::ShowHelp,
+        MenuAction::StartTour => SideEffect::StartTour,
         MenuAction::OpenAppearance => SideEffect::OpenAppearance,
         MenuAction::OpenDownloadPage => SideEffect::OpenUrl(DOWNLOAD_URL.to_string()),
         MenuAction::About => SideEffect::ShowAbout,

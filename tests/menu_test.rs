@@ -100,6 +100,7 @@ fn the_bar_carries_the_v1_menu_table() {
                 "Help",
                 vec![
                     "Keyboard & mouse",
+                    "Start or restart tour",
                     "Download desktop app",
                     "About Vector Field Explorer",
                 ],
@@ -190,6 +191,7 @@ fn every_action_maps_to_its_side_effect() {
         ),
         (MenuAction::ToggleHelp, SideEffect::None),
         (MenuAction::ShowHelpTable, SideEffect::ShowHelp),
+        (MenuAction::StartTour, SideEffect::StartTour),
         (MenuAction::OpenAppearance, SideEffect::OpenAppearance),
         (
             MenuAction::OpenDownloadPage,
