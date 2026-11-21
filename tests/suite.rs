@@ -126,6 +126,8 @@ mod panel_rails_test;
 mod parameters_test;
 mod particle_playback_test;
 mod particles_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod perf_baseline_test;
 mod persistence_test;
 mod plane_particles_test;
 mod plane_scene_test;

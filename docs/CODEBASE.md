@@ -12,6 +12,7 @@ Pointers, not duplicates:
 - Decisions and their rationale: [docs/adr/](adr/)
 - User quickstart: [README.md](../README.md)
 - Working conventions and gates: [AGENTS.md](../AGENTS.md)
+- Performance harness, per-feature reports and dated baselines: [docs/perf/README.md](perf/README.md)
 - Licence: [GPL-3.0-only](../LICENSE)
 
 ---
@@ -6661,6 +6662,7 @@ touching renderer/shader/windowing/input code: `scripts/smoke-run.sh 15`.
 cargo build
 cargo run --release
 scripts/test.sh                  # cargo test --all-targets, then prunes stale binaries
+scripts/bench-perf-baseline.sh   # release perf baseline; add --gpu for offscreen frames
 KEEP_TEST_ARTIFACTS=1 scripts/test.sh
 scripts/test.sh --incremental
 cargo clippy --all-targets -- -D warnings
@@ -6721,6 +6723,13 @@ enforces this. Test-only access is provided by a small number of
 `#[doc(hidden)] pub` seams (arrow geometry, particle history, font definitions,
 help typography helpers, branding cache, hint restart), documented in their
 modules. Do not widen the public API for tests without a ledger ruling.
+
+Gated benchmark modules (`tests/*_bench_test.rs` and
+`tests/perf_baseline_test.rs`) are registered in `tests/suite.rs` but return
+immediately unless their environment flag is set. The maintained post-epic
+harness is `tests/perf_baseline_test.rs` behind `VFE_PERF_BASELINE=1`, driven by
+`scripts/bench-perf-baseline.sh`; see [docs/perf/README.md](perf/README.md) for
+what it measures and what it deliberately does not.
 
 ---
 
