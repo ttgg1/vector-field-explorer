@@ -132,6 +132,7 @@ mod scalar_animation_app_test;
 mod scalar_animation_test;
 mod scalar_clock_test;
 mod scalar_test;
+mod scalar_view_test;
 mod scene_document_test;
 mod scene_flow_test;
 mod scene_store_test;

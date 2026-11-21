@@ -1726,6 +1726,32 @@ GPU-coordinate representability belongs to the sampler, not this evaluator.
 **Pinned by.** [tests/scalar_test.rs](../tests/scalar_test.rs):
 `scalar_rhs_context_and_errors`, `partly_undefined_is_valid_syntax`.
 
+#### `src/scalar_view.rs` — bounded scalar grids, contours and probes
+
+**Purpose / API (issue #92 slice A).** `ScalarSample`, `ScalarGrid`,
+`ContourSegment`, `PointProbe`, `LineProbe` and `ProbeSet` model scalar views
+on one `PlaneFrame`. `sample_grid`/`sample_line` evaluate through
+`ScalarExpr::eval_at` with `ScalarContext::Surface`; committed parameters are
+substituted into the formula text first. `contour_segments` performs explicit
+marching squares. `ScalarViewCache` is a one-entry cache keyed on formula text,
+parameters, frame, domain, grid side, explicit levels and the clock quantised to
+`SCALAR_RESAMPLE_INTERVAL` (100 ms).
+
+**Invariants.** Grid sides stay in `MIN_GRID_SIDE=8..=MAX_GRID_SIDE=160` and
+line samples in `2..=MAX_LINE_SAMPLES=512`, validated before allocation. A cell
+is painted only with four finite corners; missing samples stay `None` and are
+never interpolated. Contour levels are finite, strictly increasing and at most
+`MAX_CONTOUR_LEVELS=16`; cells with a missing corner emit no segment. `z`
+formulas return `UNSUPPORTED_Z_REASON` ("scalar views support x/y formulas").
+A hidden cache samples nothing; a changed key causes exactly one rebuild.
+Probes keep world positions and optional `SeedAnchor`s as document state while
+sampled values/points remain runtime-only and unpersisted.
+
+**Pinned by.** [tests/scalar_view_test.rs](../tests/scalar_view_test.rs):
+`constant_field_grid_is_uniform_and_finite` through
+`z_formula_reports_the_scalar_unsupported_reason`; probe persistence in
+`tests/persistence_test.rs` and `tests/scene_document_test.rs`.
+
 #### `src/plot.rs` — pure bounded scalar geometry and plot types
 
 **Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable
@@ -2739,7 +2765,8 @@ view, parameters, camera }` with `capture`, `validate`, `to_json` and
   validates.
 
 **Pinned by.** `tests/scene_document_test.rs`: full JSON round trip including a
-custom colour ramp, future-version rejection naming both versions, unknown
+custom colour ramp and scalar probes, a legacy document without `probes`,
+future-version rejection naming both versions, unknown
 document and camera fields, the name rules, non-finite and out-of-range camera
 fields, the exact `ParameterSet` error, malformed-JSON prefixes, export/import
 composition, pinned field order, and validation never mutating the document.

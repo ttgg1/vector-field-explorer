@@ -38,6 +38,9 @@ use crate::maxwell::{
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
 use crate::reference::{sanitized_opacity, scaled_viewport_style};
+use crate::scalar_view::{
+    MAX_GRID_SIDE, MIN_GRID_SIDE, ProbeSet, ScalarViewCache, ScalarViewRecord, ScalarViewRequest,
+};
 use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedError, SeedLayout, SeedPoint,
 };
@@ -328,6 +331,14 @@ pub struct State {
     /// startup restores assign it directly. S2 wires generation to it; until
     /// then the automatic grid still supplies the streamline seeds.
     pub seed_layout: SeedLayout,
+    /// Durable scalar point/line probes (issue #92 slice A). Only the startup
+    /// restore and the committed probe edits replace it; sampled values are
+    /// runtime state and are never persisted.
+    pub probes: ProbeSet,
+    /// One-entry bounded scalar-view cache (issue #92 slice A). Runtime only;
+    /// only [`State::refresh_scalar_view`] touches it, and only while the
+    /// scalar panel is visible.
+    scalar_view_cache: ScalarViewCache,
     /// What one explicit left click does (ticket 60). The S/P shortcuts ignore
     /// it and always run their own action.
     pub left_click_action: LeftClickAction,
@@ -847,6 +858,8 @@ impl State {
             seed_mode: StreamlineSeedMode::Auto,
             streamline_count: 0,
             seed_layout: SeedLayout::default(),
+            probes: ProbeSet::default(),
+            scalar_view_cache: ScalarViewCache::default(),
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -2046,6 +2059,54 @@ impl State {
             let grid = self.plane_grid();
             PlaneFrame::new(&self.domain, self.plane.clamped(grid), grid)
         })
+    }
+
+    /// The plane frame a scalar view samples. A visible plane slice uses its
+    /// own axes; every other view uses the XY plane through the domain centre.
+    pub fn scalar_view_frame(self: &State) -> PlaneFrame {
+        self.plane_frame().unwrap_or_else(|| {
+            let grid = self.plane_grid();
+            PlaneFrame::new(&self.domain, PlaneView::middle(grid), grid)
+        })
+    }
+
+    /// The request the scalar panel builds: the surface formula, committed
+    /// parameters, current plane frame, domain and simulated time.
+    ///
+    /// The grid side follows the surface resolution but is clamped into the
+    /// scalar-view bounds. No panel state exists in slice A, so the explicit
+    /// contour level list is empty.
+    pub fn scalar_view_request(self: &State) -> ScalarViewRequest {
+        let frame = self.scalar_view_frame();
+        ScalarViewRequest {
+            source: self.plot.surface.source.clone(),
+            parameters: self.parameters.clone(),
+            frame,
+            domain: frame.local_domain(),
+            time: f64::from(self.time),
+            grid_side: self
+                .plot
+                .settings
+                .surface_resolution
+                .clamp(MIN_GRID_SIDE, MAX_GRID_SIDE),
+            levels: Vec::new(),
+        }
+    }
+
+    /// Refresh the scalar-view cache while the panel is visible.
+    ///
+    /// Hidden panels do no sampling. A changed key (formula, parameters, frame,
+    /// domain, grid side, levels or the 100 ms-quantised clock) causes exactly
+    /// one rebuild; an unchanged key is a cache hit. This is a pure model seam
+    /// and is deliberately not called from any per-frame path.
+    pub fn refresh_scalar_view(self: &mut State, visible: bool) -> Option<&ScalarViewRecord> {
+        let request = self.scalar_view_request();
+        self.scalar_view_cache.refresh(&request, visible)
+    }
+
+    /// The runtime scalar-view cache (records, failure reason, resample count).
+    pub fn scalar_view_cache(self: &State) -> &ScalarViewCache {
+        &self.scalar_view_cache
     }
 
     /// The domain the visible scene covers. A plane slice uses its flat local

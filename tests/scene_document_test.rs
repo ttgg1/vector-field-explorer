@@ -9,6 +9,7 @@ use vector_field_explorer::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::persistence::ViewRecord;
 use vector_field_explorer::plane::PlaneAxis;
+use vector_field_explorer::scalar_view::{LineProbe, PointProbe, ProbeSet};
 use vector_field_explorer::scene_document::{
     MAX_SCENE_NAME_BYTES, SCENE_FORMAT_VERSION, SceneCamera, SceneDocument, export_scene,
     import_scene,
@@ -49,6 +50,29 @@ fn sample_view() -> ViewRecord {
         color_min: -1.5,
         color_max: 4.5,
         show_grid: false,
+        probes: ProbeSet {
+            points: vec![
+                PointProbe::new(
+                    Vec3::new(0.25, -0.5, 0.0),
+                    Some(SeedAnchor {
+                        axis: PlaneAxis::Z,
+                        index: 2,
+                        u: 0.25,
+                        v: -0.5,
+                    }),
+                )
+                .expect("valid test point probe"),
+            ],
+            lines: vec![
+                LineProbe::new(
+                    Vec3::new(-1.0, 0.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    None,
+                    Vec::new(),
+                )
+                .expect("valid test line probe"),
+            ],
+        },
         ..ViewRecord::default()
     }
 }
@@ -110,6 +134,22 @@ fn scene_round_trips_through_json() {
     assert!(ramp.reversed);
     assert_eq!(ramp.stops.len(), 2);
     assert_eq!(restored.parameters, sample_parameters());
+    assert_eq!(restored.view.probes, sample_view().probes);
+    assert_eq!(restored.view.probes.points.len(), 1);
+    assert_eq!(restored.view.probes.lines.len(), 1);
+}
+
+#[test]
+fn legacy_scene_without_probes_restores_no_probes() {
+    let json = sample_document().to_json().expect("valid scene serializes");
+    let mut value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    value["view"]
+        .as_object_mut()
+        .expect("view is an object")
+        .remove("probes");
+    let legacy = serde_json::to_string(&value).expect("re-serializes");
+    let restored = SceneDocument::from_json(&legacy).expect("legacy scene parses");
+    assert!(restored.view.probes.is_empty());
 }
 
 #[test]
