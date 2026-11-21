@@ -87,7 +87,7 @@ impl VfApp {
         } else {
             AnimationEligibility::from_state(&self.state).reason
         };
-        egui::Panel::top("top_bar").show(ui, |ui| {
+        let top_response = egui::Panel::top("top_bar").show(ui, |ui| {
             let (action, changed) = if plan.compact_top_bar {
                 top_bar::show_compact_with_plot_kind_history_bindings(
                     ui,
@@ -118,6 +118,7 @@ impl VfApp {
                 self.apply_menu_action(action, ctx);
             }
         });
+        self.record_tour_panel(PanelId::TopBar, top_response.response.rect);
         if style_changed {
             style_panel::apply(ui.ctx(), &self.style);
         }
@@ -128,7 +129,7 @@ impl VfApp {
         // toggle. Field presets load from the grouped Presets panel. Every
         // edit goes through a viewmodel setter, which owns parsing, clamping
         // and the dirty flag.
-        egui::Panel::top("formula_bar").show(ui, |ui| {
+        let formula_response = egui::Panel::top("formula_bar").show(ui, |ui| {
             crate::ui::formula_bar::show(
                 ui,
                 &mut self.state,
@@ -142,6 +143,7 @@ impl VfApp {
                 crate::ui::transport::show(ui, &mut self.clock, &self.state, false);
             }
         });
+        self.record_tour_panel(PanelId::FormulaBar, formula_response.response.rect);
     }
 
     /// Apply the formula bar's one-shot "Open Sources"/"Open induction"
@@ -352,6 +354,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Controls, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.controls_width = width;
             }
@@ -407,6 +410,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Sources, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.sources_width = width;
             }
@@ -438,6 +442,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Induction, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.induction_width = width;
             }
@@ -471,6 +476,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Ode, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.ode_width = width;
             }
@@ -505,6 +511,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Materials, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.materials_width = width;
             }
@@ -539,6 +546,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Maxwell, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.maxwell_width = width;
             }
@@ -1107,6 +1115,7 @@ impl VfApp {
                                 self.presets.show(ui, &mut self.camera, &mut self.state);
                         });
                 });
+            self.record_tour_panel(PanelId::Presets, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
                 self.layout.presets_width = width;
             }
@@ -1143,6 +1152,7 @@ impl VfApp {
                                 .show(ui, &mut self.state, &mut self.profiles, false);
                         });
                 });
+            self.record_tour_panel(PanelId::Appearance, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
                 self.layout.appearance_width = width;
             }
@@ -1183,6 +1193,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_panel(PanelId::Interaction, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Right) {
                 self.layout.interaction_width = width;
             }
@@ -1287,9 +1298,10 @@ impl VfApp {
             }
         }
 
-        egui::Panel::bottom("status_bar").show(ui, |ui| {
+        let status_response = egui::Panel::bottom("status_bar").show(ui, |ui| {
             crate::ui::status_bar::show(ui, &self.status, self.layout_mode);
         });
+        self.record_tour_panel(PanelId::StatusBar, status_response.response.rect);
 
         // Ticket 53: compact bottom chrome registers after the status bar and
         // before the central viewport, so the viewport reflows above it and the
@@ -1455,7 +1467,7 @@ impl VfApp {
         let mut material_action = None;
         let mut maxwell_action = None;
         let controls_shown = sheet == SheetState::Controls;
-        egui::Panel::bottom("compact_sheet")
+        let sheet_response = egui::Panel::bottom("compact_sheet")
             .exact_size(height)
             .show(ui, |ui| {
                 ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
@@ -1595,6 +1607,25 @@ impl VfApp {
                     SheetState::None => {}
                 });
             });
+
+        let sheet_panel = match sheet {
+            SheetState::Controls => Some(PanelId::Controls),
+            SheetState::Presets => Some(PanelId::Presets),
+            SheetState::Appearance => Some(PanelId::Appearance),
+            SheetState::Interaction => Some(PanelId::Interaction),
+            SheetState::Sources => Some(PanelId::Sources),
+            SheetState::Induction => Some(PanelId::Induction),
+            SheetState::Ode => Some(PanelId::Ode),
+            SheetState::Materials => Some(PanelId::Materials),
+            SheetState::Maxwell => Some(PanelId::Maxwell),
+            #[cfg(not(target_arch = "wasm32"))]
+            SheetState::Cas | SheetState::None => None,
+            #[cfg(target_arch = "wasm32")]
+            SheetState::None => None,
+        };
+        if let Some(panel) = sheet_panel {
+            self.record_tour_panel(panel, sheet_response.response.rect);
+        }
 
         if close {
             self.sheet.close();

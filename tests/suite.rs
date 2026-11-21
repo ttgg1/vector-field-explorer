@@ -188,6 +188,7 @@ mod streamlines_test;
 mod svg_export_test;
 mod test_layout_test;
 mod top_bar_test;
+mod tour_overlay_test;
 mod tour_test;
 mod ui_preset_test;
 mod ui_style_panel_test;

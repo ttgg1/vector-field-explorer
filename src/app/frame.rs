@@ -31,6 +31,7 @@ impl eframe::App for VfApp {
         // top: the same statement order as the pre-split `ui` body.
         let ctx = ui.ctx().clone();
         let domain_before = self.frame_input(&ctx);
+        self.prepare_tour_frame();
         self.frame_chrome(ui, &ctx, domain_before);
         // Chrome setters (formula bar 2D/3D, presets, CAS, future plot panel)
         // can change the plot kind. Reconcile and release capture again before
@@ -42,6 +43,9 @@ impl eframe::App for VfApp {
         self.frame_status_bar(ui);
         self.frame_viewport(ui, frame);
         self.frame_overlays(ui);
+        // The guided tour is painted last so its card is never hidden by the
+        // help overlay or an open dialog.
+        self.frame_tour_overlay(&ctx);
         // Issue #86 slice A2: one driver pass after the UI has had its say.
         self.drive_history(&ctx);
     }

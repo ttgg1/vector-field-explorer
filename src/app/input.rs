@@ -15,6 +15,12 @@ impl VfApp {
     /// the clock, camera keys, and the help keys. Captures the domain before
     /// anything can edit it so the camera can follow a moved box this frame.
     pub(super) fn frame_input(&mut self, ctx: &egui::Context) -> Domain {
+        // #99 slice B: the guided tour owns Enter/Right, Left and Escape before
+        // any menu, viewport or camera handler sees them. A focused text field
+        // keeps every key, so editing is never interrupted.
+        self.handle_tour_keys(ctx);
+        self.sync_tour_snapshot();
+
         // Screenshot completions arrive on a channel from the save thread; pick
         // them up here so the toast reflects the latest attempt this frame.
         self.screenshot.tick(Instant::now());
@@ -304,6 +310,10 @@ impl VfApp {
             menu::SideEffect::OpenAppearance => self.appearance_open = true,
             menu::SideEffect::ShowAbout => self.about_open = true,
             menu::SideEffect::ShowHelp => self.help_open = true,
+            menu::SideEffect::StartTour => {
+                self.start_or_restart_tour();
+                self.sync_tour_snapshot();
+            }
             // The capture itself happens in the viewport, where this frame's
             // rect and camera are known.
             menu::SideEffect::Screenshot => self.request_png_export(),
@@ -383,6 +393,10 @@ impl VfApp {
         let context = self.view_context();
         self.orbit =
             view_command::apply_view_command_with_fly(self.orbit, &mut self.fly, context, command);
+        if command == ViewCommand::Fit {
+            // The viewport tour stop waits on a real Fit (see `tour_control_value`).
+            self.camera_fit_generation = self.camera_fit_generation.wrapping_add(1);
+        }
         if matches!(command, ViewCommand::Reset | ViewCommand::Fit) {
             self.presets.clear_active();
         }
