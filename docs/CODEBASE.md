@@ -70,14 +70,19 @@ The field is formula-driven:
 Native `cli` configuration exposes the pure `output_frame` seam implemented in
 `src/cli_scene.rs`. Its `OutputFrame` owns output dimensions, camera transforms,
 and straight-alpha sRGB/linear background values for both export backends;
-`PreparedScene` pairs that frame with renderer-ready `SceneGPU`. The
-`app::object_scene_for_state` mapping feeds the live viewport and the animation
-snapshot (the CLI animation reaches it through `AnimationSnapshot::from_parts`),
-so a Sources/Induction state has one object count everywhere. The mapping is
-shared, but CLI PNG and CLI animation exports do not yet composite those objects
-into their output; that parity work is tracked by issue #192. Geometry,
-camera applicability and background conversion are covered by
-`tests/cli_scene_test.rs`. The same module's `prepare_scene` preflights an indexed
+`PreparedScene` pairs that frame with renderer-ready `SceneGPU` plus the mapped
+`objects: Option<Arc<MeshScene>>` and committed `object_style`. The
+`app::object_scene_for_state` mapping feeds the live viewport, the animation
+snapshot (the CLI animation reaches it through `AnimationSnapshot::from_parts`)
+and the CLI still scene, so a Sources/Induction state has one object count
+everywhere. `prepare_scene_inner` stores `None` when the mapped scene has no
+objects, so a Formula-mode PNG keeps the existing no-objects capture
+byte-identical; a non-empty scene composites through
+`render_offscreen_with_objects` with the committed Solid/Wireframe style. The
+animation session forwards `AnimationFrame.object_scene`/`object_style` instead
+of the live state. The SVG path ignores both fields and keeps its neutral
+blueprint. Geometry, camera applicability and background conversion are covered
+by `tests/cli_scene_test.rs`. The same module's `prepare_scene` preflights an indexed
 f64 time schedule before seeded particle spawn/advection, then samples the final
 f32 endpoint once through `State::snapshot`, composes references onto its flow
 lines, and builds/sorts particle trails and the 3D combined arrow/dot stream.
@@ -510,7 +515,9 @@ and persistence sentinels through the wired binary.
 **Purpose / API.** `cli::scene_to_cli_svg(&PreparedScene)` returns a 2D SVG or
 rejects 3D before serialization, without creating a GPU adapter or device.
 
-**Invariants.** Uses the prepared frame and instance order. Flat arrow shaft/head
+**Invariants.** Uses the prepared frame and instance order and never reads
+`PreparedScene.objects`/`object_style`; those belong to the raster captures.
+Flat arrow shaft/head
 and headless Streamline geometry follow `shaders.arrow2d.wgsl`; line/trail widths
 and particle radii remain world-space quantities. Every polygon is projected
 through the shared view-projection and clipped to the WebGPU frustum before
@@ -528,17 +535,22 @@ portrait/landscape fit, deterministic bytes, no raster image, and 3D rejection.
 **Purpose / API.** `cli::render_offscreen(&PreparedScene)` requests a headless
 wgpu adapter/device and returns packed RGBA8. `HeadlessRenderSession::new`
 initializes one adapter/device/`DrawState` and `render_frame` can paint many
-scenes; `render_offscreen` remains the one-shot still-PNG wrapper. It does not
-create a surface, window, app or persistence state. PNG encoding/writing belongs
-to CLI dispatch. `AnimationRenderSession` is the doc-hidden frame seam used by
-CLI animation; `HeadlessRenderSession` implements it.
+scenes; `render_offscreen` remains the one-shot still-PNG wrapper. `render_frame`
+takes the optional mapped objects and the committed `ObjectStyle`, sets the
+style on the draw state and calls `render_offscreen_with_objects`; `None` keeps
+the existing no-objects path. `AnimationRenderSession` forwards each frame's
+`object_scene`/`object_style`. It does not create a surface, window, app or
+persistence state. PNG encoding/writing belongs to CLI dispatch.
 
 **Invariants.** Dimensions, packed/padded pixel bytes, storage sizes, vertex
 counts and adapter/device limits are checked for every frame before resource
 allocation. A streaming session requests the adapter's storage/buffer maxima so
 later frames are not limited by the first frame, then checks each frame against
-the device's limits; the one-shot still wrapper keeps its original minimal
-request and bytes. No optional device features are requested. The target must
+the device's limits; the one-shot still wrapper sizes to its frame, readback and
+any carried object vertex buffers. Both request the vertex/sampler/heatmap
+limits `DrawState` unconditionally uses, and an object-carrying still also sizes
+for the static primitive vertex buffer. No optional device features are
+requested. The target must
 support rendering, blending and copying `Rgba8UnormSrgb`; no format or CPU/noop
 fallback is allowed. The existing `DrawState` paints the prepared frame with its
 linear clear color; readback is display-encoded sRGB. GPU validation/internal/OOM
@@ -552,12 +564,15 @@ the actual device request once and preserves its original cause in a contextual
 
 **Pinned by.** `tests/cli_gpu_test.rs` covers invalid dimensions, reduced texture,
 readback/storage/binding limits, injected device-request failure, exactly-once
-acquisition success/failure, and actual map callback failure.
+acquisition success/failure, actual map callback failure, and the env-gated
+`VFE_OBJECT_GPU_PROBE=1` CLI PNG object/style probe (non-clear pixels and a
+Wireframe/Solid difference; ordinary runs print `GPU not requested`).
 `tests/cli_animation_test.rs` pins that one animation export opens exactly one
 session through the injected factory and streams the scheduled frame count.
 `scripts/test-cli-gpu.sh` runs isolated displayless workers for
 injected adapter absence, real 2D/3D dimensions/field content, PNG decoding, exact
-clear/linear-alpha-blend channel bytes, and software Vulkan when installed.
+clear/linear-alpha-blend channel bytes, and the `VFE_OBJECT_GPU_PROBE=1` CLI PNG
+object/style probe, plus software Vulkan when installed.
 The shared suite never mutates display environment; ordinary worker returns
 without GPU execution are not runtime proof.
 

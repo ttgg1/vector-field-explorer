@@ -8,7 +8,7 @@ use serde::Deserialize;
 mod scene;
 pub use scene::{
     OutputFrame, PreparedScene, output_frame, prepare_animation_snapshot, prepare_scene,
-    prepare_scene_with_styles,
+    prepare_scene_with_state, prepare_scene_with_styles,
 };
 
 #[path = "cli_svg.rs"]

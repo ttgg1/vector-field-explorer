@@ -10,6 +10,7 @@ use crate::{
     camera::OrbitCamera,
     fly_camera::FlyCamera,
     layer_style::LayerStyles,
+    object_scene::{MeshScene, ObjectStyle},
     particles::{self, AdvectSettings, Particles},
     renderer::{SceneGPU, combined_instances, sort_lines_back_to_front, sort_scene_back_to_front},
     viewmodel::State,
@@ -34,11 +35,17 @@ pub struct OutputFrame {
 pub struct PreparedScene {
     pub scene: SceneGPU,
     pub frame: OutputFrame,
+    /// Mapped source/induction bodies for the raster backends. `None` when the
+    /// mapped scene is empty, so the existing no-objects path stays
+    /// byte-identical. SVG ignores this field.
+    pub objects: Option<Arc<MeshScene>>,
+    /// The committed object style used by the CLI render. SVG ignores it.
+    pub object_style: ObjectStyle,
 }
 
 /// Prepare the renderer-ready final scene for either backend.
 pub fn prepare_scene(options: &CliOptions, frame: OutputFrame) -> Result<PreparedScene, CliError> {
-    prepare_scene_inner(options, frame, None)
+    prepare_scene_inner(options, frame, None, None)
 }
 
 /// Prepare the same scene as [`prepare_scene`] with an explicit layer-style
@@ -49,18 +56,32 @@ pub fn prepare_scene_with_styles(
     frame: OutputFrame,
     styles: &LayerStyles,
 ) -> Result<PreparedScene, CliError> {
-    prepare_scene_inner(options, frame, Some(styles))
+    prepare_scene_inner(options, frame, Some(styles), None)
+}
+
+/// Prepare a scene from an explicit [`State`] instead of the CLI's formula-only
+/// state. The CLI configuration has no Sources/Induction or object-style
+/// fields, so this doc-hidden seam is the only observable path for the object
+/// carrier; production export still builds its state from [`CliOptions`].
+#[doc(hidden)]
+pub fn prepare_scene_with_state(
+    options: &CliOptions,
+    frame: OutputFrame,
+    state: State,
+) -> Result<PreparedScene, CliError> {
+    prepare_scene_inner(options, frame, None, Some(state))
 }
 
 fn prepare_scene_inner(
     options: &CliOptions,
     frame: OutputFrame,
     styles: Option<&LayerStyles>,
+    state: Option<State>,
 ) -> Result<PreparedScene, CliError> {
     validate_effective(options)?;
     // Validate every interval before allocating or advancing a particle cloud.
     let (steps, endpoint) = simulation_schedule(options)?;
-    let mut state = cli_state(options);
+    let mut state = state.unwrap_or_else(|| cli_state(options));
     let styles = styles.copied().unwrap_or(*state.layer_styles());
     let cloud = particle_cloud(&mut state, options, &steps);
     state.time = endpoint;
@@ -118,7 +139,17 @@ fn prepare_scene_inner(
     } else {
         sort_scene_back_to_front(Arc::make_mut(&mut scene.arrows).as_mut_slice(), &frame.view);
     }
-    Ok(PreparedScene { scene, frame })
+    let mapped = crate::app::object_scene_for_state(&state);
+    // Only a non-empty mapping selects the object path; an empty scene keeps
+    // the existing no-objects capture byte-identical.
+    let objects = (!mapped.objects().is_empty()).then(|| Arc::new(mapped));
+    let object_style = state.object_style();
+    Ok(PreparedScene {
+        scene,
+        frame,
+        objects,
+        object_style,
+    })
 }
 
 /// Capture the Formula/particle state for a CLI animation.

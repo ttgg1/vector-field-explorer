@@ -6,6 +6,7 @@ use glam::{Mat4, Vec3};
 
 use super::{CliError, PreparedScene};
 use crate::animation_scene::AnimationFrame;
+use crate::object_scene::{MeshPrimitive, MeshScene, ObjectStyle, VERTEX_BYTES};
 use crate::renderer::{
     ArrowInstanceGPU, DrawState, Globals, LineInstanceGPU, OffscreenError, SceneGPU,
 };
@@ -21,6 +22,49 @@ pub fn offscreen_error_to_cli(error: OffscreenError) -> CliError {
 struct ResourceSizes {
     readback: u64,
     storage: u64,
+}
+
+/// The largest static primitive vertex buffer the object pass uploads once.
+fn object_vertex_bytes() -> u64 {
+    MeshPrimitive::ALL
+        .iter()
+        .map(|primitive| primitive.vertices())
+        .max()
+        .unwrap_or(0) as u64
+        * VERTEX_BYTES as u64
+}
+
+/// Give the headless device the resources `DrawState` always creates (the
+/// heatmap pipeline) plus the object pass it may composite. Each value is
+/// either the exact measured requirement or deliberate headroom, and every one
+/// stays below `Limits::downlevel_webgl2_defaults()` so an adapter that already
+/// meets the downlevel floor is never excluded. They do not change any
+/// rendering output.
+///
+/// - `max_bindings_per_bind_group = 4`: exact. Bindings must be lower than this
+///   limit, and the object composite layout uses binding indices 2 and 3; the
+///   heatmap layout uses three entries at indices 0..=2.
+/// - `max_vertex_buffers = 2`: exact. The object pass binds one mesh and one
+///   instance buffer; the heatmap pass binds one.
+/// - `max_vertex_attributes = 11`: exact. Three mesh attributes plus eight
+///   instance attributes.
+/// - `max_vertex_buffer_array_stride = 128`: exact. `ObjectInstance` is 128
+///   bytes per instance.
+/// - `max_sampled_textures_per_shader_stage = 1`: exact floor. Each pass's
+///   fragment stage samples exactly one texture.
+/// - `max_samplers_per_shader_stage = 1`: exact floor. Each pass's fragment
+///   stage uses exactly one sampler.
+/// - `max_inter_stage_shader_variables = 8`: headroom. The object vertex stage
+///   passes four variables; the extra four leave room for future varyings
+///   while staying under the WebGL2 default of 15.
+fn request_renderer_limits(limits: &mut wgpu::Limits) {
+    limits.max_bindings_per_bind_group = 4;
+    limits.max_vertex_buffers = 2;
+    limits.max_vertex_attributes = 11;
+    limits.max_vertex_buffer_array_stride = 128;
+    limits.max_sampled_textures_per_shader_stage = 1;
+    limits.max_samplers_per_shader_stage = 1;
+    limits.max_inter_stage_shader_variables = 8;
 }
 
 /// Check the renderer's actual resource requirements without allocating a GPU.
@@ -194,7 +238,8 @@ impl HeadlessRenderSession {
         // A streaming session outlives one scene, so request the adapter's
         // storage/buffer maxima instead of sizing to a first frame that later
         // frames may exceed. Each frame is still checked against the device
-        // limits. The still wrapper keeps its original minimal request.
+        // limits. The still wrapper sizes to its frame and any objects it
+        // carries.
         let mut required_limits =
             wgpu::Limits::downlevel_webgl2_defaults().using_alignment(limits.clone());
         required_limits.max_texture_dimension_1d = 1;
@@ -202,34 +247,40 @@ impl HeadlessRenderSession {
         required_limits.max_texture_dimension_3d = 1;
         required_limits.max_texture_array_layers = 1;
         required_limits.max_bind_groups = 1;
-        required_limits.max_bind_groups_plus_vertex_buffers = 1;
-        required_limits.max_bindings_per_bind_group = 2;
+        // Exact: one bind group plus the object pass's two vertex buffers.
+        required_limits.max_bind_groups_plus_vertex_buffers = 3;
         required_limits.max_dynamic_uniform_buffers_per_pipeline_layout = 0;
         required_limits.max_dynamic_storage_buffers_per_pipeline_layout = 0;
-        required_limits.max_sampled_textures_per_shader_stage = 0;
-        required_limits.max_samplers_per_shader_stage = 0;
         required_limits.max_storage_buffers_per_shader_stage = 1;
         required_limits.max_storage_textures_per_shader_stage = 0;
         required_limits.max_uniform_buffers_per_shader_stage = 1;
         required_limits.max_uniform_buffer_binding_size = size_of::<Globals>() as u64;
         required_limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size;
         required_limits.max_buffer_size = limits.max_buffer_size;
-        required_limits.max_vertex_buffers = 0;
-        required_limits.max_vertex_attributes = 0;
-        required_limits.max_vertex_buffer_array_stride = 0;
-        required_limits.max_inter_stage_shader_variables = 4;
         required_limits.max_color_attachments = 1;
         required_limits.max_color_attachment_bytes_per_sample = 8;
-        required_limits.max_buffers_and_acceleration_structures_per_shader_stage = 2;
+        // One uniform and one storage buffer per shader stage are used; two
+        // spare are deliberate headroom within the WebGL2 floor of 19.
+        required_limits.max_buffers_and_acceleration_structures_per_shader_stage = 4;
+        request_renderer_limits(&mut required_limits);
         if let Some(prepared) = initial {
             let sizes = still_sizes.expect("sizes were validated above");
-            required_limits.max_texture_dimension_2d =
-                prepared.frame.width.max(prepared.frame.height);
+            // `DrawState::new` always allocates the resident heatmap texture,
+            // even for a small still frame, so the heatmap side is a floor.
+            required_limits.max_texture_dimension_2d = prepared
+                .frame
+                .width
+                .max(prepared.frame.height)
+                .max(crate::renderer::MAX_HEATMAP_SIDE);
             required_limits.max_storage_buffer_binding_size = sizes.storage;
             required_limits.max_buffer_size = sizes
                 .readback
                 .max(sizes.storage)
                 .max(size_of::<Globals>() as u64);
+            if prepared.objects.is_some() {
+                required_limits.max_buffer_size =
+                    required_limits.max_buffer_size.max(object_vertex_bytes());
+            }
         }
         let mut unsupported = Vec::new();
         required_limits.check_limits_with_fail_fn(&limits, false, |name, requested, supported| {
@@ -279,9 +330,16 @@ impl HeadlessRenderSession {
     }
 
     /// Render packed, display-encoded RGBA8 without a surface or GUI.
+    ///
+    /// `objects` is the already-mapped body scene to composite first (`None`
+    /// keeps the existing no-objects path); `object_style` is the committed
+    /// Solid/Wireframe choice for this capture.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_frame(
         &mut self,
         scene: &SceneGPU,
+        objects: Option<&Arc<MeshScene>>,
+        object_style: ObjectStyle,
         view_proj: Mat4,
         camera_pos: Vec3,
         width: u32,
@@ -295,10 +353,11 @@ impl HeadlessRenderSession {
         let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        self.draw.set_object_style(object_style);
         let result = self
             .draw
-            .render_offscreen(
-                device, queue, scene, view_proj, camera_pos, width, height, clear,
+            .render_offscreen_with_objects(
+                device, queue, scene, objects, view_proj, camera_pos, width, height, clear,
             )
             .map_err(offscreen_error_to_cli);
         for (stage, scope) in [
@@ -343,8 +402,12 @@ impl AnimationRenderSession for HeadlessRenderSession {
         height: u32,
         clear: [f64; 4],
     ) -> Result<Vec<u8>, CliError> {
+        // An empty mapped scene keeps the byte-identical no-objects path.
+        let objects = (!frame.object_scene.objects().is_empty()).then_some(&frame.object_scene);
         self.render_frame(
             &frame.scene,
+            objects,
+            frame.object_style,
             frame.view_proj,
             frame.eye,
             width,
@@ -365,6 +428,8 @@ pub fn render_offscreen(prepared: &PreparedScene) -> Result<Vec<u8>, CliError> {
     let mut session = HeadlessRenderSession::for_scene(prepared)?;
     session.render_frame(
         &prepared.scene,
+        prepared.objects.as_ref(),
+        prepared.object_style,
         prepared.frame.view_proj,
         prepared.frame.eye,
         prepared.frame.width,
