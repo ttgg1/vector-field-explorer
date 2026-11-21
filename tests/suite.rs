@@ -60,6 +60,7 @@ mod color_mapping_test;
 mod color_ramp_test;
 mod colormap_test;
 mod custom_density_test;
+mod density_state_test;
 mod domain_test;
 mod dot_billboard_test;
 mod download_link_test;

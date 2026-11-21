@@ -27,6 +27,10 @@ use super::streamlines::{
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorSample, ColorStats};
 use crate::color_ramp::{ColorRamp, ScaleMode};
+use crate::custom_density::{
+    ChargeReport, ContinuityReport, DensityFamily, DensitySpec, DiagnosticsStatus, charge_report,
+    continuity_report,
+};
 use crate::induction::{
     InductionPrepared, InductionSampling, InductionScene, MAX_INDUCTION_DENSITY_2D,
     MAX_INDUCTION_DENSITY_3D, induction_key, prepare_induction, sample_induction,
@@ -101,6 +105,8 @@ pub const DEFAULT_SCALAR_TEXT_COLOR: [f32; 4] = [0.72, 0.72, 0.72, 1.0];
 /// Quantum of the visibility-gated probe report clock (issue #95 slice B).
 /// Reports refresh at most once per 100 ms while the section is open.
 pub const REPORT_REFRESH_SECONDS: f64 = 0.1;
+/// Document-state cap on custom densities (issue #96 slice B1).
+pub const MAX_DENSITIES: usize = 4;
 /// Wireframe alpha multiplier for probe surfaces and loops.
 const PROBE_WIREFRAME_ALPHA: f32 = 0.6;
 /// Segments in one probe wireframe ring.
@@ -400,6 +406,16 @@ impl ProbeField for ProbeAdapter {
     }
 }
 
+/// One custom density's last explicitly requested diagnostics (issue #96
+/// slice B1). `charge` is present only for a volume charge and `continuity`
+/// only for a steady current; an unsupported report is absent, never a zero.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DensityReportRow {
+    pub spec_index: usize,
+    pub charge: Option<ChargeReport>,
+    pub continuity: Option<ContinuityReport>,
+}
+
 /// The state the user can touch: what field, how dense, how coloured, how
 /// projected, from where.
 #[derive(Clone)]
@@ -498,6 +514,17 @@ pub struct State {
     /// [`State::set_gradient`] replaces it in response to an edit; startup
     /// restore assigns directly.
     pub gradient: Option<GradientSpec>,
+    /// Durable bounded custom densities (issue #96 slice B1), capped by
+    /// [`MAX_DENSITIES`]. Only [`State::commit_densities`], reset and the
+    /// startup restore replace the list; they never feed the sampled E/B
+    /// fields in this slice.
+    pub(crate) densities: Vec<DensitySpec>,
+    /// The last explicitly requested diagnostics, rebuilt only by
+    /// [`State::refresh_density_reports`] while the section is open.
+    density_reports: Vec<DensityReportRow>,
+    /// Counts explicit report refreshes; the UI test seam pins that ordinary
+    /// frames never sample.
+    density_report_generation: u64,
     /// The Scalar view section's grid side (issue #92 slice B1). Runtime
     /// configuration, not document state; the request key invalidates the
     /// cached records when it changes.
@@ -874,6 +901,9 @@ impl State {
             return Ok(());
         }
         self.parameters = next;
+        // A parameter change invalidates every stored density estimate; the
+        // next explicit refresh re-runs both diagnostics at most once.
+        self.density_reports.clear();
         let parsed = FieldExpr::parse_with_parameters(self.formula.as_str(), &self.parameters);
         match parsed {
             Ok(field) => {
@@ -890,6 +920,124 @@ impl State {
         }
         self.mark_dirty();
         Ok(())
+    }
+
+    /// The committed custom density list in document order.
+    pub fn densities(self: &State) -> &[DensitySpec] {
+        &self.densities
+    }
+
+    /// Atomically replace the custom density list after validating every
+    /// entry: the cap, unique names, support geometry, formula and sample
+    /// budget. A rejected list leaves the previous list, the reports and the
+    /// dirty flag untouched; an equal list is a validated no-op with no dirtying
+    /// and no report invalidation. A real change dirties the scene once and
+    /// drops the stale reports so the UI computes them on demand.
+    pub fn commit_densities(self: &mut State, next: Vec<DensitySpec>) -> Result<(), String> {
+        if next.len() > MAX_DENSITIES {
+            return Err(format!(
+                "at most {MAX_DENSITIES} custom densities are allowed; found {}",
+                next.len()
+            ));
+        }
+        let mut names = std::collections::HashSet::new();
+        for spec in &next {
+            spec.validate(&self.parameters)?;
+            if !names.insert(spec.name.as_str()) {
+                return Err(format!(
+                    "custom density names must be unique; duplicate \"{}\"",
+                    spec.name
+                ));
+            }
+        }
+        if next == self.densities {
+            return Ok(());
+        }
+        self.densities = next;
+        self.density_reports.clear();
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Clear the custom density list. An already-empty list is a no-op that
+    /// does not dirty the scene; a real clear requests one rebuild.
+    pub fn reset_densities(self: &mut State) {
+        if self.densities.is_empty() {
+            return;
+        }
+        self.densities.clear();
+        self.density_reports.clear();
+        self.mark_dirty();
+    }
+
+    /// Install a sanitised startup density list without validating, dirtying
+    /// or computing reports. The caller filters against the already restored
+    /// parameter set; stale report rows are dropped.
+    pub(crate) fn restore_densities(self: &mut State, next: Vec<DensitySpec>) {
+        self.densities = next;
+        self.density_reports.clear();
+    }
+
+    /// The last explicitly computed density diagnostics, in document order.
+    pub fn density_reports(self: &State) -> &[DensityReportRow] {
+        &self.density_reports
+    }
+
+    /// Count of explicit report refreshes. Ordinary frames never call the
+    /// sampler, so this stays fixed until the user asks for an estimate.
+    pub fn density_report_generation(self: &State) -> u64 {
+        self.density_report_generation
+    }
+
+    /// Rebuild custom density diagnostics on demand at the mirrored clock.
+    ///
+    /// Charge families use [`charge_report`]; a surface-charge placeholder has
+    /// no volume total and therefore no charge row. A steady current uses
+    /// [`continuity_report`]. A failed call is stored as an explicit
+    /// `Unresolved` report rather than a silent zero. Reports never dirty the
+    /// scene.
+    pub fn refresh_density_reports(self: &mut State) {
+        let time = f64::from(self.time);
+        let mut rows = Vec::with_capacity(self.densities.len());
+        for (spec_index, spec) in self.densities.iter().enumerate() {
+            let mut row = DensityReportRow {
+                spec_index,
+                charge: None,
+                continuity: None,
+            };
+            match spec.family {
+                DensityFamily::VolumeCharge => {
+                    row.charge = Some(charge_report(spec, &self.parameters, time).unwrap_or_else(
+                        |reason| ChargeReport {
+                            total: f64::NAN,
+                            min: f64::NAN,
+                            max: f64::NAN,
+                            sign_changes: 0,
+                            samples: 0,
+                            status: DiagnosticsStatus::Unresolved { reason },
+                        },
+                    ));
+                }
+                DensityFamily::SurfaceCharge => {
+                    // Slice A has no surface integration and no volume total.
+                }
+                DensityFamily::SteadyCurrent => {
+                    row.continuity = Some(
+                        continuity_report(spec, &self.parameters, time).unwrap_or_else(|reason| {
+                            ContinuityReport {
+                                div_j_min: f64::NAN,
+                                div_j_max: f64::NAN,
+                                worst_point: None,
+                                status: DiagnosticsStatus::Unresolved { reason },
+                            }
+                        }),
+                    );
+                }
+            }
+            rows.push(row);
+        }
+        self.density_reports = rows;
+        self.density_report_generation = self.density_report_generation.wrapping_add(1);
     }
 
     /// The committed named-parameter value, if it exists.
@@ -1313,6 +1461,9 @@ impl State {
             probe_reports: ProbeReportsCache::default(),
             comparison_series: ComparisonSet::default(),
             gradient: None,
+            densities: Vec::new(),
+            density_reports: Vec::new(),
+            density_report_generation: 0,
             scalar_grid_side: DEFAULT_SCALAR_GRID_SIDE,
             scalar_contour_levels: DEFAULT_SCALAR_CONTOUR_LEVELS,
             show_scalar_heatmap: false,

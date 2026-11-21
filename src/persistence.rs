@@ -19,6 +19,7 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::colormap::Colormap;
+use crate::custom_density::{DensityFamily, DensitySpec, DensitySupport, SupportKind};
 use crate::field_probe::{
     CirculationLoop, GaussianSurface, LoopKind, MAX_LOOPS, MAX_SURFACES, SurfaceKind,
 };
@@ -54,7 +55,9 @@ use crate::sources::FieldFamily;
 use crate::ui::layout::LayoutState;
 use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
-use crate::viewmodel::{ArrowLengthMode, LeftClickAction, State, StreamlineSeedMode};
+use crate::viewmodel::{
+    ArrowLengthMode, LeftClickAction, MAX_DENSITIES, State, StreamlineSeedMode,
+};
 use crate::viewport_style::ViewportStyle;
 use glam::{DVec3, Vec3};
 
@@ -461,6 +464,103 @@ fn probe_family_available(state: &State, family: FieldFamily) -> bool {
     }
 }
 
+/// Wire form of one custom density. `glam` has no serde feature in this crate,
+/// so the support vectors are stored as plain arrays, matching the probe record
+/// style. The model types stay free of persistence attributes. The family and
+/// support kind are stable tokens; an unknown token makes the whole entry
+/// unrepresentable, so [`DensitySpecRecord::to_spec`] returns `None` and the
+/// restore `filter_map` drops it instead of failing the settings envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DensitySpecRecord {
+    pub name: String,
+    pub family: String,
+    pub support: DensitySupportRecord,
+    pub formula: String,
+    pub samples: u32,
+    pub softening: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DensitySupportRecord {
+    pub kind: String,
+    pub center: [f32; 3],
+    pub axis: [f32; 3],
+    pub size: [f32; 3],
+}
+
+fn density_family_label(family: DensityFamily) -> &'static str {
+    match family {
+        DensityFamily::VolumeCharge => "volume_charge",
+        DensityFamily::SurfaceCharge => "surface_charge",
+        DensityFamily::SteadyCurrent => "steady_current",
+    }
+}
+
+fn density_family_from_label(label: &str) -> Option<DensityFamily> {
+    match label {
+        "volume_charge" => Some(DensityFamily::VolumeCharge),
+        "surface_charge" => Some(DensityFamily::SurfaceCharge),
+        "steady_current" => Some(DensityFamily::SteadyCurrent),
+        _ => None,
+    }
+}
+
+fn support_kind_label(kind: SupportKind) -> &'static str {
+    match kind {
+        SupportKind::Sphere => "sphere",
+        SupportKind::Box => "box",
+        SupportKind::Cylinder => "cylinder",
+    }
+}
+
+fn support_kind_from_label(label: &str) -> Option<SupportKind> {
+    match label {
+        "sphere" => Some(SupportKind::Sphere),
+        "box" => Some(SupportKind::Box),
+        "cylinder" => Some(SupportKind::Cylinder),
+        _ => None,
+    }
+}
+
+impl DensitySpecRecord {
+    /// Flatten one committed density into its stable wire form.
+    pub fn from_spec(spec: &DensitySpec) -> Self {
+        Self {
+            name: spec.name.clone(),
+            family: density_family_label(spec.family).to_string(),
+            support: DensitySupportRecord {
+                kind: support_kind_label(spec.support.kind).to_string(),
+                center: spec.support.center.to_array(),
+                axis: spec.support.axis.to_array(),
+                size: spec.support.size.to_array(),
+            },
+            formula: spec.formula.clone(),
+            samples: spec.samples,
+            softening: spec.softening,
+        }
+    }
+
+    /// Rebuild the model density. An unknown family or support-kind token
+    /// returns `None`; the restore path validates the rest of the record.
+    pub fn to_spec(&self) -> Option<DensitySpec> {
+        let family = density_family_from_label(&self.family)?;
+        let kind = support_kind_from_label(&self.support.kind)?;
+        Some(DensitySpec {
+            name: self.name.clone(),
+            family,
+            support: DensitySupport {
+                kind,
+                center: Vec3::from_array(self.support.center),
+                axis: Vec3::from_array(self.support.axis),
+                size: Vec3::from_array(self.support.size),
+            },
+            formula: self.formula.clone(),
+            samples: self.samples,
+            softening: self.softening,
+        })
+    }
+}
+
 /// The view state the Controls panel edits, in a serde-friendly shape (JSON/RON
 /// arrays instead of glam types). These are the *effective* values from
 /// [`State`], so a restored record reproduces exactly what was on screen.
@@ -599,6 +699,12 @@ pub struct ViewRecord {
     /// on older records, which restore as no gradient.
     #[serde(default)]
     pub gradient: Option<GradientSpec>,
+    /// Durable custom densities (issue #96 slice B1), at most
+    /// [`MAX_DENSITIES`]. Missing on older records/scenes, which restore as an
+    /// empty list. Unknown family/support-kind tokens and invalid entries drop
+    /// on restore and keep the rest in order.
+    #[serde(default)]
+    pub densities: Vec<DensitySpecRecord>,
     /// What one explicit left click does (ticket 60). Older records did not
     /// carry it; they load as SeedStreamline. An unknown spelling also falls
     /// back to the default instead of failing the whole envelope.
@@ -840,6 +946,11 @@ impl ViewRecord {
             show_scalar_heatmap: state.show_scalar_heatmap(),
             comparison_series: state.comparison_series.clone(),
             gradient: state.gradient.clone(),
+            densities: state
+                .densities()
+                .iter()
+                .map(DensitySpecRecord::from_spec)
+                .collect(),
             left_click_action: state.left_click_action,
             particles: state.particles,
             particle_size: state.particle_size,
@@ -1054,6 +1165,31 @@ impl ViewRecord {
             },
             None => None,
         };
+        // Custom densities are document state (issue #96 slice B1). Assign
+        // directly so the startup seam does not dirty per entry; entries that
+        // fail validation against the already restored parameters drop in
+        // place, the survivors keep their order, and one warning reports the
+        // loss.
+        let stored_densities = self.densities.len();
+        let densities: Vec<DensitySpec> = self
+            .densities
+            .iter()
+            .filter_map(DensitySpecRecord::to_spec)
+            .filter(|spec| spec.validate(&state.parameters).is_ok())
+            .take(MAX_DENSITIES)
+            .collect();
+        if densities.len() != stored_densities {
+            log::warn!(
+                "persisted custom densities dropped {} invalid or excess entr{}",
+                stored_densities - densities.len(),
+                if stored_densities - densities.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            );
+        }
+        state.restore_densities(densities);
         // Issue #83 colour mapping restores directly, not through the setters:
         // startup must not dirty per field, and corrupt values fall back
         // individually so the rest of the record still loads.

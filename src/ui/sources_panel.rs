@@ -9,13 +9,17 @@
 use eframe::egui;
 use glam::DVec3;
 
+use crate::custom_density::{
+    ChargeReport, ContinuityReport, DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus,
+    MAX_SAMPLES, MIN_SAMPLES, SupportKind,
+};
 use crate::object_scene::ObjectStyle;
 use crate::source_scene::{
     MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag,
     SourceSampling, SourceScene, error_message, scene_error_message, validate_source,
 };
 use crate::sources::{MAX_SOURCES, Source, SourceKind};
-use crate::viewmodel::State;
+use crate::viewmodel::{DensityReportRow, MAX_DENSITIES, State};
 
 /// The persistent help line under the object-style pair. It names both modes
 /// and keeps the vector-export boundary explicit.
@@ -119,12 +123,115 @@ impl SourceDraft {
     }
 }
 
+/// One editable custom-density row. `committed` is the last valid spec; the
+/// text and numeric mirrors stay session-only and may be invalid while typed.
+#[derive(Debug, Clone)]
+pub struct DensityDraft {
+    pub committed: DensitySpec,
+    pub name: String,
+    pub family: DensityFamily,
+    pub support_kind: SupportKind,
+    pub center: [f64; 3],
+    pub axis: [f64; 3],
+    pub size: [f64; 3],
+    pub formula: String,
+    pub samples: u32,
+    pub softening: f64,
+    pub error: Option<String>,
+    pub dirty: bool,
+}
+
+impl DensityDraft {
+    fn from_spec(spec: &DensitySpec) -> Self {
+        Self {
+            committed: spec.clone(),
+            name: spec.name.clone(),
+            family: spec.family,
+            support_kind: spec.support.kind,
+            center: spec.support.center.as_dvec3().to_array(),
+            axis: spec.support.axis.as_dvec3().to_array(),
+            size: spec.support.size.as_dvec3().to_array(),
+            formula: spec.formula.clone(),
+            samples: spec.samples,
+            softening: spec.softening,
+            error: None,
+            dirty: false,
+        }
+    }
+
+    /// Rebuild the spec from the mirrors. The caller validates before commit.
+    pub fn spec(&self) -> DensitySpec {
+        DensitySpec {
+            name: self.name.clone(),
+            family: self.family,
+            support: DensitySupport {
+                kind: self.support_kind,
+                center: glam::Vec3::new(
+                    self.center[0] as f32,
+                    self.center[1] as f32,
+                    self.center[2] as f32,
+                ),
+                axis: glam::Vec3::new(
+                    self.axis[0] as f32,
+                    self.axis[1] as f32,
+                    self.axis[2] as f32,
+                ),
+                size: glam::Vec3::new(
+                    self.size[0] as f32,
+                    self.size[1] as f32,
+                    self.size[2] as f32,
+                ),
+            },
+            formula: self.formula.clone(),
+            samples: self.samples,
+            softening: self.softening,
+        }
+    }
+}
+
+impl DensityFamily {
+    fn label(self) -> &'static str {
+        match self {
+            DensityFamily::VolumeCharge => "Volume charge",
+            DensityFamily::SurfaceCharge => "Surface charge",
+            DensityFamily::SteadyCurrent => "Steady current",
+        }
+    }
+
+    fn formula_hint(self) -> &'static str {
+        match self {
+            DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge => "scalar rho(x, y, z, t)",
+            DensityFamily::SteadyCurrent => "Jx, Jy, Jz",
+        }
+    }
+}
+
+impl SupportKind {
+    fn label(self) -> &'static str {
+        match self {
+            SupportKind::Sphere => "Sphere",
+            SupportKind::Box => "Box",
+            SupportKind::Cylinder => "Cylinder",
+        }
+    }
+}
+
 /// Panel-local state: the kind the Add control will create and one draft per
 /// committed scene entry.
 #[derive(Debug)]
 pub struct SourcesPanelState {
     pub add_kind: SourceKindTag,
     pub drafts: Vec<SourceDraft>,
+    /// Session-only custom-density editors (issue #96 slice B1); the committed
+    /// list lives in `State::densities`.
+    pub density_drafts: Vec<DensityDraft>,
+    pub density_error: Option<String>,
+    /// Rows with a continuous (drag/slider) density edit in flight, in the
+    /// order they first changed. Each edit is committed once when the gesture
+    /// ends, so a drag does not validate and re-sample the lattice on every
+    /// frame. A bounded queue rather than one slot keeps a second row's text
+    /// edit in the same frame from displacing an unfinished drag.
+    pub density_pending_commits: Vec<usize>,
 }
 
 impl Default for SourcesPanelState {
@@ -132,6 +239,9 @@ impl Default for SourcesPanelState {
         Self {
             add_kind: SourceKindTag::PointCharge,
             drafts: Vec::new(),
+            density_drafts: Vec::new(),
+            density_error: None,
+            density_pending_commits: Vec::new(),
         }
     }
 }
@@ -150,6 +260,157 @@ impl SourcesPanelState {
         for (draft, entry) in self.drafts.iter_mut().zip(&scene.entries) {
             if !draft.dirty {
                 *draft = SourceDraft::from_entry(entry);
+            }
+        }
+    }
+
+    /// Follow the committed density list. A structural change (add/remove)
+    /// rebuilds every draft; otherwise only non-dirty drafts refresh so invalid
+    /// text survives while the user types.
+    pub fn sync_densities(&mut self, state: &State) {
+        let committed = state.densities();
+        if self.density_drafts.len() != committed.len() {
+            self.density_drafts = committed.iter().map(DensityDraft::from_spec).collect();
+            // Structural changes renumber the rows, so a stale index could
+            // commit one row's mirror onto another. `remove_density` also
+            // cancels the removed row's deferred edit before this runs.
+            self.density_pending_commits.clear();
+            return;
+        }
+        for (draft, spec) in self.density_drafts.iter_mut().zip(committed) {
+            if !draft.dirty {
+                *draft = DensityDraft::from_spec(spec);
+            }
+        }
+    }
+
+    /// Remember a row with an in-flight continuous edit, once. The queue is
+    /// bounded by the document cap so it can never grow without limit.
+    fn queue_pending(&mut self, index: usize) {
+        if self.density_pending_commits.len() >= MAX_DENSITIES
+            || self.density_pending_commits.contains(&index)
+        {
+            return;
+        }
+        self.density_pending_commits.push(index);
+    }
+
+    /// Take the deferred edits in first-changed order, leaving the queue empty.
+    fn take_pending(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.density_pending_commits)
+    }
+
+    /// Drop one row's deferred edit; a text/combo edit on that row already
+    /// commits the whole draft now.
+    fn forget_pending(&mut self, index: usize) {
+        self.density_pending_commits
+            .retain(|&pending| pending != index);
+    }
+
+    /// Add a valid default density unless the document cap is reached. A real
+    /// add commits through the model seam and refreshes reports once.
+    pub fn add_density(&mut self, state: &mut State) -> Option<String> {
+        if state.densities().len() >= MAX_DENSITIES {
+            let message =
+                format!("At most {MAX_DENSITIES} custom densities are allowed; remove one first.");
+            self.density_error = Some(message.clone());
+            return Some(message);
+        }
+        let used: Vec<&str> = state
+            .densities()
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect();
+        let mut serial = state.densities().len() + 1;
+        let name = loop {
+            let candidate = format!("Density {serial}");
+            if !used.contains(&candidate.as_str()) {
+                break candidate;
+            }
+            serial += 1;
+        };
+        let mut next = state.densities().to_vec();
+        next.push(default_density(name));
+        match state.commit_densities(next) {
+            Ok(()) => {
+                self.density_error = None;
+                self.sync_densities(state);
+                state.refresh_density_reports();
+                None
+            }
+            Err(message) => {
+                self.density_error = Some(message.clone());
+                Some(message)
+            }
+        }
+    }
+
+    /// Remove one committed density. An out-of-range index is a no-op.
+    pub fn remove_density(&mut self, index: usize, state: &mut State) -> Option<String> {
+        if index >= state.densities().len() {
+            return Some("That custom density no longer exists.".to_owned());
+        }
+        // Structural rebuild drops every draft mirror, so commit the other
+        // rows' deferred continuous edits first. Only the removed row's own
+        // pending index is cancelled.
+        let pending = std::mem::take(&mut self.density_pending_commits);
+        for pending_index in pending.into_iter().filter(|&pending| pending != index) {
+            self.commit_density(pending_index, state);
+        }
+        let mut next = state.densities().to_vec();
+        next.remove(index);
+        match state.commit_densities(next) {
+            Ok(()) => {
+                self.density_error = None;
+                self.sync_densities(state);
+                state.refresh_density_reports();
+                None
+            }
+            Err(message) => {
+                self.density_error = Some(message.clone());
+                Some(message)
+            }
+        }
+    }
+
+    /// Hand one draft to the atomic model seam. A rejected edit keeps the draft
+    /// and the committed list; an accepted one is followed by one on-demand
+    /// report refresh.
+    pub fn commit_density(&mut self, index: usize, state: &mut State) -> Option<String> {
+        let Some(draft) = self.density_drafts.get(index) else {
+            return Some("That custom density no longer exists.".to_owned());
+        };
+        let spec = draft.spec();
+        let mut next = state.densities().to_vec();
+        let Some(slot) = next.get_mut(index) else {
+            return Some("That custom density no longer exists.".to_owned());
+        };
+        *slot = spec;
+        match state.commit_densities(next) {
+            Ok(()) => {
+                let committed = state.densities().get(index).cloned();
+                if let (Some(draft), Some(committed)) =
+                    (self.density_drafts.get_mut(index), committed)
+                {
+                    draft.committed = committed;
+                    draft.error = None;
+                    draft.dirty = false;
+                }
+                // A per-draft edit never owns the panel-level message: leaving
+                // a cap/add/remove notice in place until its own condition
+                // clears is the point of that banner.
+                self.sync_densities(state);
+                state.refresh_density_reports();
+                None
+            }
+            Err(message) => {
+                if let Some(draft) = self.density_drafts.get_mut(index) {
+                    draft.dirty = true;
+                    draft.error = Some(message.clone());
+                }
+                // The rejection is shown on this draft; a panel-level message
+                // set by another action must survive it.
+                Some(message)
             }
         }
     }
@@ -372,6 +633,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelState,
         ui.spacing_mut().item_spacing.y = crate::ui::layout::COMPACT_ITEM_SPACING;
     }
     panel.sync(&state.sources);
+    panel.sync_densities(state);
 
     ui.horizontal(|ui| {
         ui.heading("Sources");
@@ -444,6 +706,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelState,
     }
 
     advanced(ui, state, panel);
+    show_density_section(ui, state, panel);
 
     ui.label("Streamlines and particles use the formula field; switch to Formula to use them.");
 }
@@ -644,6 +907,297 @@ fn show_parameters(
             }
         });
     }
+}
+
+fn default_density(name: String) -> DensitySpec {
+    DensitySpec {
+        name,
+        family: DensityFamily::VolumeCharge,
+        support: DensitySupport {
+            kind: SupportKind::Sphere,
+            center: glam::Vec3::ZERO,
+            axis: glam::Vec3::Z,
+            size: glam::Vec3::splat(2.0),
+        },
+        formula: "1".to_string(),
+        samples: 12,
+        softening: 0.0,
+    }
+}
+
+fn density_report_lines(row: &DensityReportRow) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(charge) = &row.charge {
+        lines.push(charge_line(charge));
+    }
+    if let Some(continuity) = &row.continuity {
+        lines.push(continuity_line(continuity));
+    }
+    lines
+}
+
+fn charge_line(report: &ChargeReport) -> String {
+    match &report.status {
+        DiagnosticsStatus::Estimate { error } => format!(
+            "Estimate: total = {:.6e}, error = {:.6e}",
+            report.total, error
+        ),
+        DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+        DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
+    }
+}
+
+fn continuity_line(report: &ContinuityReport) -> String {
+    match &report.status {
+        DiagnosticsStatus::Estimate { error } => format!(
+            "Estimate: div J in [{:.6e}, {:.6e}], error = {:.6e}",
+            report.div_j_min, report.div_j_max, error
+        ),
+        DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+        DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
+    }
+}
+
+fn show_density_section(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelState) {
+    egui::CollapsingHeader::new("Custom densities")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                "Normalized teaching values (eps0 = mu0 = 1). A custom density does not \
+                 feed the sampled E/B fields in this slice. SurfaceCharge has no volume total.",
+            );
+            ui.label("Density outside the support is identically zero.");
+
+            let at_cap = state.densities().len() >= MAX_DENSITIES;
+            let mut add = false;
+            let mut compute = false;
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(!at_cap, egui::Button::new("Add density"))
+                    .on_hover_text(format!("Add up to {MAX_DENSITIES} custom densities"))
+                    .clicked()
+                {
+                    add = true;
+                }
+                if ui
+                    .button("Compute")
+                    .on_hover_text(
+                        "Sample the declared lattice and run the applicable diagnostics once",
+                    )
+                    .clicked()
+                {
+                    compute = true;
+                }
+                ui.label(format!("{} / {MAX_DENSITIES}", state.densities().len()));
+                if at_cap {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("At most {MAX_DENSITIES} custom densities."),
+                    );
+                }
+            });
+            if add {
+                panel.add_density(state);
+            }
+            if compute {
+                state.refresh_density_reports();
+            }
+            if let Some(error) = panel.density_error.clone() {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+
+            let mut remove = None;
+            let mut immediate = Vec::new();
+            let mut pending = Vec::new();
+            // Continuous widgets (sliders and drag values) only commit once,
+            // when the pointer gesture ends. Committing per frame would
+            // validate and re-sample the whole lattice on every frame, and a
+            // drag still in flight must survive another row's immediate edit.
+            let pointer_down = ui.input(|input| input.pointer.any_down());
+            for index in 0..panel.density_drafts.len() {
+                let Some(draft) = panel.density_drafts.get_mut(index) else {
+                    continue;
+                };
+                let mut edited = false;
+                let mut continuous = false;
+                ui.push_id(("custom_density", index), |ui| {
+                    egui::CollapsingHeader::new(format!("{} {}", draft.family.label(), index + 1))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Name");
+                                edited |= ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut draft.name)
+                                            .desired_width(140.0),
+                                    )
+                                    .changed();
+                                let mut family = draft.family;
+                                egui::ComboBox::from_id_salt(("density_family", index))
+                                    .selected_text(family.label())
+                                    .show_ui(ui, |ui| {
+                                        for option in [
+                                            DensityFamily::VolumeCharge,
+                                            DensityFamily::SurfaceCharge,
+                                            DensityFamily::SteadyCurrent,
+                                        ] {
+                                            ui.selectable_value(
+                                                &mut family,
+                                                option,
+                                                option.label(),
+                                            );
+                                        }
+                                    });
+                                if family != draft.family {
+                                    draft.family = family;
+                                    edited = true;
+                                }
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Support");
+                                let mut kind = draft.support_kind;
+                                egui::ComboBox::from_id_salt(("density_support", index))
+                                    .selected_text(kind.label())
+                                    .show_ui(ui, |ui| {
+                                        for option in [
+                                            SupportKind::Sphere,
+                                            SupportKind::Box,
+                                            SupportKind::Cylinder,
+                                        ] {
+                                            ui.selectable_value(&mut kind, option, option.label());
+                                        }
+                                    });
+                                if kind != draft.support_kind {
+                                    draft.support_kind = kind;
+                                    edited = true;
+                                }
+                                ui.label("Samples");
+                                let response = ui.add(
+                                    egui::Slider::new(
+                                        &mut draft.samples,
+                                        MIN_SAMPLES..=MAX_SAMPLES,
+                                    )
+                                    .integer(),
+                                );
+                                if response.changed() {
+                                    continuous = true;
+                                }
+                            });
+                            for (label, values) in [
+                                ("Center", &mut draft.center),
+                                ("Axis", &mut draft.axis),
+                                ("Size", &mut draft.size),
+                            ] {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(label);
+                                    for (axis, slot) in ["x", "y", "z"].into_iter().zip(values) {
+                                        ui.label(axis);
+                                        let response =
+                                            ui.add(egui::DragValue::new(slot).speed(0.05));
+                                        if response.changed() {
+                                            continuous = true;
+                                        }
+                                    }
+                                });
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Formula");
+                                edited |= ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut draft.formula)
+                                            .hint_text(draft.family.formula_hint())
+                                            .desired_width(220.0),
+                                    )
+                                    .changed();
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Softening");
+                                let response = ui.add(
+                                    egui::DragValue::new(&mut draft.softening)
+                                        .speed(0.005)
+                                        .range(0.0..=1.0),
+                                );
+                                if response.changed() {
+                                    continuous = true;
+                                }
+                                if ui.button("Remove density").clicked() {
+                                    remove = Some(index);
+                                }
+                            });
+                            if let Some(error) = &draft.error {
+                                ui.colored_label(ui.visuals().error_fg_color, error);
+                            }
+                        });
+                });
+                if edited || continuous {
+                    // Stop `sync_densities` from replacing this frame's mirror
+                    // with the committed value while another row commits.
+                    draft.dirty = true;
+                }
+                if edited {
+                    immediate.push(index);
+                } else if continuous {
+                    if pointer_down {
+                        pending.push(index);
+                    } else {
+                        // Keyboard edit: no gesture to wait for.
+                        immediate.push(index);
+                    }
+                }
+                for line in state
+                    .density_reports()
+                    .iter()
+                    .find(|row| row.spec_index == index)
+                    .map(density_report_lines)
+                    .unwrap_or_default()
+                {
+                    ui.label(line);
+                }
+                if draft.family == DensityFamily::SurfaceCharge {
+                    ui.label("No volume total for a SurfaceCharge density.");
+                }
+            }
+            for index in pending {
+                panel.queue_pending(index);
+            }
+            // Text/combo edits commit their whole mirror now, so any deferred
+            // gesture on the same row is superseded.
+            for &index in &immediate {
+                panel.forget_pending(index);
+            }
+            let mut commits = if pointer_down {
+                Vec::new()
+            } else {
+                // The gesture ended (or its release was missed): commit every
+                // deferred continuous edit once, in first-changed order.
+                panel.take_pending()
+            };
+            commits.retain(|index| *index < panel.density_drafts.len());
+            for index in immediate {
+                if !commits.contains(&index) {
+                    commits.push(index);
+                }
+            }
+            if let Some(index) = remove {
+                // Removing one row cancels only its own deferred edit; the
+                // other rows commit before the structural rebuild replaces
+                // their draft mirrors.
+                for commit_index in commits.into_iter().filter(|&commit| commit != index) {
+                    panel.commit_density(commit_index, state);
+                }
+                panel.remove_density(index, state);
+            } else {
+                for index in commits {
+                    panel.commit_density(index, state);
+                }
+            }
+
+            ui.separator();
+            ui.label(
+                "Reports refresh only on demand: press Compute or accept an edit. \
+                 A parameter change invalidates them.",
+            );
+        });
 }
 
 fn advanced(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelState) {

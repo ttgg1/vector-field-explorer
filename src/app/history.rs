@@ -50,7 +50,15 @@ pub(crate) fn apply_document(
     orbit: &mut OrbitCamera,
     _fly: &mut Option<FlyCamera>,
 ) {
+    // The view restore validates parameter-dependent entries (the custom
+    // density filter) against the committed parameter set, so install the
+    // snapshot's parameters first, mirroring `AppSettings::restore`. Put the
+    // live set back before the explicit commit below: it then observes a
+    // change and performs the field re-parse/rebuild that the direct
+    // assignment alone would skip.
+    let live_parameters = std::mem::replace(&mut state.parameters, snapshot.parameters.clone());
     snapshot.view.restore(state, controls);
+    state.parameters = live_parameters;
     if let Err(error) = state.commit_parameters(snapshot.parameters.clone()) {
         // Snapshots are captured from a validated committed state; a failure
         // here is an internal construction bug, never a user edit.
@@ -107,9 +115,7 @@ impl VfApp {
                 // every button (e.g. a context-menu chord during a drag).
                 input.pointer.button_pressed(egui::PointerButton::Primary),
                 input.pointer.any_down(),
-                input
-                    .pointer
-                    .button_released(egui::PointerButton::Primary),
+                input.pointer.button_released(egui::PointerButton::Primary),
             )
         });
 
@@ -141,8 +147,7 @@ impl VfApp {
         // document owns has changed.
         let current = capture_document(&self.state, &self.orbit);
         if current != self.last_committed {
-            self.history
-                .record(self.last_committed.clone(), &current);
+            self.history.record(self.last_committed.clone(), &current);
             self.last_committed = current;
         }
     }
