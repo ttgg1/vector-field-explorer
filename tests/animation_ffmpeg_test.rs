@@ -4,7 +4,7 @@ use tempfile::tempdir;
 #[cfg(unix)]
 use vector_field_explorer::animation::frame_count;
 use vector_field_explorer::animation::{
-    AnimationError, AnimationFormat, AnimationSpec, ffmpeg_args, video_sink_with_program,
+    AnimationError, AnimationFormat, AnimationSpec, FrameSink, ffmpeg_args, video_sink_with_program,
 };
 use vector_field_explorer::export_provenance::ExportProvenance;
 
@@ -191,18 +191,53 @@ fn video_rejects_gif_and_odd_or_missing_programs() {
 #[cfg(unix)]
 mod unix_fake_ffmpeg {
     use std::fs;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use super::*;
 
+    /// Write a fake program and fully release the write handle before any
+    /// spawn can see it. `Text file busy` is the ETXTBSY fork/exec race: a
+    /// concurrent test's child can inherit this process's still-open write
+    /// handle and hold the file busy briefly. Syncing and dropping here
+    /// removes this writer's side; [`open_video_sink`] retries the remaining
+    /// cross-thread window, mirroring `cas_backend::spawn_with_retry`.
     fn script(directory: &Path, body: &str) -> PathBuf {
         let path = directory.join("fake-ffmpeg.sh");
-        fs::write(&path, body).unwrap();
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(body.as_bytes()).unwrap();
+        file.flush().unwrap();
+        file.sync_all().unwrap();
+        drop(file);
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&path, permissions).unwrap();
         path
+    }
+
+    /// Open a sink against a freshly written fake program. A concurrent
+    /// test's fork can still hold the script busy for a moment, so retry the
+    /// transient ETXTBSY failure with a short backoff before giving up.
+    fn open_video_sink(
+        spec: &AnimationSpec,
+        output: &Path,
+        provenance: &ExportProvenance,
+        program: &Path,
+    ) -> Box<dyn FrameSink> {
+        for attempt in 0..5 {
+            match video_sink_with_program(spec, output, provenance, program) {
+                Ok(sink) => return sink,
+                Err(AnimationError::External(message))
+                    if message.contains("Text file busy") && attempt < 4 =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("could not open the fake ffmpeg sink: {error}"),
+            }
+        }
+        unreachable!("the final attempt either opens the sink or panics")
     }
 
     fn frame(spec: &AnimationSpec) -> Vec<u8> {
@@ -233,7 +268,7 @@ mod unix_fake_ffmpeg {
         );
         let spec = spec(AnimationFormat::Mp4);
 
-        let mut sink = video_sink_with_program(&spec, &output, &provenance(), &program).unwrap();
+        let mut sink = open_video_sink(&spec, &output, &provenance(), &program);
         for _ in 0..frame_count(&spec).unwrap() {
             sink.push_frame(&frame(&spec), spec.width, spec.height)
                 .unwrap();
@@ -262,7 +297,7 @@ mod unix_fake_ffmpeg {
         );
         let spec = spec(AnimationFormat::Webm);
 
-        let mut sink = video_sink_with_program(&spec, &output, &provenance(), &program).unwrap();
+        let mut sink = open_video_sink(&spec, &output, &provenance(), &program);
         sink.push_frame(&frame(&spec), spec.width, spec.height)
             .unwrap();
         let error = sink.finish().expect_err("nonzero exit must fail");
