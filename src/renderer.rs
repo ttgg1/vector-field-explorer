@@ -13,6 +13,7 @@
 //! off-plane arrows translucently; selected plane arrows arrive with alpha 1.0
 //! and therefore still paint opaquely.
 
+use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -1964,49 +1965,87 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
     }
 }
 
-/// Painter's-algorithm helper: order a scene's instances far-to-near along the
-/// view direction, since the egui_wgpu pass has no depth attachment.
-///
-/// Works on any instance mix: the ticket-62 combined stream carries arrows and
-/// particle dots together, so the whole scene interleaves by depth. The sort is
-/// stable, so equal-depth instances keep their pre-sort order. A non-finite
-/// view depth (NaN or either infinity) is mapped to `NEG_INFINITY`: view-space
-/// z grows toward the eye, so this puts it in the far group, first in the
-/// painter order, instead of letting `INFINITY` paint on top. A bad origin can
-/// therefore neither panic nor wedge itself in front of the scene.
-pub fn sort_scene_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4) {
-    instances.sort_by(|a, b| {
-        let depth = |instance: &ArrowInstanceGPU| {
+/// The view-space depth of each arrow/particle origin, computed once per
+/// element. Non-finite depths are mapped to `NEG_INFINITY` (the far group), so
+/// callers never compare a NaN.
+#[must_use]
+pub fn scene_view_depths(instances: &[ArrowInstanceGPU], view: &Mat4) -> Vec<f32> {
+    instances
+        .iter()
+        .map(|instance| {
             let position = Vec3::new(instance.origin[0], instance.origin[1], instance.origin[2]);
-            let z = (*view * position.extend(1.0)).z;
-            if z.is_finite() { z } else { f32::NEG_INFINITY }
-        };
-        depth(a)
-            .partial_cmp(&depth(b))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+            finite_depth((*view * position.extend(1.0)).z)
+        })
+        .collect()
 }
 
-/// Painter's-algorithm helper for trail segments (ticket 48): order lines
-/// far-to-near by the view depth of their midpoint, since alpha overlap is
-/// order-visible. Stable, so equal-depth segments keep chronological order. A
-/// non-finite midpoint depth joins the far group (`NEG_INFINITY`) instead of
-/// painting in front or panicking.
-pub fn sort_lines_back_to_front(instances: &mut [LineInstanceGPU], view: &Mat4) {
-    instances.sort_by(|a, b| {
-        let depth = |line: &LineInstanceGPU| {
+/// The view-space depth of each trail segment's midpoint, computed once per
+/// element. Non-finite depths are mapped to `NEG_INFINITY` (the far group).
+#[must_use]
+pub fn line_view_depths(lines: &[LineInstanceGPU], view: &Mat4) -> Vec<f32> {
+    lines
+        .iter()
+        .map(|line| {
             let midpoint = Vec3::new(
                 (line.a[0] + line.b[0]) * 0.5,
                 (line.a[1] + line.b[1]) * 0.5,
                 (line.a[2] + line.b[2]) * 0.5,
             );
-            let z = (*view * midpoint.extend(1.0)).z;
-            if z.is_finite() { z } else { f32::NEG_INFINITY }
-        };
-        depth(a)
-            .partial_cmp(&depth(b))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+            finite_depth((*view * midpoint.extend(1.0)).z)
+        })
+        .collect()
+}
+
+/// Map a non-finite view depth to the far group; view-space z grows toward the
+/// eye, so `NEG_INFINITY` paints first instead of `INFINITY` on top.
+fn finite_depth(z: f32) -> f32 {
+    if z.is_finite() { z } else { f32::NEG_INFINITY }
+}
+
+/// Decorate–sort–undecorate: reorder `items` by already-computed `keys` using
+/// the same stable far-to-near rule as the historical comparator. Keys are
+/// finite or `NEG_INFINITY`, so equal keys (including any `-0.0`/`0.0` pair)
+/// keep their input order.
+fn reorder_by_depth_keys<T: Copy>(items: &mut [T], keys: &[f32]) {
+    debug_assert_eq!(items.len(), keys.len());
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by(|&a, &b| keys[a].partial_cmp(&keys[b]).unwrap_or(Ordering::Equal));
+    if order
+        .iter()
+        .enumerate()
+        .all(|(position, &index)| position == index)
+    {
+        return;
+    }
+    let sorted: Vec<T> = order.iter().map(|&index| items[index]).collect();
+    items.copy_from_slice(&sorted);
+}
+
+/// Painter's-algorithm helper: order a scene's instances far-to-near along the
+/// view direction, since the egui_wgpu pass has no depth attachment.
+///
+/// Works on any instance mix: the ticket-62 combined stream carries arrows and
+/// particle dots together, so the whole scene interleaves by depth. Each depth
+/// is transformed once via [`scene_view_depths`], never inside the comparator.
+/// The sort is stable, so equal-depth instances keep their pre-sort order. A
+/// non-finite view depth (NaN or either infinity) is mapped to `NEG_INFINITY`:
+/// view-space z grows toward the eye, so this puts it in the far group, first
+/// in the painter order, instead of letting `INFINITY` paint on top. A bad
+/// origin can therefore neither panic nor wedge itself in front of the scene.
+pub fn sort_scene_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4) {
+    let depths = scene_view_depths(instances, view);
+    reorder_by_depth_keys(instances, &depths);
+}
+
+/// Painter's-algorithm helper for trail segments (ticket 48): order lines
+/// far-to-near by the view depth of their midpoint, since alpha overlap is
+/// order-visible. Each midpoint is transformed once via [`line_view_depths`],
+/// never inside the comparator. Stable, so equal-depth segments keep
+/// chronological order. A non-finite midpoint depth joins the far group
+/// (`NEG_INFINITY`) instead of painting in front or panicking.
+pub fn sort_lines_back_to_front(instances: &mut [LineInstanceGPU], view: &Mat4) {
+    let depths = line_view_depths(instances, view);
+    reorder_by_depth_keys(instances, &depths);
 }
 
 /// A stable far-to-near copy of the trail list under the current view. The
