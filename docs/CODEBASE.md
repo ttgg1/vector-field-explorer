@@ -814,11 +814,15 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
 - Wide layout shows both side panels (or rails) and no compact chrome; Compact
   uses `layout::compact_plan` to hide both panels, swap the top bar, and show
   one bottom sheet. The left rail strip orders Controls, native CAS and Sources.
-- The right Appearance rail/body and compact Appearance tab draw
-  `appearance_panel::show`; the right Interaction rail/body and compact
+- The right side is ONE rail strip ordering Presets, Appearance and Interaction
+  above the expanded right bodies; the strip is drawn first so it stays the
+  outermost right column, and it reserves exactly one `RAIL_WIDTH` in the
+  right-chrome budget. Each entry toggles only its own `LayoutState` flag.
+- The right Appearance body and compact Appearance tab draw
+  `appearance_panel::show`; the right Interaction body and compact
   Interaction tab draw `interaction_panel::show` against
-  `VfApp::interaction`/`VfApp::interaction_profiles`. Both rails count in the
-  right-rail width budget.
+  `VfApp::interaction`/`VfApp::interaction_profiles`. An armed rebind capture
+  is cancelled whenever the Interaction body is not drawn.
 - The Sources rail/body and the compact Sources tab draw
   `sources_panel::show`; the formula bar's one-shot `open_sources` request
   expands the wide rail or opens the compact sheet, then clears.
