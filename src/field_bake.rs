@@ -1,11 +1,11 @@
-//! CPU-baked field lattice (P3 slice 1a).
+//! CPU-baked field lattice (P3 slice 1b).
 //!
 //! A time-independent formula field can be evaluated once onto a bounded
 //! axis-aligned lattice and then sampled with trilinear interpolation. This
-//! module is the **model only**: it builds, validates and samples a
-//! [`BakedField`]. No particle, streamline, `advance_exact`, animation or CLI
-//! call site switches to it in this slice, so every existing result stays
-//! byte-identical. The opt-in wiring belongs to slice 1b.
+//! module builds, validates, samples and measures a [`BakedField`], and owns
+//! the durable [`BakeSettings`] record. The opt-in wiring lives in
+//! [`crate::viewmodel::State::scene_flow`]; with the opt-in off (the default)
+//! every existing result stays byte-identical.
 //!
 //! # 2D versus 3D
 //!
@@ -18,10 +18,11 @@
 //!
 //! # Accuracy
 //!
-//! A bake is an approximation. [`BakedField::accuracy_report`] measures the
-//! interpolation error against a supplied reference and can measure the
-//! divergence residual of a supplied divergence-free field. A number that was
-//! not measured stays [`None`]; nothing is fabricated.
+//! A bake is an approximation. [`BakedField::build`] measures the
+//! interpolation and divergence error against the exact field on a bounded
+//! deterministic probe set and stores a [`BakeAccuracy`]. An unmeasured metric
+//! stays [`None`]; nothing is fabricated, and an error above
+//! [`BAKE_TOLERANCE`] is reported by [`BakeAccuracy::exceeds_tolerance`].
 //!
 //! Built only for [`FieldExpr::is_time_dependent`] `== false`; a time-dependent
 //! field is refused rather than silently frozen at `t = 0`.
@@ -29,6 +30,7 @@
 use std::fmt;
 
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::Domain;
 use crate::field::FieldExpr;
@@ -48,6 +50,67 @@ pub const MAX_VOLUME_RESOLUTION: u32 = 64;
 pub const MIN_PLANE_RESOLUTION: u32 = 32;
 /// Largest accepted resolution along a plane axis.
 pub const MAX_PLANE_RESOLUTION: u32 = 256;
+
+/// Persisted default volume resolution. Coarse enough for a bounded startup
+/// build while staying well inside the ADR 0005 lattice budget.
+pub const DEFAULT_BAKE_RESOLUTION_3D: u32 = 48;
+/// Persisted default plane resolution.
+pub const DEFAULT_BAKE_RESOLUTION_2D: u32 = 128;
+
+/// The stated CPU-vs-bake acceptance bound in normalized field units. A
+/// measured error above this is reported by [`BakeAccuracy::exceeds_tolerance`]
+/// rather than hidden behind the teaching-units caption.
+pub const BAKE_TOLERANCE: f32 = 1e-3;
+
+/// The durable opt-in and its per-axis lattice sizes.
+///
+/// This record is stored in [`crate::persistence::AppSettings`], never in a
+/// `ViewRecord`, scene document or edit-history snapshot. The live bake itself
+/// is runtime-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BakeSettings {
+    /// Whether the scene should trace the baked lattice.
+    pub enabled: bool,
+    /// Requested resolution for a three-component volume lattice.
+    pub resolution_3d: u32,
+    /// Requested resolution for a genuine two-component plane lattice.
+    pub resolution_2d: u32,
+}
+
+impl Default for BakeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            resolution_3d: DEFAULT_BAKE_RESOLUTION_3D,
+            resolution_2d: DEFAULT_BAKE_RESOLUTION_2D,
+        }
+    }
+}
+
+impl BakeSettings {
+    /// Clamp both resolutions into their axis bounds, keeping the opt-in. The
+    /// caller logs one warning when the record changed.
+    pub fn sanitized(self) -> Self {
+        Self {
+            enabled: self.enabled,
+            resolution_3d: self
+                .resolution_3d
+                .clamp(MIN_VOLUME_RESOLUTION, MAX_VOLUME_RESOLUTION),
+            resolution_2d: self
+                .resolution_2d
+                .clamp(MIN_PLANE_RESOLUTION, MAX_PLANE_RESOLUTION),
+        }
+    }
+
+    /// The stored resolution for `axis`.
+    pub fn resolution_for(self, axis: BakeAxis) -> u32 {
+        match axis {
+            BakeAxis::Volume3d => self.resolution_3d,
+            BakeAxis::Plane2d => self.resolution_2d,
+        }
+    }
+}
 
 /// Which lattice a bake occupies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,31 +274,46 @@ impl fmt::Display for BakeError {
 
 impl std::error::Error for BakeError {}
 
-/// One measured accuracy statement. Each optional number is present only when
-/// the caller supplied the matching probe reference.
+/// One measured accuracy statement, computed during [`BakedField::build`]
+/// against the exact field.
+///
+/// Every metric is finite-or-`None`: an unmeasured value is absent rather than
+/// fabricated as zero. `tolerance` is the stated acceptance bound; a value above
+/// it is reported by [`BakeAccuracy::exceeds_tolerance`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BakeAccuracy {
-    /// Points per axis of the bake these numbers describe.
-    pub resolution: u32,
-    /// Maximum `|baked - reference|` at cell centres, when measured.
-    pub interpolation_max_error: Option<f32>,
-    /// Maximum measured divergence residual of the bake, when a divergence-free
-    /// reference was supplied.
+    /// Interpolation probes actually compared (bounded to 512).
+    pub probes: u32,
+    /// Maximum `|baked - exact|`, when any probe could be compared.
+    pub max_abs_error: Option<f32>,
+    /// Maximum relative error against the exact velocity magnitude.
+    pub max_rel_error: Option<f32>,
+    /// Maximum `|div(baked) - div(exact)|` over at most `8³` interior nodes.
     pub divergence_residual: Option<f32>,
+    /// The CPU-vs-bake acceptance bound in normalized field units.
+    pub tolerance: f32,
 }
 
-/// Optional references [`BakedField::accuracy_report`] measures against.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BakeAccuracyProbes<'a> {
-    /// A reference implementation of the baked formula; cell centres are
-    /// compared against it.
-    pub interpolation: Option<&'a FieldExpr>,
-    /// The same formula when it is divergence-free. This is a
-    /// presence/assertion gate, **not** a measurement source: the reference is
-    /// never evaluated. Supplying it asserts the property and enables
-    /// measuring the baked field's own divergence residual. The caller owns
-    /// that assertion.
-    pub divergence_free: Option<&'a FieldExpr>,
+impl BakeAccuracy {
+    /// No measurement was possible (an empty or non-finite probe set).
+    fn unmeasured() -> Self {
+        Self {
+            probes: 0,
+            max_abs_error: None,
+            max_rel_error: None,
+            divergence_residual: None,
+            tolerance: BAKE_TOLERANCE,
+        }
+    }
+
+    /// Whether a measured metric exceeds the stated tolerance.
+    pub fn exceeds_tolerance(self) -> bool {
+        self.max_abs_error
+            .is_some_and(|error| error > self.tolerance)
+            || self
+                .divergence_residual
+                .is_some_and(|residual| residual > self.tolerance)
+    }
 }
 
 /// A bounded f32 lattice plus the spec that produced it.
@@ -248,6 +326,7 @@ pub struct BakeAccuracyProbes<'a> {
 pub struct BakedField {
     spec: BakeSpec,
     lattice: Vec<Vec3>,
+    accuracy: BakeAccuracy,
 }
 
 impl BakedField {
@@ -321,7 +400,13 @@ impl BakedField {
         // Keep the validated value, not the unchecked request.
         let mut spec = spec;
         spec.resolution = resolution.resolution();
-        Ok(Self { spec, lattice })
+        let mut baked = Self {
+            spec,
+            lattice,
+            accuracy: BakeAccuracy::unmeasured(),
+        };
+        baked.accuracy = baked.measure_accuracy(field);
+        Ok(baked)
     }
 
     pub fn spec(&self) -> &BakeSpec {
@@ -411,41 +496,35 @@ impl BakedField {
         value.is_finite().then_some(value)
     }
 
-    /// Measure the bake against the supplied references. Anything not supplied
-    /// stays [`None`]; the resolution is always reported.
-    pub fn accuracy_report(&self, probes: BakeAccuracyProbes<'_>) -> BakeAccuracy {
-        BakeAccuracy {
-            resolution: self.spec.resolution,
-            interpolation_max_error: probes
-                .interpolation
-                .and_then(|reference| self.interpolation_error(reference)),
-            divergence_residual: probes
-                .divergence_free
-                .and_then(|_| self.divergence_residual()),
-        }
+    /// The accuracy measured when this bake was built. Every metric is
+    /// finite-or-`None`; nothing is fabricated.
+    pub fn accuracy(&self) -> BakeAccuracy {
+        self.accuracy
     }
 
-    /// Maximum error at cell centres; `None` when no cell could be compared.
-    fn interpolation_error(&self, reference: &FieldExpr) -> Option<f32> {
+    /// Measure interpolation and divergence against `reference` on bounded,
+    /// deterministic probe sets: at most `8³ = 512` cell-centre points and at
+    /// most `8³` interior divergence nodes.
+    fn measure_accuracy(&self, reference: &FieldExpr) -> BakeAccuracy {
         let [nx, ny, nz] = self.dims();
         let min = self.spec.domain.min;
         let span = self.spec.domain.max - min;
-        let cells_x = nx.saturating_sub(1);
-        let cells_y = ny.saturating_sub(1);
-        let cells_z = match self.spec.axis {
-            BakeAxis::Volume3d => nz.saturating_sub(1),
+        let probes_x = nx.saturating_sub(1).clamp(1, 8);
+        let probes_y = ny.saturating_sub(1).clamp(1, 8);
+        let probes_z = match self.spec.axis {
+            BakeAxis::Volume3d => nz.saturating_sub(1).clamp(1, 8),
             BakeAxis::Plane2d => 1,
         };
-        let mut worst: Option<f32> = None;
-        for ix in 0..cells_x {
-            for iy in 0..cells_y {
-                for iz in 0..cells_z {
-                    let x = min.x + span.x * (ix as f32 + 0.5) / cells_x.max(1) as f32;
-                    let y = min.y + span.y * (iy as f32 + 0.5) / cells_y.max(1) as f32;
+        let mut probes = 0u32;
+        let mut max_abs_error: Option<f32> = None;
+        let mut max_rel_error: Option<f32> = None;
+        for ix in 0..probes_x {
+            for iy in 0..probes_y {
+                for iz in 0..probes_z {
+                    let x = min.x + span.x * (ix as f32 + 0.5) / probes_x as f32;
+                    let y = min.y + span.y * (iy as f32 + 0.5) / probes_y as f32;
                     let z = match self.spec.axis {
-                        BakeAxis::Volume3d => {
-                            min.z + span.z * (iz as f32 + 0.5) / cells_z.max(1) as f32
-                        }
+                        BakeAxis::Volume3d => min.z + span.z * (iz as f32 + 0.5) / probes_z as f32,
                         BakeAxis::Plane2d => min.z + span.z * 0.5,
                     };
                     let point = Vec3::new(x, y, z);
@@ -454,19 +533,32 @@ impl BakedField {
                         continue;
                     };
                     let error = (sampled - exact).abs().max_element();
-                    if error.is_finite() {
-                        worst = Some(worst.map_or(error, |current| current.max(error)));
+                    if !error.is_finite() {
+                        continue;
+                    }
+                    probes += 1;
+                    max_abs_error = Some(max_abs_error.map_or(error, |current| current.max(error)));
+                    let scale = exact.abs().max_element().max(1e-6);
+                    let relative = error / scale;
+                    if relative.is_finite() {
+                        max_rel_error =
+                            Some(max_rel_error.map_or(relative, |current| current.max(relative)));
                     }
                 }
             }
         }
-        worst
+
+        BakeAccuracy {
+            probes,
+            max_abs_error,
+            max_rel_error,
+            divergence_residual: self.divergence_residual(reference),
+            tolerance: BAKE_TOLERANCE,
+        }
     }
 
-    /// Maximum measured divergence of the baked field at interior lattice
-    /// nodes. The caller of [`Self::accuracy_report`] asserts the reference is
-    /// divergence-free; an absent measurement stays [`None`].
-    fn divergence_residual(&self) -> Option<f32> {
+    /// Maximum `|div(baked) - div(exact)|` at up to `8³` interior nodes.
+    fn divergence_residual(&self, reference: &FieldExpr) -> Option<f32> {
         let [nx, ny, nz] = self.dims();
         let min = self.spec.domain.min;
         let span = self.spec.domain.max - min;
@@ -478,48 +570,82 @@ impl BakedField {
         if !h.is_finite() || h.x <= 0.0 || h.y <= 0.0 {
             return None;
         }
-        let z_index = match self.spec.axis {
-            BakeAxis::Volume3d => (1..nz.saturating_sub(1)).collect::<Vec<_>>(),
+        let xs = interior_indices(nx);
+        let ys = interior_indices(ny);
+        let zs = match self.spec.axis {
+            BakeAxis::Volume3d => interior_indices(nz),
             BakeAxis::Plane2d => vec![0],
         };
         let mut worst: Option<f32> = None;
-        for ix in 1..nx.saturating_sub(1) {
-            for iy in 1..ny.saturating_sub(1) {
-                for &iz in &z_index {
+        for &ix in &xs {
+            for &iy in &ys {
+                for &iz in &zs {
                     let point = Vec3::new(
-                        min.x + span.x * ix as f32 / (nx - 1) as f32,
-                        min.y + span.y * iy as f32 / (ny - 1) as f32,
-                        min.z + span.z * iz as f32 / (nz.max(2) - 1) as f32,
+                        min.x + span.x * ix as f32 / (nx.max(2) - 1) as f32,
+                        min.y + span.y * iy as f32 / (ny.max(2) - 1) as f32,
+                        match self.spec.axis {
+                            BakeAxis::Volume3d => {
+                                min.z + span.z * iz as f32 / (nz.max(2) - 1) as f32
+                            }
+                            BakeAxis::Plane2d => min.z + span.z * 0.5,
+                        },
                     );
-                    let derivative = |axis: Vec3| {
+                    let baked_derivative = |axis: Vec3| {
                         let plus = self.sample(point + axis * h)?;
                         let minus = self.sample(point - axis * h)?;
                         Some((plus - minus) * 0.5)
                     };
-                    let Some(du_dx) = derivative(Vec3::X).map(|d| d.x / h.x) else {
+                    let exact_derivative = |axis: Vec3| {
+                        let plus = reference.eval3(point + axis * h)?;
+                        let minus = reference.eval3(point - axis * h)?;
+                        Some((plus - minus) * 0.5)
+                    };
+                    let Some(baked_dx) = baked_derivative(Vec3::X).map(|d| d.x / h.x) else {
                         continue;
                     };
-                    let Some(dv_dy) = derivative(Vec3::Y).map(|d| d.y / h.y) else {
+                    let Some(baked_dy) = baked_derivative(Vec3::Y).map(|d| d.y / h.y) else {
                         continue;
                     };
-                    let dw_dz = match self.spec.axis {
+                    let Some(exact_dx) = exact_derivative(Vec3::X).map(|d| d.x / h.x) else {
+                        continue;
+                    };
+                    let Some(exact_dy) = exact_derivative(Vec3::Y).map(|d| d.y / h.y) else {
+                        continue;
+                    };
+                    let (baked_dz, exact_dz) = match self.spec.axis {
                         BakeAxis::Volume3d => {
-                            let Some(value) = derivative(Vec3::Z).map(|d| d.z / h.z) else {
+                            let Some(baked) = baked_derivative(Vec3::Z).map(|d| d.z / h.z) else {
                                 continue;
                             };
-                            value
+                            let Some(exact) = exact_derivative(Vec3::Z).map(|d| d.z / h.z) else {
+                                continue;
+                            };
+                            (baked, exact)
                         }
-                        BakeAxis::Plane2d => 0.0,
+                        BakeAxis::Plane2d => (0.0, 0.0),
                     };
-                    let divergence = (du_dx + dv_dy + dw_dz).abs();
-                    if divergence.is_finite() {
-                        worst = Some(worst.map_or(divergence, |current| current.max(divergence)));
+                    let baked_divergence = baked_dx + baked_dy + baked_dz;
+                    let exact_divergence = exact_dx + exact_dy + exact_dz;
+                    let residual = (baked_divergence - exact_divergence).abs();
+                    if residual.is_finite() {
+                        worst = Some(worst.map_or(residual, |current| current.max(residual)));
                     }
                 }
             }
         }
         worst
     }
+}
+
+/// At most eight interior indices in `1..n-1`, evenly spaced and deterministic.
+/// A lattice too small for an interior node falls back to its single node.
+fn interior_indices(n: usize) -> Vec<usize> {
+    if n <= 2 {
+        return vec![0];
+    }
+    let count = (n - 2).min(8);
+    let step = (n - 2) as f32 / count as f32;
+    (0..count).map(|i| 1 + (i as f32 * step) as usize).collect()
 }
 
 /// Grid index pair and fractional weight for one axis. Endpoints are

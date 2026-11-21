@@ -15,6 +15,7 @@ use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::custom_density::{
     DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw,
 };
+use vector_field_explorer::field_bake::BakeSettings;
 use vector_field_explorer::field_probe::{
     CirculationLoop, GaussianSurface, IntegralStatus, LoopKind, MAX_LOOPS, MAX_SURFACES,
     SurfaceKind,
@@ -542,6 +543,7 @@ fn sample_settings() -> AppSettings {
         interaction_profiles: Vec::new(),
         seed_layouts: Vec::new(),
         up_axis: Default::default(),
+        bake: BakeSettings::default(),
     }
 }
 
@@ -4512,4 +4514,258 @@ fn parameter_dependent_density_restores_against_its_stored_parameter() {
         state.densities().is_empty(),
         "the same density drops when the restored parameter set cannot bind it"
     );
+}
+
+/// Remove one top-level field from a serialized RON record.
+///
+/// Field selection is an exact top-level token match (start of the record or
+/// after a separator), never a substring search, so a string value that happens
+/// to contain `name:` cannot be mistaken for the field. The value may be a
+/// parenthesized struct, so the removal scan tracks depth and quotes.
+fn remove_ron_field(raw: &str, name: &str) -> String {
+    let needle = format!("{name}:");
+    let bytes = raw.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut start = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        let at_field_start = depth == 1
+            && !in_string
+            && (i == 0 || bytes[i - 1] == b',' || bytes[i - 1] == b'(')
+            && raw[i..].starts_with(&needle);
+        if at_field_start {
+            start = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let start = start.expect("field is serialized as a top-level token");
+
+    let value_start = start + needle.len();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut seen_open = false;
+    let mut end = value_start;
+    for (offset, byte) in bytes[value_start..].iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            end = value_start + offset + 1;
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                seen_open = true;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                if seen_open && depth == 0 {
+                    end = value_start + offset + 1;
+                    break;
+                }
+            }
+            b',' if depth == 0 => {
+                end = value_start + offset;
+                break;
+            }
+            _ => {}
+        }
+        end = value_start + offset + 1;
+    }
+
+    // Remove the separating comma on whichever side the field has one. Removing
+    // the first field therefore consumes the comma after it, not before.
+    let mut begin = start;
+    if begin > 0 && bytes[begin - 1] == b',' {
+        begin -= 1;
+    } else if end < bytes.len() && bytes[end] == b',' {
+        end += 1;
+    }
+    let mut result = String::with_capacity(raw.len());
+    result.push_str(&raw[..begin]);
+    result.push_str(&raw[end..]);
+    result
+}
+
+#[test]
+fn bake_settings_default_disabled_and_round_trip() {
+    assert_eq!(
+        AppSettings::default().bake,
+        BakeSettings {
+            enabled: false,
+            resolution_3d: 48,
+            resolution_2d: 128,
+        }
+    );
+
+    let settings = AppSettings {
+        bake: BakeSettings {
+            enabled: true,
+            resolution_3d: 32,
+            resolution_2d: 96,
+        },
+        ..AppSettings::default()
+    };
+    let mut storage = MemoryStorage::default();
+    save(&mut storage, &settings);
+    assert_eq!(load(Some(&storage)).bake, settings.bake);
+}
+
+#[test]
+fn missing_bake_field_loads_the_documented_defaults() {
+    let raw = ron_string(&AppSettings::default());
+    let without = remove_ron_field(&raw, "bake");
+    assert!(
+        !without.contains("bake:"),
+        "the field was removed:\n{without}"
+    );
+    let loaded: AppSettings = from_ron(&without);
+    assert_eq!(loaded.bake, BakeSettings::default());
+}
+
+#[test]
+fn bake_resolution_bounds_are_repaired_with_one_sanitized_record() {
+    let settings = AppSettings {
+        bake: BakeSettings {
+            enabled: true,
+            resolution_3d: 999,
+            resolution_2d: 1,
+        },
+        ..AppSettings::default()
+    }
+    .sanitized();
+    assert_eq!(
+        settings.bake,
+        BakeSettings {
+            enabled: true,
+            resolution_3d: 64,
+            resolution_2d: 32,
+        },
+        "out-of-range resolutions clamp into the axis bounds and keep the opt-in"
+    );
+
+    let untouched = AppSettings::default().sanitized();
+    assert_eq!(untouched.bake, BakeSettings::default());
+}
+
+#[test]
+fn startup_with_bake_enabled_builds_once_and_reports_failure_honestly() {
+    let mut source = State::new(true);
+    source.set_formula("(sin(x) + y, cos(z) - x, x*y*z)".into());
+    source.set_density(16);
+    source.set_bake_resolution(16);
+    source.set_field_bake_enabled(true);
+    let settings = AppSettings {
+        view: ViewRecord::capture(&source),
+        bake: BakeSettings {
+            enabled: true,
+            resolution_3d: 16,
+            resolution_2d: 64,
+        },
+        ..AppSettings::default()
+    };
+
+    let mut state = State::new(true);
+    let mut controls = Controls::new();
+    let dirty_before = state.dirty;
+    settings.restore(&mut state, &mut controls);
+    assert!(state.field_bake_enabled());
+    assert!(
+        state.field_bake().is_some(),
+        "an enabled startup setting builds the bake once"
+    );
+    assert!(state.baked_flow_active());
+    assert_eq!(state.field_bake().unwrap().resolution(), 16);
+    assert_eq!(state.dirty, dirty_before, "startup restore never dirties");
+
+    // A restored time-dependent field cannot bake; startup stays up and the
+    // failure is reported, never silently swallowed.
+    let mut dependent = State::new(true);
+    dependent.set_formula("(t, 0, 0)".into());
+    let failing = AppSettings {
+        view: ViewRecord::capture(&dependent),
+        bake: BakeSettings {
+            enabled: true,
+            ..BakeSettings::default()
+        },
+        ..AppSettings::default()
+    };
+    let mut state = State::new(true);
+    failing.restore(&mut state, &mut Controls::new());
+    assert!(state.field_bake_enabled());
+    assert!(state.field_bake().is_none());
+    assert_eq!(
+        state.field_bake_error(),
+        Some("cannot bake a time-dependent field")
+    );
+}
+
+#[test]
+fn state_bake_settings_capture_the_live_opt_in_and_resolutions() {
+    let mut state = State::new(true);
+    state.set_bake_resolution(32);
+    assert_eq!(state.bake_settings().resolution_3d, 32);
+    state.set_field_bake_enabled(true);
+    assert_eq!(
+        state.bake_settings(),
+        BakeSettings {
+            enabled: true,
+            resolution_3d: 32,
+            resolution_2d: 128,
+        }
+    );
+}
+
+#[test]
+fn direct_bake_settings_application_clamps_out_of_range_resolutions() {
+    let mut state = State::new(true);
+    state.set_formula("(x, y, z)".into());
+    state.apply_bake_settings(BakeSettings {
+        enabled: true,
+        resolution_3d: 999,
+        resolution_2d: 1,
+    });
+    assert_eq!(
+        state.bake_settings(),
+        BakeSettings {
+            enabled: true,
+            resolution_3d: 64,
+            resolution_2d: 32,
+        },
+        "a direct restore is clamped exactly like load()"
+    );
+    assert_eq!(state.bake_resolution(), 64);
+    assert!(
+        state.field_bake().is_some(),
+        "the clamped resolution builds instead of failing the startup build"
+    );
+    assert_eq!(state.field_bake().unwrap().resolution(), 64);
 }

@@ -10,10 +10,9 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::edit_history::EditSnapshot;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::field_bake::{
-    BakeAccuracyProbes, BakeAxis, BakeError, BakeResolution, BakeSpec, BakedField,
-    MAX_LATTICE_BYTES,
+    BAKE_TOLERANCE, BakeAxis, BakeError, BakeResolution, BakeSpec, BakedField, MAX_LATTICE_BYTES,
 };
-use vector_field_explorer::flow::{BakedFlow, Flow, PlaneFlow};
+use vector_field_explorer::flow::{BakedFlow, Flow, PlaneFlow, SceneFlow};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{self, AdvectSettings, Particles};
 use vector_field_explorer::persistence::ViewRecord;
@@ -109,22 +108,23 @@ fn linear_field_is_reproduced_at_interior_points() {
         assert_close(sampled, exact, 1e-4);
     }
 
-    // A linear field has zero divergence, and the reported residual agrees.
-    let report = baked.accuracy_report(BakeAccuracyProbes {
-        interpolation: Some(&field),
-        divergence_free: Some(&field),
-    });
-    assert_eq!(report.resolution, 24);
-    let interpolation = report.interpolation_max_error.expect("measured");
+    // A linear field is reproduced to f32 tightness, and the build-time report
+    // says so rather than leaving the numbers unmeasured.
+    let report = baked.accuracy();
+    assert_eq!(baked.resolution(), 24);
+    assert!(report.probes > 0 && report.probes <= 512);
+    let interpolation = report.max_abs_error.expect("measured during build");
     assert!(
         interpolation <= 1e-4,
         "linear error {interpolation} is not f32-tight"
     );
-    let residual = report.divergence_residual.expect("measured");
+    let residual = report.divergence_residual.expect("measured during build");
     assert!(
         residual <= 1e-3,
         "linear divergence residual {residual} is too large"
     );
+    assert_eq!(report.tolerance, BAKE_TOLERANCE);
+    assert!(!report.exceeds_tolerance());
 }
 
 #[test]
@@ -134,29 +134,26 @@ fn quadratic_field_error_is_bounded_and_reported() {
     let resolution = 24;
     let baked = BakedField::build(volume_spec(resolution, formula), &field).unwrap();
 
-    let report = baked.accuracy_report(BakeAccuracyProbes {
-        interpolation: Some(&field),
-        divergence_free: None,
-    });
-    assert_eq!(report.resolution, resolution);
+    let report = baked.accuracy();
+    assert_eq!(baked.resolution(), resolution);
     let error = report
-        .interpolation_max_error
-        .expect("a supplied reference is measured");
+        .max_abs_error
+        .expect("a build measures the interpolation error");
     assert!(error > 0.0, "a quadratic field cannot be exact");
     // Cell width is 2/23; the linear-interpolation error of x² is h²/4 ≈ 0.0019.
     assert!(
         error < 0.02,
         "quadratic error {error} exceeds the documented bound"
     );
-    assert_eq!(
-        report.divergence_residual, None,
-        "an unmeasured residual must stay absent, never fabricated"
+    assert!(
+        report.max_rel_error.is_some_and(f32::is_finite),
+        "a measured relative error stays finite"
     );
-
-    // No reference means no measured number at all.
-    let unmeasured = baked.accuracy_report(BakeAccuracyProbes::default());
-    assert_eq!(unmeasured.interpolation_max_error, None);
-    assert_eq!(unmeasured.divergence_residual, None);
+    assert_eq!(report.tolerance, BAKE_TOLERANCE);
+    assert!(
+        report.divergence_residual.is_some_and(f32::is_finite),
+        "a build measures the divergence residual, finite or absent"
+    );
 }
 
 #[test]
@@ -434,18 +431,57 @@ fn bake_is_runtime_only_and_absent_from_capture_restore_and_history() {
     assert!(restored.field_bake().is_none());
 }
 
-#[test]
-fn clearing_the_bake_leaves_existing_particle_and_streamline_results_identical() {
+fn advect_once(state: &State, positions: &[Vec3]) -> Particles {
+    let settings = AdvectSettings {
+        dt: 0.02,
+        time: 0.0,
+        trail_len: 8,
+        loop_on_stagnation: false,
+        stagnation_seconds: 0.5,
+    };
+    let mut particles = Particles::with_positions(positions.to_vec());
+    particles::advect(
+        &mut particles,
+        &state.scene_flow(),
+        &state.scene_domain(),
+        settings,
+    );
+    particles
+}
+
+fn assert_positions_differ(left: &[Vec3], right: &[Vec3]) {
+    assert_eq!(left.len(), right.len(), "position count differs");
+    let differs = left.iter().zip(right).any(|(a, b)| {
+        (a - b).abs().max_element() > 1e-5
+            || a.to_array().map(f32::to_bits) != b.to_array().map(f32::to_bits)
+    });
+    assert!(
+        differs,
+        "a coarse bake must change the advected positions, never be silently ignored"
+    );
+}
+
+fn nonlinear_state() -> State {
     let mut state = State::new(true);
-    state.set_formula("(-y, x, z)".into());
+    state.set_formula("(sin(3*x) + y, cos(2*y) - x, 0.2*z)".into());
     state.set_density(16);
     state.set_streamlines(true);
-    let positions = vec![
+    state
+}
+
+fn sample_positions() -> Vec<Vec3> {
+    vec![
         Vec3::new(-0.5, -0.5, 0.0),
         Vec3::new(0.25, -0.1, 0.4),
         Vec3::new(0.6, 0.3, -0.2),
         Vec3::new(-0.2, 0.7, 0.1),
-    ];
+    ]
+}
+
+#[test]
+fn disabled_bake_leaves_particle_and_streamline_results_byte_identical() {
+    let state = nonlinear_state();
+    let positions = sample_positions();
     let settings = AdvectSettings {
         dt: 0.02,
         time: 0.0,
@@ -454,41 +490,247 @@ fn clearing_the_bake_leaves_existing_particle_and_streamline_results_identical()
         stagnation_seconds: 0.5,
     };
 
-    let mut before = Particles::with_positions(positions.clone());
+    let mut first = Particles::with_positions(positions.clone());
     particles::advect(
-        &mut before,
+        &mut first,
         &state.scene_flow(),
         &state.scene_domain(),
         settings,
     );
-    let lines_before = state.streamlines_snapshot(&state.sample());
-
-    state.rebuild_field_bake(32).unwrap();
-    let mut during = Particles::with_positions(positions.clone());
+    let lines_first = state.streamlines_snapshot(&state.sample());
+    let mut second = Particles::with_positions(positions);
     particles::advect(
-        &mut during,
+        &mut second,
         &state.scene_flow(),
         &state.scene_domain(),
         settings,
     );
-    let lines_during = state.streamlines_snapshot(&state.sample());
+    let lines_second = state.streamlines_snapshot(&state.sample());
 
-    state.clear_field_bake();
+    assert_positions_bit_equal(&first.pos, &second.pos);
+    assert_lines_bit_equal(&lines_first, &lines_second);
+}
+
+#[test]
+fn enabling_a_coarse_bake_changes_particles_and_disabling_restores_exact_bytes() {
+    let mut state = nonlinear_state();
+    let positions = sample_positions();
+    let exact = advect_once(&state, &positions);
+    let exact_lines = state.streamlines_snapshot(&state.sample());
+
+    state.set_bake_resolution(16);
+    state.set_field_bake_enabled(true);
+    assert!(
+        state.field_bake().is_some(),
+        "enabling a valid formula bake builds it"
+    );
+    assert_eq!(state.field_bake().unwrap().resolution(), 16);
+    assert!(state.baked_flow_active());
+    let baked = advect_once(&state, &positions);
+    assert_positions_differ(&exact.pos, &baked.pos);
+    let baked_lines = state.streamlines_snapshot(&state.sample());
+    assert_ne!(
+        exact_lines.len(),
+        baked_lines.len(),
+        "the coarse bake must also change the traced streamlines"
+    );
+
+    state.set_field_bake_enabled(false);
+    assert!(!state.field_bake_enabled());
     assert!(state.field_bake().is_none());
-    let mut after = Particles::with_positions(positions);
-    particles::advect(
-        &mut after,
-        &state.scene_flow(),
-        &state.scene_domain(),
-        settings,
-    );
-    let lines_after = state.streamlines_snapshot(&state.sample());
+    let restored = advect_once(&state, &positions);
+    let restored_lines = state.streamlines_snapshot(&state.sample());
+    assert_positions_bit_equal(&exact.pos, &restored.pos);
+    assert_lines_bit_equal(&exact_lines, &restored_lines);
+}
 
-    // Slice 1a never routes these call sites through the bake.
-    assert_positions_bit_equal(&before.pos, &during.pos);
-    assert_positions_bit_equal(&before.pos, &after.pos);
-    assert_lines_bit_equal(&lines_before, &lines_during);
-    assert_lines_bit_equal(&lines_before, &lines_after);
+#[test]
+fn field_changes_make_the_bake_stale_but_never_disable_it_or_rebuild() {
+    let mut state = nonlinear_state();
+    state.set_bake_resolution(16);
+    state.set_field_bake_enabled(true);
+    assert!(state.field_bake().is_some());
+
+    state.set_formula("(y, x, 0.2*z)".into());
+    assert!(
+        state.field_bake().is_none(),
+        "formula change drops the bake"
+    );
+    assert!(state.field_bake_enabled(), "the opt-in stays on");
+    assert!(!state.baked_flow_active(), "a stale bake is not used");
+
+    state.rebuild_field_bake(16).unwrap();
+    let parameters = ParameterSet {
+        entries: vec![Parameter {
+            name: "k".into(),
+            value: 2.0,
+            step: 1.0,
+            ..Parameter::default()
+        }],
+        ..ParameterSet::default()
+    };
+    state.commit_parameters(parameters).unwrap();
+    assert!(
+        state.field_bake().is_none(),
+        "parameter change drops the bake"
+    );
+    assert!(state.field_bake_enabled());
+
+    state.rebuild_field_bake(16).unwrap();
+    state.set_domain(Vec3::splat(-2.0), Vec3::splat(2.0));
+    assert!(state.field_bake().is_none(), "domain change drops the bake");
+    assert!(state.field_bake_enabled());
+
+    state.rebuild_field_bake(16).unwrap();
+    state.set_density(12);
+    assert!(
+        state.field_bake().is_none(),
+        "density change drops the bake"
+    );
+    assert!(state.field_bake_enabled());
+
+    state.rebuild_field_bake(16).unwrap();
+    state.set_bake_resolution(20);
+    assert!(
+        state.field_bake_enabled(),
+        "a resolution change keeps the opt-in on"
+    );
+    assert!(
+        state.field_bake().is_none(),
+        "a resolution change drops the lattice and leaves it stale"
+    );
+
+    state.rebuild_field_bake(16).unwrap();
+    state.set_mode(false);
+    assert!(state.field_bake().is_none(), "plane mode change drops it");
+    assert!(state.field_bake_enabled());
+
+    state.rebuild_field_bake(16).unwrap();
+    state.set_plane_axis(PlaneAxis::X);
+    assert!(state.field_bake().is_none(), "plane axis change drops it");
+    assert!(state.field_bake_enabled());
+}
+
+#[test]
+fn rebuild_after_a_change_reactivates_and_a_refusal_clears_the_bake() {
+    let mut state = nonlinear_state();
+    state.set_bake_resolution(16);
+    state.set_field_bake_enabled(true);
+    state.set_formula("(y, x, 0.2*z)".into());
+    assert!(!state.baked_flow_active());
+
+    state.rebuild_field_bake(16).unwrap();
+    assert!(state.baked_flow_active());
+
+    state.set_field_mode(FieldMode::Sources);
+    let error = state.rebuild_field_bake(16).unwrap_err();
+    assert_eq!(
+        error,
+        BakeError::UnsupportedMode {
+            mode: FieldMode::Sources
+        }
+    );
+    assert!(state.field_bake().is_none());
+    assert!(state.field_bake_enabled(), "a refusal keeps the opt-in on");
+    assert_eq!(
+        state.field_bake_error(),
+        Some("cannot bake the Sources field; only Formula can be baked")
+    );
+}
+
+#[test]
+fn accuracy_report_is_bounded_finite_and_reports_tolerance_exceedance() {
+    let formula = "(x*x + y*y + z*z, x*y, y*z)";
+    let field = FieldExpr::parse(formula).unwrap();
+    let coarse = BakedField::build(volume_spec(16, formula), &field).unwrap();
+    let report = coarse.accuracy();
+    assert!(report.probes > 0 && report.probes <= 512);
+    assert!(report.max_abs_error.is_some_and(f32::is_finite));
+    assert!(report.max_rel_error.is_some_and(f32::is_finite));
+    assert!(report.divergence_residual.is_some_and(f32::is_finite));
+    assert_eq!(report.tolerance, BAKE_TOLERANCE);
+    assert!(
+        report.max_abs_error.unwrap() > report.tolerance,
+        "a coarse quadratic bake must be reported as above tolerance"
+    );
+    assert!(
+        report.exceeds_tolerance(),
+        "exceeding the stated tolerance must be reported, never hidden"
+    );
+
+    let linear = FieldExpr::parse("(z + 2*y, x - z, y + 1)").unwrap();
+    let fine = BakedField::build(volume_spec(24, "(z + 2*y, x - z, y + 1)"), &linear).unwrap();
+    assert!(!fine.accuracy().exceeds_tolerance());
+}
+
+#[test]
+fn plane_bake_samples_the_current_frame_after_set_density_reclamps_index() {
+    // The field varies with z, so using the bake's stored spec frame after the
+    // slice index moved would visibly sample the wrong plane.
+    let mut state = State::new(false);
+    state.set_formula("(z, 0, 0)".into());
+    state.set_density(16);
+    let stale_frame = state.plane_frame().expect("2D slice of a 3D field");
+    let mut spec = volume_spec(16, "(z, 0, 0)");
+    spec.plane_frame = Some(stale_frame);
+    let stale_bake = BakedField::build(spec, &state.field).unwrap();
+
+    state.set_density(8);
+    let current_frame = state.plane_frame().expect("still a slice");
+    assert!(
+        current_frame.origin.z != stale_frame.origin.z,
+        "the density change must actually re-clamp the slice index"
+    );
+    state.set_field_bake_enabled(true);
+    state.install_field_bake_for_tests(stale_bake);
+
+    let flow = state.scene_flow();
+    let SceneFlow::Baked(baked_flow) = flow else {
+        panic!("an active bake must select SceneFlow::Baked");
+    };
+    assert_eq!(baked_flow.plane, Some(current_frame));
+    assert_ne!(baked_flow.plane, Some(stale_frame));
+
+    let point = Vec3::new(0.5, -0.25, 0.0);
+    let expected = PlaneFlow {
+        field: &state.field,
+        frame: current_frame,
+    }
+    .eval(point, 0.0)
+    .unwrap();
+    let actual = flow.eval(point, 0.0).unwrap();
+    assert_close(actual, expected, 1e-4);
+    let stale = PlaneFlow {
+        field: &state.field,
+        frame: stale_frame,
+    }
+    .eval(point, 0.0)
+    .unwrap();
+    assert!(
+        (stale - expected).abs().max_element() > 1e-3,
+        "the stale and current frames must be distinguishable"
+    );
+}
+
+#[test]
+fn non_formula_and_time_dependent_refusals_surface_verbatim() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    state.set_field_bake_enabled(true);
+    assert_eq!(
+        state.field_bake_error(),
+        Some("cannot bake the Sources field; only Formula can be baked")
+    );
+    assert!(!state.baked_flow_active());
+
+    state.set_field_mode(FieldMode::Formula);
+    state.set_formula("(t, 0, 0)".into());
+    state.set_field_bake_enabled(true);
+    assert_eq!(
+        state.field_bake_error(),
+        Some("cannot bake a time-dependent field")
+    );
+    assert!(state.field_bake().is_none());
 }
 
 #[test]
@@ -536,10 +778,11 @@ fn baked_flow_matches_plane_flow_projection_and_stationary_rule() {
     }
     assert!(baked_flow.zero_velocity_is_stationary());
     assert!(
-        !BakedFlow {
+        BakedFlow {
             baked: &baked,
             plane: None,
         }
-        .zero_velocity_is_stationary()
+        .zero_velocity_is_stationary(),
+        "a world-volume bake treats an exact zero as stationary too"
     );
 }

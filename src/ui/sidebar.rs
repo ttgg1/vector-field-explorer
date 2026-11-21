@@ -32,6 +32,10 @@ use crate::color_mapping::{ClipCounts, ColorMapping, ColorQuantity, ColorStats};
 use crate::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb, ScaleMode};
 use crate::colormap::Colormap;
 use crate::domain::Domain;
+use crate::field_bake::{
+    BakeAccuracy, BakeAxis, BakedField, MAX_PLANE_RESOLUTION, MAX_VOLUME_RESOLUTION,
+    MIN_PLANE_RESOLUTION, MIN_VOLUME_RESOLUTION,
+};
 use crate::field_probe::{
     CirculationLoop, GaussianSurface, IntegralStatus, LoopKind, MAX_SEGMENTS, MIN_SEGMENTS,
     SurfaceKind,
@@ -347,6 +351,74 @@ pub fn streamline_count_label(count: u32) -> String {
     } else {
         count.to_string()
     }
+}
+
+/// The lattice size as `48³` or `128²`; the axis names the topology.
+pub fn bake_resolution_label(axis: BakeAxis, resolution: u32) -> String {
+    match axis {
+        BakeAxis::Volume3d => format!("{resolution}³"),
+        BakeAxis::Plane2d => format!("{resolution}²"),
+    }
+}
+
+/// The resolution slider bounds for `axis`.
+pub fn bake_resolution_bounds(axis: BakeAxis) -> (u32, u32) {
+    match axis {
+        BakeAxis::Volume3d => (MIN_VOLUME_RESOLUTION, MAX_VOLUME_RESOLUTION),
+        BakeAxis::Plane2d => (MIN_PLANE_RESOLUTION, MAX_PLANE_RESOLUTION),
+    }
+}
+
+/// One honest caption for the Baked flow area: resolution, interpolation,
+/// measured errors, tolerance and the normalized-teaching-units caveat.
+pub fn bake_accuracy_caption(axis: BakeAxis, resolution: u32, accuracy: BakeAccuracy) -> String {
+    let metric = |value: Option<f32>| match value {
+        Some(value) if value.is_finite() => format!("{value:.2e}"),
+        Some(_) | None => "not measured".to_owned(),
+    };
+    let mut caption = format!(
+        "Baked {} lattice, trilinear interpolation · max |Δv| {} · max relative error {} · \
+         divergence residual {} · tolerance {:.0e} · normalized teaching approximation, not SI",
+        bake_resolution_label(axis, resolution),
+        metric(accuracy.max_abs_error),
+        metric(accuracy.max_rel_error),
+        metric(accuracy.divergence_residual),
+        accuracy.tolerance,
+    );
+    if accuracy.exceeds_tolerance() {
+        caption.push_str(&format!(
+            " · exceeds the {:.0e} tolerance",
+            accuracy.tolerance
+        ));
+    }
+    caption
+}
+
+/// The provenance line for the active bake.
+pub fn bake_provenance_line(axis: BakeAxis, resolution: u32) -> String {
+    format!(
+        "Flow traced on a {} baked lattice (trilinear approximation, normalized teaching units).",
+        bake_resolution_label(axis, resolution)
+    )
+}
+
+/// The status line under the Baked flow controls. `None` when the opt-in is
+/// off; otherwise the verbatim refusal, a stale prompt, or the active
+/// provenance statement.
+pub fn bake_status_text(enabled: bool, active: bool, error: Option<&str>) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    if let Some(error) = error {
+        return Some(error.to_owned());
+    }
+    if active {
+        return Some(
+            "Flow traced on a baked lattice (trilinear approximation, normalized teaching units)."
+                .to_owned(),
+        );
+    }
+    Some("Baked flow is stale; press Rebuild to apply it to the current scene.".to_owned())
 }
 
 /// Explained in place of the Coloring widgets when the Both source display
@@ -2157,6 +2229,74 @@ pub fn show_compact_with_plot_action(
     show_inner(ui, state, controls, layouts, compact)
 }
 
+/// The collapsed Baked flow area. It stays reachable outside Formula so a
+/// recorded refusal is visible: the controls are disabled with a short reason,
+/// while the status line keeps the verbatim error.
+fn baked_flow_section(ui: &mut egui::Ui, state: &mut State) {
+    let formula = state.field_mode == crate::source_scene::FieldMode::Formula;
+    egui::CollapsingHeader::new("Baked flow")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.add_enabled_ui(formula, |ui| {
+                let mut enabled = state.field_bake_enabled();
+                if ui
+                    .checkbox(&mut enabled, "Enable baked flow")
+                    .on_hover_text(
+                        "Trace particles and streamlines on a sampled lattice instead of \
+                         evaluating the formula at every point. Results are approximations.",
+                    )
+                    .changed()
+                {
+                    state.set_field_bake_enabled(enabled);
+                }
+                let axis = state.bake_axis();
+                let (min, max) = bake_resolution_bounds(axis);
+                let mut resolution = state.bake_resolution();
+                ui.horizontal(|ui| {
+                    ui.label("Resolution");
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut resolution)
+                                .range(min..=max)
+                                .speed(1.0),
+                        )
+                        .on_hover_text("Lattice points per axis. Changing it makes the bake stale.")
+                        .changed()
+                    {
+                        state.set_bake_resolution(resolution);
+                    }
+                });
+                if ui
+                    .button("Rebuild")
+                    .on_hover_text("Bake the current formula, parameters, domain and plane")
+                    .clicked()
+                {
+                    let _ = state.rebuild_field_bake(state.bake_resolution());
+                }
+                if let Some(accuracy) = state.field_bake_accuracy() {
+                    let baked_resolution = state
+                        .field_bake()
+                        .map(BakedField::resolution)
+                        .unwrap_or(resolution);
+                    ui.label(bake_accuracy_caption(axis, baked_resolution, accuracy));
+                }
+            });
+        });
+    if !formula {
+        ui.add_enabled(
+            false,
+            egui::Button::selectable(false, "Baked flow is only available for Formula fields."),
+        );
+    }
+    if let Some(status) = bake_status_text(
+        state.field_bake_enabled(),
+        state.baked_flow_active(),
+        state.field_bake_error(),
+    ) {
+        ui.add_enabled(false, egui::Button::selectable(false, status));
+    }
+}
+
 fn show_inner(
     ui: &mut egui::Ui,
     state: &mut State,
@@ -2423,6 +2563,7 @@ fn show_inner(
 
     if state.field_mode == crate::source_scene::FieldMode::Sources {
         ui.label("Streamlines and particles use the formula field; switch to Formula to use them.");
+        baked_flow_section(ui, state);
     } else {
         let induction_mode = state.field_mode == crate::source_scene::FieldMode::Induction;
         let ode_mode = state.field_mode == crate::source_scene::FieldMode::Ode;
@@ -2450,6 +2591,11 @@ fn show_inner(
             ui.checkbox(&mut controls.streamlines, "Streamlines").on_hover_text(
                 "Auto adds grid seeds; Click shows only click seeds. Off hides both and disables click seeding.",
             );
+            if state.baked_flow_active()
+                && let Some(baked) = state.field_bake()
+            {
+                ui.label(bake_provenance_line(state.bake_axis(), baked.resolution()));
+            }
             ui.add_enabled_ui(seed_mode_enabled(controls.streamlines), |ui| {
                 button_row(ui, |ui| {
                     ui.label("Seed");
@@ -2661,6 +2807,7 @@ fn show_inner(
                     .on_disabled_hover_text("Turn Particles on to change their appearance");
                 });
             });
+            baked_flow_section(ui, state);
             if seed_layout_visible(state.field_mode, controls.streamlines, vector_mode) {
                 egui::CollapsingHeader::new("Seed layout")
                     .default_open(false)

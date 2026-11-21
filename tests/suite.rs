@@ -24,6 +24,7 @@ mod arrow_geometry_test;
 mod arrow_layer_style_test;
 mod arrow_opacity_test;
 mod arrow_style_test;
+mod bake_ui_test;
 mod branding_assets_test;
 mod button_sizing_test;
 mod camera_input_test;

@@ -69,8 +69,9 @@ impl Flow for PlaneFlow<'_> {
 ///
 /// The simulated time is ignored: a bake is only built for
 /// [`FieldExpr::is_time_dependent`] `== false`, so there is no time input to
-/// lose. Slice 1a adds this model only; no default particle, streamline or
-/// `advance_exact` call site selects it yet.
+/// lose. [`SceneFlow::Baked`] is selected by
+/// [`crate::viewmodel::State::scene_flow`] when the opt-in is on and the bake
+/// still matches the live inputs.
 #[derive(Debug, Clone, Copy)]
 pub struct BakedFlow<'a> {
     pub baked: &'a BakedField,
@@ -91,17 +92,20 @@ impl Flow for BakedFlow<'_> {
     }
 
     fn zero_velocity_is_stationary(&self) -> bool {
-        // Mirrors `PlaneFlow`: a lower-dimensional slice treats an exact zero
-        // in-plane velocity as stationary; the world flow keeps respawning.
-        self.plane.is_some()
+        // A bake is a sampled approximation whose exact-zero cells would
+        // otherwise respawn, so both the world-volume and plane-slice views
+        // keep a zero-velocity particle put. This matches `SceneFlow::Baked`.
+        true
     }
 }
 
-/// The field the current scene traces: the world field or a projected slice.
+/// The field the current scene traces: the world field, a projected slice or an
+/// opt-in baked lattice.
 #[derive(Debug, Clone, Copy)]
 pub enum SceneFlow<'a> {
     World(&'a FieldExpr),
     Plane(PlaneFlow<'a>),
+    Baked(BakedFlow<'a>),
 }
 
 impl Flow for SceneFlow<'_> {
@@ -109,6 +113,7 @@ impl Flow for SceneFlow<'_> {
         match self {
             SceneFlow::World(field) => field.eval(point, t),
             SceneFlow::Plane(flow) => flow.eval(point, t),
+            SceneFlow::Baked(flow) => flow.eval(point, t),
         }
     }
 
@@ -116,6 +121,9 @@ impl Flow for SceneFlow<'_> {
         match self {
             SceneFlow::World(_) => false,
             SceneFlow::Plane(flow) => flow.zero_velocity_is_stationary(),
+            // A baked lattice is a sampled approximation, so an exact zero is
+            // treated like a plane slice rather than triggering respawn.
+            SceneFlow::Baked(_) => true,
         }
     }
 }
