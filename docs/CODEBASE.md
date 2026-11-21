@@ -1755,6 +1755,66 @@ integration. Wasm/browser and manual visual checks remain waived, not passed.
 See [sources accuracy notes](sources-accuracy.md) for tested cases and
 timings.
 
+#### `src/field_probe.rs` — bounded Gaussian surfaces and circulation loops
+
+**Purpose.** A no-UI, no-GPU, native/wasm-compatible seam for closed-surface
+flux and circulation estimates. The caller supplies the already selected field
+through `ProbeField`; the report records the explicit `FieldFamily` so electric
+and magnetic contributions are never added. All values are normalized teaching
+units, not SI measurements.
+
+**Public API.** `SurfaceKind`, `LoopKind`, `GaussianSurface`, `CirculationLoop`,
+`ProbeField`, `IntegralStatus`, `FluxReport`, `CirculationReport`, `flux`,
+`circulation`, `GaussianSurface::validate`, `GaussianSurface::area`,
+`CirculationLoop::validate`, `MAX_SURFACES`, `MAX_LOOPS`, `MAX_PROBE_SAMPLES`,
+`MIN_SEGMENTS`, and `MAX_SEGMENTS`. `size` holds full extents along the local
+axes (sphere/circle diameter, box/rectangle width-height, cylinder diameter and
+height); local `z` follows the explicit axis.
+
+**Invariants.**
+- Validation rejects non-finite centre/axis/size, non-positive extents, a
+  degenerate axis and `segments` outside `8..=64`. The axis is normalized on
+  use; a degenerate axis is never replaced by `+Z` in this model.
+- The full-resolution patch budget is `segments²` for a sphere,
+  `6 * segments²` for a box, `3 * segments²` for a cylinder (side plus two caps),
+  `segments` for a circle and `4 * segments` for a rectangle. Any geometry above
+  `MAX_PROBE_SAMPLES` is rejected before integration, with the limit named.
+- Quadrature is midpoint patches for surfaces, weighted by the outward area
+  normal, and midpoint segments for loops, weighted by the oriented tangent.
+  Patch areas use exact geometry weights; work is deterministic and bounded.
+  Surface normals are built in the surface's local basis: a cylinder side uses
+  `u*cos(phi) + v*sin(phi)` with caps at `±w`, a box uses `±u/±v/±w`, a sphere
+  is radial, and loop tangents use the local `u`/`v` basis. No normal assumes
+  the axis is `+Z`.
+- A second pass at half resolution (halved segments, floor four) must complete
+  before `Estimate { value, error }` is reported; `error` is the absolute spread
+  between the two passes, not a certified bound.
+- A missing or unsupported sample makes the result `Unresolved`; any non-finite
+  sample makes it `Singular`. The reported `samples` count is the full-resolution
+  patch/segment count (within `MAX_PROBE_SAMPLES`); failed patches/segments are
+  counted from the pass that failed and are never silently treated as zero
+  contributions. A failed full pass skips the half-resolution pass.
+- Electric and magnetic families remain separate inputs and separate reports.
+  Supported loops are closed, so `one_sided` is currently always false.
+
+**Pinned by.** [tests/field_probe_test.rs](../tests/field_probe_test.rs):
+`sphere_flux_of_a_point_charge_follows_the_enclosed_charge_relation`,
+`uniform_field_has_zero_flux_through_a_closed_surface`,
+`tilted_cylinder_in_a_uniform_field_has_zero_flux`,
+`tilted_cylinder_normals_follow_the_local_basis`,
+`loop_around_a_straight_wire_recovers_the_ampere_relation`,
+`missing_and_non_finite_samples_are_reported_not_zeroed`,
+`validation_rejects_non_finite_and_degenerate_geometry`,
+`validation_rejects_geometry_over_the_sample_budget`,
+`refinement_does_not_increase_the_reported_error`, and
+`reports_are_deterministic_for_repeated_calls`.
+
+**Limitations.** Midpoint quadrature is a teaching estimate for the sampled
+field, not a Maxwell solver or a certified enclosure. The error is a
+resolution-spread indicator. Placement/UI, persistence, rendering and app
+wiring belong to the later slice. Wasm/browser and manual visual checks remain
+waived, not passed.
+
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 
 **Purpose.** Give the streamline tracer one `Flow::eval(point, t)` seam over
