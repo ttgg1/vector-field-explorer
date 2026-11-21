@@ -138,7 +138,11 @@ fn visible_height(camera: &OrbitCamera, view: ViewContext) -> f32 {
 
 /// Apply `command` to `camera` for `view` and return the new camera. Pure: the
 /// caller owns the camera and decides when to store the result.
-pub fn apply_view_command(camera: OrbitCamera, view: ViewContext, command: ViewCommand) -> OrbitCamera {
+pub fn apply_view_command(
+    camera: OrbitCamera,
+    view: ViewContext,
+    command: ViewCommand,
+) -> OrbitCamera {
     let mut camera = camera;
     match command {
         ViewCommand::Orbit { dx, dy } => {
@@ -167,8 +171,11 @@ pub fn apply_view_command(camera: OrbitCamera, view: ViewContext, command: ViewC
             }
         }
         ViewCommand::Reset => {
+            // Issue #208: reset restores the default pose but keeps the user's
+            // display-only up axis; it is not a document/camera preference.
             camera = OrbitCamera {
                 target: domain_center(view.domain),
+                up_axis: camera.up_axis,
                 ..OrbitCamera::default()
             };
         }
@@ -188,7 +195,8 @@ pub fn apply_view_command(camera: OrbitCamera, view: ViewContext, command: ViewC
                 let zoom = (plane_size / height)
                     .min(plane_size * view.aspect / width)
                     .min(1.0);
-                camera.ortho_zoom = zoom.clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
+                camera.ortho_zoom =
+                    zoom.clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
             }
         }
     }
@@ -591,10 +599,7 @@ pub fn seed_shortcut_with_bindings(
 /// The point a keyboard seed/burst lands on: the pointer when it is inside the
 /// viewport, otherwise the viewport centre. A captured/locked pointer may not
 /// hover at all, which is why `pointer` is optional.
-pub fn shortcut_seed_point(
-    pointer: Option<egui::Pos2>,
-    viewport_rect: egui::Rect,
-) -> egui::Pos2 {
+pub fn shortcut_seed_point(pointer: Option<egui::Pos2>, viewport_rect: egui::Rect) -> egui::Pos2 {
     match pointer {
         Some(pos) if viewport_rect.contains(pos) => pos,
         _ => viewport_rect.center(),

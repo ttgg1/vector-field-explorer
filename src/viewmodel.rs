@@ -71,6 +71,7 @@ use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedError, SeedLayout, SeedPoint,
 };
 use crate::sources::{EvalOptions, Evaluator, FamilyResult, FieldFamily, SourceSet, WorkLimits};
+use crate::view_orientation::UpAxis;
 use crate::viewport_style::ViewportStyle;
 
 use std::cell::RefCell;
@@ -480,6 +481,11 @@ pub struct State {
     /// [`State::commit_viewport_style`] may replace it in response to an edit;
     /// startup restores assign it directly.
     pub viewport_style: ViewportStyle,
+    /// Display-only vertical world axis (issue #208). The persisted settings
+    /// envelope restores it directly without dirtying the scene; it is never
+    /// written into a [`crate::persistence::ViewRecord`], scene document,
+    /// appearance profile or edit-history snapshot.
+    pub up_axis: UpAxis,
     /// Durable per-layer and per-family appearance overrides (issue #84 slice
     /// A1). Only [`State::commit_layer_styles`] may replace it in response to
     /// an edit; an invalid commit leaves the previous record untouched.
@@ -1491,6 +1497,7 @@ impl State {
             formula: formula.to_string(),
             parameters: ParameterSet::default(),
             viewport_style: ViewportStyle::default(),
+            up_axis: UpAxis::default(),
             layer_styles: LayerStyles::default(),
             object_style: ObjectStyle::default(),
             field,

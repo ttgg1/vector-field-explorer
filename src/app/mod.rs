@@ -431,7 +431,10 @@ impl VfApp {
         // the first frame, not only after the first edit. This is the same
         // tested recentre helper the live domain editor uses; the default
         // domain's centre is the origin, so a fresh session is unchanged.
-        let mut orbit = OrbitCamera::default();
+        let mut orbit = OrbitCamera {
+            up_axis: state.up_axis,
+            ..OrbitCamera::default()
+        };
         if state.mode_3d {
             orbit.recentre_on(&state.scene_domain());
         } else {

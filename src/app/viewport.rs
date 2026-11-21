@@ -11,6 +11,10 @@ impl VfApp {
     /// Frame phase: the wgpu field viewport, its camera input, click-to-seed,
     /// screenshot capture and the captured-pointer crosshair.
     pub(super) fn frame_viewport(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Issue #208: keep the orbit basis in step with the display-only
+        // orientation. A same-frame Appearance-panel change applies before the
+        // view, picking and screenshot paths read the camera.
+        self.orbit.up_axis = self.state.up_axis;
         // Central viewport: the wgpu field renderer, driven by the same state.
         egui::CentralPanel::default_margins().show(ui, |ui| {
             let rect = ui.max_rect().shrink(2.0);

@@ -196,6 +196,7 @@ mod ui_preset_test;
 mod ui_style_panel_test;
 mod version_test;
 mod view_command_test;
+mod view_orientation_test;
 mod viewmodel_test;
 mod viewport_style_test;
 mod web_assets_test;

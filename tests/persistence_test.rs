@@ -541,6 +541,7 @@ fn sample_settings() -> AppSettings {
         interaction: InteractionProfile::default(),
         interaction_profiles: Vec::new(),
         seed_layouts: Vec::new(),
+        up_axis: Default::default(),
     }
 }
 

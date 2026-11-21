@@ -1098,6 +1098,7 @@ fn saving_a_scene_captures_view_parameters_and_camera() {
         target: Vec3::new(1.0, 2.0, 3.0),
         fov_y: 1.2,
         ortho_zoom: 2.5,
+        up_axis: Default::default(),
     };
     app.presets.set_scene_name("scene one");
 

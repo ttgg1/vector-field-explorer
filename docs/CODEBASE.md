@@ -283,7 +283,8 @@ called the single `src/app` module is now `src/app/mod.rs` plus
 `arrow_geometry.rs`, `arrow_style.rs`, `fly_camera.rs`, `fonts.rs`, `plane.rs`,
 `pointer_lock.rs`, `reference.rs`, `sim_clock.rs`, `render/instancer.rs`,
 `ui/branding.rs`, `ui/menu.rs`, `ui/transport.rs`, `version.rs`,
-`viewport_style.rs`, `layer_style.rs`, and the four shaders. Two files on disk are not compiled at all (`render/instancer.rs` and
+`view_orientation.rs`, `viewport_style.rs`, `layer_style.rs`, and the four
+shaders. Two files on disk are not compiled at all (`render/instancer.rs` and
 `ui/arrows.rs`); they are documented where they appear so nobody adds live code
 to them by mistake.
 
@@ -854,7 +855,8 @@ persistence write.
 - Phase order is input → chrome → simulation → status → viewport → overlays.
 - `save` writes exactly `AppSettings { style, layout, view:
   ViewRecord::capture(&state) }` plus the durable parameter, viewport-style,
-  layer-style, user-profile, interaction and named-seed-layout records; the
+  layer-style, object-style, display-only up-axis, user-profile, interaction and
+  named-seed-layout records; the
   user profile libraries come from `VfApp::profiles.user()`,
   `VfApp::interaction_profiles.user()` and `VfApp::seed_layouts.user()`.
   Cameras and fly state are intentionally absent.
@@ -3964,7 +3966,7 @@ migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-seed_layouts, preset_ui, object_style }`, `AppSettings::sanitized`;
+seed_layouts, preset_ui, object_style, up_axis }`, `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
 `restore_maxwell_fields`, `restore_maxwell_wave`, `Default`); `finite_or`;
 `load`, `save`; private serde helpers.
@@ -3983,6 +3985,7 @@ seed_layouts, preset_ui, object_style }`, `AppSettings::sanitized`;
 | `interaction_profiles: Vec<InteractionProfile>` | user interaction profiles only (the built-in `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized, an entry named `DEFAULT_PROFILE_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_PROFILES = 16` are dropped with a warning |
 | `seed_layouts: Vec<SeedLayoutProfile>` | user named seed layouts only (the built-in empty `Default` is never stored) | `#[serde(default)]`; an absent key loads an empty library; each entry is sanitized against the restored view domain, an entry whose trimmed name is empty or `DEFAULT_LAYOUT_NAME` or whose sanitized name duplicates an earlier one is dropped with a warning, and entries beyond `MAX_USER_LAYOUTS = 16` are dropped with a warning |
 | `object_style: ObjectStyle` | `Solid` or `Wireframe` | `#[serde(default)]`; an absent key loads `Solid`; an unknown token is repaired to `Solid` with one warning by the enum decoder, and a non-string stored value is repaired to `Solid` by the field wrapper, leaving every other field intact |
+| `up_axis: UpAxis` | display-only `Z` (default), `X` or `Y`, stored lowercase as `z`, `x`, `y` | `#[serde(default)]`; an absent key loads `Z`; an unknown token is repaired to `Z` with one warning by the enum decoder, and a non-string stored value is repaired to `Z` by the field wrapper. The default is genuinely Z-up (physics convention); the token `y` selects the old historical Y-up view. It is assigned at the startup seam without dirtying and never appears in `ViewRecord`, scenes, appearance profiles or edit history |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -4155,7 +4158,7 @@ envelope.
 projection/ray math shared by painting, screenshots, and click seeding.
 
 **Public API.** `OrbitCamera` fields (`yaw`, `pitch`, `distance`, `target`,
-`fov_y`, `ortho_zoom`) and methods; `MIN_DISTANCE`, `MAX_DISTANCE`,
+`fov_y`, `ortho_zoom`, `up_axis`) and methods; `MIN_DISTANCE`, `MAX_DISTANCE`,
 `MIN_ORTHO_ZOOM`, `MAX_ORTHO_ZOOM`; `ViewCamera<'a>` (`Orbit`/`Fly`) with
 `view`, `vp_matrix`, `eye_position`, `ndc_ray`, `is_fly`;
 `apply_camera_record`.
@@ -4163,6 +4166,12 @@ projection/ray math shared by painting, screenshots, and click seeding.
 **Invariants.**
 - Spherical position has exactly `distance` from `target`; pitch clamps to
   ±1.55 to keep the up vector valid.
+- Issue #208: `up_axis` is display-only. The default `Z` applies the physics
+  Z-up rotation so world `+Z` is screen-up; `X` puts world `+X` up, and `Y` is
+  the old historical Y-up orientation (identity basis). Each derives the orbit
+  basis from its deterministic world `(up, forward)` pair. `ndc_ray` and click
+  picking invert the same view, so they keep returning world-space rays. The 2D
+  front view ignores `up_axis`.
 - `zoom` clamps distance to 0.5..=20; `zoom_2d` clamps ortho zoom to
   0.05..=50 and recovers from a non-finite current value.
 - The 2D view is a front view: eye at `target + Z*distance`, looking down -Z,
@@ -4179,15 +4188,40 @@ projection/ray math shared by painting, screenshots, and click seeding.
 
 **Pinned by.** `tests/camera_test.rs`, `tests/camera_pan_zoom_test.rs`,
 `tests/camera_zoom_pan_test.rs`, `tests/click_seed_zoom_test.rs`,
-`tests/fly_camera_test.rs::view_camera_*`:
+`tests/view_orientation_test.rs`, `tests/fly_camera_test.rs::view_camera_*`:
 `ndc_ray_at_center_looks_at_target`, `target_maps_to_vp_center`,
 `front_view_looks_down_negative_z_with_y_up`,
 `two_d_vp_uses_the_front_view_not_the_orbit_view`,
 `zoom_2d_recovers_from_a_non_finite_ortho_zoom`,
-`recentre_on_targets_the_domain_centre_without_changing_the_pose`, etc.
+`recentre_on_targets_the_domain_centre_without_changing_the_pose`,
+`z_up_is_the_default_and_projects_world_z_to_screen_up`, etc.
 
-**Limitations.** World up is fixed to +Y; there is no roll. The far plane is
-100 world units. The 2D camera is orthographic only.
+**Limitations.** The default `Z` view intentionally changes the old pre-#208
+Y-up screen orientation; the `Y` option restores it. There is no roll. The far
+plane is 100 world units. The 2D camera is orthographic only.
+
+#### `src/view_orientation.rs` — display-only vertical world axis
+
+**Purpose.** Issue #208: `UpAxis { Z (default), X, Y }` with one deterministic
+world-to-display rotation. It is display-only; coordinates, formulas, probes and
+saved scenes remain in x/y/z. The labels name the world axis that actually points
+up on screen: the physics-convention default is `Z up (default)`, and `Y up`
+selects the pre-change historical orientation.
+
+**Public API.** `UpAxis` (`ALL`, `label`, `basis`, `rotation`), lenient
+`Deserialize` that accepts the lowercase tokens `z`, `x`, `y` and repairs an
+unknown token to `Z` with one warning.
+
+**Invariants.** `Z` is the default and a proper -90° turn about X mapping world
+`+Z` to display `+Y` and world `+Y` to display forward `-Z`. `X` is a half turn
+about `(1,1,0)` mapping world `+X` to display `+Y`. `Y` is the identity that
+preserves the old historical view. All rotations are proper and right-handed;
+`basis()` returns the inverse-rotated display `(up, forward)` world vectors.
+`rotation().inverse()` reproduces world positions within float precision for
+picking. `tests/view_orientation_test.rs` derives the world axis from each label
+and asserts it projects to display up, pinning label/rendering agreement.
+
+**Pinned by.** `tests/view_orientation_test.rs` (14 tests).
 
 #### `src/fly_camera.rs` — six-DOF camera and capture policy
 
@@ -4564,6 +4598,9 @@ legacy entry points delegate to the default style and stay byte-identical.
 - Every line stays inside the domain bounds.
 - Reference geometry is never counted as field geometry and is not part of the
   viewmodel snapshot.
+- Issue #208 keeps every axis line and colour in world coordinates. The display
+  orientation is a camera property, so only the projected screen direction
+  changes; labels/colours stay x/y/z and 2D is unaffected.
 
 **Pinned by.** `tests/reference_lines_test.rs` (13 tests):
 `three_d_reference_has_twelve_box_edges_subdivided_faces_and_three_axes`,
@@ -5295,6 +5332,10 @@ the current appearance under a name and imports/exports the user library as
 portable text. The header notes that styling affects the live/raster view only;
 SVG exports keep the unstyled blueprint, and preset labels say the seaborn and
 editor-theme looks are teaching approximations, not byte-exact reproductions.
+Issue #208 adds one `Viewport` section with a single `Up axis` ComboBox (Z/X/Y)
+and an honest note that it changes only how the view is drawn; coordinates and
+saved scenes are unchanged. The choice is display-only, never dirties the
+document and is never written into a `ViewRecord` or appearance profile.
 
 **Public API.** `AppearanceEdit` (`LayerOpacity`, `LayerWidth`, `FamilyOpacity`,
 `FamilyWidth`, `FamilyColor`); `apply_edit`, `reset_all`; `AppearancePanelState`
@@ -5328,7 +5369,7 @@ a weak-coloured success `message`. Session drafts (`profile_name`, `import_text`
   revision counters; an empty user library yields an empty buffer, so `Copy`
   stays disabled.
 
-**Pinned by.** `tests/appearance_panel_test.rs` (34): panel toggle/width
+**Pinned by.** `tests/appearance_panel_test.rs` (35): panel toggle/width
 round trip and clamp, single compact sheet, compact Appearance tab opening,
 layer/family commit and resolution, layer-over-family precedence and the
 family-only fallback, default escape, inline error display/clearing, invalid

@@ -16,6 +16,7 @@ use crate::layer_style::{
     ResolvedLayerStyle,
 };
 use crate::profile_library::ProfileLibrary;
+use crate::view_orientation::UpAxis;
 use crate::viewmodel::State;
 
 /// One field edit the panel can request.
@@ -160,6 +161,20 @@ impl AppearancePanelState {
         }
 
         self.profile_section(ui, state, profiles);
+
+        ui.separator();
+        ui.label(egui::RichText::new("Viewport").strong());
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Up axis");
+            egui::ComboBox::from_id_salt("appearance_up_axis")
+                .selected_text(state.up_axis.label())
+                .show_ui(ui, |ui| {
+                    for axis in UpAxis::ALL {
+                        ui.selectable_value(&mut state.up_axis, axis, axis.label());
+                    }
+                });
+        });
+        ui.weak("Changes only how the view is drawn; coordinates and saved scenes are unchanged.");
 
         ui.separator();
         ui.label(egui::RichText::new("Layers").strong());

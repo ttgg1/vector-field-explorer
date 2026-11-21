@@ -15,6 +15,9 @@ impl VfApp {
     /// the clock, camera keys, and the help keys. Captures the domain before
     /// anything can edit it so the camera can follow a moved box this frame.
     pub(super) fn frame_input(&mut self, ctx: &egui::Context) -> Domain {
+        // Issue #208: input/picking below must use the same display basis the
+        // viewport draws. The assignment is display-only and never dirties.
+        self.orbit.up_axis = self.state.up_axis;
         // #99 slice B: the guided tour owns Enter/Right, Left and Escape before
         // any menu, viewport or camera handler sees them. A focused text field
         // keeps every key, so editing is never interrupted.

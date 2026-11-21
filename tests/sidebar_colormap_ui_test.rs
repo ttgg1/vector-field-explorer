@@ -318,6 +318,7 @@ fn colormap_row_drives_state_scene_and_persistence() {
         interaction: Default::default(),
         interaction_profiles: Default::default(),
         seed_layouts: Default::default(),
+        up_axis: Default::default(),
         object_style: Default::default(),
     };
     let mut storage = MemoryStorage::default();

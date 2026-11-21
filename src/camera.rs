@@ -7,6 +7,7 @@ use crate::domain::Domain;
 use crate::fly_camera::FlyCamera;
 use crate::interaction::CameraFeel;
 use crate::render::Camera;
+use crate::view_orientation::UpAxis;
 
 /// Spherical orbit camera around a target point.
 ///
@@ -25,6 +26,9 @@ pub struct OrbitCamera {
     /// it, so 2.0 shows half as much world. Clamped to
     /// [`OrbitCamera::MIN_ORTHO_ZOOM`]..=[`OrbitCamera::MAX_ORTHO_ZOOM`].
     pub ortho_zoom: f32,
+    /// Display-only vertical world axis (issue #208). It never changes world
+    /// coordinates or the 2D front view; it only selects the 3D orbit basis.
+    pub up_axis: UpAxis,
 }
 
 impl Default for OrbitCamera {
@@ -36,6 +40,7 @@ impl Default for OrbitCamera {
             target: Vec3::ZERO,
             fov_y: 55.0_f32.to_radians(),
             ortho_zoom: 1.0,
+            up_axis: UpAxis::Z,
         }
     }
 }
@@ -52,17 +57,23 @@ impl OrbitCamera {
     /// Widest 2D zoom-out (50x the domain).
     pub const MAX_ORTHO_ZOOM: f32 = 50.0;
 
-    /// Eye position derived from the spherical parameters. The three terms are
-    /// the unit sphere direction, so `|position() - target| == distance` for
-    /// every yaw/pitch (review I-2: the z term is `sin(yaw) * sin(pitch)`).
+    /// The unit direction from the target to the eye in the selected display
+    /// basis. The three terms are the display basis vectors, so the result is
+    /// unit length and `|position() - target| == distance` for every
+    /// yaw/pitch (review I-2: the z term is `sin(yaw) * sin(pitch)` in the
+    /// default basis).
+    pub fn eye_direction(&self) -> Vec3 {
+        let (up, forward) = self.up_axis.basis();
+        let right = forward.cross(up);
+        up * self.pitch.cos()
+            + (forward * self.yaw.cos() + right * self.yaw.sin()) * self.pitch.sin()
+    }
+
+    /// Eye position derived from the spherical parameters around the selected
+    /// up axis. The default Z basis is the physics Z-up convention; the Y
+    /// option reproduces the pre-#208 historical formula exactly.
     pub fn position(&self) -> Vec3 {
-        self.target
-            + self.distance
-                * Vec3::new(
-                    self.yaw.cos() * self.pitch.sin(),
-                    self.pitch.cos(),
-                    self.yaw.sin() * self.pitch.sin(),
-                )
+        self.target + self.distance * self.eye_direction()
     }
 
     /// Rotate the camera around the target (radians).
@@ -85,7 +96,8 @@ impl OrbitCamera {
             self.ortho_zoom = 1.0;
         }
         if factor.is_finite() && factor > 0.0 {
-            self.ortho_zoom = (self.ortho_zoom * factor).clamp(Self::MIN_ORTHO_ZOOM, Self::MAX_ORTHO_ZOOM);
+            self.ortho_zoom =
+                (self.ortho_zoom * factor).clamp(Self::MIN_ORTHO_ZOOM, Self::MAX_ORTHO_ZOOM);
         }
     }
 
@@ -94,7 +106,8 @@ impl OrbitCamera {
     /// these, so the view slides in the plane the user sees.
     pub fn view_basis(&self) -> (Vec3, Vec3) {
         let forward = (self.target - self.position()).normalize_or_zero();
-        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let (up, _) = self.up_axis.basis();
+        let right = forward.cross(up).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
         (right, up)
     }
@@ -124,14 +137,19 @@ impl OrbitCamera {
 
     /// World-to-eye transform (look-at from the orbit position).
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at_rh(self.position(), self.target, Vec3::Y)
+        let (up, _) = self.up_axis.basis();
+        Mat4::look_at_rh(self.position(), self.target, up)
     }
 
     /// The eye for a projection mode: the orbit position in 3D, and the fixed
     /// front-view eye (`target + Z * distance`) in 2D. The renderer's
     /// camera-facing line ribbons take this, so they match the projection.
     pub fn eye_position(&self, ortho: bool) -> Vec3 {
-        if ortho { self.target + Vec3::Z * self.distance } else { self.position() }
+        if ortho {
+            self.target + Vec3::Z * self.distance
+        } else {
+            self.position()
+        }
     }
 
     /// World-to-eye transform for the 2D front view: the eye on +Z looking
@@ -181,11 +199,16 @@ impl OrbitCamera {
     /// the far plane (view depth `FAR`, which is farther than Euclidean `FAR`
     /// for off-centre rays).
     pub fn ndc_ray(&self, aspect: f32, ndc_xy: Vec2) -> (Vec3, Vec3) {
-        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            1.0
+        };
         let half_h = (self.fov_y * 0.5).tan();
         let camera_dir = Vec3::new(ndc_xy.x * half_h * aspect, ndc_xy.y * half_h, -1.0) * Self::FAR;
-        let direction = (self.view().inverse() * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
-            .truncate();
+        let direction = (self.view().inverse()
+            * Vec4::new(camera_dir.x, camera_dir.y, camera_dir.z, 0.0))
+        .truncate();
         (self.position(), direction)
     }
 }
@@ -281,11 +304,7 @@ impl ViewCamera<'_> {
 /// views and never carry a fly pose, so the user gets the saved framing back
 /// rather than a stale free-flight view. Non-finite components are ignored, so
 /// a hand-edited preset file cannot poison the camera.
-pub fn apply_camera_record(
-    record: &Camera,
-    orbit: &mut OrbitCamera,
-    fly: &mut Option<FlyCamera>,
-) {
+pub fn apply_camera_record(record: &Camera, orbit: &mut OrbitCamera, fly: &mut Option<FlyCamera>) {
     *fly = None;
     if record.position[0].is_finite() {
         orbit.target.x = record.position[0];
@@ -294,8 +313,8 @@ pub fn apply_camera_record(
         orbit.target.y = record.position[1];
     }
     if record.scale.is_finite() {
-        orbit.ortho_zoom =
-            record.scale.clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
+        orbit.ortho_zoom = record
+            .scale
+            .clamp(OrbitCamera::MIN_ORTHO_ZOOM, OrbitCamera::MAX_ORTHO_ZOOM);
     }
 }
-
