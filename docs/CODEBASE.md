@@ -1450,10 +1450,12 @@ later tasks.
 
 #### `src/source_presets.rs` — built-in source-scene presets
 
-**Purpose.** The ten illustrative source scenes offered above the saved camera
-views in the Presets panel. Each is built from
+**Purpose.** The seventeen illustrative source scenes offered above the saved
+camera views in the Presets panel. Most are built from
 [`SourceKindTag::default_source`](../src/source_scene.rs) with unit
-charge/current, so the catalogue adds no new physics and no formula conversion.
+charge/current; `Electric dipole`, `Unequal charges` and `Opposing wires`
+override their strength to `+1`/`-1` through the shared `with_strength` helper,
+so the catalogue still adds no new physics and no formula conversion.
 
 **Public API.** `SourcePreset { name, summary, build }`; `source_presets()`;
 `source_preset(name)`; `source_strength(&Source) -> f64`;
@@ -1462,15 +1464,20 @@ charge/current, so the catalogue adds no new physics and no formula conversion.
 **Invariants.**
 - The catalogue order is `Coulomb point`, `Electric dipole`, `Charged line`,
   `Uniform ring`, `Thin disc`, `Charged sphere`, `Infinite wire`,
-  `Current loop`, `Finite solenoid`, `Source gallery`; names are unique and the
-  gallery contains one entry of each of the eight kinds.
+  `Current loop`, `Finite solenoid`, then ticket 91's `Unequal charges`,
+  `Off-axis ring`, `Sphere inside and out`, `Paired loops`, `Helmholtz pair`,
+  `Opposing wires`, `Solenoid ends`, and `Source gallery` last; names are unique
+  and the gallery contains one entry of each of the eight kinds.
 - Strengths are finite and illustrative: unit magnitude everywhere, with the
-  dipole's charges at `+1`/`-1`. Every scene keeps the default `0.1` softening,
-  `Both` display and `allow_inaccurate = false`.
+  dipole's and opposing wires' entries at `+1`/`-1`; the unequal-charge
+  quadrupole alternates `+1`/`-1` over four point charges. Every scene keeps the
+  default `0.1` softening, `Both` display and `allow_inaccurate = false`.
 - `load_source_preset` validates the built scene first, then uses the ordinary
   setters to select `PlotKind::VectorField`, `FieldMode::Sources`, a 3D view,
   the canonical `[-2, 2]^3` domain and the new scene. It returns false without
-  touching the state when validation fails.
+  touching the state when validation fails. Ticket 91 keeps that single
+  canonical domain: the off-axis ring and the length-2 solenoid's ends both sit
+  inside it, so no per-preset domain field was added.
 - Formula presets remain formulas; loading a source preset touches no saved
   formula or camera-preset storage.
 
@@ -1478,7 +1485,9 @@ charge/current, so the catalogue adds no new physics and no formula conversion.
 `source_presets_have_unique_names_and_cover_all_eight_kinds`,
 `loading_a_source_preset_uses_real_setters_and_a_visible_domain`,
 `every_preset_strength_is_the_illustrative_unit_and_finite`,
-`legacy_formula_presets_keep_their_mode_and_label`, and
+`legacy_formula_presets_keep_their_mode_and_label`,
+`teaching_source_presets_use_the_expected_existing_kinds_and_signs`,
+`teaching_source_presets_validate_and_load_inside_the_canonical_domain`, and
 `panel_source_preset_loads_the_scene_and_tracks_the_active_source`.
 
 **Limitations.** Presets are presentation examples, not calibrated physical
@@ -1966,15 +1975,26 @@ dimension, category }`; `presets()`; `presets_in(category)`;
 - `preset_approximation_label` returns `Some("2D approximation")` for exactly
   `Dipole`, `Source and sink`, `Point charge`, `Like charges`, `Quadrupole` and
   `Straight wire`; it is a display label only and never converts a formula.
+- Ticket 91's teaching entries add pulsating-radial, rotating, traveling-wave,
+  standing-wave, quadrupole-saddle, saddle-potential, anisotropic-well,
+  double-well, softened-dipole and moving-Gaussian formulas. The four entries
+  that reference `t` (`Pulsating radial field`, `Traveling wave field`,
+  `Standing wave field`, `Moving Gaussian packet`) are driven by the shared
+  `SimClock` through the ordinary `State::sample` path; no second timer exists.
 
 **Pinned by.** `tests/presets_test.rs`: `every_preset_parses_with_declared_dimension`,
 `every_preset_stays_finite_on_the_default_domain`, `preset_names_are_unique`,
 `grouping_preserves_declared_category_order`, `softening_covers_the_origin`,
-and the category/limit tests.
+`new_teaching_presets_have_representative_values`,
+`new_animated_presets_move_with_the_shared_clock`,
+`only_the_clock_driven_teaching_presets_reference_t`,
+`loading_a_new_animated_preset_leaves_unrelated_state_untouched`, and the
+category/limit tests.
 
 **Limitations.** Formulas are illustrative, not physical (Coulomb numerators are
-not normalised). The preset formulas themselves are static spatial snapshots;
-formulas may still reference `t` when the user edits them.
+not normalised). Legacy static entries remain spatial snapshots; the ticket-91
+animated entries read `t` from the shared clock but make no SI or propagation
+claim.
 
 #### `src/preset_library.rs` — indexed preset catalogue
 
@@ -1985,27 +2005,35 @@ later panel work consumes the stable IDs and metadata.
 
 **Public API.** `PresetId` with `new(&str)`/`as_str`; `PresetIdError`;
 `PresetGroup { Classic, Physics, Sources, Gallery }`;
-`PresetFilters { dimension, animated }`;
+`PresetValidity { MathematicalIllustration, PhysicallyValid,
+PhysicallyValidRegularized }` with `label`; `PresetFilters { dimension, animated }`;
 `PresetEntry { id, name, summary, group, filters, assumptions, parameters,
-exploration_prompt }`; `PresetLibrary::builtin`, `from_entries`, `entries`,
-`len`, `is_empty`, `search`, `filtered`, `search_filtered`, `get`;
+exploration_prompt, validity }`; `PresetLibrary::builtin`, `from_entries`,
+`entries`, `len`, `is_empty`, `search`, `filtered`, `search_filtered`, `get`;
 `PresetLibraryError`.
 
 **Invariants.**
 - IDs match `[a-z0-9][a-z0-9_.-]*`, ASCII, 1..=64 bytes; malformed candidates
   return a descriptive error and never panic.
 - Formula IDs are `formula.<slug>` (lowercased name with each non-`[a-z0-9]`
-  run replaced by `_`); source IDs are `source.<slug>`. IDs are unique across
-  the whole catalogue and construction rejects duplicates.
+  run replaced by `_`) unless ticket 91 metadata fixes an explicit ID;
+  `Quadrupole (unequal charges)` uses
+  `formula.quadrupole-unequal-charges` because the legacy `Quadrupole` already
+  owns `formula.quadrupole`. Source IDs are `source.<slug>`. IDs are unique
+  across the whole catalogue and construction rejects duplicates.
 - Catalogue order is `presets()` order, then `source_presets()` order. Formula
   groups map `Classic` to `Classic` and the three physics categories to
   `Physics`; source entries are `Sources` except the named last gallery, which
   is `Gallery`.
-- Formula entries carry `Preset::dimension` and are never animated; source
-  entries are dimension-agnostic (`None`). `assumptions` reuses
-  `preset_approximation_label`, so only the documented 2D approximations carry
-  one. `parameters` and `exploration_prompt` stay empty until a preset defines
-  them.
+- Formula entries carry `Preset::dimension`; the four ticket-91 clock-driven
+  entries set `animated`, the rest stay static. Source entries are
+  dimension-agnostic (`None`) and static.
+- `assumptions` reuses `preset_approximation_label` for legacy formulas and
+  carries the ticket-91 teaching note otherwise. The new formula and source
+  entries also carry a non-empty summary, exploration prompt and a
+  `PresetValidity` label (`Mathematical illustration`, `Physically valid`, or
+  the regularized softened dipole); legacy entries without labels carry
+  `validity: None`. `parameters` stays empty until a preset defines them.
 - `search` is trimmed, case-insensitive substring over name, summary and ID,
   with a blank query returning all entries in catalogue order. `filtered` keeps
   sources under every dimension and only animated entries when `animated` is
@@ -2017,13 +2045,16 @@ exploration_prompt }`; `PresetLibrary::builtin`, `from_entries`, `entries`,
 `source_entries_use_the_source_group_and_gallery_last`,
 `search_is_trimmed_case_insensitive_and_ordered`,
 `dimension_filter_keeps_sources_and_matching_dimension`,
-`animated_filter_is_honest_for_an_all_static_catalogue`,
+`animated_filter_returns_exactly_the_clock_driven_entries`,
+`teaching_formula_entries_carry_stable_metadata`,
+`teaching_source_entries_carry_stable_metadata`,
 `combined_search_and_filter_matches_manual_intersection`,
 `get_returns_the_entry_or_none`, and `duplicate_ids_are_rejected`.
 
-**Limitations.** Formula presets have no summary in their source catalogue, so
-their `summary` is empty. No preset is animated or parameterised yet, and no
-entry supplies an exploration prompt.
+**Limitations.** Legacy formula presets have no summary in their source
+catalogue, so their `summary` is empty and their `validity` label is `None`.
+No preset is parameterised yet. The animated flag is catalogue metadata; the
+panel already runs the shared clock from `State`, but no library API drives it.
 
 #### `src/colormap.rs` — scalar-to-RGB ramps
 

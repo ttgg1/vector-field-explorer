@@ -23,8 +23,8 @@ pub enum PresetCategory {
     Electrostatics,
     /// Fields around steady currents.
     Magnetostatics,
-    /// Static spatial sinusoids: the field oscillates in space, but v1 has no
-    /// time variable, so these are snapshots of a wave rather than a moving one.
+    /// Waves and other time-varying teaching fields. Static entries are
+    /// snapshots; entries that reference `t` follow the shared simulation clock.
     Electrodynamics,
 }
 
@@ -58,7 +58,7 @@ impl PresetCategory {
                 "Fields around steady currents: wires, dipoles, solenoids"
             }
             PresetCategory::Electrodynamics => {
-                "Static spatial sinusoids: the field oscillates in space (no time variable in v1)"
+                "Waves: static snapshots plus time-varying fields driven by the shared clock"
             }
         }
     }
@@ -157,6 +157,43 @@ pub fn presets() -> &'static [Preset] {
             dimension: 2,
             category: PresetCategory::Classic,
         },
+        // Radial outflow whose speed breathes with the shared clock. This is a
+        // kinematic illustration, not a physical radiating field.
+        Preset {
+            name: "Pulsating radial field",
+            formula: "(x*(1+0.5*sin(t)), y*(1+0.5*sin(t)))",
+            dimension: 2,
+            category: PresetCategory::Classic,
+        },
+        // Rigid rotation with no decay; the shared clock does not enter.
+        Preset {
+            name: "Rotating field",
+            formula: "(-y, x)",
+            dimension: 2,
+            category: PresetCategory::Classic,
+        },
+        // The saddle field (x, -y) is the negative gradient of x^2 - y^2.
+        Preset {
+            name: "Saddle potential",
+            formula: "(x, -y)",
+            dimension: 2,
+            category: PresetCategory::Classic,
+        },
+        // Anisotropic harmonic well: the y restoring force is four times x.
+        Preset {
+            name: "Anisotropic well",
+            formula: "(-x, -4*y)",
+            dimension: 2,
+            category: PresetCategory::Classic,
+        },
+        // Double well along x: -grad((x^2 - 1)^2) = (-4x^3 + 4x, 0), plus a
+        // separate linear well along y.
+        Preset {
+            name: "Double-well potential",
+            formula: "(-4*x^3 + 4*x, -y)",
+            dimension: 2,
+            category: PresetCategory::Classic,
+        },
         // Electrostatics: softened Coulomb fields from static charges.
         Preset {
             name: "Dipole",
@@ -196,6 +233,22 @@ pub fn presets() -> &'static [Preset] {
         Preset {
             name: "Quadrupole",
             formula: "(-2*x, 2*y)",
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        // Symmetric quadrupole saddle, opposite in sign to the legacy
+        // Quadrupole above. Kept as its own teaching entry.
+        Preset {
+            name: "Quadrupole (unequal charges)",
+            formula: "(x, -y)",
+            dimension: 2,
+            category: PresetCategory::Electrostatics,
+        },
+        // Genuine regularized dipole: +1 at (1.25, 0) and -1 at (0.75, 0),
+        // each softened with s^2 = 0.0625 so neither charge centre is singular.
+        Preset {
+            name: "Softened dipole",
+            formula: "((x-1.25)/(((x-1.25)^2+y^2+0.0625)^1.5) - (x-0.75)/(((x-0.75)^2+y^2+0.0625)^1.5), y/(((x-1.25)^2+y^2+0.0625)^1.5) - y/(((x-0.75)^2+y^2+0.0625)^1.5))",
             dimension: 2,
             category: PresetCategory::Electrostatics,
         },
@@ -244,6 +297,27 @@ pub fn presets() -> &'static [Preset] {
             name: "Circular wave",
             formula: "(0, sin(x), cos(x))",
             dimension: 3,
+            category: PresetCategory::Electrodynamics,
+        },
+        // A 2D sinusoidal profile translating along x at unit speed.
+        Preset {
+            name: "Traveling wave field",
+            formula: "(sin(x-t), 0)",
+            dimension: 2,
+            category: PresetCategory::Electrodynamics,
+        },
+        // A spatial sinusoid oscillating in place with the shared clock.
+        Preset {
+            name: "Standing wave field",
+            formula: "(sin(x)*cos(t), 0)",
+            dimension: 2,
+            category: PresetCategory::Electrodynamics,
+        },
+        // Translating Gaussian packet: -grad(exp(-((x-t)^2+y^2))).
+        Preset {
+            name: "Moving Gaussian packet",
+            formula: "(-2*(x-t)*exp(-((x-t)^2+y^2)), -2*y*exp(-((x-t)^2+y^2)))",
+            dimension: 2,
             category: PresetCategory::Electrodynamics,
         },
     ];
