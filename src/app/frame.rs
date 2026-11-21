@@ -4,6 +4,12 @@
 use super::*;
 
 impl eframe::App for VfApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // #18 task b: the deadline must also run when eframe hides the window
+        // and calls only `logic`, so a measurement cannot hang forever.
+        self.present_deadline_check(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Restyle the whole frame from the persisted record before any widget
         // runs. `apply` is idempotent, so doing this every frame is cheap and
@@ -48,12 +54,19 @@ impl eframe::App for VfApp {
         self.frame_tour_overlay(&ctx);
         // Issue #86 slice A2: one driver pass after the UI has had its say.
         self.drive_history(&ctx);
+        // #18 task b: feed this frame into a bounded present measurement, if
+        // one was requested. Inert (one branch) in every ordinary run.
+        self.present_frame(&ctx, frame);
     }
 
     /// Persist the settings envelope (style + layout + view state) under
     /// eframe's app key. Camera state is intentionally absent: presets are the
     /// way to restore a viewpoint.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if self.present.is_some() {
+            // A measurement run must never touch user settings.
+            return;
+        }
         let settings = AppSettings {
             style: self.style.clone(),
             layout: self.layout.clone(),

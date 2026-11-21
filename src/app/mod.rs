@@ -77,6 +77,7 @@ mod input;
 mod panels;
 mod plane;
 pub mod plot;
+mod present;
 
 use plane::SceneFrameKey;
 mod simulation;
@@ -173,6 +174,9 @@ pub struct VfApp {
     pub status: StatusBarState,
     /// Smoothed FPS/frame-time source, fed once per frame from `stable_dt`.
     pub fps_meter: FpsMeter,
+    /// Bounded native present-path measurement (#18 task b). `None` in every
+    /// ordinary run; only `main` opts in through `VFE_PERF_PRESENT=1`.
+    present: Option<present::PresentRun>,
     /// Frame time accumulated while the current transient hint is live.
     hint_elapsed: f32,
     /// The hint text observed last frame, so a new hint restarts its lifetime.
@@ -408,7 +412,38 @@ impl VfApp {
         Self::build_with_storage(storage)
     }
 
+    /// Native present-path measurement entry (#18 task b).
+    ///
+    /// No app storage is passed, so settings/history are in-memory and never
+    /// loaded or written; presets and saved scenes may still be read
+    /// read-only by their panels, but a measurement never overwrites them.
+    /// The named scene is applied before the view is derived.
+    ///
+    /// # Panics
+    ///
+    /// `config.scene` must be one of
+    /// [`SUPPORTED_SCENES`](crate::perf_present::SUPPORTED_SCENES), as
+    /// [`PresentConfig::from_env`](crate::perf_present::PresentConfig::from_env)
+    /// guarantees; a hand-built invalid config panics rather than measuring a
+    /// different scene.
+    pub fn new_present(config: crate::perf_present::PresentConfig) -> Self {
+        Self::build_with_storage_and_present(None, Some(config))
+    }
+
+    /// Test seam: whether this instance opted into the present harness.
+    #[doc(hidden)]
+    pub fn present_mode_active(&self) -> bool {
+        self.present.is_some()
+    }
+
     fn build_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
+        Self::build_with_storage_and_present(storage, None)
+    }
+
+    fn build_with_storage_and_present(
+        storage: Option<&dyn eframe::Storage>,
+        present: Option<crate::perf_present::PresentConfig>,
+    ) -> Self {
         let settings = persistence::load(storage);
         let mut state = State::new(false);
         let mut controls = Controls::new();
@@ -418,6 +453,13 @@ impl VfApp {
         // not dirty the scene on its own), so a saved parameterised formula
         // binds the saved values.
         settings.restore(&mut state, &mut controls);
+        // Present measurements apply their named scene through the shipped
+        // state constructors/setters after restoration and before the orbit,
+        // backdrop and cached collections are derived from it.
+        if let Some(config) = &present {
+            crate::perf_present::apply_scene(&mut state, &config.scene)
+                .expect("PresentConfig validated its scene");
+        }
         // `AppSettings::restore` also applies the persisted object style through
         // `State::restore_object_style`, which never dirties the first frame.
         // Same for the viewport style: startup assigns the loaded record
@@ -538,6 +580,7 @@ impl VfApp {
             cas,
             status: StatusBarState::default(),
             fps_meter: FpsMeter::default(),
+            present: present.map(present::PresentRun::new),
             hint_elapsed: 0.0,
             hint_seen: None,
             camera: Camera::default(),

@@ -128,6 +128,8 @@ mod particle_playback_test;
 mod particles_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod perf_baseline_test;
+#[cfg(not(target_arch = "wasm32"))]
+mod perf_present_test;
 mod persistence_test;
 mod plane_particles_test;
 mod plane_scene_test;

@@ -80,6 +80,68 @@ Like the rest of `scripts/`, the baseline script is Linux-only.
 It claims no floor. A recorded baseline describes one host, one build profile
 and one code revision; compare like with like.
 
+## Present-path floor record (#18 task b)
+
+The accepted floors in
+[particle-performance.md](particle-performance.md) describe **presented** rates:
+60 fps for the default 2D scene and 30 fps for the densest shipped 3D scene at
+1280×800 on the integrated-GPU reference. The offscreen harness above cannot
+prove them because it never exercises the egui painter, swapchain or
+compositor. The bounded native present-path mode does:
+
+```sh
+scripts/bench-present-floor.sh
+# equivalent single scene:
+VFE_PERF_PRESENT=1 VFE_PERF_SCENE=densest-3d VFE_PERF_SECONDS=10 \
+  cargo run --release --bin vector-field-explorer
+```
+
+`VFE_PERF_PRESENT=1` is the only enabling value; absent or any other value
+leaves the app byte-for-byte unchanged. `VFE_PERF_SCENE` defaults to
+`default-2d` and accepts `densest-3d`; `VFE_PERF_SECONDS` defaults to 10 and is
+clamped to 5..=60; `VFE_PERF_OUT` optionally receives just the two `PERF present`
+lines. The window is pinned to 1280×800 logical (min = max), the first 2 s are
+discarded, then **raw wall-clock intervals between successive `ui()` update
+calls** are aggregated to p50/p95/p99 ms and `fps_p50`. Each interval includes
+the previous frame's present and swapchain work; GPU submit cost inside the
+current frame is only visible through the next interval. The app closes itself,
+settings and history are in-memory, and while presets and saved scenes may be
+read read-only by their panels, they are never overwritten. A wall-clock
+deadline (warm-up + window + 5 s slack) prints a bounded `error=deadline_exceeded`
+line and closes even if frames stop arriving. The record line names the actual
+adapter, backend and pixel size. Dropped frames are not observable through
+eframe, so none are claimed.
+
+**Recorded 2026-11-21 at base `b4c9a39`, release build, AMD Ryzen 9 7950X +
+AMD Radeon RX 9070 XT (RADV GFX1201), Vulkan on Wayland, 1280×800, 10 s window
+after 2 s warm-up** ([baseline](baselines/2026-11-21-present-rx9070xt.txt)).
+This is a **re-measurement** with the raw inter-update wall-clock sampler; the
+earlier `stable_dt`-smoothed record was replaced, not kept alongside it.
+
+| Scene | Documented floor | p50 ms | p95 ms | p99 ms | fps_p50 | Verdict |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `default-2d` | 60 fps | 5.553 | 5.737 | 5.891 | 180.1 | **PASS** |
+| `densest-3d` | 30 fps | 5.570 | 5.766 | 5.933 | 179.5 | **PASS** |
+
+Explicit verdict wording:
+
+- **PASS** means the measured p50 on this host, build and 1280×800 size reached
+  the documented floor. Both floor scenes passed; no floor was lowered.
+- **FAIL** would mean the measured p50 fell below the floor on a correctly
+  configured run at 1280×800; none did here.
+- **not verified** remains the integrated-GPU reference itself: this host has no
+  iGPU, so the record proves the discrete RX 9070 XT clears the floors, not that
+  the documented integrated target does. Other scenes and hardware are also not
+  verified by this record.
+- The display refreshes at 179.92 Hz, so ~5.55 ms is the vsync cap with
+  headroom, not a GPU-limit claim; the p50 cannot distinguish “fast enough” from
+  “faster than this display can show”. Raw inter-update p95/p99 now include
+  scheduling outliers that the earlier smoothed sampler damped.
+
+Run logs stay under `/tmp/opencode/present-floor-<date>/`; the script refuses to
+overwrite an existing same-date baseline. It is a measurement record, not a CI
+threshold.
+
 ## Per-feature reports
 
 - [animation-performance.md](animation-performance.md): animation export,

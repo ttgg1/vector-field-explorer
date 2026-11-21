@@ -2,8 +2,9 @@
 fn main() -> eframe::Result {
     use log::info;
     use vector_field_explorer::VfApp;
+    use vector_field_explorer::perf_present::PresentConfig;
     use vector_field_explorer::version::VERSION;
-    use vector_field_explorer::window::{WINDOW_TITLE, window_options};
+    use vector_field_explorer::window::{WINDOW_TITLE, window_options, window_options_present};
 
     // Ticket 20: `RUST_LOG` selects the filter, defaulting to `info`; logs go
     // to stderr. The wasm build initializes `console_log` in its own entry
@@ -19,6 +20,33 @@ fn main() -> eframe::Result {
     // The build version seam (ticket 42): a nightly stamps its full version
     // through `VFE_BUILD_VERSION`, so the startup line matches About.
     info!("{WINDOW_TITLE} v{VERSION} starting (native)");
+    // #18 task b: a bounded, native-only present-path measurement. With the
+    // variable absent this is `None` and startup is byte-for-byte unchanged.
+    let present = match PresentConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("present: {error}");
+            std::process::exit(2);
+        }
+    };
+    if let Some(config) = present {
+        info!(
+            "present measurement: scene={} seconds={} warmup=2s size=1280x800",
+            config.scene, config.seconds
+        );
+        return eframe::run_native(
+            WINDOW_TITLE,
+            window_options_present(),
+            Box::new(move |cc| {
+                vector_field_explorer::fonts::install(&cc.egui_ctx);
+                // In-memory only: pass no app storage, so settings and history
+                // are never loaded or written. Panels may still read presets
+                // and saved scenes read-only, but the measurement never
+                // overwrites them.
+                Ok(Box::new(VfApp::new_present(config)))
+            }),
+        );
+    }
     let options = window_options();
     eframe::run_native(
         WINDOW_TITLE,

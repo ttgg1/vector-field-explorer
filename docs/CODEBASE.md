@@ -407,6 +407,12 @@ including the pre-start WebGPU gate and the static fallback UI.
 - After logging setup, arguments dispatch to `cli::run_from` before window options
   or app construction; help/version succeed without a window or GPU. No arguments
   retain the ordinary GUI path and its startup log.
+- `VFE_PERF_PRESENT=1` selects the bounded native present-path measurement before
+  `run_native`: `PresentConfig::from_env` validates the scene/seconds, the app is
+  built through `VfApp::new_present` with `None` storage, and
+  `window_options_present` forces the 1280×800 measurement geometry. Invalid
+  values exit 2 with a named error; every other value or an absent variable
+  leaves the ordinary path untouched.
 - Wasm initializes `console_log`, checks `navigator.gpu` and awaits
   `requestAdapter()` before `WebRunner::new()`, reveals `#webgpu-unsupported`
   with the reason on failure, hides the panel on success, and removes `#loading`
@@ -684,6 +690,8 @@ and the helpers that belong to no single frame phase.
   in-memory `history`/`last_committed` pair driven by
   [`src/app/history.rs`](#srcapphistoryrs--edit-history-wiring).
 - `VfApp::new()` and `VfApp::new_with_storage(Option<&dyn eframe::Storage>)`.
+- `VfApp::new_present(PresentConfig)` (native measurement entry; `None` storage)
+  and the `#[doc(hidden)] present_mode_active()` test seam.
 - `StatusBarState` (parse message, fps/frame ms, arrow/streamline/particle/trail
   counts, density, `is_3d`, sim time, flying, hint, animation progress).
 - `presets_data_dir()` (native re-export of the XDG directory).
@@ -6486,11 +6494,16 @@ mark as the window icon.
 
 **Public API.** `WINDOW_TITLE = "Vector Field Explorer"`,
 `DEFAULT_INNER_SIZE = [1280, 800]`, `MIN_INNER_SIZE = [960, 600]`,
-`window_options()` (native), `#[doc(hidden)]`/`pub(crate)` `icon_data`.
+`window_options()` (native), `window_options_present()` (native measurement
+geometry), `#[doc(hidden)]`/`pub(crate)` `icon_data`.
 
 **Invariants.**
 - The window starts centred, resizable, at 1280×800, cannot shrink below
   960×600, and persists its size/position.
+- `window_options_present()` instead pins exactly 1280×800 (min = max, not
+  resizable), disables window persistence, uses a distinct app id and points
+  eframe's storage at `/dev/null`, so a measurement cannot restore or rewrite
+  user geometry.
 - The 256 px PNG is decoded at startup; a decode failure logs and falls back to
   eframe's default icon rather than blocking launch.
 - Wasm never calls this module's native functions.
@@ -6728,6 +6741,7 @@ cargo build
 cargo run --release
 scripts/test.sh                  # cargo test --all-targets, then prunes stale binaries
 scripts/bench-perf-baseline.sh   # release perf baseline; add --gpu for offscreen frames
+scripts/bench-present-floor.sh   # bounded native present-path floor record
 KEEP_TEST_ARTIFACTS=1 scripts/test.sh
 scripts/test.sh --incremental
 cargo clippy --all-targets -- -D warnings
@@ -6794,7 +6808,12 @@ Gated benchmark modules (`tests/*_bench_test.rs` and
 immediately unless their environment flag is set. The maintained post-epic
 harness is `tests/perf_baseline_test.rs` behind `VFE_PERF_BASELINE=1`, driven by
 `scripts/bench-perf-baseline.sh`; see [docs/perf/README.md](perf/README.md) for
-what it measures and what it deliberately does not.
+what it measures and what it deliberately does not. The native present-path
+floor harness is `src/perf_present.rs` (pure config/aggregation) plus
+`src/app/present.rs` (raw wall-clock inter-update driver with a safety
+deadline), behind `VFE_PERF_PRESENT=1` and driven by
+`scripts/bench-present-floor.sh`; a normal app never reads the variable and
+`tests/perf_present_test.rs` pins the inert default.
 
 ---
 
