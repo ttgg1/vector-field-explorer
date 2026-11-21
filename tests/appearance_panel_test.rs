@@ -11,6 +11,7 @@ use eframe::egui;
 use crate::support;
 use crate::support::storage::{from_ron, ron_string};
 
+use vector_field_explorer::VfApp;
 use vector_field_explorer::appearance_profile::{
     AppearanceProfile, PROFILE_FORMAT_VERSION, ProfileDocument, builtins,
 };
@@ -25,7 +26,6 @@ use vector_field_explorer::ui::layout::{
     DEFAULT_APPEARANCE_WIDTH, LayoutState, MAX_PANEL_WIDTH, SheetState,
 };
 use vector_field_explorer::viewmodel::State;
-use vector_field_explorer::VfApp;
 
 fn layer_slot(layer: LayerId) -> usize {
     LayerId::ALL
@@ -312,10 +312,7 @@ fn clearing_a_field_restores_the_fallback() {
     )
     .expect("an override commits");
     assert_eq!(
-        state
-            .layer_styles()
-            .resolve(LayerId::Reference, None)
-            .width,
+        state.layer_styles().resolve(LayerId::Reference, None).width,
         0.25
     );
 
@@ -414,10 +411,7 @@ fn accesskit_labels(output: &egui::FullOutput) -> Vec<String> {
         .collect()
 }
 
-fn render_panel(
-    panel: &mut AppearancePanelState,
-    state: &mut State,
-) -> egui::FullOutput {
+fn render_panel(panel: &mut AppearancePanelState, state: &mut State) -> egui::FullOutput {
     let mut profiles = ProfileLibrary::default();
     render_panel_with(panel, state, &mut profiles, 420.0, false)
 }
@@ -512,50 +506,104 @@ impl ProfileHarness {
 
     fn click_label(&mut self, label: &str) -> egui::FullOutput {
         let out = self.idle();
-        let pos = button_center(&out, label)
-            .unwrap_or_else(|| panic!("the {label} button is painted"));
+        let pos =
+            button_center(&out, label).unwrap_or_else(|| panic!("the {label} button is painted"));
         self.click(pos);
         self.idle()
     }
 
-    fn click_nth_label(&mut self, label: &str, index: usize) -> egui::FullOutput {
-        let out = self.idle();
-        let pos = nth_button_center(&out, label, index)
-            .unwrap_or_else(|| panic!("{label} button {index} is painted"));
-        self.click(pos);
-        self.idle()
-    }
-}
-
-fn button_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
-    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
-        return Vec::new();
-    };
-    let mut rects: Vec<egui::Rect> = update
-        .nodes
-        .iter()
-        .filter_map(|(_, node)| {
-            if node.role() != egui::Role::Button || node.label() != Some(label) {
-                return None;
+    /// Open the profile dropdown and click `name` in its list. The selection is
+    /// only a draft; the caller decides whether to click Apply.
+    fn select_profile(&mut self, name: &str) -> egui::FullOutput {
+        self.open_profile_dropdown();
+        // The popup scrolls: AccessKit reports every option's bounds, including
+        // ones clipped out of the visible menu. Scroll until the option's paint
+        // is inside its clip rect, then click it.
+        for _ in 0..40 {
+            let out = self.idle();
+            let rect = label_rect(&out, name)
+                .unwrap_or_else(|| panic!("{name} is listed in the profile dropdown"));
+            let clip = text_clip(&out, name, rect);
+            if let Some(clip) = clip
+                && clip.contains_rect(rect)
+            {
+                self.click(rect.center());
+                return self.idle();
             }
-            let bounds = node.bounds()?;
-            Some(egui::Rect::from_min_max(
-                egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
-                egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
-            ))
-        })
-        .collect();
-    rects.sort_by(|a, b| {
-        a.center()
-            .y
-            .total_cmp(&b.center().y)
-            .then(a.center().x.total_cmp(&b.center().x))
-    });
-    rects
+            let pos = clip
+                .map(|clip| rect.intersect(clip).center())
+                .or_else(|| dropdown_scroll_pos(&out))
+                .expect("the open dropdown has a scrollable viewport");
+            self.frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -300.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        panic!("{name} never scrolled into the profile dropdown viewport");
+    }
+
+    fn open_profile_dropdown(&mut self) -> egui::FullOutput {
+        let out = self.idle();
+        let pos = combo_center(&out).expect("the profile dropdown is painted");
+        self.click(pos);
+        self.idle()
+    }
 }
 
-fn nth_button_center(output: &egui::FullOutput, label: &str, index: usize) -> Option<egui::Pos2> {
-    button_rects(output, label).get(index).map(egui::Rect::center)
+fn node_rect(node: &egui::accesskit::Node) -> Option<egui::Rect> {
+    let bounds = node.bounds()?;
+    Some(egui::Rect::from_min_max(
+        egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+        egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+    ))
+}
+
+fn label_rect(output: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
+    let update = output.platform_output.accesskit_update.as_ref()?;
+    update.nodes.iter().find_map(|(_, node)| {
+        (node.label() == Some(label))
+            .then(|| node_rect(node))
+            .flatten()
+    })
+}
+
+fn text_clip(output: &egui::FullOutput, label: &str, rect: egui::Rect) -> Option<egui::Rect> {
+    output.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text)
+            if text.galley.text() == label && rect.intersects(text.visual_bounding_rect()) =>
+        {
+            Some(shape.clip_rect)
+        }
+        _ => None,
+    })
+}
+
+fn dropdown_scroll_pos(output: &egui::FullOutput) -> Option<egui::Pos2> {
+    for profile in builtins() {
+        let Some(rect) = label_rect(output, &profile.name) else {
+            continue;
+        };
+        if let Some(clip) = text_clip(output, &profile.name, rect) {
+            return Some(rect.intersect(clip).center());
+        }
+    }
+    combo_center(output).map(|center| center + egui::vec2(0.0, 30.0))
+}
+
+fn combo_center(output: &egui::FullOutput) -> Option<egui::Pos2> {
+    let update = output.platform_output.accesskit_update.as_ref()?;
+    update.nodes.iter().find_map(|(_, node)| {
+        (node.role() == egui::Role::ComboBox)
+            .then(|| node_rect(node))
+            .flatten()
+            .map(|rect| rect.center())
+    })
 }
 
 fn button_disabled(output: &egui::FullOutput, label: &str) -> Option<bool> {
@@ -594,8 +642,8 @@ fn applying_a_user_profile_updates_the_appearance_state() {
     .expect("clearing the layer override commits");
     h.state.colormap = Colormap::Mono;
 
-    let user_apply = builtins().len();
-    let out = h.click_nth_label("Apply", user_apply);
+    h.select_profile("Mine");
+    let out = h.click_label("Apply");
 
     assert_eq!(h.state.viewport_style, saved.viewport);
     assert_eq!(*h.state.layer_styles(), saved.layer_styles);
@@ -606,6 +654,155 @@ fn applying_a_user_profile_updates_the_appearance_state() {
     assert!(
         painted(&out).contains("Applied Mine"),
         "applying reports the profile name:\n{}",
+        painted(&out)
+    );
+}
+
+#[test]
+fn profile_dropdown_lists_builtins_then_user_profiles() {
+    let mut h = ProfileHarness::new();
+    h.profiles = ProfileLibrary::new(vec![
+        AppearanceProfile::capture("User one", &h.state),
+        AppearanceProfile::capture("User two", &h.state),
+    ])
+    .expect("the profiles are valid");
+
+    let out = h.open_profile_dropdown();
+    let expected: Vec<String> = builtins()
+        .iter()
+        .map(|profile| profile.name.clone())
+        .chain(["User one".to_owned(), "User two".to_owned()])
+        .collect();
+
+    let mut listed: Vec<(f32, String)> = expected
+        .iter()
+        .filter_map(|name| label_rect(&out, name).map(|rect| (rect.center().y, name.clone())))
+        .collect();
+    assert_eq!(
+        listed.len(),
+        expected.len(),
+        "every built-in and user profile is listed"
+    );
+    listed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let order: Vec<String> = listed.into_iter().map(|(_, name)| name).collect();
+    assert_eq!(
+        order, expected,
+        "the dropdown lists the built-ins first, then user profiles"
+    );
+}
+
+#[test]
+fn apply_button_applies_only_the_selected_profile() {
+    let mut h = ProfileHarness::new();
+    let mut selected_source = State::new(false);
+    apply_edit(
+        &mut selected_source,
+        AppearanceEdit::LayerOpacity(LayerId::Flow, Some(0.2)),
+    )
+    .expect("the layer override commits");
+    selected_source.colormap = Colormap::Turbo;
+    let selected = AppearanceProfile::capture("Selected", &selected_source);
+    let mut other_source = State::new(false);
+    other_source.colormap = Colormap::Mono;
+    let other = AppearanceProfile::capture("Other", &other_source);
+    h.profiles =
+        ProfileLibrary::new(vec![selected.clone(), other]).expect("the profiles are valid");
+
+    h.select_profile("Selected");
+    let out = h.click_label("Apply");
+
+    assert_eq!(h.state.colormap, selected.color.colormap);
+    assert_eq!(h.state.color_ramp, selected.color.ramp);
+    assert_eq!(*h.state.layer_styles(), selected.layer_styles);
+    assert!(
+        painted(&out).contains("Applied Selected"),
+        "the applied profile is reported:\n{}",
+        painted(&out)
+    );
+}
+
+#[test]
+fn delete_is_unavailable_for_builtins_and_deletes_a_user_profile_after_two_clicks() {
+    let mut h = ProfileHarness::new();
+    h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("Mine", &h.state)])
+        .expect("the profile is valid");
+    h.select_profile(&builtins()[0].name);
+
+    let out = h.idle();
+    assert_eq!(
+        button_disabled(&out, "Delete"),
+        Some(true),
+        "a built-in selection cannot be deleted"
+    );
+    h.click_label("Delete");
+    assert!(
+        h.panel.pending_delete.is_none(),
+        "clicking the disabled Delete button arms nothing"
+    );
+    assert_eq!(h.profiles.len(), 1);
+
+    h.select_profile("Mine");
+    let out = h.idle();
+    assert_eq!(
+        button_disabled(&out, "Delete"),
+        Some(false),
+        "a user selection enables Delete"
+    );
+    let out = h.click_label("Delete");
+    assert_eq!(
+        h.panel.pending_delete.as_deref(),
+        Some("Mine"),
+        "the first click only arms the delete"
+    );
+    assert_eq!(h.profiles.len(), 1, "the profile survives the first click");
+    assert!(
+        painted(&out).contains("again") || painted(&out).contains("confirm"),
+        "the panel asks for the second click:\n{}",
+        painted(&out)
+    );
+
+    h.click_label("Confirm delete");
+    assert!(h.panel.pending_delete.is_none());
+    assert!(
+        h.profiles.is_empty(),
+        "the second click removes the profile"
+    );
+    assert!(
+        h.panel.selected_profile.is_none(),
+        "a deleted selection falls back to no selection"
+    );
+}
+
+#[test]
+fn selection_never_applies_on_its_own_and_survives_frames() {
+    let mut h = ProfileHarness::new();
+    let mut source = State::new(false);
+    source.colormap = Colormap::Turbo;
+    let profile = AppearanceProfile::capture("Selected", &source);
+    h.profiles = ProfileLibrary::new(vec![profile]).expect("the profile is valid");
+    let before = AppearanceProfile::capture("Before", &h.state);
+
+    h.select_profile("Selected");
+    for _ in 0..5 {
+        h.idle();
+    }
+
+    let after = AppearanceProfile::capture("After", &h.state);
+    assert_eq!(after.viewport, before.viewport);
+    assert_eq!(after.layer_styles, before.layer_styles);
+    assert_eq!(
+        after.color, before.color,
+        "selecting never applies a profile"
+    );
+    assert_eq!(
+        h.panel.selected_profile.as_deref(),
+        Some("Selected"),
+        "the session-only selection survives frames"
+    );
+    let out = h.idle();
+    assert!(
+        painted(&out).contains("Selected"),
+        "the dropdown shows the selected name:\n{}",
         painted(&out)
     );
 }
@@ -775,6 +972,7 @@ fn deleting_a_user_profile_needs_two_clicks() {
     let mut h = ProfileHarness::new();
     h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("Mine", &h.state)])
         .expect("the profile is valid");
+    h.select_profile("Mine");
 
     let out = h.click_label("Delete");
     assert_eq!(
@@ -791,7 +989,10 @@ fn deleting_a_user_profile_needs_two_clicks() {
 
     h.click_label("Confirm delete");
     assert!(h.panel.pending_delete.is_none());
-    assert!(h.profiles.is_empty(), "the second click removes the profile");
+    assert!(
+        h.profiles.is_empty(),
+        "the second click removes the profile"
+    );
 }
 
 #[test]
@@ -799,6 +1000,7 @@ fn saving_over_an_armed_delete_clears_the_pending_delete() {
     let mut h = ProfileHarness::new();
     h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("X", &h.state)])
         .expect("the profile is valid");
+    h.select_profile("X");
     h.click_label("Delete");
     assert_eq!(
         h.panel.pending_delete.as_deref(),
@@ -860,6 +1062,33 @@ fn import_replaces_the_user_library_atomically() {
 }
 
 #[test]
+fn import_clears_the_armed_delete() {
+    let mut h = ProfileHarness::new();
+    h.profiles = ProfileLibrary::new(vec![AppearanceProfile::capture("Mine", &h.state)])
+        .expect("the profile is valid");
+    h.select_profile("Mine");
+    h.click_label("Delete");
+    assert_eq!(
+        h.panel.pending_delete.as_deref(),
+        Some("Mine"),
+        "the first delete click arms the delete"
+    );
+
+    let document = ProfileDocument {
+        version: PROFILE_FORMAT_VERSION,
+        profiles: vec![AppearanceProfile::capture("Imported", &h.state)],
+    };
+    h.panel.import_text = document.to_json().expect("the document serializes");
+    h.click_label("Apply text");
+
+    assert!(
+        h.panel.pending_delete.is_none(),
+        "a successful import clears the armed delete"
+    );
+    assert_eq!(h.profiles.len(), 2, "the import merged its profile");
+}
+
+#[test]
 fn import_that_only_replaces_existing_names_reports_no_new_profiles() {
     let mut h = ProfileHarness::new();
     h.profiles = ProfileLibrary::new(vec![
@@ -877,7 +1106,11 @@ fn import_that_only_replaces_existing_names_reports_no_new_profiles() {
 
     let out = h.click_label("Apply text");
 
-    assert_eq!(h.profiles.user()[0], updated, "the existing name is replaced");
+    assert_eq!(
+        h.profiles.user()[0],
+        updated,
+        "the existing name is replaced"
+    );
     assert_eq!(h.profiles.len(), 2, "the replacement grows nothing");
     let text = painted(&out);
     assert!(
@@ -915,8 +1148,7 @@ fn empty_import_document_reports_nothing_to_import_without_replacement_wording()
 
     let mut populated = ProfileHarness::new();
     let mine = AppearanceProfile::capture("Mine", &fresh.state);
-    populated.profiles =
-        ProfileLibrary::new(vec![mine.clone()]).expect("the profile is valid");
+    populated.profiles = ProfileLibrary::new(vec![mine.clone()]).expect("the profile is valid");
     let before = populated.profiles.user().to_vec();
     populated.panel.import_text = empty;
     let out = populated.click_label("Apply text");
@@ -969,7 +1201,10 @@ fn export_text_is_empty_without_user_profiles_and_copy_is_disabled() {
     );
 
     let out = h.click_label("Export text");
-    assert_eq!(h.panel.export_text, "", "no user profile means no export text");
+    assert_eq!(
+        h.panel.export_text, "",
+        "no user profile means no export text"
+    );
     assert_eq!(
         button_disabled(&out, "Copy"),
         Some(true),
@@ -1048,8 +1283,8 @@ fn compact_appearance_tab_opens_and_switches_the_single_sheet() {
         run_app_frame(&ctx, &mut app, Vec::new());
     }
 
-    let presets = button_center(&run_app_frame(&ctx, &mut app, Vec::new()), "Presets")
-        .expect("Presets tab");
+    let presets =
+        button_center(&run_app_frame(&ctx, &mut app, Vec::new()), "Presets").expect("Presets tab");
     run_app_frame(&ctx, &mut app, pointer(presets, true));
     run_app_frame(&ctx, &mut app, pointer(presets, false));
     assert_eq!(app.sheet, SheetState::Presets);
@@ -1068,8 +1303,8 @@ fn compact_appearance_tab_opens_and_switches_the_single_sheet() {
         "opening Appearance closes Presets"
     );
 
-    let presets = button_center(&run_app_frame(&ctx, &mut app, Vec::new()), "Presets")
-        .expect("Presets tab");
+    let presets =
+        button_center(&run_app_frame(&ctx, &mut app, Vec::new()), "Presets").expect("Presets tab");
     run_app_frame(&ctx, &mut app, pointer(presets, true));
     run_app_frame(&ctx, &mut app, pointer(presets, false));
     assert_eq!(
