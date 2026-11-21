@@ -783,6 +783,71 @@ fn generation_is_stable_and_changes_with_mapped_input() {
     assert_ne!(first.generation(), MeshScene::empty().generation());
 }
 
+/// Issue #207: the generation deliberately omits the slice clip, so a cache
+/// that keeps a scene on generation equality retains a 2D clip in 3D (and the
+/// unclipped 3D scene in 2D). `cache_matches` is the one cache rule that also
+/// compares the clip.
+#[test]
+fn cache_matches_compares_the_slice_clip_as_well_as_the_generation() {
+    let sphere = || {
+        scene(vec![entry(source(
+            SourceKind::SolidSphere {
+                charge: 1.0,
+                radius: 0.5,
+            },
+            CENTER,
+            [0.0, 1.0, 0.0],
+        ))])
+    };
+    let frame = |axis: PlaneAxis| {
+        let (right, up, normal) = match axis {
+            PlaneAxis::X => (Vec3::Y, Vec3::Z, Vec3::X),
+            PlaneAxis::Y => (Vec3::X, Vec3::Z, Vec3::Y),
+            PlaneAxis::Z => (Vec3::X, Vec3::Y, Vec3::Z),
+        };
+        PlaneFrame {
+            axis,
+            origin: Vec3::ZERO,
+            right,
+            up,
+            normal,
+            half_u: 1.0,
+            half_v: 1.0,
+        }
+    };
+    let sources = sphere();
+    let two_d = MeshScene::from_sources(&sources, &unit_domain(), Some(&frame(PlaneAxis::Y)));
+    let three_d = MeshScene::from_sources(&sources, &unit_domain(), None);
+    assert_eq!(
+        two_d.generation(),
+        three_d.generation(),
+        "the 2D and 3D mappings of the same sources share a generation"
+    );
+    assert!(two_d.clip().is_some());
+    assert!(three_d.clip().is_none());
+    assert!(!two_d.cache_matches(&three_d));
+    assert!(!three_d.cache_matches(&two_d));
+    assert!(two_d.cache_matches(&two_d.clone()));
+    assert!(three_d.cache_matches(&three_d.clone()));
+
+    // Another plane changes the clip without changing the generation.
+    let other = MeshScene::from_sources(&sources, &unit_domain(), Some(&frame(PlaneAxis::X)));
+    assert_eq!(two_d.generation(), other.generation());
+    assert!(!two_d.cache_matches(&other));
+
+    // An empty enabled set still maps the plane: generation 0, clip Some.
+    let empty_2d = MeshScene::from_sources(
+        &scene(Vec::new()),
+        &unit_domain(),
+        Some(&frame(PlaneAxis::Y)),
+    );
+    let empty_3d = MeshScene::from_sources(&scene(Vec::new()), &unit_domain(), None);
+    assert_eq!(empty_2d.generation(), 0);
+    assert_eq!(empty_3d.generation(), 0);
+    assert!(!empty_2d.cache_matches(&empty_3d));
+    assert!(!empty_3d.cache_matches(&empty_2d));
+}
+
 #[test]
 fn empty_scene_has_no_objects_or_triangles_and_a_distinct_generation() {
     let empty = MeshScene::empty();

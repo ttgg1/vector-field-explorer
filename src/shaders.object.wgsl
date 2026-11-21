@@ -1,11 +1,14 @@
 // Vector Field Explorer — lit object body and fullscreen composite shader.
 //
-// One depth-enabled pipeline draws every mapped instance from the shared static
-// primitive meshes (36-byte MeshVertex stride: position, outward normal,
+// A depth-writing body pipeline draws every mapped instance from the shared
+// static primitive meshes (36-byte MeshVertex stride: position, outward normal,
 // barycentric corner) with a 128-byte per-instance record (model matrix,
 // inverse-transpose normal matrix, linear colour). Shading is ambient plus one
 // directional diffuse term on a two-sided normal, with an optional world-space
 // slice-plane discard and a barycentric wireframe path in the same entry point.
+// A second depth-tested but non-depth-writing pipeline uses the attenuated
+// fragment entry to draw the discarded slice half as a shaded body, so the 2D
+// slice stays visible from the far side without hiding the kept half (#207).
 //
 // The second pair is the composite: egui's incoming paint pass has no depth
 // attachment, so it samples the owned colour target and covers the callback
@@ -101,11 +104,14 @@ fn fs_object(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @locati
     return vec4<f32>(rgb, clamp(v.color.a, 0.0, 1.0));
 }
 
-// Issue #114 slice 5: the 2D slice keeps the on-slice body authoritative but
-// shows the discarded side once as a faint barycentric wireframe. This entry
-// reuses the same vertices and instance buffer; only the fragment side flips.
+// Issue #207: the 2D slice keeps the on-slice body authoritative but still
+// shows the discarded side as a shaded body at reduced opacity, so a camera
+// orbiting to the far side sees a surface rather than an empty cut. This entry
+// reuses the same vertices and instance buffer; the pipeline disables depth
+// writes so the kept half always stays visible. In Wireframe style the far side
+// keeps the same edges-only reading as the rest of the object.
 @fragment
-fn fs_object_faint(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_object_attenuated(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     if (globals.params.y <= 0.5) {
         discard;
     }
@@ -114,11 +120,13 @@ fn fs_object_faint(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @
         discard;
     }
 
-    let grid = fwidth(v.barycentric);
-    let edges = v.barycentric / max(grid, vec3<f32>(1e-5));
-    let nearest = min(min(edges.x, edges.y), edges.z);
-    if (nearest > 1.5) {
-        discard;
+    if (globals.params.x > 0.5) {
+        let width = fwidth(v.barycentric);
+        let edges = v.barycentric / max(width, vec3<f32>(1e-5));
+        let nearest = min(min(edges.x, edges.y), edges.z);
+        if (nearest > 1.5) {
+            discard;
+        }
     }
 
     var normal = normalize(v.normal);
@@ -128,7 +136,7 @@ fn fs_object_faint(v: VertexOut, @builtin(front_facing) front_facing: bool) -> @
     let light = normalize(globals.light_dir.xyz);
     let diffuse = max(dot(normal, light), 0.0);
     let rgb = clamp(v.color.rgb * (0.25 + 0.75 * diffuse), vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(rgb, clamp(v.color.a, 0.0, 1.0) * 0.2);
+    return vec4<f32>(rgb, clamp(v.color.a, 0.0, 1.0) * 0.35);
 }
 
 @group(0) @binding(2)

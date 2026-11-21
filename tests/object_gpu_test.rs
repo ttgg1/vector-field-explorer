@@ -50,17 +50,21 @@ fn sphere_scene() -> MeshScene {
     )
 }
 
-fn probe_view(viewport: [u32; 2]) -> ObjectView {
+fn probe_view_from(viewport: [u32; 2], eye: Vec3, up: Vec3) -> ObjectView {
     let aspect = viewport[0] as f32 / viewport[1].max(1) as f32;
     let view_proj = Mat4::perspective_rh(45_f32.to_radians(), aspect, 0.1, 100.0)
-        * Mat4::look_at_rh(Vec3::new(0.0, 0.0, 3.0), Vec3::ZERO, Vec3::Y);
+        * Mat4::look_at_rh(eye, Vec3::ZERO, up);
     ObjectView {
         view_proj: view_proj.to_cols_array_2d(),
-        eye: [0.0, 0.0, 3.0],
+        eye: eye.to_array(),
         viewport,
         wireframe: false,
         clear: PROBE_CLEAR,
     }
+}
+
+fn probe_view(viewport: [u32; 2]) -> ObjectView {
+    probe_view_from(viewport, Vec3::new(0.0, 0.0, 3.0), Vec3::Y)
 }
 
 fn all_finite(values: &[f32]) -> bool {
@@ -872,24 +876,41 @@ fn probe_capture_object_style(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<
     Ok(())
 }
 
-/// An asymmetric sphere: its centre sits above the `y = 0` slice, so the
-/// visible cap and the discarded cap have different silhouettes. A probe that
-/// merely swapped the two clip comparisons could not pass by symmetry.
-fn sphere_scene_at_y(center_y: f64, plane: Option<&PlaneFrame>) -> MeshScene {
-    let domain = Domain::new(Vec3::splat(-2.0), Vec3::splat(2.0));
-    let mut source = SourceKindTag::SolidSphere.default_source();
-    source.center = DVec3::new(0.0, center_y, 0.0);
+/// A charged disc is a 48-triangle, two-sided fan, so its barycentric
+/// wireframe leaves large gaps. That makes it the discriminating probe for
+/// "the discarded slice half is a shaded body", which a dense sphere
+/// wireframe would fill and hide.
+fn disc_scene(domain: &Domain, plane: Option<&PlaneFrame>) -> MeshScene {
     let scene = SourceScene {
         entries: vec![SourceEntry {
             enabled: true,
-            source,
+            source: Source {
+                center: DVec3::ZERO,
+                axis: DVec3::Z,
+                kind: SourceKind::ChargedDisc {
+                    charge: 1.0,
+                    radius: 1.0,
+                },
+            },
         }],
         ..SourceScene::default()
     };
-    MeshScene::from_sources(&scene, &domain, plane)
+    MeshScene::from_sources(&scene, domain, plane)
 }
 
-fn clipped_sphere_scene() -> MeshScene {
+/// Issue #207: on the 2D slice the discarded half must still read as a shaded
+/// body from every direction, not as a faint wireframe or a dark opening. The
+/// slice is world `y = 0` with the `+Y` half visible, and the camera sits at
+/// `y = 0`, so world `+Y` maps to the upper image half from either `±Z` eye.
+/// An unclipped reference frame of the same low-poly disc gives the "full
+/// silhouette" pixels: every lower-half reference pixel must be present in the
+/// clipped frame and attenuated rather than byte-identical to the opaque body,
+/// while the upper kept half stays byte-identical. A sparse 48-triangle
+/// wireframe would leave interior lower-half pixels empty, so filling them
+/// pins a shaded body rather than an edge-only representation.
+fn probe_slice_attenuated_far_side(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(), String> {
+    const EDGE: u32 = 128;
+    const CUT_BAND: u32 = 2;
     let domain = Domain::new(Vec3::splat(-2.0), Vec3::splat(2.0));
     let frame = PlaneFrame::new(
         &domain,
@@ -900,83 +921,395 @@ fn clipped_sphere_scene() -> MeshScene {
         },
         UVec3::new(5, 5, 5),
     );
-    sphere_scene_at_y(0.5, Some(&frame))
+    let scene = disc_scene(&domain, Some(&frame));
+    if scene.clip().is_none() {
+        return Err("the clipped disc scene carries no slice plane".into());
+    }
+    let full_scene = disc_scene(&domain, None);
+    let mut pass = ObjectPass::new(&gpu.device, format);
+
+    for (label, eye) in [
+        ("+Z", Vec3::new(0.0, 0.0, 3.0)),
+        ("-Z", Vec3::new(0.0, 0.0, -3.0)),
+    ] {
+        let view = probe_view_from([EDGE, EDGE], eye, Vec3::Y);
+        let (frame, clear) = render_scene_view(gpu, &mut pass, &scene, &view, EDGE)?;
+        let (full, full_clear) = render_scene_view(gpu, &mut pass, &full_scene, &view, EDGE)?;
+        if clear != full_clear {
+            return Err(format!(
+                "{label}: the clipped and unclipped frames use different clear colours"
+            ));
+        }
+        let mut kept = 0usize;
+        let mut kept_mismatch = 0usize;
+        let mut far_covered = 0usize;
+        let mut far_missing = 0usize;
+        let mut far_opaque = 0usize;
+        for y in 0..EDGE {
+            for x in 0..EDGE {
+                let reference = pixel(&full, EDGE, x, y);
+                if reference == clear {
+                    continue;
+                }
+                let current = pixel(&frame, EDGE, x, y);
+                if y + CUT_BAND < EDGE / 2 {
+                    kept += 1;
+                    if current != reference {
+                        kept_mismatch += 1;
+                    }
+                } else if y > EDGE / 2 + CUT_BAND {
+                    far_covered += 1;
+                    if current == clear {
+                        far_missing += 1;
+                    } else if current == reference {
+                        far_opaque += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "PROBE slice-attenuated: {label}: {kept} kept pixels ({kept_mismatch} differ from the opaque body), {far_covered} far-side silhouette pixels ({far_missing} missing, {far_opaque} opaque)"
+        );
+        if kept == 0 {
+            return Err(format!(
+                "{label}: the kept half of the clipped sphere is missing"
+            ));
+        }
+        if kept_mismatch != 0 {
+            return Err(format!(
+                "{label}: {kept_mismatch} kept-half pixels differ from the unclipped body; the attenuated pass must not cover the kept half"
+            ));
+        }
+        if far_covered == 0 {
+            return Err(format!("{label}: the reference has no far-side silhouette"));
+        }
+        if far_missing != 0 {
+            return Err(format!(
+                "{label}: {far_missing} of {far_covered} far-side silhouette pixels are empty; the discarded side is not covered by a shaded body"
+            ));
+        }
+        if far_opaque != 0 {
+            return Err(format!(
+                "{label}: {far_opaque} far-side pixels are byte-identical to the opaque body; the discarded side must be attenuated"
+            ));
+        }
+
+        // Wireframe style: the far side must keep the edges-only reading, not
+        // become the Solid shaded body. The sparse disc guarantees interior
+        // far-side pixels that the Solid pass fills but a wireframe leaves
+        // empty, while some edge pixels must still survive.
+        let mut wire_view = view;
+        wire_view.wireframe = true;
+        let (wire, wire_clear) = render_scene_view(gpu, &mut pass, &scene, &wire_view, EDGE)?;
+        if wire_clear != clear {
+            return Err(format!(
+                "{label}: the Wireframe frame uses a different clear colour"
+            ));
+        }
+        let mut wire_edges = 0usize;
+        let mut wire_interior_empty = 0usize;
+        for y in 0..EDGE {
+            for x in 0..EDGE {
+                if pixel(&full, EDGE, x, y) == clear || y <= EDGE / 2 + CUT_BAND {
+                    continue;
+                }
+                if pixel(&wire, EDGE, x, y) == clear {
+                    if pixel(&frame, EDGE, x, y) != clear {
+                        wire_interior_empty += 1;
+                    }
+                } else {
+                    wire_edges += 1;
+                }
+            }
+        }
+        eprintln!(
+            "PROBE slice-attenuated: {label}: Wireframe far side has {wire_edges} edge pixels and {wire_interior_empty} interior pixels empty where Solid fills"
+        );
+        if wire_edges == 0 {
+            return Err(format!(
+                "{label}: the Wireframe far side has no pixels; the discarded half disappeared"
+            ));
+        }
+        if wire_interior_empty == 0 {
+            return Err(format!(
+                "{label}: the Wireframe far side fills every Solid interior pixel; the attenuated pass ignored the object style"
+            ));
+        }
+    }
+    Ok(())
 }
 
-/// Issue #114 slice 5 pixel evidence: the on-slice half is drawn by the normal
-/// body pipeline, and the discarded half appears once as the attenuated
-/// wireframe. The slice is world `y = 0` with the `+Y` half visible, so the
-/// screen's lower half can only contain faint discarded-side pixels. An
-/// unclipped reference frame of the same asymmetric sphere lets the probe
-/// assert that those pixels are attenuated blends, not opaque body pixels that
-/// a broken clip comparison would leave behind.
-fn probe_slice_faint_side(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(), String> {
+/// Render one scene into a fresh incoming target and return the composited
+/// pixels with the target's clear pixel (always sampled at `(0, 0)`).
+fn render_scene_view(
+    gpu: &Gpu,
+    pass: &mut ObjectPass,
+    scene: &MeshScene,
+    view: &ObjectView,
+    edge: u32,
+) -> Result<(Vec<u8>, [u8; 4]), String> {
+    submit_prepare(gpu, pass, scene, view)?;
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(edge as f32, edge as f32));
+    let frame = composite_frame(
+        gpu,
+        pass,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        [edge, edge],
+        rect,
+    )?;
+    let clear = pixel(&frame, edge, 0, 0);
+    Ok((frame, clear))
+}
+
+fn body_pixels(frame: &[u8], clear: [u8; 4]) -> usize {
+    frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|candidate| **candidate != clear)
+        .count()
+}
+
+/// Render one view of the unclipped sphere and return how many pixels differ
+/// from the target clear colour, the centre pixel and the clear pixel.
+fn render_sphere_view(
+    gpu: &Gpu,
+    pass: &mut ObjectPass,
+    scene: &MeshScene,
+    view: &ObjectView,
+    edge: u32,
+) -> Result<(usize, [u8; 4], [u8; 4]), String> {
+    let (frame, clear) = render_scene_view(gpu, pass, scene, view, edge)?;
+    let differing = body_pixels(&frame, clear);
+    let centre = pixel(&frame, edge, edge / 2, edge / 2);
+    Ok((differing, centre, clear))
+}
+
+/// Issue #207 reproduction: a closed, unclipped sphere must cover roughly the
+/// same number of pixels and reach its centre from either side of every axis.
+/// A one-sided failure shows up as zero coverage from the opposite eye while
+/// the original view still passes.
+fn probe_opposite_views(gpu: &Gpu) -> Result<(), String> {
     const EDGE: u32 = 128;
-    let scene = clipped_sphere_scene();
-    if scene.clip().is_none() {
-        return Err("the clipped sphere scene carries no slice plane".into());
-    }
-    let view = probe_view([EDGE, EDGE]);
-    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(EDGE as f32, EDGE as f32));
-
-    let mut pass = ObjectPass::new(&gpu.device, format);
-    submit_prepare(gpu, &mut pass, &scene, &view)?;
-    let frame = composite_frame(gpu, &pass, format, [EDGE, EDGE], rect)?;
-
-    // The same sphere without the slice clip draws opaque bodies on both
-    // halves; its lower-half pixels are the "body would have drawn here"
-    // reference for the faint-pixel comparison.
-    let mut reference = ObjectPass::new(&gpu.device, format);
-    submit_prepare(gpu, &mut reference, &sphere_scene_at_y(0.5, None), &view)?;
-    let full = composite_frame(gpu, &reference, format, [EDGE, EDGE], rect)?;
-
-    let clear = pixel(&frame, EDGE, 0, 0);
-    let mut on_slice = 0usize;
-    let mut discarded = 0usize;
-    let mut attenuated = 0usize;
-    for y in 0..EDGE {
-        for x in 0..EDGE {
-            let current = pixel(&frame, EDGE, x, y);
-            if current == clear {
-                continue;
-            }
-            // World +Y maps to the top of the image.
-            if y <= EDGE / 2 {
-                on_slice += 1;
-            } else {
-                discarded += 1;
-                let opaque = pixel(&full, EDGE, x, y);
-                if opaque == clear {
+    let scene = sphere_scene();
+    let mut pass = ObjectPass::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let eyes = [
+        ("+Z", Vec3::new(0.0, 0.0, 3.0), Vec3::Y),
+        ("-Z", Vec3::new(0.0, 0.0, -3.0), Vec3::Y),
+        ("+X", Vec3::new(3.0, 0.0, 0.0), Vec3::Y),
+        ("-X", Vec3::new(-3.0, 0.0, 0.0), Vec3::Y),
+        ("+Y", Vec3::new(0.0, 3.0, 0.0), Vec3::Z),
+        ("-Y", Vec3::new(0.0, -3.0, 0.0), Vec3::Z),
+    ];
+    let mut reference = None;
+    for (label, eye, up) in eyes {
+        let view = probe_view_from([EDGE, EDGE], eye, up);
+        let (differing, centre, clear) = render_sphere_view(gpu, &mut pass, &scene, &view, EDGE)?;
+        eprintln!("PROBE view {label}: {differing} pixels differ from clear, centre {centre:?}");
+        if differing == 0 {
+            return Err(format!(
+                "the sphere is invisible from eye {label} ({eye:?}); one-sided rendering reproduced"
+            ));
+        }
+        if centre == clear {
+            return Err(format!(
+                "the sphere covers no centre pixel from eye {label}; it is clipped or depth-rejected"
+            ));
+        }
+        match reference {
+            None => reference = Some(differing),
+            Some(first) => {
+                let ratio = differing as f32 / first.max(1) as f32;
+                if !(0.7..=1.3).contains(&ratio) {
                     return Err(format!(
-                        "the unclipped reference has no body under the faint pixel ({x}, {y})"
+                        "coverage from eye {label} is {differing} vs {first} from the first eye (ratio {ratio:.2}); a full sphere must cover a similar area"
                     ));
                 }
-                if current == opaque {
-                    return Err(format!(
-                        "the discarded-side pixel ({x}, {y}) is opaque body colour, not an attenuated faint pixel"
-                    ));
-                }
-                attenuated += 1;
             }
         }
     }
-    if on_slice == 0 {
-        return Err("the on-slice half of the clipped sphere is missing".into());
+    Ok(())
+}
+
+/// One Sources-mode state with a single solid sphere at `center`.
+fn sources_state_with_sphere(center: DVec3, radius: f64) -> State {
+    let mut state = State::new(false);
+    state.set_field_mode(FieldMode::Sources);
+    let mut sources = SourceScene::default();
+    sources.entries.push(SourceEntry {
+        enabled: true,
+        source: Source {
+            center,
+            axis: DVec3::Z,
+            kind: SourceKind::SolidSphere {
+                charge: 1.0,
+                radius,
+            },
+        },
+    });
+    state.set_source_scene(sources);
+    state
+}
+
+/// Apply the documented live viewport cache rule to a sequence of mapped
+/// scenes. Re-deriving the rule from `generation()` and `clip()` here (rather
+/// than replaying `MeshScene::cache_matches`) keeps the probe an independent
+/// statement of the contract: the viewport and this probe must both follow the
+/// same documented key, not merely agree with one helper.
+fn cached_scene_after(scenes: impl IntoIterator<Item = MeshScene>) -> MeshScene {
+    let mut cached = MeshScene::empty();
+    for next in scenes {
+        if next.generation() != cached.generation() || next.clip() != cached.clip() {
+            cached = next;
+        }
     }
-    if discarded == 0 {
-        return Err(
-            "the discarded side has no faint wireframe pixels; the extra attenuation draw did not record"
-                .into(),
+    cached
+}
+
+/// Issue #207 regression: the live viewport caches the object scene, and its
+/// key must include the slice `clip`, not only `generation()`. A 2D → 3D switch
+/// must replace the clipped scene with the unclipped one (full shaded body from
+/// both `±Z` eyes), and 3D → 2D must replace it with the clipped one. The
+/// generations are deliberately equal here, so a generation-only cache would
+/// keep the wrong scene.
+fn probe_stale_slice_clip_cache(gpu: &Gpu, format: wgpu::TextureFormat) -> Result<(), String> {
+    const EDGE: u32 = 128;
+    let mut pass = ObjectPass::new(&gpu.device, format);
+
+    // Off-centre bodies expose a retained clip: the slice cut removes roughly
+    // half of the body from one side and none from the other.
+    for (label, center_z) in [("+Z source", 1.0), ("-Z source", -1.0)] {
+        let mut state = sources_state_with_sphere(DVec3::new(0.0, 0.0, center_z), 0.6);
+        let two_d = vector_field_explorer::app::object_scene_for_state(&state);
+        if two_d.clip().is_none() {
+            return Err(format!("{label}: the 2D Sources scene maps no slice clip"));
+        }
+        if !state.set_mode(true) {
+            return Err(format!("{label}: switching the state to 3D was a no-op"));
+        }
+        let three_d = vector_field_explorer::app::object_scene_for_state(&state);
+        if three_d.clip().is_some() {
+            return Err(format!("{label}: the 3D scene still maps a slice clip"));
+        }
+        if two_d.generation() != three_d.generation() {
+            return Err(format!(
+                "{label}: the 2D and 3D generations differ ({} vs {}), so the cache key would not need the clip; the regression premise no longer holds",
+                two_d.generation(),
+                three_d.generation()
+            ));
+        }
+        let cached = cached_scene_after([two_d.clone(), three_d.clone()]);
+        if cached.clip().is_some() {
+            return Err(format!(
+                "{label}: 2D -> 3D kept the 2D slice clip; bodies stay cut in 3D"
+            ));
+        }
+        let mut coverages = Vec::new();
+        for (eye_label, eye) in [
+            ("+Z", Vec3::new(0.0, 0.0, 3.0)),
+            ("-Z", Vec3::new(0.0, 0.0, -3.0)),
+        ] {
+            let view = probe_view_from([EDGE, EDGE], eye, Vec3::Y);
+            let (frame, clear) = render_scene_view(gpu, &mut pass, &cached, &view, EDGE)?;
+            let pixels = body_pixels(&frame, clear);
+            let centre = pixel(&frame, EDGE, EDGE / 2, EDGE / 2);
+            if pixels == 0 {
+                return Err(format!(
+                    "{label}: the unclipped 3D body is invisible from {eye_label}; the stale clip survived"
+                ));
+            }
+            if centre == clear {
+                return Err(format!(
+                    "{label}: the unclipped 3D body covers no centre pixel from {eye_label}"
+                ));
+            }
+            coverages.push(pixels);
+        }
+        eprintln!(
+            "PROBE stale-clip: {label}, generations {}/{}, cached clip {}, unclipped coverage {coverages:?} from ±Z",
+            two_d.generation(),
+            three_d.generation(),
+            cached.clip().is_some(),
         );
     }
-    if attenuated != discarded {
+
+    // A centred body is symmetric under a plane through the origin, so only
+    // the cache clip state and the two-sided coverage can distinguish the
+    // stale scene from the fresh one.
+    let mut state = sources_state_with_sphere(DVec3::ZERO, 0.8);
+    let two_d = vector_field_explorer::app::object_scene_for_state(&state);
+    if !state.set_mode(true) {
+        return Err("centred body: switching the state to 3D was a no-op".into());
+    }
+    let three_d = vector_field_explorer::app::object_scene_for_state(&state);
+    if two_d.generation() != three_d.generation() || two_d.clip().is_none() {
+        return Err("centred body: the stale-clip premise no longer holds".into());
+    }
+    let cached = cached_scene_after([two_d, three_d.clone()]);
+    if cached.clip().is_some() {
+        return Err("centred body: 2D -> 3D kept the 2D slice clip".into());
+    }
+    let mut coverages = Vec::new();
+    for (label, eye) in [
+        ("+Z", Vec3::new(0.0, 0.0, 3.0)),
+        ("-Z", Vec3::new(0.0, 0.0, -3.0)),
+    ] {
+        let view = probe_view_from([EDGE, EDGE], eye, Vec3::Y);
+        let (frame, clear) = render_scene_view(gpu, &mut pass, &cached, &view, EDGE)?;
+        let pixels = body_pixels(&frame, clear);
+        if pixels == 0 || pixel(&frame, EDGE, EDGE / 2, EDGE / 2) == clear {
+            return Err(format!(
+                "centred body: the unclipped 3D body is invisible from {label}"
+            ));
+        }
+        coverages.push(pixels);
+    }
+    let ratio = coverages[1] as f32 / coverages[0].max(1) as f32;
+    eprintln!(
+        "PROBE stale-clip: centred body, cached clip {}, coverage {coverages:?} from ±Z (ratio {ratio:.2})",
+        cached.clip().is_some()
+    );
+    if !(0.7..=1.3).contains(&ratio) {
         return Err(format!(
-            "only {attenuated} of {discarded} discarded-side pixels are attenuated; the rest are opaque body pixels"
+            "centred body: unclipped coverage {coverages:?} differs between ±Z (ratio {ratio:.2})"
         ));
     }
+
+    // The symmetric direction: enter 3D first, then switch to 2D. The cache
+    // must now keep the clipped scene; a 2D view without the cut would show
+    // full bodies.
+    let mut state = sources_state_with_sphere(DVec3::new(0.0, 0.0, -1.0), 0.6);
+    if !state.set_mode(true) {
+        return Err("3D -> 2D: starting the probe state in 3D was a no-op".into());
+    }
+    let three_d = vector_field_explorer::app::object_scene_for_state(&state);
+    if three_d.clip().is_some() {
+        return Err("3D -> 2D: the 3D scene maps a slice clip".into());
+    }
+    if !state.set_mode(false) {
+        return Err("3D -> 2D: switching the state to 2D was a no-op".into());
+    }
+    let two_d = vector_field_explorer::app::object_scene_for_state(&state);
+    if two_d.clip().is_none() {
+        return Err("3D -> 2D: the 2D scene maps no slice clip".into());
+    }
+    if two_d.generation() != three_d.generation() {
+        return Err(format!(
+            "3D -> 2D: the generations differ ({} vs {}), so the cache key would not need the clip",
+            two_d.generation(),
+            three_d.generation()
+        ));
+    }
+    let cached = cached_scene_after([three_d, two_d.clone()]);
     eprintln!(
-        "PROBE slice-faint: {on_slice} on-slice pixels, {discarded} attenuated discarded-side wireframe pixels"
+        "PROBE stale-clip: 3D -> 2D keeps clip {} (2D clip {}), generation {}",
+        cached.clip().is_some(),
+        two_d.clip().is_some(),
+        two_d.generation()
     );
+    if cached.clip().is_none() {
+        return Err("3D -> 2D: the cache dropped the 2D slice clip".into());
+    }
     Ok(())
 }
 
@@ -986,7 +1319,9 @@ fn run_probe() -> Result<(), String> {
     let result = probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb)
         .and_then(|()| probe_offscreen_capture(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
         .and_then(|()| probe_capture_object_style(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
-        .and_then(|()| probe_slice_faint_side(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
+        .and_then(|()| probe_slice_attenuated_far_side(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
+        .and_then(|()| probe_opposite_views(&gpu))
+        .and_then(|()| probe_stale_slice_clip_cache(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
     gpu.end_scopes(scopes)?;
     result
 }
