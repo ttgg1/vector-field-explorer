@@ -103,6 +103,7 @@ mod menu_test;
 mod nightly_version_test;
 #[cfg(unix)]
 mod notices_test;
+mod object_scene_test;
 mod ode_app_test;
 mod ode_bench_test;
 mod ode_export_test;

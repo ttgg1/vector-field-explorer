@@ -3958,6 +3958,48 @@ annotation, and no plane-mode dimming.
 
 ### 3.6 Rendering
 
+#### `src/object_scene.rs` — static primitive meshes for object instances
+
+**Purpose.** Pure, GPU-free geometry for the depth-enabled object renderer. Five
+object bodies are generated once per process and reused by every instance:
+`MeshPrimitive::{Sphere, Cylinder, Torus, Tube, Disc}`. The module has no
+renderer, app, persistence or `wgpu` dependency; later slices add source mapping,
+instance transforms and the offscreen pass.
+
+**Public API.** `MeshPrimitive` with `ALL`, `triangles()`, `vertices()`,
+`index()` and `from_index(u32) -> Option<MeshPrimitive>`; `MeshVertex {
+position: [f32; 3], normal: [f32; 3], barycentric: [f32; 3] }` (`repr(C)`);
+`PrimitiveMesh { primitive, vertices: &'static [MeshVertex] }`;
+`primitive_mesh(MeshPrimitive) -> &'static PrimitiveMesh`; and the budget
+constants `STATIC_TRIANGLES = 2_832`, `STATIC_VERTICES = 8_496`,
+`VERTEX_BYTES = 36`.
+
+**Invariants.** Every mesh is non-indexed, three vertices per triangle, with
+exactly `[1,0,0]`, `[0,1,0]`, `[0,0,1]` barycentrics. Normals are outward unit
+vectors; positions are finite. Triangle counts are pinned: Sphere 768 (24 × 16),
+Cylinder 96 (24 sides plus two 24-triangle caps), Torus 768 (32 × 12), Tube 1,152
+(12 turns × 8 sides × 6 steps × 2, helical body radius 1 and total height 1 on
+`+Y`), Disc 48 (24 rim segments, two-sided fan). `STATIC_VERTICES × VERTEX_BYTES`
+is 305,856 B of static geometry. Each variant is cached in its own
+`OnceLock<PrimitiveMesh>`; there is no per-frame allocation and no `unsafe`.
+
+**Pinned by.** [tests/object_scene_test.rs](../tests/object_scene_test.rs):
+`primitive_triangle_counts_match_the_budget`,
+`vertex_layout_is_thirty_six_bytes_and_aligns_to_four` (pins
+`size_of::<MeshVertex>() == VERTEX_BYTES`),
+`every_primitive_mesh_has_finite_vertices_and_unit_normals`,
+`barycentric_corners_are_one_hot_per_triangle`,
+`every_triangle_winds_ccw_from_outside_and_is_non_degenerate` (CCW-from-outside
+winding and non-degenerate cross products), `generated_geometry_matches_static_budget`
+(generated vertex/triangle totals equal the constants),
+`sphere_vertices_lie_on_the_unit_sphere`,
+`cylinder_spans_unit_height_and_has_caps`, `disc_is_two_sided_and_flat`, and
+`tube_has_twelve_visible_turns` (unit height and 12-turn azimuthal span).
+
+**Limitations.** Fixed tessellation, no LOD, no picking metadata and no
+per-triangle colour. Solenoid turns are capped at 12 for honesty; the source's
+numeric `turns` remains authoritative in panel and export text.
+
 #### `src/renderer.rs` — instanced wgpu renderer
 
 **Purpose.** GPU resources, instance layouts, draw-plan decisions, painter
