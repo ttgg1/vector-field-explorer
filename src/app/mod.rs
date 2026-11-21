@@ -17,6 +17,7 @@ use crate::fly_camera::{
 };
 use crate::interaction::{self, InteractionProfile};
 use crate::layer_style::LayerId;
+use crate::object_scene::MeshScene;
 use crate::persistence::{self, AppSettings, PresetUiRecord, ViewRecord};
 use crate::plane::PlaneFrame;
 use crate::plot::PlotKind;
@@ -248,6 +249,10 @@ pub struct VfApp {
     /// The one cached GUI scene: the vector snapshot or the scalar plot scene.
     /// The CLI keeps its own `SceneGPU` and never reads this.
     scene: ViewportScene,
+    /// The cached object scene for the current source/induction mode. The
+    /// stored `Arc` is replaced only when its content fingerprint changes, so
+    /// the pass can skip its instance upload on an unchanged frame.
+    object_scene: Arc<MeshScene>,
     /// The transient plot-only camera, independent of the saved vector orbit.
     plot_camera: PlotCamera,
     /// The vector orbit/2D pose remembered while plotting. Never persisted:
@@ -540,6 +545,7 @@ impl VfApp {
                 arrow_params,
                 mode_3d,
             }),
+            object_scene: Arc::new(MeshScene::empty()),
             plot_camera: PlotCamera::default(),
             saved_vector_orbit,
             last_plot_epoch,
@@ -595,6 +601,13 @@ impl VfApp {
 }
 
 impl AnimationSnapshot {
+    /// Replace the mapped object scene computed by [`Self::from_parts`] with
+    /// the live app's cached scene, so a capture shares the exact `Arc`.
+    fn with_object_scene(mut self, object_scene: Arc<MeshScene>) -> Self {
+        self.object_scene = object_scene;
+        self
+    }
+
     /// Copy the live app's animatable state without mutating it.
     pub fn capture(app: &VfApp) -> Result<Self, AnimationError> {
         let clear = {
@@ -613,7 +626,8 @@ impl AnimationSnapshot {
             app.orbit,
             app.fly,
             clear,
-        ))
+        )
+        .with_object_scene(Arc::clone(&app.object_scene)))
     }
 }
 
@@ -770,6 +784,35 @@ pub(crate) fn compose_vector_lines(
     let count = glyphs.len();
     lines.extend(glyphs);
     (lines, count)
+}
+
+/// Map the current source or induction mode to the object scene the renderer
+/// composites first. Formula, Materials, Ode and Maxwell have no mapped bodies
+/// and return [`MeshScene::empty`], so their render path stays byte-identical.
+///
+/// The induction branch mirrors [`compose_vector_lines`]: the kind's unit
+/// source is mapped through the same [`MeshScene::from_sources`] entry point as
+/// the Sources mode, so panel text and the body cannot disagree. Exposed as a
+/// test seam: the live viewport, the animation snapshot and the CLI animation
+/// path all map through this one function.
+#[doc(hidden)]
+pub fn object_scene_for_state(state: &State) -> MeshScene {
+    let domain = state.scene_domain();
+    let frame = state.plane_frame();
+    match state.field_mode {
+        FieldMode::Sources => MeshScene::from_sources(&state.sources, &domain, frame.as_ref()),
+        FieldMode::Induction => {
+            let mut scene = crate::source_scene::SourceScene::default();
+            scene.entries.push(crate::source_scene::SourceEntry {
+                enabled: true,
+                source: state.induction.unit_source(),
+            });
+            MeshScene::from_sources(&scene, &domain, frame.as_ref())
+        }
+        FieldMode::Formula | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
+            MeshScene::empty()
+        }
+    }
 }
 
 /// Everything the particle colours need, cached alongside the arrows so dots

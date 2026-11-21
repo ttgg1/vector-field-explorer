@@ -5,19 +5,26 @@
 //! an explicit frame step, so an export never mutates live playback. Scene
 //! composition reuses the same assembly the live viewport uses.
 
+use std::sync::Arc;
+
 use glam::{Mat4, Vec3};
 
 use crate::animation::AnimationError;
 use crate::camera::{OrbitCamera, ViewCamera};
 use crate::fly_camera::FlyCamera;
+use crate::object_scene::MeshScene;
 use crate::particles::{AdvectSettings, Particles, advance_exact};
 use crate::renderer::SceneGPU;
 use crate::source_scene::FieldMode;
 use crate::viewmodel::State;
 
-/// One rendered animation frame: geometry plus its camera matrices.
+/// One rendered animation frame: geometry plus its camera matrices and the
+/// object scene the frame composites first.
 pub struct AnimationFrame {
     pub scene: SceneGPU,
+    /// The detached snapshot's mapped source/induction bodies. The same `Arc`
+    /// is carried by every frame, so no mesh is rebuilt per frame.
+    pub object_scene: Arc<MeshScene>,
     pub view_proj: Mat4,
     pub eye: Vec3,
 }
@@ -30,6 +37,8 @@ pub struct AnimationSnapshot {
     pub orbit: OrbitCamera,
     pub fly: Option<FlyCamera>,
     pub clear: [f64; 4],
+    /// Mapped bodies captured with the snapshot; frame exports composite them.
+    pub object_scene: Arc<MeshScene>,
 }
 
 impl AnimationSnapshot {
@@ -41,12 +50,14 @@ impl AnimationSnapshot {
         fly: Option<FlyCamera>,
         clear: [f64; 4],
     ) -> Self {
+        let object_scene = Arc::new(crate::app::object_scene_for_state(&state));
         Self {
             state,
             particles,
             orbit,
             fly,
             clear,
+            object_scene,
         }
     }
 
@@ -150,6 +161,7 @@ impl AnimationSnapshot {
         let scene = crate::app::assemble_vector_scene(&self.state, &mut base, &[], &view);
         Ok(AnimationFrame {
             scene,
+            object_scene: Arc::clone(&self.object_scene),
             view_proj,
             eye,
         })

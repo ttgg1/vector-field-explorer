@@ -16,6 +16,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
+use eframe::egui;
 use eframe::egui_wgpu;
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
@@ -24,6 +25,8 @@ use glam::{Mat4, Vec3};
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MAX_SIDES, MIN_SIDES};
 use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorStats};
 use crate::color_ramp::ScaleMode;
+use crate::object_renderer::{ObjectPass, ObjectView};
+use crate::object_scene::MeshScene;
 use crate::scalar_view::ScalarGrid;
 
 /// Native capture failures retain the readback stage and its original cause.
@@ -507,6 +510,113 @@ pub enum DrawPass {
     Dots { instances: usize },
 }
 
+/// One painter step. [`DrawStage::Objects`] is the composite of the offscreen
+/// object image; every later stage is an existing vector draw. `record` walks
+/// [`paint_stages`], so the ordering is observable without a GPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawStage {
+    /// Composite the prepared object target before any vector geometry.
+    Objects,
+    /// One of the existing arrow/line/dot draws.
+    Vector(DrawPass),
+}
+
+/// Device-free state of the object scene owned by [`DrawState`].
+///
+/// `DrawState` needs a wgpu device to build its pipelines, so this slot is the
+/// test seam for "starts empty", "keeps the scene's generation" and "an empty
+/// scene draws nothing". It allocates only the `Arc` it is handed.
+#[derive(Clone, Default)]
+pub struct ObjectSceneState {
+    scene: Option<Arc<MeshScene>>,
+}
+
+impl ObjectSceneState {
+    /// An empty slot: no object scene has been installed for this frame.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { scene: None }
+    }
+
+    /// The slot holding an already-built scene.
+    #[must_use]
+    pub fn from_scene(scene: Arc<MeshScene>) -> Self {
+        Self { scene: Some(scene) }
+    }
+
+    /// Install this frame's scene; the `Arc` and its generation are unchanged.
+    pub fn set(&mut self, scene: Arc<MeshScene>) {
+        self.scene = Some(scene);
+    }
+
+    /// Clear the slot when a capture or frame has no object scene.
+    pub fn clear(&mut self) {
+        self.scene = None;
+    }
+
+    /// The installed scene, if any.
+    #[must_use]
+    pub fn get(&self) -> Option<&Arc<MeshScene>> {
+        self.scene.as_ref()
+    }
+
+    /// Objects in the installed scene; zero when nothing is installed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.scene.as_ref().map_or(0, |scene| scene.objects().len())
+    }
+
+    /// Whether the slot is empty (no scene or a scene with no mapped bodies).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether the installed scene has at least one mapped body.
+    #[must_use]
+    pub fn has_objects(&self) -> bool {
+        !self.is_empty()
+    }
+}
+
+/// The painter order for one frame: the object composite first (only when the
+/// scene has at least one mapped body), then the unchanged vector passes.
+///
+/// The returned `Vec` is one small allocation per paint (at most seven stages,
+/// with no per-instance growth). The draw pipeline is defined by this ordered
+/// slice in both the live callback and the offscreen capture; that bounded
+/// allocation is accepted rather than threading a bespoke iterator/visitor
+/// through both paths.
+#[must_use]
+pub fn paint_stages(scene: &SceneGPU, object_count: usize) -> Vec<DrawStage> {
+    let mut stages = Vec::with_capacity(7);
+    if object_count > 0 {
+        stages.push(DrawStage::Objects);
+    }
+    stages.extend(scene.draw_passes().into_iter().map(DrawStage::Vector));
+    stages
+}
+
+/// Physical-pixel extent of the egui callback viewport, rounded like
+/// `egui::PaintCallbackInfo::viewport_in_pixels`. The screen-edge clamp is left
+/// to the host: the target only needs a nonzero extent.
+#[must_use]
+pub fn object_viewport_pixels(viewport: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return [0, 0];
+    }
+    let left = (pixels_per_point * viewport.min.x).round();
+    let top = (pixels_per_point * viewport.min.y).round();
+    let right = (pixels_per_point * viewport.max.x).round();
+    let bottom = (pixels_per_point * viewport.max.y).round();
+    if !left.is_finite() || !top.is_finite() || !right.is_finite() || !bottom.is_finite() {
+        return [0, 0];
+    }
+    let width = (right - left).max(0.0);
+    let height = (bottom - top).max(0.0);
+    [width as u32, height as u32]
+}
+
 /// Vertices the dot shader emits per instance: the two triangles of a
 /// camera-facing billboard quad. Kept in step with
 /// [`crate::particles::DOT_QUAD_CORNERS`] (the CPU mirror of the same table).
@@ -760,6 +870,11 @@ pub struct DrawState {
     _heatmap_texture: wgpu::Texture,
     heatmap_identity: Option<u64>,
     light_dir: [f32; 4],
+    /// The offscreen object pass. It allocates no target until a non-empty
+    /// scene with a nonzero viewport arrives.
+    object_pass: ObjectPass,
+    /// This frame's mapped object scene, installed by the draw callback.
+    object_scene: ObjectSceneState,
     /// The surface format the pipelines were built for. An offscreen capture
     /// renders in the same format, so the image matches the screen and the
     /// readback only needs the channel-order fix-up.
@@ -1194,8 +1309,22 @@ impl DrawState {
             _heatmap_texture: heatmap_texture,
             heatmap_identity: None,
             light_dir: LIGHT_DIR,
+            object_pass: ObjectPass::new(device, format),
+            object_scene: ObjectSceneState::new(),
             format,
         }
+    }
+
+    /// Install the object scene this frame composites. The scene is carried by
+    /// `Arc`; its content fingerprint is never rewritten here.
+    pub fn set_object_scene(&mut self, scene: Arc<MeshScene>) {
+        self.object_scene.set(scene);
+    }
+
+    /// The object scene installed for the current frame, if any.
+    #[must_use]
+    pub fn object_scene(&self) -> Option<&Arc<MeshScene>> {
+        self.object_scene.get()
     }
 
     /// The resident heatmap identity, exposed for the upload-skip seam tests.
@@ -1397,47 +1526,63 @@ impl DrawState {
         }
     }
 
-    /// Record this frame's scene into a render pass: backdrop lines, then the
-    /// single combined 3D arrow+particle draw (or, in 2D, the arrows-then-dots
-    /// draws). The same plan runs for the on-screen and offscreen passes, so a
-    /// capture paints exactly what the viewport paints.
-    fn record(&self, pass: &mut wgpu::RenderPass<'_>, scene: &SceneGPU) {
-        for draw in scene.draw_passes() {
-            match draw {
-                DrawPass::Heatmap { vertices } => {
-                    pass.set_pipeline(&self.heatmap_pipeline);
-                    pass.set_bind_group(0, &self.heatmap_bind, &[]);
-                    pass.set_vertex_buffer(0, self.heatmap_vertex_buf.slice(..));
-                    pass.draw(0..vertices as u32, 0..1);
-                }
-                DrawPass::Lines { instances } => {
-                    pass.set_pipeline(&self.line_pipeline);
-                    pass.set_bind_group(0, &self.line_bind, &[]);
-                    pass.draw(0..(instances as u32) * 6, 0..1);
-                }
-                DrawPass::Trails { instances } => {
-                    pass.set_pipeline(&self.line_pipeline);
-                    pass.set_bind_group(0, &self.trail_bind, &[]);
-                    pass.draw(0..(instances as u32) * 6, 0..1);
-                }
-                DrawPass::Scene3D { instances, .. } => {
-                    pass.set_pipeline(&self.scene_pipeline);
-                    pass.set_bind_group(0, &self.arrow_bind, &[]);
-                    pass.draw(0..scene_vertex_count(instances), 0..1);
-                }
-                DrawPass::Arrow2D {
-                    instances,
-                    vertices,
-                } => {
-                    pass.set_pipeline(&self.arrow2d_pipeline);
-                    pass.set_bind_group(0, &self.arrow_bind, &[]);
-                    pass.draw(0..(instances as u32) * vertices, 0..1);
-                }
-                DrawPass::Dots { instances } => {
-                    pass.set_pipeline(&self.dot_pipeline);
-                    pass.set_bind_group(0, &self.dot_bind, &[]);
-                    pass.draw(0..(instances as u32) * DOT_VERTS_PER_INSTANCE, 0..1);
-                }
+    /// Record the object composite then the vector passes. `object_count` is
+    /// the number of mapped bodies in the prepared scene; it only decides
+    /// whether the composite stage exists. `composite_guard_rect` bounds the
+    /// composite: the live callback passes the callback rect in egui points,
+    /// while the offscreen capture passes a pixel-sized rect
+    /// (`0..width`, `0..height`). `ObjectPass::paint` only needs a positive,
+    /// finite extent, so either unit works; callers must not mix them.
+    fn record_with_objects(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        scene: &SceneGPU,
+        object_count: usize,
+        composite_guard_rect: egui::Rect,
+    ) {
+        for stage in paint_stages(scene, object_count) {
+            match stage {
+                DrawStage::Objects => self.object_pass.paint(pass, composite_guard_rect),
+                DrawStage::Vector(draw) => self.record_draw(pass, draw),
+            }
+        }
+    }
+
+    fn record_draw(&self, pass: &mut wgpu::RenderPass<'_>, draw: DrawPass) {
+        match draw {
+            DrawPass::Heatmap { vertices } => {
+                pass.set_pipeline(&self.heatmap_pipeline);
+                pass.set_bind_group(0, &self.heatmap_bind, &[]);
+                pass.set_vertex_buffer(0, self.heatmap_vertex_buf.slice(..));
+                pass.draw(0..vertices as u32, 0..1);
+            }
+            DrawPass::Lines { instances } => {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_bind_group(0, &self.line_bind, &[]);
+                pass.draw(0..(instances as u32) * 6, 0..1);
+            }
+            DrawPass::Trails { instances } => {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_bind_group(0, &self.trail_bind, &[]);
+                pass.draw(0..(instances as u32) * 6, 0..1);
+            }
+            DrawPass::Scene3D { instances, .. } => {
+                pass.set_pipeline(&self.scene_pipeline);
+                pass.set_bind_group(0, &self.arrow_bind, &[]);
+                pass.draw(0..scene_vertex_count(instances), 0..1);
+            }
+            DrawPass::Arrow2D {
+                instances,
+                vertices,
+            } => {
+                pass.set_pipeline(&self.arrow2d_pipeline);
+                pass.set_bind_group(0, &self.arrow_bind, &[]);
+                pass.draw(0..(instances as u32) * vertices, 0..1);
+            }
+            DrawPass::Dots { instances } => {
+                pass.set_pipeline(&self.dot_pipeline);
+                pass.set_bind_group(0, &self.dot_bind, &[]);
+                pass.draw(0..(instances as u32) * DOT_VERTS_PER_INSTANCE, 0..1);
             }
         }
     }
@@ -1458,6 +1603,7 @@ impl DrawState {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         scene: &SceneGPU,
+        objects: Option<&Arc<MeshScene>>,
         view_proj: Mat4,
         camera_pos: Vec3,
         width: u32,
@@ -1473,6 +1619,29 @@ impl DrawState {
         // paint callback re-uploads every frame, so this does not leave the
         // live frame stale.
         self.upload(device, queue, view_proj, camera_pos, scene);
+
+        // One encoder carries the whole capture in submission order: the object
+        // image is recorded first, the screenshot pass composites it before any
+        // vector draw, and the readback copy follows. wgpu inserts the usage
+        // transition between the object target write and the later sample.
+        // An empty scene allocates nothing and draws nothing.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("vfe screenshot encoder"),
+        });
+        if let Some(objects) = objects {
+            self.set_object_scene(Arc::clone(objects));
+            let object_view = ObjectView {
+                view_proj: view_proj.to_cols_array_2d(),
+                eye: camera_pos.to_array(),
+                viewport: [width, height],
+                wireframe: false,
+                clear,
+            };
+            self.object_pass
+                .prepare(device, queue, &mut encoder, objects, &object_view)?;
+        } else {
+            self.object_scene.clear();
+        }
 
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("vfe screenshot target"),
@@ -1498,9 +1667,6 @@ impl DrawState {
             mapped_at_creation: false,
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("vfe screenshot encoder"),
-        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("vfe screenshot pass"),
@@ -1523,7 +1689,12 @@ impl DrawState {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.record(&mut pass, scene);
+            let composite_guard_rect = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width as f32, height as f32),
+            );
+            let object_count = objects.map_or(0, |scene| scene.objects().len());
+            self.record_with_objects(&mut pass, scene, object_count, composite_guard_rect);
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -1568,9 +1739,32 @@ impl DrawState {
         height: u32,
         clear: [f64; 4],
     ) -> Result<Vec<u8>, OffscreenError> {
+        self.render_offscreen_with_objects(
+            device, queue, scene, None, view_proj, camera_pos, width, height, clear,
+        )
+    }
+
+    /// As [`Self::render_offscreen`], compositing the object image first when
+    /// `objects` is a non-empty scene. The live viewport and the GUI screenshot
+    /// capture use this. CLI PNG and CLI animation exports still call the
+    /// no-objects form, so they do not yet composite objects (issue #192).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_offscreen_with_objects(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &SceneGPU,
+        objects: Option<&Arc<MeshScene>>,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        width: u32,
+        height: u32,
+        clear: [f64; 4],
+    ) -> Result<Vec<u8>, OffscreenError> {
         let readback = self
             .submit_offscreen(
-                device, queue, scene, view_proj, camera_pos, width, height, clear,
+                device, queue, scene, objects, view_proj, camera_pos, width, height, clear,
             )
             .map_err(OffscreenError::Setup)?;
 
@@ -1613,8 +1807,30 @@ impl DrawState {
         clear: [f64; 4],
         completion: impl FnOnce(Result<Vec<u8>, String>) + Send + 'static,
     ) -> Result<(), String> {
+        self.render_offscreen_async_with_objects(
+            device, queue, scene, None, view_proj, camera_pos, width, height, clear, completion,
+        )
+    }
+
+    /// As [`Self::render_offscreen_async`] with the object scene composited
+    /// first.
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_offscreen_async_with_objects(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &SceneGPU,
+        objects: Option<&Arc<MeshScene>>,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        width: u32,
+        height: u32,
+        clear: [f64; 4],
+        completion: impl FnOnce(Result<Vec<u8>, String>) + Send + 'static,
+    ) -> Result<(), String> {
         let readback = self.submit_offscreen(
-            device, queue, scene, view_proj, camera_pos, width, height, clear,
+            device, queue, scene, objects, view_proj, camera_pos, width, height, clear,
         )?;
         let buffer = readback.clone();
         let format = self.format;
@@ -1651,9 +1867,22 @@ pub(crate) fn readback_result(
     crate::screenshot::to_rgba(format, pixels)
 }
 
-/// Per-frame draw: carries the scene to upload and the camera matrices.
+/// Per-frame draw: carries the scene to upload, the object scene to composite
+/// first, and the camera matrices.
+///
+/// `object_style` is deferred to the persisted-style slice (#115): this slice
+/// always renders the shipped Solid bodies.
 pub struct DrawCallback {
     pub scene: SceneGPU,
+    /// This frame's mapped source/induction bodies. `Arc` so a capture and the
+    /// live callback share one fingerprint without a rebuild.
+    pub objects: Arc<MeshScene>,
+    /// The callback rect in egui points (used for the composite guard).
+    pub screen: egui::Rect,
+    /// The callback rect in physical pixels; the object target's extent.
+    pub object_viewport: [u32; 2],
+    /// Linear background the owned object target is cleared to.
+    pub object_clear: [f64; 4],
     pub view_proj: Mat4,
     pub camera_pos: Vec3,
 }
@@ -1664,13 +1893,33 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let ds = callback_resources
             .get_mut::<DrawState>()
             .expect("DrawState must be installed before the first paint callback");
         ds.upload(device, queue, self.view_proj, self.camera_pos, &self.scene);
+
+        // The object scene is installed before the pass so the paint stage can
+        // name it; the pass itself records before any vector draw, in both the
+        // live callback and `submit_offscreen`.
+        ds.set_object_scene(Arc::clone(&self.objects));
+        let object_view = ObjectView {
+            view_proj: self.view_proj.to_cols_array_2d(),
+            eye: self.camera_pos.to_array(),
+            viewport: self.object_viewport,
+            wireframe: false,
+            clear: self.object_clear,
+        };
+        if let Err(error) =
+            ds.object_pass
+                .prepare(device, queue, egui_encoder, &self.objects, &object_view)
+        {
+            // A callback cannot return an error; the pass left `prepared` unset,
+            // so `paint` skips the composite and the vector scene still paints.
+            log::warn!("object pass skipped: {error}");
+        }
         Vec::new()
     }
 
@@ -1684,7 +1933,12 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
             .get::<DrawState>()
             .expect("DrawState must be installed before the first paint callback");
 
-        ds.record(render_pass, &self.scene);
+        ds.record_with_objects(
+            render_pass,
+            &self.scene,
+            self.objects.objects().len(),
+            self.screen,
+        );
     }
 }
 

@@ -84,10 +84,11 @@ impl VfApp {
                                 self.renderer_ready = true;
                             }
                             if let Some(draw) = renderer.callback_resources.get_mut::<DrawState>() {
-                                let started = draw.render_offscreen_async(
+                                let started = draw.render_offscreen_async_with_objects(
                                     &render_state.device,
                                     &render_state.queue,
                                     &request.frame.scene,
+                                    Some(&request.frame.object_scene),
                                     request.frame.view_proj,
                                     request.frame.eye,
                                     request.width,
@@ -461,10 +462,11 @@ impl VfApp {
                             .callback_resources
                             .get_mut::<DrawState>()
                             .expect("DrawState must be installed before capturing")
-                            .render_offscreen(
+                            .render_offscreen_with_objects(
                                 &render_state.device,
                                 &render_state.queue,
                                 &scene,
+                                Some(&self.object_scene),
                                 view_proj,
                                 eye_position,
                                 capture_width,
@@ -510,10 +512,11 @@ impl VfApp {
                             .callback_resources
                             .get_mut::<DrawState>()
                             .expect("DrawState must be installed before capturing")
-                            .render_offscreen_async(
+                            .render_offscreen_async_with_objects(
                                 &render_state.device,
                                 &render_state.queue,
                                 &scene,
+                                Some(&self.object_scene),
                                 view_proj,
                                 eye_position,
                                 capture_width,
@@ -543,10 +546,19 @@ impl VfApp {
                 }
             }
 
+            let object_clear = egui::Rgba::from(ui.visuals().panel_fill)
+                .to_array()
+                .map(f64::from);
+            let object_viewport =
+                crate::renderer::object_viewport_pixels(rect, ui.ctx().pixels_per_point());
             let callback = eframe::egui_wgpu::Callback::new_paint_callback(
                 rect,
                 DrawCallback {
                     scene,
+                    objects: Arc::clone(&self.object_scene),
+                    screen: rect,
+                    object_viewport,
+                    object_clear,
                     view_proj,
                     camera_pos: eye_position,
                 },
@@ -564,6 +576,16 @@ impl VfApp {
                 }
             }
         });
+    }
+
+    /// Replace the cached object scene only when its content fingerprint
+    /// changes. The mapping is bounded by `MAX_OBJECTS`; an unchanged source,
+    /// domain or slice keeps the old `Arc` so the pass skips the upload.
+    fn refresh_object_scene(&mut self) {
+        let next = super::object_scene_for_state(&self.state);
+        if next.generation() != self.object_scene.generation() {
+            self.object_scene = Arc::new(next);
+        }
     }
 
     /// Build the renderer scene from the cached vector scene for one frame's
@@ -589,6 +611,7 @@ impl VfApp {
         view: &Mat4,
         styles: &LayerStyles,
     ) -> SceneGPU {
+        self.refresh_object_scene();
         // Ode markers are recomputed per frame and appended to copies: 2D uses
         // the cached dots vector, 3D the sorted combined stream. The cached
         // scene itself is never written.
@@ -776,10 +799,11 @@ impl crate::animation_job::AnimationRenderer for NativeAnimationRenderer<'_> {
         clear: [f64; 4],
     ) -> Result<Vec<u8>, AnimationError> {
         self.draw
-            .render_offscreen(
+            .render_offscreen_with_objects(
                 self.device,
                 self.queue,
                 &frame.scene,
+                Some(&frame.object_scene),
                 frame.view_proj,
                 frame.eye,
                 width,

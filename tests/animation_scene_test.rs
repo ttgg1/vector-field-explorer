@@ -203,6 +203,31 @@ fn first_frame_renders_the_captured_particle_cloud() {
 }
 
 #[test]
+fn animation_snapshot_copies_the_object_scene() {
+    let mut state = State::new(true);
+    assert!(state.set_field_mode(vector_field_explorer::source_scene::FieldMode::Induction));
+    let mut snapshot = snapshot(state, Particles::default());
+    assert!(
+        !snapshot.object_scene.objects().is_empty(),
+        "the default induction scene maps one object"
+    );
+    let generation = snapshot.object_scene.generation();
+
+    let frame = snapshot
+        .frame_at(0.0, 0.0, 1.0, true)
+        .expect("first induction frame");
+    assert!(
+        std::sync::Arc::ptr_eq(&snapshot.object_scene, &frame.object_scene),
+        "the frame carries the snapshot's object scene, not a rebuild"
+    );
+    assert_eq!(frame.object_scene.generation(), generation);
+    assert_eq!(
+        frame.object_scene.objects().len(),
+        snapshot.object_scene.objects().len()
+    );
+}
+
+#[test]
 fn scene_color_facts_collects_stats_from_drawn_arrows() {
     let mut state = State::new(false);
     state.set_formula("(x + 1, y - 1)".to_owned());
@@ -221,7 +246,10 @@ fn scene_color_facts_collects_stats_from_drawn_arrows() {
     );
     assert_eq!(stats, expected);
     assert_eq!(range, state.color_range(&sampled));
-    assert_eq!(range, vector_field_explorer::sampling::magnitude_range(&sampled));
+    assert_eq!(
+        range,
+        vector_field_explorer::sampling::magnitude_range(&sampled)
+    );
     assert!(mapping.is_none(), "the default mapping is legacy");
 }
 
@@ -248,9 +276,15 @@ fn capture_uses_the_same_effective_arrow_params() {
         .expect("the arrow style is valid");
     let live = state.effective_arrow_params();
     assert_eq!(live.head_width, stored.head_width * 2.0);
-    assert_ne!(live.head_width, stored.head_width, "the style really applies");
+    assert_ne!(
+        live.head_width, stored.head_width,
+        "the style really applies"
+    );
     let live_snapshot = state.snapshot();
-    assert_eq!(live_snapshot.arrow_params, live, "the live cache carries it");
+    assert_eq!(
+        live_snapshot.arrow_params, live,
+        "the live cache carries it"
+    );
 
     let mut snapshot = snapshot(state, Particles::default());
     let frame = snapshot
