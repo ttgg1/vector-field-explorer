@@ -1,6 +1,7 @@
 //! Native-only symbolic formula tools. All editor state is transient.
 use eframe::egui;
 
+use crate::cas_actions::{self, CasAction, CasActionError};
 use crate::{cas, field::FieldExpr, source_scene::FieldMode, viewmodel::State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -80,7 +81,17 @@ pub struct CasPanelState {
     pub variable: Variable,
     pub preview: Option<Preview>,
     pub error: Option<String>,
+    /// The parsed app-control action for the current line, if any.
+    pub action: Option<CasAction>,
+    /// The precise parse rejection for an app-control action line.
+    pub action_error: Option<String>,
+    /// Result of the most recent applied action (shown until the input edits).
+    pub action_message: Option<String>,
+    /// Rejection from applying a parsed action (shown until the input edits).
+    pub action_rejection: Option<String>,
     last_request: Option<Request>,
+    /// The input text the apply result belongs to, so a new edit clears it.
+    last_action_input: Option<String>,
 }
 impl Default for CasPanelState {
     fn default() -> Self {
@@ -90,7 +101,12 @@ impl Default for CasPanelState {
             variable: Variable::X,
             preview: None,
             error: None,
+            action: None,
+            action_error: None,
+            action_message: None,
+            action_rejection: None,
             last_request: None,
+            last_action_input: None,
         }
     }
 }
@@ -104,6 +120,34 @@ impl CasPanelState {
         }
     }
     pub fn refresh(&mut self, dimension: usize) {
+        if self.last_action_input.as_deref() != Some(self.input.as_str()) {
+            self.last_action_input = Some(self.input.clone());
+            self.action_message = None;
+            self.action_rejection = None;
+        }
+        // A recognised action verb wins over the mathematical intent grammar.
+        match cas_actions::parse_action(&self.input) {
+            Ok(action) => {
+                self.action = Some(action);
+                self.action_error = None;
+                self.preview = None;
+                self.error = None;
+                self.last_request = None;
+                return;
+            }
+            Err(CasActionError::UnknownVerb) | Err(CasActionError::Empty) => {
+                self.action = None;
+                self.action_error = None;
+            }
+            Err(error) => {
+                self.action = None;
+                self.action_error = Some(error.to_string());
+                self.preview = None;
+                self.error = None;
+                self.last_request = None;
+                return;
+            }
+        }
         let request = self.request(dimension);
         if self.last_request.as_ref() == Some(&request) {
             return;
@@ -307,7 +351,7 @@ fn derive(r: &Request) -> Result<(String, ResultKind), String> {
     Ok(output)
 }
 
-pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
+pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) -> Option<CasAction> {
     let disabled_mode = matches!(
         state.field_mode,
         FieldMode::Induction | FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
@@ -315,10 +359,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
     if disabled_mode {
         ui.label("CAS edits the formula field; switch to Formula.");
     }
-    ui.add_enabled_ui(!disabled_mode, |ui| show_enabled(ui, state, panel));
+    ui.add_enabled_ui(!disabled_mode, |ui| show_enabled(ui, state, panel))
+        .inner
 }
 
-fn show_enabled(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) {
+fn show_enabled(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    panel: &mut CasPanelState,
+) -> Option<CasAction> {
     let sources_mode = state.field_mode == FieldMode::Sources;
     let dimension = cas_dimension(state);
     panel.refresh(dimension);
@@ -331,7 +380,11 @@ fn show_enabled(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState)
     let input_width = ui.available_width();
     let changed = ui
         .add(egui::TextEdit::singleline(&mut panel.input).desired_width(input_width))
-        .on_hover_text("Enter a scalar formula or a comma-separated vector formula")
+        .on_hover_text(
+            "Enter a scalar or vector formula, or an action such as \
+             `domain 2, 2, 2`, `density 20`, `colors turbo magnitude linear`, \
+             `camera fit` or `pause`",
+        )
         .changed();
     ui.label("Operation");
     egui::ComboBox::from_id_salt("cas_operation")
@@ -371,6 +424,29 @@ fn show_enabled(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState)
         panel.last_request = None;
     }
     panel.refresh(dimension);
+    let mut apply_action = None;
+    if let Some(error) = &panel.action_error {
+        ui.colored_label(ui.visuals().error_fg_color, format!("Error: {error}"));
+    }
+    if let Some(action) = panel.action.clone() {
+        ui.label(format!("Preview — {}", cas_actions::preview(&action)));
+        if ui
+            .button("Apply action")
+            .on_hover_text("Apply this one validated action as a single undoable edit")
+            .clicked()
+        {
+            apply_action = Some(action);
+        }
+    }
+    if let Some(rejection) = &panel.action_rejection {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            format!("Rejected: {rejection}"),
+        );
+    }
+    if let Some(message) = &panel.action_message {
+        ui.label(format!("Applied: {message}"));
+    }
     ui.label(format!("Dimension: {}D (current app mode)", dimension));
     let vector_mode = state.is_vector_mode();
     if let Some(p) = panel.preview.clone() {
@@ -435,4 +511,5 @@ fn show_enabled(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState)
     if reset {
         panel.reset();
     }
+    apply_action
 }

@@ -6,6 +6,7 @@ pub mod appearance_profile;
 pub mod arrow_geometry;
 pub mod arrow_style;
 pub mod camera;
+pub mod cas_actions;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cas;
 pub mod cas_backend;

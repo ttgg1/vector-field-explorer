@@ -2174,6 +2174,49 @@ as text and not validated as meval or CAS expressions, LaTeX support is the
 listed subset, and nested calls are left to the backend after the delimiter
 checks.
 
+#### `src/cas_actions.rs` — typed CAS app-control actions
+
+**Purpose.** Parse a fixed, bounded verb vocabulary on top of the #168 CAS
+line into typed app-control actions, and preview exactly what each action will
+do before it applies.
+
+**Public API.** `CasAction` (`SetFormula`, `SetScalarSource`, `SetParameters`,
+`SetDomain`, `SetDensity`, `SetDimension`, `SetColors`,
+`ApplyAppearanceProfile`, `AddPointProbe`, `ApplySeedLayout`, `SetCamera`,
+`SetTransport`), `CameraFraming` (`Fit`, `Reset`, `Isometric`), `CasActionError`
+(`Empty`, `TooLong`, `UnknownVerb`, `BadValue`, `UnsupportedHere`),
+`parse_action`, `preview`, `MAX_PARAMETER_ASSIGNMENTS = 8`,
+`MIN_HALF_EXTENT = 0.1`, `MAX_HALF_EXTENT = 100`.
+
+**Invariants.** Verbs are `formula`, `scalar`, `param`, `domain`, `density`,
+`2d`/`3d`, `colors`/`colours`, `appearance`, `probe`, `seeds`, `camera`,
+`play`/`pause`, matched case-insensitively while values keep their case. Input
+is limited to the shared 512-byte CAS bound and at most eight parameter
+assignments. Values are validated before an action exists: the formula through
+`FieldExpr`, the surface source through `ScalarExpr`, the domain through finite
+half-extents in `0.1..=100`, density through the model's sampled bounds, colour
+names through the built-in enums, and camera framings through the fixed list.
+An unrecognised leading word returns `UnknownVerb` so the panel can fall back
+to the mathematical intent grammar. Parsing and preview are pure: no app state,
+no mutation and no sampling. Actions that need live state (parameter names,
+library records, the probe cap or the current dimension's density bound) are
+validated again by the app before the first mutation. `SetFormula` and
+`SetScalarSource` edit the Formula-mode field only: `apply_cas_action` refuses
+both outside `FieldMode::Formula` with the same `CAS edits the formula field;
+switch to Formula.` explanation as the #168 mathematical path, because the
+scalar overlay (`scalar_view_applicable`) and the Surface plot are Formula-mode
+views. The panel stays enabled so the preview remains visible; the refusal
+surfaces on Apply and leaves the document, dirty flag and history untouched.
+
+**Pinned by.** `tests/cas_actions_test.rs`: every verb and case variant, preview
+text, every rejection path, the assignment cap, and app-level application with
+atomic rejection, one dirty transition/undo entry, named library resolution,
+the probe cap, camera framing, runtime-only transport and neutral no-ops.
+
+**Limitations.** The grammar is textual and intentionally shallow; parameters
+may only be updated, never defined, and no action creates a source, runs a
+solver, writes a file or touches preset storage.
+
 #### `src/domain.rs` — sampling box and grid iterator
 
 **Purpose.** Axis-aligned sampling domain and the exact lattice used everywhere
@@ -4461,17 +4504,25 @@ display-only menu shortcut.
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
 Native-only independent panel for transient scalar/vector formula input,
-operation preview, copy, and explicitly applying validated vector results.
+operation preview, copy, and explicitly applying validated vector results. A
+recognised app-control action verb from `cas_actions` takes precedence over the
+mathematical intent: the panel shows `preview()` (or the precise parse
+rejection) and an `Apply action` button, and returns the parsed action to
+`VfApp::apply_cas_action`, which commits it once through the existing setters.
 `VfApp::cas` owns scratch state; `app/panels.rs::show_left_panels` assembles its
 rail/body independently of Controls, and Compact reuses the single sheet.
 `tests/cas_rails_test.rs` exercises actual rail/menu/tab/Apply and resize paths.
 Preview identity includes input, operation, variable, and the current app mode;
-CAS scratch is not persisted. Formula mode keeps its historical authoritative
-2D/3D app-mode dimension (not the field's arity). Sources mode has no formula
-editor: `apply` refuses it before dimension/vector checks, and `show` disables
-Apply with the exact explanation `CAS edits the formula field; switch to
-Formula.` The preview dimension reads `State::active_dimension()` in Sources
-mode without changing formula-mode semantics.
+CAS scratch, action messages and rejections are not persisted. Formula mode
+keeps its historical authoritative 2D/3D app-mode dimension (not the field's
+arity). Sources mode has no formula editor: `apply` refuses it before
+dimension/vector checks, and `show` disables Apply with the exact explanation
+`CAS edits the formula field; switch to Formula.` The action seam matches that
+rule: a previewed `formula` or `scalar` action is shown in Sources mode but
+`VfApp::apply_cas_action` refuses it on Apply with the same explanation and no
+mutation. The preview dimension reads
+`State::active_dimension()` in Sources mode without changing formula-mode
+semantics.
 
 #### `src/ui/arrows.rs` — unused placeholder (not compiled)
 
