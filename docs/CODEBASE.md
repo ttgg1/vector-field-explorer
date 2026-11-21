@@ -1780,6 +1780,50 @@ the cap, and disarms with a message when the probe path disappears.
 `tests/sidebar_controls_test.rs`; the history, row and mode-switch tests in
 `tests/edit_history_app_test.rs`.
 
+#### `src/scalar_analysis.rs` — comparison series and potential gradients
+
+**Purpose / API (issue #93 slice A).** `ComparisonSeries`, `ComparisonSet`,
+`SeriesRole`, `SeriesStyle`, `GradientSpec`, `GradientSample`, `GradientCacheKey`
+and `GradientCache` model display-only comparison curves and one finite-difference
+gradient request. `ComparisonSet` caps at `MAX_COMPARISON_SERIES=4`, rejects
+duplicate ids, and `sanitized()` repairs stored data (drops empty expressions and
+duplicates, truncates labels to `MAX_SERIES_LABEL_BYTES=48` on a character
+boundary, applies palette fallbacks, enforces the cap). Only
+`SeriesRole::ElectricPotential` is labelled `E = -∇V`; a generic source stays
+`∇f` and is never called an electric field.
+
+**Differentiation.** `sample_gradient` validates the spec first (step finite and
+in `MIN_STEP=1e-6..=MAX_STEP=1e-1`, never clamped; `max_error` finite and
+non-negative), reports the #92 unsupported/parse reason for a `z` or otherwise
+invalid source, then samples the frame at the #92 side `160² =
+MAX_GRADIENT_SAMPLES=25_600` in row-major order. Central differences use
+`h = step`; exact domain edges use the inward one-sided stencil and set
+`one_sided`. Any non-finite stencil evaluation yields `gradient: None` with
+`error_estimate = 0.0` and `usable = false`; holes are never interpolated.
+`error_estimate` is the largest component disagreement between `h` and `h / 2`
+(an agreement indicator, not a true-error bound) and a finite sample above
+`max_error` is marked unusable. The sampled vector is the field the overlay must
+draw in frame-world coordinates: `∂f/∂u · right + ∂f/∂v · up` for
+`SeriesRole::Scalar`, negated to `E = -∇V` for
+`SeriesRole::ElectricPotential`. The negation is applied after differentiation,
+so `error_estimate`, `usable` and `one_sided` are sign-independent, and the role
+is part of the cache identity because the vectors differ.
+
+**Cache / persistence.** `GradientCache` is a one-entry cache keyed on role,
+source text, step, budget, frame, domain, the committed `ParameterSet` and the
+clock quantised to `SCALAR_RESAMPLE_INTERVAL` (100 ms); `record_matches`/`store`
+invalidate on any edit. `ViewRecord.comparison_series` and
+`ViewRecord.gradient` are serde-default document state: capture writes them,
+startup restore assigns them directly (series sanitized, an invalid gradient
+dropped, one warning) without per-field dirtying, and older records load as no
+series and no gradient. `State::set_comparison_series`/`set_gradient` validate
+and dirty once on a real change; they never touch arrows, colour mapping or
+probes.
+
+**Pinned by.** `tests/scalar_analysis_test.rs` (the fourteen contract tests),
+series/gradient envelope and corrupt-record pins in `tests/persistence_test.rs`,
+and the scene JSON round-trip/legacy pins in `tests/scene_document_test.rs`.
+
 #### `src/plot.rs` — pure bounded scalar geometry and plot types
 
 **Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable

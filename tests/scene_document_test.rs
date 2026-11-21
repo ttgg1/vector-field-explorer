@@ -8,7 +8,10 @@ use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_ramp::{ColorRamp, ColorStop, RampKind, Rgb};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::persistence::ViewRecord;
-use vector_field_explorer::plane::PlaneAxis;
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame};
+use vector_field_explorer::scalar_analysis::{
+    ComparisonSeries, ComparisonSet, GradientSpec, SeriesId, SeriesRole, SeriesStyle,
+};
 use vector_field_explorer::scalar_view::{LineProbe, PointProbe, ProbeSet};
 use vector_field_explorer::scene_document::{
     MAX_SCENE_NAME_BYTES, SCENE_FORMAT_VERSION, SceneCamera, SceneDocument, export_scene,
@@ -36,9 +39,52 @@ fn sample_camera() -> SceneCamera {
     }
 }
 
+fn sample_comparison_series() -> ComparisonSet {
+    ComparisonSet::from_series(vec![
+        ComparisonSeries::new(
+            SeriesId(7),
+            "quadratic".to_owned(),
+            "x*x + y*y".to_owned(),
+            SeriesStyle {
+                color: Rgb([40, 120, 200]),
+                dashed: false,
+            },
+        ),
+        ComparisonSeries::new(
+            SeriesId(8),
+            "potential".to_owned(),
+            "x + y".to_owned(),
+            SeriesStyle {
+                color: Rgb([200, 80, 40]),
+                dashed: true,
+            },
+        ),
+    ])
+}
+
+fn sample_gradient() -> GradientSpec {
+    GradientSpec {
+        role: SeriesRole::ElectricPotential,
+        expr: "x*x + y*y".to_owned(),
+        frame: PlaneFrame {
+            axis: PlaneAxis::Z,
+            origin: Vec3::new(0.5, -0.5, 0.0),
+            right: Vec3::X,
+            up: Vec3::Y,
+            normal: Vec3::Z,
+            half_u: 2.0,
+            half_v: 1.5,
+        },
+        step: 1e-2,
+        max_error: 0.05,
+    }
+}
+
 fn sample_view() -> ViewRecord {
     ViewRecord {
         formula: "x + y".to_string(),
+        comparison_series: sample_comparison_series(),
+        gradient: Some(sample_gradient()),
         color_ramp: Some(ColorRamp {
             stops: vec![stop(0.0, "#102030"), stop(1.0, "#a0b0c0")],
             reversed: true,
@@ -137,6 +183,27 @@ fn scene_round_trips_through_json() {
     assert_eq!(restored.view.probes, sample_view().probes);
     assert_eq!(restored.view.probes.points.len(), 1);
     assert_eq!(restored.view.probes.lines.len(), 1);
+    assert_eq!(restored.view.comparison_series, sample_comparison_series());
+    assert_eq!(restored.view.gradient, Some(sample_gradient()));
+}
+
+#[test]
+fn legacy_scene_without_comparison_series_or_gradient_restores_defaults() {
+    let json = sample_document().to_json().expect("valid scene serializes");
+    let mut value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    {
+        let view = value["view"].as_object_mut().expect("view is an object");
+        view.remove("comparison_series");
+        view.remove("gradient");
+    }
+    let legacy = serde_json::to_string(&value).expect("re-serializes");
+    let restored = SceneDocument::from_json(&legacy).expect("legacy scene parses");
+    assert!(restored.view.comparison_series.is_empty());
+    assert!(restored.view.gradient.is_none());
+    assert!(
+        restored.view.probes.lines.len() == 1,
+        "other fields still load"
+    );
 }
 
 #[test]

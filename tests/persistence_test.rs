@@ -10,7 +10,7 @@ use vector_field_explorer::appearance_profile::{AppearanceProfile, builtins};
 use vector_field_explorer::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::color_mapping::ColorQuantity;
-use vector_field_explorer::color_ramp::{ColorRamp, RampKind, ScaleMode};
+use vector_field_explorer::color_ramp::{ColorRamp, RampKind, Rgb, ScaleMode};
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::induction::{InductionCase, InductionScene};
 use vector_field_explorer::interaction::{
@@ -22,11 +22,15 @@ use vector_field_explorer::layer_style::LayerStyles;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::particles::{MAX_PARTICLES, ParticleAppearance, ParticleColorMode};
 use vector_field_explorer::persistence::{AppSettings, PresetUiRecord, ViewRecord, load, save};
-use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis};
+use vector_field_explorer::plane::{DIM_ALPHA, PlaneAxis, PlaneFrame};
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::preset_library::PresetGroup;
 use vector_field_explorer::profile_library::{MAX_USER_PROFILES, ProfileLibrary};
 use vector_field_explorer::scalar::ScalarContext;
+use vector_field_explorer::scalar_analysis::{
+    ComparisonSeries, ComparisonSet, GradientSpec, MAX_SERIES_LABEL_BYTES, SeriesId, SeriesRole,
+    SeriesStyle,
+};
 use vector_field_explorer::scalar_view::{LineProbe, PointProbe, ScalarSample};
 use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint};
 use vector_field_explorer::seed_layout_library::{
@@ -3688,4 +3692,132 @@ fn probes_round_trip_through_the_envelope_and_legacy_records_default_to_none() {
     let mut legacy_state = State::new(false);
     legacy.view.restore(&mut legacy_state, &mut Controls::new());
     assert!(legacy_state.probes.is_empty());
+}
+
+// Issue #93 slice A: comparison series and the gradient request are durable
+// document state; invalid stored values are repaired/dropped on restore.
+
+#[test]
+fn comparison_series_and_gradient_round_trip_through_the_envelope() {
+    let set = ComparisonSet::from_series(vec![ComparisonSeries::new(
+        SeriesId(5),
+        "potential".to_owned(),
+        "x*x + y*y".to_owned(),
+        SeriesStyle {
+            color: Rgb([12, 200, 90]),
+            dashed: true,
+        },
+    )]);
+    let gradient = GradientSpec {
+        role: SeriesRole::ElectricPotential,
+        expr: "x*x + y*y".to_owned(),
+        frame: PlaneFrame {
+            axis: PlaneAxis::Z,
+            origin: Vec3::new(0.25, -0.5, 1.0),
+            right: Vec3::X,
+            up: Vec3::Y,
+            normal: Vec3::Z,
+            half_u: 1.5,
+            half_v: 2.5,
+        },
+        step: 1e-2,
+        max_error: 0.25,
+    };
+
+    let mut state = State::new(false);
+    state.comparison_series = set.clone();
+    state.gradient = Some(gradient.clone());
+
+    let mut storage = MemoryStorage::default();
+    save(
+        &mut storage,
+        &AppSettings {
+            view: ViewRecord::capture(&state),
+            ..Default::default()
+        },
+    );
+    let raw = storage
+        .get_string(eframe::APP_KEY)
+        .expect("the envelope is saved");
+    assert!(
+        raw.contains("comparison_series"),
+        "the series record is stored:\n{raw}"
+    );
+    assert!(raw.contains("gradient"), "the gradient record is stored");
+
+    let loaded = load(Some(&storage));
+    assert_eq!(loaded.view.comparison_series, set);
+    assert_eq!(loaded.view.gradient, Some(gradient.clone()));
+
+    let mut restored = State::new(false);
+    loaded.view.restore(&mut restored, &mut Controls::new());
+    assert_eq!(restored.comparison_series, set);
+    assert_eq!(restored.gradient, Some(gradient));
+
+    // A legacy envelope without the fields restores no series and no gradient.
+    let legacy = load_legacy(false);
+    assert!(legacy.view.comparison_series.is_empty());
+    assert!(legacy.view.gradient.is_none());
+    let mut legacy_state = State::new(false);
+    legacy.view.restore(&mut legacy_state, &mut Controls::new());
+    assert!(legacy_state.comparison_series.is_empty());
+    assert!(legacy_state.gradient.is_none());
+}
+
+#[test]
+fn corrupt_series_and_gradient_are_sanitized_on_restore() {
+    let record = ViewRecord {
+        comparison_series: ComparisonSet::from_series(vec![
+            ComparisonSeries::new(
+                SeriesId(1),
+                String::new(),
+                "x".to_owned(),
+                SeriesStyle::default(),
+            ),
+            ComparisonSeries::new(
+                SeriesId(1),
+                "duplicate".to_owned(),
+                "x".to_owned(),
+                SeriesStyle::default(),
+            ),
+            ComparisonSeries::new(
+                SeriesId(2),
+                "x".repeat(MAX_SERIES_LABEL_BYTES + 4),
+                "x".to_owned(),
+                SeriesStyle::default(),
+            ),
+        ]),
+        gradient: Some(GradientSpec {
+            role: SeriesRole::Scalar,
+            expr: "x*x".to_owned(),
+            frame: PlaneFrame {
+                axis: PlaneAxis::Z,
+                origin: Vec3::ZERO,
+                right: Vec3::X,
+                up: Vec3::Y,
+                normal: Vec3::Z,
+                half_u: 1.0,
+                half_v: 1.0,
+            },
+            step: 0.0,
+            max_error: 0.1,
+        }),
+        ..ViewRecord::default()
+    };
+
+    let mut state = State::new(false);
+    record.restore(&mut state, &mut Controls::new());
+    assert!(state.comparison_series.len() <= 2);
+    assert_eq!(state.comparison_series.validate(), Ok(()));
+    assert!(
+        state
+            .comparison_series
+            .iter()
+            .all(|series| !series.label.is_empty() && series.label.len() <= MAX_SERIES_LABEL_BYTES),
+        "invalid labels are repaired"
+    );
+    assert!(
+        state.gradient.is_none(),
+        "an invalid stored gradient is dropped instead of sampled"
+    );
 }

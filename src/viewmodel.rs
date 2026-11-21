@@ -42,6 +42,7 @@ use crate::particles::{
     effective_particle_count,
 };
 use crate::reference::{sanitized_opacity, scaled_viewport_style};
+use crate::scalar_analysis::{ComparisonSet, GradientSpec};
 use crate::scalar_view::{
     MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MIN_GRID_SIDE, PointProbe, ProbeSet,
     SCALAR_RESAMPLE_INTERVAL, ScalarViewCache, ScalarViewError, ScalarViewIdentity,
@@ -347,6 +348,15 @@ pub struct State {
     /// restore and the committed probe edits replace it; sampled values are
     /// runtime state and are never persisted.
     pub probes: ProbeSet,
+    /// Durable display-only comparison series (issue #93 slice A). Only
+    /// [`State::set_comparison_series`] replaces them in response to an edit;
+    /// startup restore assigns directly. They never reach arrows, colour
+    /// mapping or probes.
+    pub comparison_series: ComparisonSet,
+    /// Durable potential-gradient request (issue #93 slice A). Only
+    /// [`State::set_gradient`] replaces it in response to an edit; startup
+    /// restore assigns directly.
+    pub gradient: Option<GradientSpec>,
     /// The Scalar view section's grid side (issue #92 slice B1). Runtime
     /// configuration, not document state; the request key invalidates the
     /// cached records when it changes.
@@ -882,6 +892,8 @@ impl State {
             streamline_count: 0,
             seed_layout: SeedLayout::default(),
             probes: ProbeSet::default(),
+            comparison_series: ComparisonSet::default(),
+            gradient: None,
             scalar_grid_side: DEFAULT_SCALAR_GRID_SIDE,
             scalar_contour_levels: DEFAULT_SCALAR_CONTOUR_LEVELS,
             scalar_text_color: DEFAULT_SCALAR_TEXT_COLOR,
@@ -2269,6 +2281,35 @@ impl State {
             self.scalar_text_color = color;
             self.mark_dirty();
         }
+    }
+
+    /// Replace the display-only comparison series after validating the whole
+    /// set. A rejected set leaves the previous series and dirty flag untouched;
+    /// an accepted real change dirties once. Arrows, colour mapping and probes
+    /// are never touched.
+    pub fn set_comparison_series(self: &mut State, next: ComparisonSet) -> Result<(), String> {
+        next.validate()?;
+        if next == self.comparison_series {
+            return Ok(());
+        }
+        self.comparison_series = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Replace the potential-gradient request after validating it. `None`
+    /// clears the request. A rejected spec leaves the previous request and
+    /// dirty flag untouched; an accepted real change dirties once.
+    pub fn set_gradient(self: &mut State, next: Option<GradientSpec>) -> Result<(), String> {
+        if let Some(spec) = &next {
+            spec.validate()?;
+        }
+        if next == self.gradient {
+            return Ok(());
+        }
+        self.gradient = next;
+        self.mark_dirty();
+        Ok(())
     }
 
     /// Append one point probe through the shared cap and validation seam. The
