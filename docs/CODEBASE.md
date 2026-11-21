@@ -1977,9 +1977,12 @@ dimension, category }`; `presets()`; `presets_in(category)`;
   `Straight wire`; it is a display label only and never converts a formula.
 - Ticket 91's teaching entries add pulsating-radial, rotating, traveling-wave,
   standing-wave, quadrupole-saddle, saddle-potential, anisotropic-well,
-  double-well, softened-dipole and moving-Gaussian formulas. The four entries
-  that reference `t` (`Pulsating radial field`, `Traveling wave field`,
-  `Standing wave field`, `Moving Gaussian packet`) are driven by the shared
+  double-well, softened-dipole and moving-Gaussian formulas. Slice B adds the
+  3D entries `Uniform field`, `Quadrupole field`, `Softened point charge`,
+  `Helical solenoid field`, `ABC flow`, `3D shear flow`, `Rotating uniform
+  field` and `3D plane wave`. The six entries that reference `t` (`Pulsating
+  radial field`, `Traveling wave field`, `Standing wave field`, `Moving Gaussian
+  packet`, `Rotating uniform field`, `3D plane wave`) are driven by the shared
   `SimClock` through the ordinary `State::sample` path; no second timer exists.
 
 **Pinned by.** `tests/presets_test.rs`: `every_preset_parses_with_declared_dimension`,
@@ -1988,7 +1991,8 @@ dimension, category }`; `presets()`; `presets_in(category)`;
 `new_teaching_presets_have_representative_values`,
 `new_animated_presets_move_with_the_shared_clock`,
 `only_the_clock_driven_teaching_presets_reference_t`,
-`loading_a_new_animated_preset_leaves_unrelated_state_untouched`, and the
+`loading_a_new_animated_preset_leaves_unrelated_state_untouched`,
+`slice_b_3d_presets_have_the_declared_category_and_dimension`, and the
 category/limit tests.
 
 **Limitations.** Formulas are illustrative, not physical (Coulomb numerators are
@@ -2025,15 +2029,16 @@ exploration_prompt, validity }`; `PresetLibrary::builtin`, `from_entries`,
   groups map `Classic` to `Classic` and the three physics categories to
   `Physics`; source entries are `Sources` except the named last gallery, which
   is `Gallery`.
-- Formula entries carry `Preset::dimension`; the four ticket-91 clock-driven
+- Formula entries carry `Preset::dimension`; the six ticket-91 clock-driven
   entries set `animated`, the rest stay static. Source entries are
   dimension-agnostic (`None`) and static.
 - `assumptions` reuses `preset_approximation_label` for legacy formulas and
   carries the ticket-91 teaching note otherwise. The new formula and source
   entries also carry a non-empty summary, exploration prompt and a
   `PresetValidity` label (`Mathematical illustration`, `Physically valid`, or
-  the regularized softened dipole); legacy entries without labels carry
-  `validity: None`. `parameters` stays empty until a preset defines them.
+  `Physically valid (regularized)` for the softened dipole and softened point
+  charge); legacy entries without labels carry `validity: None`. `parameters`
+  stays empty until a preset defines them.
 - `search` is trimmed, case-insensitive substring over name, summary and ID,
   with a blank query returning all entries in catalogue order. `filtered` keeps
   sources under every dimension and only animated entries when `animated` is
@@ -2047,6 +2052,7 @@ exploration_prompt, validity }`; `PresetLibrary::builtin`, `from_entries`,
 `dimension_filter_keeps_sources_and_matching_dimension`,
 `animated_filter_returns_exactly_the_clock_driven_entries`,
 `teaching_formula_entries_carry_stable_metadata`,
+`slice_b_3d_formula_entries_carry_stable_metadata`,
 `teaching_source_entries_carry_stable_metadata`,
 `combined_search_and_filter_matches_manual_intersection`,
 `get_returns_the_entry_or_none`, and `duplicate_ids_are_rejected`.

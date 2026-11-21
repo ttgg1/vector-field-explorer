@@ -150,6 +150,27 @@ pub fn presets() -> &'static [Preset] {
             dimension: 3,
             category: PresetCategory::Classic,
         },
+        // A constant field pointing along +x.
+        Preset {
+            name: "Uniform field",
+            formula: "(1, 0, 0)",
+            dimension: 3,
+            category: PresetCategory::Classic,
+        },
+        // ABC flow: a divergence-free, chaotic advection field.
+        Preset {
+            name: "ABC flow",
+            formula: "(sin(z)+cos(y), sin(x)+cos(z), sin(y)+cos(x))",
+            dimension: 3,
+            category: PresetCategory::Classic,
+        },
+        // Linear shear: fluid moves along x at speed y.
+        Preset {
+            name: "3D shear flow",
+            formula: "(y, 0, 0)",
+            dimension: 3,
+            category: PresetCategory::Classic,
+        },
         // Inward spiral with linear damping: a spiral sink with eigenvalues -0.3 ± i.
         Preset {
             name: "Damped oscillator",
@@ -252,6 +273,21 @@ pub fn presets() -> &'static [Preset] {
             dimension: 2,
             category: PresetCategory::Electrostatics,
         },
+        // Traceless linear quadrupole field: div = 1 + 1 - 2 = 0.
+        Preset {
+            name: "Quadrupole field",
+            formula: "(x, y, -2*z)",
+            dimension: 3,
+            category: PresetCategory::Electrostatics,
+        },
+        // A single positive point charge at the origin, regularized with
+        // s^2 = 0.0625 so the centre stays finite.
+        Preset {
+            name: "Softened point charge",
+            formula: "(x/((x^2+y^2+z^2+0.0625)^1.5), y/((x^2+y^2+z^2+0.0625)^1.5), z/((x^2+y^2+z^2+0.0625)^1.5))",
+            dimension: 3,
+            category: PresetCategory::Electrostatics,
+        },
         // Magnetostatics: fields of steady currents.
         // Azimuthal field around a straight current along z.
         Preset {
@@ -272,6 +308,14 @@ pub fn presets() -> &'static [Preset] {
         Preset {
             name: "Solenoid",
             formula: "(-y/(x^2+y^2+0.05), x/(x^2+y^2+0.05), 0.5)",
+            dimension: 3,
+            category: PresetCategory::Magnetostatics,
+        },
+        // Helical solenoid: a stronger uniform axial component (0.75) with
+        // the same azimuthal winding as the simplified Solenoid above.
+        Preset {
+            name: "Helical solenoid field",
+            formula: "(-y, x, 0.75)",
             dimension: 3,
             category: PresetCategory::Magnetostatics,
         },
@@ -318,6 +362,21 @@ pub fn presets() -> &'static [Preset] {
             name: "Moving Gaussian packet",
             formula: "(-2*(x-t)*exp(-((x-t)^2+y^2)), -2*y*exp(-((x-t)^2+y^2)))",
             dimension: 2,
+            category: PresetCategory::Electrodynamics,
+        },
+        // A uniform field whose direction rotates in the xy plane with the
+        // shared clock.
+        Preset {
+            name: "Rotating uniform field",
+            formula: "(cos(t), sin(t), 0)",
+            dimension: 3,
+            category: PresetCategory::Electrodynamics,
+        },
+        // A plane wave travelling along z, polarised along y.
+        Preset {
+            name: "3D plane wave",
+            formula: "(0, sin(z-t), 0)",
+            dimension: 3,
             category: PresetCategory::Electrodynamics,
         },
     ];

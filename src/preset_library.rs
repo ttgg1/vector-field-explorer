@@ -166,7 +166,8 @@ impl PresetValidity {
 pub struct PresetFilters {
     /// Formula dimension; `None` for dimension-agnostic source scenes.
     pub dimension: Option<usize>,
-    /// Whether the preset animates over time. Every current preset is static.
+    /// Whether the preset animates over time; only clock-driven formula
+    /// entries set this.
     pub animated: bool,
 }
 
@@ -433,6 +434,70 @@ fn formula_metadata(name: &str) -> Option<FormulaMetadata> {
             exploration_prompt: "Track the packet centre as time advances.",
             animated: true,
             validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Uniform field" => FormulaMetadata {
+            id: Some("formula.uniform-field"),
+            summary: "A constant field pointing along x",
+            assumptions: "Physically valid: uniform field in normalized teaching units with no spatial variation",
+            exploration_prompt: "Check that every sampled arrow has the same direction and length.",
+            animated: false,
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Quadrupole field" => FormulaMetadata {
+            id: Some("formula.quadrupole-field"),
+            summary: "A traceless linear electrostatic quadrupole field",
+            assumptions: "Physically valid: linear electrostatic field (x, y, -2z) with zero divergence in normalized teaching units; not the field of four specified charges",
+            exploration_prompt: "Trace the inflow along z and the outflow in the xy plane meeting at the origin.",
+            animated: false,
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "Softened point charge" => FormulaMetadata {
+            id: Some("formula.softened-point-charge"),
+            summary: "A regularized positive point charge at the origin",
+            assumptions: "Physically valid (regularized): unit point charge at the origin softened with s^2 = 0.0625 so the centre stays finite; normalized teaching units, not an SI field",
+            exploration_prompt: "Compare the inverse-square falloff away from the origin with the finite value exactly at the charge centre.",
+            animated: false,
+            validity: Some(PresetValidity::PhysicallyValidRegularized),
+        },
+        "Helical solenoid field" => FormulaMetadata {
+            id: Some("formula.helical-solenoid-field"),
+            summary: "Azimuthal winding plus a uniform axial component",
+            assumptions: "Physically valid: idealised solenoid field with azimuthal circulation (-y, x) and axial component 0.75 in normalized teaching units; no end effects",
+            exploration_prompt: "Follow a field line as it winds around the axis while advancing steadily along z.",
+            animated: false,
+            validity: Some(PresetValidity::PhysicallyValid),
+        },
+        "ABC flow" => FormulaMetadata {
+            id: Some("formula.abc-flow"),
+            summary: "A divergence-free chaotic advection field",
+            assumptions: "Mathematical illustration: the ABC kinematic flow is divergence-free but is not an electromagnetic field",
+            exploration_prompt: "Release nearby tracers and watch the flow stretch and fold them without any sources or sinks.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "3D shear flow" => FormulaMetadata {
+            id: Some("formula.3d-shear-flow"),
+            summary: "Linear shear transporting along x at speed y",
+            assumptions: "Mathematical illustration: kinematic shear flow with no physical medium or forces",
+            exploration_prompt: "Compare particle speeds at different heights: each layer slides along x with no vertical motion.",
+            animated: false,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "Rotating uniform field" => FormulaMetadata {
+            id: Some("formula.rotating-uniform-field"),
+            summary: "A uniform field whose direction rotates in the xy plane",
+            assumptions: "Mathematical illustration: the direction, not the magnitude, oscillates with the shared clock; not a physical radiating field",
+            exploration_prompt: "Watch the arrow direction sweep a full circle while its length stays one.",
+            animated: true,
+            validity: Some(PresetValidity::MathematicalIllustration),
+        },
+        "3D plane wave" => FormulaMetadata {
+            id: Some("formula.3d-plane-wave"),
+            summary: "A plane wave travelling along z",
+            assumptions: "Physically valid: unit-amplitude plane wave sin(z - t) polarised along y in normalized teaching units; no SI speed or amplitude calibration",
+            exploration_prompt: "Fix z and watch the transverse component oscillate; then follow one crest as it advances along z.",
+            animated: true,
+            validity: Some(PresetValidity::PhysicallyValid),
         },
         _ => return None,
     };

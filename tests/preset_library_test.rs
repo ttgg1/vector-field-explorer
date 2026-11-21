@@ -29,11 +29,13 @@ fn ids(entries: &[&PresetEntry]) -> Vec<String> {
 }
 
 /// Ticket-91 formula entries advanced by the shared clock.
-const ANIMATED_FORMULAS: [&str; 4] = [
+const ANIMATED_FORMULAS: [&str; 6] = [
     "Pulsating radial field",
     "Traveling wave field",
     "Standing wave field",
     "Moving Gaussian packet",
+    "Rotating uniform field",
+    "3D plane wave",
 ];
 
 #[test]
@@ -49,6 +51,8 @@ fn ids_are_unique_and_stable() {
 
     assert_eq!(id_for("Vortex"), Some("formula.vortex"));
     assert_eq!(id_for("3D swirl"), Some("formula.3d_swirl"));
+    assert_eq!(id_for("ABC flow"), Some("formula.abc-flow"));
+    assert_eq!(id_for("3D plane wave"), Some("formula.3d-plane-wave"));
     assert_eq!(id_for("Coulomb point"), Some("source.coulomb_point"));
 
     let first: Vec<&str> = library
@@ -334,6 +338,86 @@ fn teaching_formula_entries_carry_stable_metadata() {
         assert_eq!(entry.name, name, "name for `{id}`");
         assert_eq!(entry.group, group, "group for `{id}`");
         assert_eq!(entry.filters.dimension, Some(2), "dimension for `{id}`");
+        assert_eq!(entry.filters.animated, animated, "animated flag for `{id}`");
+        assert_eq!(entry.validity, Some(validity), "validity label for `{id}`");
+        assert!(!entry.summary.is_empty(), "summary for `{id}`");
+        assert!(!entry.assumptions.is_empty(), "assumptions for `{id}`");
+        assert!(
+            !entry.exploration_prompt.is_empty(),
+            "exploration prompt for `{id}`"
+        );
+    }
+}
+
+#[test]
+fn slice_b_3d_formula_entries_carry_stable_metadata() {
+    let library = builtin();
+    let expected = [
+        (
+            "formula.uniform-field",
+            "Uniform field",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::PhysicallyValid,
+        ),
+        (
+            "formula.quadrupole-field",
+            "Quadrupole field",
+            PresetGroup::Physics,
+            false,
+            PresetValidity::PhysicallyValid,
+        ),
+        (
+            "formula.softened-point-charge",
+            "Softened point charge",
+            PresetGroup::Physics,
+            false,
+            PresetValidity::PhysicallyValidRegularized,
+        ),
+        (
+            "formula.helical-solenoid-field",
+            "Helical solenoid field",
+            PresetGroup::Physics,
+            false,
+            PresetValidity::PhysicallyValid,
+        ),
+        (
+            "formula.abc-flow",
+            "ABC flow",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.3d-shear-flow",
+            "3D shear flow",
+            PresetGroup::Classic,
+            false,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.rotating-uniform-field",
+            "Rotating uniform field",
+            PresetGroup::Physics,
+            true,
+            PresetValidity::MathematicalIllustration,
+        ),
+        (
+            "formula.3d-plane-wave",
+            "3D plane wave",
+            PresetGroup::Physics,
+            true,
+            PresetValidity::PhysicallyValid,
+        ),
+    ];
+
+    for (id, name, group, animated, validity) in expected {
+        let entry = library
+            .get(&PresetId::new(id).unwrap())
+            .unwrap_or_else(|| panic!("entry `{id}` must be retrievable"));
+        assert_eq!(entry.name, name, "name for `{id}`");
+        assert_eq!(entry.group, group, "group for `{id}`");
+        assert_eq!(entry.filters.dimension, Some(3), "dimension for `{id}`");
         assert_eq!(entry.filters.animated, animated, "animated flag for `{id}`");
         assert_eq!(entry.validity, Some(validity), "validity label for `{id}`");
         assert!(!entry.summary.is_empty(), "summary for `{id}`");
