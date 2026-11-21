@@ -1164,8 +1164,17 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
             ]);
 
             if let Some(reason) = scalar_view_unsupported_reason(state) {
-                ui.label(reason);
+                ui.label(&reason);
                 controls.scalar_place_probe = false;
+                // Keep the toggle visible but disabled so the section explains
+                // why no heatmap can be painted instead of silently hiding a
+                // persisted setting.
+                let mut show_heatmap = state.show_scalar_heatmap();
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut show_heatmap, "Show heatmap"),
+                )
+                .on_hover_text(reason);
                 return;
             }
 
@@ -1188,6 +1197,18 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
                 ))
                 .on_hover_text("Explicit marching-squares levels; 0 hides contours");
             });
+
+            let mut show_heatmap = state.show_scalar_heatmap();
+            if ui
+                .checkbox(&mut show_heatmap, "Show heatmap")
+                .on_hover_text("Fill painted cells with the active colour mapping")
+                .changed()
+            {
+                state.set_show_scalar_heatmap(show_heatmap);
+            }
+            if show_heatmap {
+                heatmap_legend_line(ui, state);
+            }
 
             ui.checkbox(&mut controls.scalar_place_probe, "Place probe")
                 .on_hover_text("Click the viewport plane to add one point probe");
@@ -1216,6 +1237,44 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
                 ui.label(&controls.scalar_message);
             }
         });
+}
+
+/// Palette strip, effective range and clipping note for the painted heatmap
+/// (issue #92 slice B2). Derived from the same record/colour mapping as the
+/// GPU texture so the legend cannot describe a different field.
+fn heatmap_legend_line(ui: &mut egui::Ui, state: &State) {
+    let Some(legend) = state.scalar_heatmap_legend() else {
+        ui.label("No finite heatmap cells on this slice");
+        return;
+    };
+    let mapping = state.color_mapping();
+    const STEPS: usize = 64;
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().min(220.0), 10.0),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    for step in 0..STEPS {
+        let t = step as f32 / (STEPS - 1) as f32;
+        let rgb = mapping.palette.sample_unit(t);
+        let left = rect.left() + rect.width() * step as f32 / STEPS as f32;
+        let right = rect.left() + rect.width() * (step + 1) as f32 / STEPS as f32;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(left, rect.top()),
+                egui::pos2(right + 0.5, rect.bottom()),
+            ),
+            0.0,
+            egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+        );
+    }
+    ui.label(format!("{:.4} .. {:.4}", legend.min, legend.max));
+    if legend.clipped_low > 0 || legend.clipped_high > 0 {
+        ui.label(format!(
+            "Clipped to the ramp endpoints: {} low, {} high",
+            legend.clipped_low, legend.clipped_high
+        ));
+    }
 }
 
 /// The same defaults as [`Controls::new`], so the type honours clippy's

@@ -1911,6 +1911,17 @@ fn accesskit_labels(output: &egui::FullOutput) -> Vec<String> {
         .collect()
 }
 
+fn widget_disabled(output: &egui::FullOutput, label: &str) -> Option<bool> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()?
+        .nodes
+        .iter()
+        .find(|(_, node)| node.label() == Some(label) || node.value() == Some(label))
+        .map(|(_, node)| node.is_disabled())
+}
+
 fn painted(output: &egui::FullOutput) -> String {
     painted_texts(output)
         .into_iter()
@@ -2762,6 +2773,26 @@ fn unsupported_z_formula_shows_the_reason_instead_of_controls() {
     assert!(
         !text.contains("Grid resolution") && !text.contains("Contour levels"),
         "no scalar controls are offered for a z formula"
+    );
+}
+
+#[test]
+fn unsupported_z_formula_disables_the_heatmap_checkbox_with_the_reason() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.state
+        .set_scalar_source(ScalarContext::Surface, "z + x".into());
+    h.open_header("Scalar view");
+
+    let out = h.idle();
+    let text = painted(&out);
+    assert!(
+        text.contains("Show heatmap"),
+        "the heatmap toggle stays visible so its reason can be read: {text}"
+    );
+    assert_eq!(
+        widget_disabled(&out, "Show heatmap"),
+        Some(true),
+        "an inapplicable scalar view must disable the heatmap toggle"
     );
 }
 

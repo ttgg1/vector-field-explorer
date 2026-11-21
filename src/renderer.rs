@@ -13,6 +13,7 @@
 //! off-plane arrows translucently; selected plane arrows arrive with alpha 1.0
 //! and therefore still paint opaquely.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use eframe::egui_wgpu;
@@ -21,6 +22,9 @@ use eframe::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3};
 
 use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D, MAX_SIDES, MIN_SIDES};
+use crate::color_mapping::{ColorMapping, ColorPalette, ColorQuantity, ColorStats};
+use crate::color_ramp::ScaleMode;
+use crate::scalar_view::ScalarGrid;
 
 /// Native capture failures retain the readback stage and its original cause.
 #[cfg(not(target_arch = "wasm32"))]
@@ -118,6 +122,307 @@ pub struct LineInstanceGPU {
     pub color: [f32; 4], // rgba 0..1
 }
 
+/// The largest heatmap texture side accepted by the #92 contract.
+///
+/// Tied to the scalar grid bound: a heatmap can never upload more rows or
+/// columns than the sampler can produce.
+pub const MAX_HEATMAP_SIDE: u32 = 160;
+const _: () = assert!(MAX_HEATMAP_SIDE == crate::scalar_view::MAX_GRID_SIDE);
+
+/// Vertices one heatmap quad emits: two triangles, six vertices.
+pub const HEATMAP_CORNERS: usize = 6;
+
+const HEATMAP_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
+
+/// One textured heatmap quad vertex: world position plus texture coordinate.
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct HeatmapVertex {
+    pub position: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+/// A CPU-built, bounded scalar heatmap for the current plane frame.
+///
+/// `pixels` is RGBA8 sRGB, one texel per sampled grid point. A texel represents
+/// the cell whose lower-left sample is that grid point; cells with any missing
+/// corner stay transparent, and the final row/column stay transparent because
+/// they begin no cell. Texels are therefore cell-centred while contours and
+/// probes sit on sample vertices: the sub-cell offset is intentional and bounded
+/// by half a cell, so the fill never claims to align with the overlay lines.
+/// `identity` fingerprints the grid and colour mapping so the upload path can
+/// skip unchanged frames.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeatmapGPU {
+    pub size: [u32; 2],
+    pub vertices: Vec<HeatmapVertex>,
+    pub pixels: Vec<u8>,
+    pub identity: u64,
+}
+
+/// Legend facts for a heatmap, derived from the same cells the texture paints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeatmapLegend {
+    pub min: f32,
+    pub max: f32,
+    pub clipped_low: usize,
+    pub clipped_high: usize,
+}
+
+impl HeatmapGPU {
+    /// Build the bounded heatmap for `grid` under `mapping`.
+    ///
+    /// Returns `None` when no cell has four finite corners. Colours come from
+    /// [`ColorMapping::effective_range`] and the palette's shared
+    /// [`crate::color_mapping::ColorPalette::sample_unit`]; out-of-range values
+    /// clamp to the ramp endpoint. The quad follows the grid's plane frame, so
+    /// the same builder serves every axis.
+    ///
+    /// The fill and its legend always colour by [`ColorQuantity::Magnitude`].
+    /// A cell holds one scalar, not a direction, so a `Direction2d` arrow
+    /// mapping must not turn the heatmap into an angle ramp; the arrow path
+    /// keeps its own quantity untouched.
+    pub fn from_grid(grid: &ScalarGrid, mapping: &ColorMapping) -> Option<Self> {
+        let mapping = &heatmap_colour_mapping(mapping);
+        let width = grid.width.min(MAX_HEATMAP_SIDE);
+        let height = grid.height.min(MAX_HEATMAP_SIDE);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let stats = heatmap_stats(grid);
+        if stats.min_magnitude > stats.max_magnitude {
+            return None;
+        }
+        let (min, max) = mapping.effective_range(&stats);
+        let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
+        let mut painted = false;
+        for j in 0..height.saturating_sub(1) {
+            for i in 0..width.saturating_sub(1) {
+                let Some(value) = cell_average(grid, i, j) else {
+                    continue;
+                };
+                painted = true;
+                let [red, green, blue] = scalar_colour(value, mapping, min, max);
+                let offset = ((j as usize) * (width as usize) + i as usize) * 4;
+                pixels[offset..offset + 4].copy_from_slice(&[red, green, blue, 255]);
+            }
+        }
+        if !painted {
+            return None;
+        }
+
+        let frame = grid.frame;
+        // Texture row 0 is the grid's first row and samples at v = 0, so the
+        // world-bottom corners use y = 0 and the world-top corners y = 1.
+        let corners = [
+            (-frame.half_u, -frame.half_v, 0.0, 0.0),
+            (frame.half_u, -frame.half_v, 1.0, 0.0),
+            (frame.half_u, frame.half_v, 1.0, 1.0),
+            (-frame.half_u, -frame.half_v, 0.0, 0.0),
+            (frame.half_u, frame.half_v, 1.0, 1.0),
+            (-frame.half_u, frame.half_v, 0.0, 1.0),
+        ];
+        // The resident texture is always MAX_HEATMAP_SIDE square. Scale the
+        // quad's normalized coordinates to the uploaded sub-rectangle so a
+        // smaller grid does not stretch a mostly-empty 160x160 texture.
+        let u_scale = width as f32 / MAX_HEATMAP_SIDE as f32;
+        let v_scale = height as f32 / MAX_HEATMAP_SIDE as f32;
+        let vertices = corners
+            .into_iter()
+            .map(|(u, v, x, y)| {
+                let position = frame.to_world(Vec3::new(u, v, 0.0));
+                HeatmapVertex {
+                    position: position.to_array(),
+                    uv: [x * u_scale, y * v_scale],
+                }
+            })
+            .collect();
+
+        Some(Self {
+            size: [width, height],
+            vertices,
+            pixels,
+            identity: heatmap_identity(grid, mapping),
+        })
+    }
+
+    fn is_uploadable(&self) -> bool {
+        self.vertices.len() == HEATMAP_CORNERS
+            && self.size[0] > 0
+            && self.size[1] > 0
+            && self.size[0] <= MAX_HEATMAP_SIDE
+            && self.size[1] <= MAX_HEATMAP_SIDE
+            && self.pixels.len() == (self.size[0] as usize) * (self.size[1] as usize) * 4
+    }
+}
+
+/// Legend facts for the cells [`HeatmapGPU::from_grid`] paints.
+pub fn heatmap_legend(grid: &ScalarGrid, mapping: &ColorMapping) -> Option<HeatmapLegend> {
+    let mapping = heatmap_colour_mapping(mapping);
+    let stats = heatmap_stats(grid);
+    if stats.min_magnitude > stats.max_magnitude {
+        return None;
+    }
+    let (min, max) = mapping.effective_range(&stats);
+    let mut legend = HeatmapLegend {
+        min,
+        max,
+        clipped_low: 0,
+        clipped_high: 0,
+    };
+    let valid = min.is_finite() && max.is_finite() && min < max;
+    for j in 0..grid.height.saturating_sub(1) {
+        for i in 0..grid.width.saturating_sub(1) {
+            let Some(value) = cell_average(grid, i, j) else {
+                continue;
+            };
+            if !valid {
+                continue;
+            }
+            if value < min {
+                legend.clipped_low += 1;
+            } else if value > max {
+                legend.clipped_high += 1;
+            }
+        }
+    }
+    Some(legend)
+}
+
+/// Whether `incoming` differs from the resident heatmap identity and needs an
+/// upload. A missing incoming heatmap never uploads; the resident resources stay
+/// allocated for a later identical identity.
+pub fn heatmap_upload_required(resident: Option<u64>, incoming: Option<u64>) -> bool {
+    incoming.is_some() && resident != incoming
+}
+
+/// Fingerprint the sampled grid and colour mapping for the upload skip seam.
+pub fn heatmap_identity(grid: &ScalarGrid, mapping: &ColorMapping) -> u64 {
+    let mut hash = DefaultHasher::new();
+    for value in [
+        grid.frame.origin,
+        grid.frame.right,
+        grid.frame.up,
+        grid.frame.normal,
+    ] {
+        for component in value.to_array() {
+            hash.write_u32(component.to_bits());
+        }
+    }
+    hash.write_u32(grid.frame.half_u.to_bits());
+    hash.write_u32(grid.frame.half_v.to_bits());
+    hash.write_u32(grid.width);
+    hash.write_u32(grid.height);
+    hash.write_u64(grid.time.to_bits());
+    for sample in &grid.samples {
+        match sample.value {
+            Some(value) => {
+                hash.write_u8(1);
+                hash.write_u32(value.to_bits());
+            }
+            None => hash.write_u8(0),
+        }
+    }
+    match &mapping.palette {
+        ColorPalette::Builtin(colormap) => {
+            hash.write_u8(0);
+            colormap.label().hash(&mut hash);
+        }
+        ColorPalette::Custom(ramp) => {
+            hash.write_u8(1);
+            hash.write_u8(ramp.reversed as u8);
+            ramp.kind.label().hash(&mut hash);
+            for stop in &ramp.stops {
+                hash.write_u32(stop.position.to_bits());
+                hash.write(&stop.color.0);
+            }
+        }
+    }
+    match mapping.mode {
+        ScaleMode::Linear => hash.write_u8(0),
+        ScaleMode::SignedLog { half_width } => {
+            hash.write_u8(1);
+            hash.write_u32(half_width.to_bits());
+        }
+    }
+    mapping.quantity.label().hash(&mut hash);
+    match mapping.manual_range {
+        Some((min, max)) => {
+            hash.write_u8(1);
+            hash.write_u32(min.to_bits());
+            hash.write_u32(max.to_bits());
+        }
+        None => hash.write_u8(0),
+    }
+    hash.finish()
+}
+
+fn heatmap_stats(grid: &ScalarGrid) -> ColorStats {
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    let mut max_abs: f32 = 0.0;
+    for j in 0..grid.height.saturating_sub(1) {
+        for i in 0..grid.width.saturating_sub(1) {
+            let Some(value) = cell_average(grid, i, j) else {
+                continue;
+            };
+            min = min.min(value);
+            max = max.max(value);
+            max_abs = max_abs.max(value.abs());
+        }
+    }
+    if min > max {
+        ColorStats::default()
+    } else {
+        ColorStats {
+            min_magnitude: min,
+            max_magnitude: max,
+            max_abs_component: max_abs,
+        }
+    }
+}
+
+/// Cell colour from the mean of its four finite corners. A cell with any
+/// missing corner returns `None` and is left transparent.
+fn cell_average(grid: &ScalarGrid, i: u32, j: u32) -> Option<f32> {
+    if !grid.cell_is_painted(i, j) {
+        return None;
+    }
+    let values = [
+        grid.sample(i, j).value?,
+        grid.sample(i + 1, j).value?,
+        grid.sample(i, j + 1).value?,
+        grid.sample(i + 1, j + 1).value?,
+    ];
+    Some(values.iter().sum::<f32>() / 4.0)
+}
+
+/// The heatmap's own colour mapping: the active palette and mode, but always
+/// magnitude-based. `Direction2d` describes arrows, not a filled scalar cell.
+fn heatmap_colour_mapping(mapping: &ColorMapping) -> ColorMapping {
+    ColorMapping {
+        quantity: ColorQuantity::Magnitude,
+        ..mapping.clone()
+    }
+}
+
+fn scalar_colour(value: f32, mapping: &ColorMapping, min: f32, max: f32) -> [u8; 3] {
+    if !value.is_finite() {
+        return [128, 128, 128];
+    }
+    // Signed log falls back to linear exactly when the mapping's effective
+    // mode does; the shared ScaleMode normalizer supplies the fallback.
+    let Some(t) = mapping
+        .mode
+        .normalize(value, min, max)
+        .or_else(|| ScaleMode::Linear.normalize(value, min, max))
+    else {
+        return [128, 128, 128];
+    };
+    mapping.palette.sample_unit(t)
+}
+
 /// Shared per-frame uniforms.
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -185,6 +490,9 @@ pub enum ArrowDrawPlan {
 /// arrows-then-dots draws, without a GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawPass {
+    /// Filled scalar heatmap quad, six vertices, painted before every other
+    /// collection so contours and arrows stay readable.
+    Heatmap { vertices: usize },
     /// Backdrop/streamline lines, six vertices per instance.
     Lines { instances: usize },
     /// Fading particle trail segments, six vertices per instance. Painted in
@@ -239,6 +547,9 @@ pub struct SceneGPU {
     pub trails: Arc<Vec<LineInstanceGPU>>,
     pub dots: Arc<Vec<ArrowInstanceGPU>>,
     pub combined: Arc<Vec<ArrowInstanceGPU>>,
+    /// Filled scalar heatmap (issue #92 slice B2). `None` keeps every existing
+    /// scene byte-identical: no draw, no upload and no painter-order change.
+    pub heatmap: Option<Arc<HeatmapGPU>>,
     pub arrow_style: ArrowStyle,
     pub arrow_style_2d: ArrowStyle2D,
     pub arrow_params: ArrowParams,
@@ -253,6 +564,7 @@ impl Default for SceneGPU {
             trails: Arc::new(Vec::new()),
             dots: Arc::new(Vec::new()),
             combined: Arc::new(Vec::new()),
+            heatmap: None,
             arrow_style: ArrowStyle::default(),
             arrow_style_2d: ArrowStyle2D::default(),
             arrow_params: ArrowParams::default(),
@@ -270,6 +582,7 @@ impl SceneGPU {
             && self.trails.is_empty()
             && self.dots.is_empty()
             && self.combined.is_empty()
+            && self.heatmap.is_none()
     }
 
     /// The pipeline and per-instance vertex count the next `record` call uses.
@@ -278,7 +591,9 @@ impl SceneGPU {
     /// 3D selection, and carries that 2D family's own 9- or 6-vertex count.
     pub fn arrow_draw_plan(&self) -> ArrowDrawPlan {
         if self.mode_3d {
-            ArrowDrawPlan::Combined3D { budget: MAX_ARROW_VERTS }
+            ArrowDrawPlan::Combined3D {
+                budget: MAX_ARROW_VERTS,
+            }
         } else {
             ArrowDrawPlan::Flat2D {
                 vertices: self.arrow_style_2d.vertex_count(self.arrow_params.sides),
@@ -319,9 +634,18 @@ impl SceneGPU {
     /// and ignores `combined`. A 2D plane slice can carry trails; ordinary
     /// two-component 2D simply has none.
     pub fn draw_passes(&self) -> Vec<DrawPass> {
-        let mut passes = Vec::with_capacity(5);
+        let mut passes = Vec::with_capacity(6);
+        if let Some(heatmap) = self.heatmap.as_deref()
+            && heatmap.vertices.len() == HEATMAP_CORNERS
+        {
+            passes.push(DrawPass::Heatmap {
+                vertices: HEATMAP_CORNERS,
+            });
+        }
         if !self.lines.is_empty() {
-            passes.push(DrawPass::Lines { instances: self.lines.len() });
+            passes.push(DrawPass::Lines {
+                instances: self.lines.len(),
+            });
         }
         if !self.trails.is_empty() {
             passes.push(DrawPass::Trails {
@@ -346,7 +670,9 @@ impl SceneGPU {
                 });
             }
             if !self.dots.is_empty() {
-                passes.push(DrawPass::Dots { instances: self.dots.len() });
+                passes.push(DrawPass::Dots {
+                    instances: self.dots.len(),
+                });
             }
         }
         passes
@@ -418,6 +744,7 @@ pub struct DrawState {
     arrow2d_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     dot_pipeline: wgpu::RenderPipeline,
+    heatmap_pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
     arrow_buf: wgpu::Buffer,
     line_buf: wgpu::Buffer,
@@ -427,6 +754,11 @@ pub struct DrawState {
     line_bind: wgpu::BindGroup,
     trail_bind: wgpu::BindGroup,
     dot_bind: wgpu::BindGroup,
+    heatmap_bind: wgpu::BindGroup,
+    heatmap_vertex_buf: wgpu::Buffer,
+    /// Kept alive for the bind group; the texture is allocated once and reused.
+    _heatmap_texture: wgpu::Texture,
+    heatmap_identity: Option<u64>,
     light_dir: [f32; 4],
     /// The surface format the pipelines were built for. An offscreen capture
     /// renders in the same format, so the image matches the screen and the
@@ -451,6 +783,10 @@ impl DrawState {
         let shader_dot = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vfe dot shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders.dot.wgsl").into()),
+        });
+        let shader_heatmap = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vfe heatmap shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders.heatmap.wgsl").into()),
         });
 
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -479,10 +815,48 @@ impl DrawState {
             ],
         });
 
-        let pipeline_layout =
+        let heatmap_bind_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("vfe heatmap globals+texture bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vfe pipeline layout"),
+            bind_group_layouts: &[Some(&bind_layout)],
+            immediate_size: 0,
+        });
+        let heatmap_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("vfe pipeline layout"),
-                bind_group_layouts: &[Some(&bind_layout)],
+                label: Some("vfe heatmap pipeline layout"),
+                bind_group_layouts: &[Some(&heatmap_bind_layout)],
                 immediate_size: 0,
             });
 
@@ -611,6 +985,40 @@ impl DrawState {
             cache: None,
         });
 
+        let heatmap_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vfe heatmap pipeline"),
+            layout: Some(&heatmap_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_heatmap,
+                entry_point: Some("vs_heatmap"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<HeatmapVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &HEATMAP_VERTEX_ATTRIBUTES,
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_heatmap,
+                entry_point: Some("fs_heatmap"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // Placeholder buffers (zero-length upload is illegal; start with one
         // instance each and let the first prepare() resize them).
         let globals_buf = wgpu::util::DeviceExt::create_buffer_init(
@@ -712,12 +1120,66 @@ impl DrawState {
             ],
         });
 
+        // Allocated once at the contract's maximum side; each upload writes only
+        // the current heatmap's sub-rectangle and the resident identity skips
+        // unchanged frames entirely.
+        let heatmap_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vfe heatmap texture"),
+            size: wgpu::Extent3d {
+                width: MAX_HEATMAP_SIDE,
+                height: MAX_HEATMAP_SIDE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let heatmap_view = heatmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let heatmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("vfe heatmap sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let heatmap_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vfe heatmap bind"),
+            layout: &heatmap_bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&heatmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&heatmap_sampler),
+                },
+            ],
+        });
+        let heatmap_vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vfe heatmap vertices"),
+            size: (HEATMAP_CORNERS * std::mem::size_of::<HeatmapVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             bind_layout,
             scene_pipeline,
             arrow2d_pipeline,
             line_pipeline,
             dot_pipeline,
+            heatmap_pipeline,
             globals_buf,
             arrow_buf,
             line_buf,
@@ -727,9 +1189,19 @@ impl DrawState {
             line_bind,
             trail_bind,
             dot_bind,
+            heatmap_bind,
+            heatmap_vertex_buf,
+            _heatmap_texture: heatmap_texture,
+            heatmap_identity: None,
             light_dir: LIGHT_DIR,
             format,
         }
+    }
+
+    /// The resident heatmap identity, exposed for the upload-skip seam tests.
+    #[doc(hidden)]
+    pub fn resident_heatmap_identity(&self) -> Option<u64> {
+        self.heatmap_identity
     }
 
     /// Rebuild instance buffers + write uniforms for this frame's scene.
@@ -757,8 +1229,11 @@ impl DrawState {
         // pipeline paints, the 2D family id while the 2D pipeline paints. The
         // 2D and 3D ids are separate namespaces, so the matching shader must
         // be the one that reads it (ticket 64).
-        let arrow_style_id =
-            if scene.mode_3d { scene.arrow_style.id() } else { scene.arrow_style_2d.id() };
+        let arrow_style_id = if scene.mode_3d {
+            scene.arrow_style.id()
+        } else {
+            scene.arrow_style_2d.id()
+        };
         let globals = Globals {
             view_proj: mat4_to_mats(view_proj),
             inv_view_proj: mat4_to_mats(view_proj.inverse()),
@@ -767,7 +1242,12 @@ impl DrawState {
             camera_right: camera_right.extend(0.0).to_array(),
             camera_up: camera_up.extend(0.0).to_array(),
             arrow_style: [arrow_style_id, sides, 0, 0],
-            arrow_params: [params.head_length, params.head_width, params.shaft_radius, 0.0],
+            arrow_params: [
+                params.head_length,
+                params.head_width,
+                params.shaft_radius,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
@@ -779,8 +1259,11 @@ impl DrawState {
         // 3D binds the combined sorted stream (arrows + dots) to the arrow
         // slot, so an all-particle scene still binds a buffer. 2D binds its
         // arrow list instead and never reads `combined`.
-        let arrow_instances: &[ArrowInstanceGPU] =
-            if scene.mode_3d { scene.combined.as_slice() } else { scene.arrows.as_slice() };
+        let arrow_instances: &[ArrowInstanceGPU] = if scene.mode_3d {
+            scene.combined.as_slice()
+        } else {
+            scene.arrows.as_slice()
+        };
         if !arrow_instances.is_empty() {
             self.arrow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("vfe scene instances (frame)"),
@@ -872,6 +1355,46 @@ impl DrawState {
                 ],
             });
         }
+
+        // The heatmap texture and its six-vertex quad are written only when the
+        // grid/mapping identity changes. A scene without a heatmap touches
+        // neither path.
+        if let Some(heatmap) = scene.heatmap.as_deref()
+            && heatmap.is_uploadable()
+            && heatmap_upload_required(self.heatmap_identity, Some(heatmap.identity))
+        {
+            // These rows are unpadded on purpose: `write_texture` copies straight
+            // from host memory and only buffer-copy layouts (such as the
+            // readback path) need `COPY_BYTES_PER_ROW_ALIGNMENT` (256 bytes).
+            // The heatmap pipeline targets the surface's blendable format with
+            // an `Rgba8UnormSrgb` texture; if a future target format is not
+            // blendable, disable the pass with a reason instead of degrading it.
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self._heatmap_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &heatmap.pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(heatmap.size[0] * 4),
+                    rows_per_image: Some(heatmap.size[1]),
+                },
+                wgpu::Extent3d {
+                    width: heatmap.size[0],
+                    height: heatmap.size[1],
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.write_buffer(
+                &self.heatmap_vertex_buf,
+                0,
+                bytemuck::cast_slice(&heatmap.vertices),
+            );
+            self.heatmap_identity = Some(heatmap.identity);
+        }
     }
 
     /// Record this frame's scene into a render pass: backdrop lines, then the
@@ -881,6 +1404,12 @@ impl DrawState {
     fn record(&self, pass: &mut wgpu::RenderPass<'_>, scene: &SceneGPU) {
         for draw in scene.draw_passes() {
             match draw {
+                DrawPass::Heatmap { vertices } => {
+                    pass.set_pipeline(&self.heatmap_pipeline);
+                    pass.set_bind_group(0, &self.heatmap_bind, &[]);
+                    pass.set_vertex_buffer(0, self.heatmap_vertex_buf.slice(..));
+                    pass.draw(0..vertices as u32, 0..1);
+                }
                 DrawPass::Lines { instances } => {
                     pass.set_pipeline(&self.line_pipeline);
                     pass.set_bind_group(0, &self.line_bind, &[]);
@@ -896,7 +1425,10 @@ impl DrawState {
                     pass.set_bind_group(0, &self.arrow_bind, &[]);
                     pass.draw(0..scene_vertex_count(instances), 0..1);
                 }
-                DrawPass::Arrow2D { instances, vertices } => {
+                DrawPass::Arrow2D {
+                    instances,
+                    vertices,
+                } => {
                     pass.set_pipeline(&self.arrow2d_pipeline);
                     pass.set_bind_group(0, &self.arrow_bind, &[]);
                     pass.draw(0..(instances as u32) * vertices, 0..1);
@@ -1086,9 +1618,11 @@ impl DrawState {
         )?;
         let buffer = readback.clone();
         let format = self.format;
-        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            completion(readback_result(result, &buffer, format, width, height));
-        });
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                completion(readback_result(result, &buffer, format, width, height));
+            });
         Ok(())
     }
 }
@@ -1167,12 +1701,13 @@ impl egui_wgpu::CallbackTrait for DrawCallback {
 pub fn sort_scene_back_to_front(instances: &mut [ArrowInstanceGPU], view: &Mat4) {
     instances.sort_by(|a, b| {
         let depth = |instance: &ArrowInstanceGPU| {
-            let position =
-                Vec3::new(instance.origin[0], instance.origin[1], instance.origin[2]);
+            let position = Vec3::new(instance.origin[0], instance.origin[1], instance.origin[2]);
             let z = (*view * position.extend(1.0)).z;
             if z.is_finite() { z } else { f32::NEG_INFINITY }
         };
-        depth(a).partial_cmp(&depth(b)).unwrap_or(std::cmp::Ordering::Equal)
+        depth(a)
+            .partial_cmp(&depth(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 }
 
@@ -1192,17 +1727,16 @@ pub fn sort_lines_back_to_front(instances: &mut [LineInstanceGPU], view: &Mat4) 
             let z = (*view * midpoint.extend(1.0)).z;
             if z.is_finite() { z } else { f32::NEG_INFINITY }
         };
-        depth(a).partial_cmp(&depth(b)).unwrap_or(std::cmp::Ordering::Equal)
+        depth(a)
+            .partial_cmp(&depth(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 }
 
 /// A stable far-to-near copy of the trail list under the current view. The
 /// app uses this each frame without writing the order back into the per-frame
 /// trail history.
-pub fn sorted_lines_back_to_front(
-    lines: &[LineInstanceGPU],
-    view: &Mat4,
-) -> Vec<LineInstanceGPU> {
+pub fn sorted_lines_back_to_front(lines: &[LineInstanceGPU], view: &Mat4) -> Vec<LineInstanceGPU> {
     let mut sorted = lines.to_vec();
     sort_lines_back_to_front(&mut sorted, view);
     sorted

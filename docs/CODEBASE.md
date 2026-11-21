@@ -1780,6 +1780,25 @@ the cap, and disarms with a message when the probe path disappears.
 `tests/sidebar_controls_test.rs`; the history, row and mode-switch tests in
 `tests/edit_history_app_test.rs`.
 
+**Slice B2 heatmap.** `HeatmapGPU::from_grid`/`heatmap_legend` build a bounded
+`MAX_HEATMAP_SIDE=160` RGBA8 sRGB fill from cell-centred texels (contours and
+probes sit on sample vertices, so the half-cell offset is intentional), always
+colour by `ColorQuantity::Magnitude` even when arrow mapping uses
+`Direction2d`, and fingerprint the grid+mapping for upload skipping. The upload
+uses unpadded `queue.write_texture` rows because only buffer-copy layouts need
+`COPY_BYTES_PER_ROW_ALIGNMENT`; the pipeline targets the surface's blendable
+format with the sRGB texture, and a future non-blendable target must disable the
+pass with a reason rather than degrade it. The heatmap and legend gate on the
+cached grid (`record_matches_grid`), so a constant or zero-time field whose
+contour levels collapse to an empty list still paints. Pinned by
+[tests/scalar_heatmap_test.rs](../tests/scalar_heatmap_test.rs):
+`heatmap_quad_covers_the_sampled_plane_extent`,
+`heatmap_colours_follow_the_active_palette_and_manual_range`,
+`heatmaps_colour_by_magnitude_even_when_arrows_use_direction`,
+`animation_frames_keep_the_heatmap_across_the_clock`,
+`clipped_values_use_the_endpoint_colour_and_report_clipping` and the upload
+skip/ordering/pass tests.
+
 #### `src/scalar_analysis.rs` — comparison series and potential gradients
 
 **Purpose / API (issue #93 slice A).** `ComparisonSeries`, `ComparisonSet`,

@@ -413,6 +413,10 @@ pub struct ViewRecord {
     /// Only positions and anchors are stored; sampled values are runtime.
     #[serde(default)]
     pub probes: ProbeSet,
+    /// Scalar view heatmap toggle (issue #92 slice B2). Missing on older
+    /// records/scenes, which restore hidden without dirtying.
+    #[serde(default)]
+    pub show_scalar_heatmap: bool,
     /// Display-only comparison series (issue #93 slice A). Missing on older
     /// records, which restore as no series with no extra dirtying.
     #[serde(default)]
@@ -637,6 +641,7 @@ impl ViewRecord {
             streamline_count: state.streamline_count,
             seed_layout: state.seed_layout.clone(),
             probes: state.probes.clone(),
+            show_scalar_heatmap: state.show_scalar_heatmap(),
             comparison_series: state.comparison_series.clone(),
             gradient: state.gradient.clone(),
             left_click_action: state.left_click_action,
@@ -796,6 +801,10 @@ impl ViewRecord {
             );
         }
         state.probes = probes;
+        // The heatmap toggle is document state assigned directly at the startup
+        // seam, so a restored hidden/enabled scene does not request a second
+        // rebuild beyond the enclosing restore's one.
+        state.restore_show_scalar_heatmap(self.show_scalar_heatmap);
         // Issue #93 slice A: comparison series and the gradient request are
         // document state assigned directly at the startup seam, so they never
         // dirty per field. Corrupt stored data is repaired once (series) or

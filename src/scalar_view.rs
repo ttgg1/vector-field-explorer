@@ -397,16 +397,23 @@ impl ScalarViewIdentity {
 }
 
 impl ScalarViewKey {
-    /// Whether this key and `identity` describe the same view apart from the
-    /// previewed level values.
-    fn matches_identity(&self, identity: &ScalarViewIdentity) -> bool {
+    /// Whether this key and `identity` describe the same sampled grid. The
+    /// heatmap only needs these fields: contour-level previews legitimately
+    /// collapse to an empty list on a constant or zero-time field, and that
+    /// must not hide the filled cells.
+    fn matches_grid(&self, identity: &ScalarViewIdentity) -> bool {
         self.source == identity.source
             && self.parameters == identity.parameters
             && self.frame == identity.frame
             && self.domain == identity.domain
             && self.quantized_time == identity.quantized_time
             && self.grid_side == identity.grid_side
-            && self.levels.len() == identity.level_count
+    }
+
+    /// Whether this key and `identity` describe the same view apart from the
+    /// previewed level values.
+    fn matches_identity(&self, identity: &ScalarViewIdentity) -> bool {
+        self.matches_grid(identity) && self.levels.len() == identity.level_count
     }
 }
 
@@ -470,6 +477,18 @@ impl ScalarViewCache {
                 .key
                 .as_ref()
                 .is_some_and(|key| key.matches_identity(identity))
+    }
+
+    /// Whether the retained record still describes `identity`'s sampled grid,
+    /// ignoring contour levels. A heatmap is built only from that grid, and a
+    /// constant or zero-time field can produce an empty level list even though
+    /// the cells are valid, so the contour-preview check would wrongly hide it.
+    pub fn record_matches_grid(&self, identity: &ScalarViewIdentity) -> bool {
+        self.record.is_some()
+            && self
+                .key
+                .as_ref()
+                .is_some_and(|key| key.matches_grid(identity))
     }
 
     /// The reason the last rebuild failed, if it did.

@@ -87,6 +87,12 @@ impl AnimationSnapshot {
 
         let start_time = self.state.time;
         self.state.set_time(time);
+        // The heatmap is sampled from the bounded scalar cache. An exported
+        // frame must not reuse the live cache from a different clock, so
+        // refresh it through the same throttled seam before the snapshot.
+        if self.state.show_scalar_heatmap() {
+            let _ = self.state.refresh_scalar_view(true);
+        }
         // Rebuild from scratch for this frame: the snapshot has no app-side
         // dirty cache and must not depend on how the live app last sampled.
         self.state.mark_dirty();

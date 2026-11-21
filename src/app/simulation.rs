@@ -161,6 +161,7 @@ impl VfApp {
                 scene.trails = Arc::new(Vec::new());
                 scene.dots = Arc::new(Vec::new());
                 scene.combined = Arc::new(Vec::new());
+                scene.heatmap = None;
             }
             self.state.dirty = false;
             return;
@@ -202,6 +203,7 @@ impl VfApp {
                 scene.dots = fresh.dots;
                 scene.combined = fresh.combined;
                 scene.lines = lines;
+                scene.heatmap = fresh.heatmap;
             }
             log::trace!(
                 "scene rebuilt: {} arrows, {} streamline segments, {} dots",
