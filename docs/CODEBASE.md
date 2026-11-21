@@ -1526,6 +1526,57 @@ was checked and the coupled time-dependent system was not solved.
 `unsupported_takes_precedence_over_singular`, and
 `residual_does_not_claim_a_full_time_dependent_solve`.
 
+#### `src/maxwell_wave.rs` — bounded source-free plane-wave teaching model
+
+**Purpose.** Bounded analytic full-wave illustration for #97 slice A: a single
+source-free plane wave in normalized teaching units with `c = 1` by
+construction. `E = A p̂ cos(k·r − ωt + φ)` and `B = (1/c) k̂ × E` are evaluated
+together, and closed-form `FieldTerms` feed [`maxwell_residual`](../src/maxwell_residual.rs)
+so both Gauss laws and Faraday's law report `Analytic` while Ampere–Maxwell
+honestly reports `Unsupported`. This is not an SI measurement, not a
+boundary-value solution, and not a solver for arbitrary sources or current
+distributions; no panel, persistence, renderer, capture or clock state lives
+here.
+
+**Public API.** `TEACHING_SPEED` (`1.0`), `MIN_WAVELENGTH` (`1e-6`),
+`MAX_AMPLITUDE` (`1e6`), `MIN_AXIS_LENGTH` (`1e-9`),
+`WaveSpec { amplitude, wavelength, direction, polarization, phase }` with
+`validate`, `omega` and `k`; `WaveSample { e, b, phase }`;
+`sample_wave(spec, point, time) -> Option<WaveSample>`; and
+`equation_terms(spec, point, time) -> Option<FieldTerms>`.
+
+**Invariants.** `validate` rejects a non-finite or out-of-range
+amplitude/wavelength/phase, a degenerate direction, and a polarization
+(near-)parallel to propagation, without clamping; it renormalizes `direction`
+and projects `polarization` perpendicular to it. `sample_wave` and
+`equation_terms` re-check the same bounds and reject a non-finite point or
+time, returning `None` rather than NaN. `B = (1/c) k̂ × E`, so `E`, `B` and
+`k̂` are mutually orthogonal and `|E| = |B|` when `c = 1`. `equation_terms`
+supplies `div_e = div_b = 0`, `rho = 0` (an exact analytic zero for the
+source-free wave), `curl_e`, `curl_b`, `de_dt` and `db_dt`; `j` stays `None`
+because no free-current distribution is modelled, so Ampere–Maxwell remains
+`Unsupported("j")`.
+
+**Boundaries.** `phase` is only finiteness-checked, with no range bound; a very
+large phase loses accuracy through argument reduction and any bound would belong
+to a panel that exposes it. `validate` writes normalized unit vectors back as
+`f32` `Vec3`, so re-validating an already-validated spec re-projects from the
+rounded values and may shift unit vectors by `f32` rounding (not bit-idempotent,
+but within teaching tolerance). `k` returns `Vec3::ZERO` for an unusable stored
+direction as a deliberate no-direction sentinel, not a substitute axis; callers
+validate first, and reject-without-substitution remains `validate`'s rule.
+
+**Pinned by.** [tests/maxwell_wave_test.rs](../tests/maxwell_wave_test.rs):
+`wavelength_and_amplitude_validation_rejects_non_finite_and_out_of_range`,
+`polarization_is_projected_perpendicular_to_propagation`,
+`wave_is_transverse_and_b_is_orthogonal_to_e_and_k`,
+`sampled_e_and_b_are_finite_and_equal_in_magnitude_when_c_is_one`,
+`gauss_equations_close_analytically_for_the_plane_wave`,
+`faraday_residual_stays_within_the_analytic_tolerance`,
+`ampere_maxwell_reports_unsupported_without_sources`,
+`non_finite_point_or_time_yields_no_sample`, and
+`samples_are_deterministic_and_repeatable`.
+
 #### `src/source_presets.rs` — built-in source-scene presets
 
 **Purpose.** The seventeen illustrative source scenes offered above the saved
