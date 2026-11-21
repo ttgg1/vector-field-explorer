@@ -67,6 +67,7 @@ mod download_link_test;
 mod edit_history_app_test;
 mod edit_history_test;
 mod export_test;
+mod field_cache_test;
 mod field_probe_test;
 mod field_test;
 mod fly_camera_test;

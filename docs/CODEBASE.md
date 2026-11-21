@@ -1140,6 +1140,35 @@ differentiation in the formula parser; differentiation is the separate native
 CAS panel. A formula that references `t` is time-dependent and animates from
 the shared clock.
 
+#### `src/field_cache.rs` — bounded field-evaluation cache
+
+**Purpose.** Avoid repeating an identical formula sampling pass when only
+non-field state changed (issue #240).
+
+**Public API.** `FieldSampleKey` (formula text, full committed `ParameterSet`,
+`Domain`, density, 2D/3D mode, `Option<PlaneFrame>`, `FieldMode`, `ViewOptions`);
+`FieldSampleCache::{get, insert, clear, is_empty, sample_count}`; `ArrowSample`
+(the `sampling::ArrowData` alias); `SAMPLE_CAP = 64_000`.
+
+**Invariants.**
+- At most one entry; `get` is a hit only on exact key equality.
+- An insert above `SAMPLE_CAP` is refused and drops the previous entry. The
+  worst supported grid is 3D `40³ = 64_000` samples, so the retained bound is
+  `64_000 × size_of::<ArrowSample>()` (about 2 MiB for the 32-byte sample).
+- Colours are part of an `ArrowSample`, so `ViewOptions` is part of the key.
+- Simulation time is absent from the key: time-dependent fields bypass the
+  cache entirely, so no time-dependent hit can exist.
+- Cloning the cache resets it; it is runtime-only and never serialised.
+
+**Pinned by.** `tests/field_cache_test.rs`: hit path via the doc-hidden
+`State::field_sample_passes_for_tests` counter, per-key-component changes,
+direct and State-level colour-key misses, animated time misses, static time
+advances keeping a hit, oversized refusal, cached/uncached byte equality, and
+table-driven setter invalidation.
+
+**Limitations.** One entry only; every miss replaces it. Time-dependent fields
+bypass it entirely, so animation never trades correctness for a hit.
+
 #### `src/ode.rs` — bounded ODE workbench model and fixed-step RK4
 
 **Purpose.** Owns the pure ODE workbench seam: scene validation, typed-equation
@@ -2729,8 +2758,10 @@ data.
 `manual_range_is_honoured_and_auto_uses_the_sample_set`,
 `non_finite_or_collapsed_ranges_fall_back_to_mid_grey`.
 
-**Limitations.** One full resample per dirty rebuild; no incremental sampling.
-`sample_field` always uses the 3D evaluator, so a 2D grid is a single z slice.
+**Limitations.** One full resample per dirty rebuild when the
+`field_cache` key changes; a time-invariant field reuses the previous pass
+when the key is unchanged. `sample_field` always uses the 3D evaluator, so a
+2D grid is a single z slice.
 
 #### `src/presets.rs` — built-in field presets
 
