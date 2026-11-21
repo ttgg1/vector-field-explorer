@@ -139,6 +139,10 @@ impl MaxwellPanelState {
         self.wave = state.maxwell_wave();
         self.last_wave = self.wave;
         self.wave_error = None;
+        // Mode entry, restore and Reset start from a new committed scene, so a
+        // report from the previous scene must not survive. The equation and
+        // probe selections are session preferences and stay.
+        self.learning.clear_report();
     }
 }
 
@@ -317,14 +321,15 @@ pub fn show(
     show_wave_section(ui, panel, state, &mut wave_commit_now);
 
     // Collapsed by default: the teaching/residual section is one bounded press
-    // away and never samples the field on its own.
+    // away and never samples the field on its own. It reads the committed
+    // scene, not the draft, so a rejected edit cannot relabel the report.
     let learning = &mut panel.learning;
-    let draft = &mut panel.draft;
+    let committed = &state.maxwell;
     let bem = state.maxwell_bem_solution();
     egui::CollapsingHeader::new("Maxwell equations")
         .default_open(false)
         .show(ui, |ui| {
-            learning.show(ui, draft, bem);
+            learning.show(ui, committed, bem);
         });
 
     ui.label("View: Field");

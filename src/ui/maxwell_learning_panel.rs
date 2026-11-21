@@ -17,14 +17,18 @@ use eframe::egui;
 use glam::Vec3;
 
 use crate::maxwell::{
-    maxwell_family, maxwell_field_with_bem, BemSolution, MaxwellCase, MaxwellError, MaxwellFamily,
-    MaxwellScene, MAXWELL_BEM_PENDING_WARNING, MAXWELL_BEM_STALE_WARNING,
+    BemSolution, MAXWELL_BEM_PENDING_WARNING, MAXWELL_BEM_STALE_WARNING, MaxwellCase, MaxwellError,
+    MaxwellFamily, MaxwellScene, maxwell_family, maxwell_field_with_bem,
 };
-use crate::maxwell_learning::{spec, EquationForm, EquationSpec, MaxwellEquation};
-use crate::maxwell_residual::{residual, FieldTerms, Residual, TermStatus};
+use crate::maxwell_learning::{EquationForm, EquationSpec, MaxwellEquation, spec};
+use crate::maxwell_residual::{FieldTerms, Residual, TermStatus, residual};
+use crate::ui::maxwell_panel::case_label;
 
 /// The honest scope line, always visible in the section.
 pub const MAXWELL_LEARNING_LIMITATION: &str = "These teaching cases are static or quasistatic; time-derivative terms are not available, so this is a partial check, not a full Maxwell verification.";
+
+/// Explains that a stored report no longer describes the committed scene.
+pub const MAXWELL_REPORT_STALE: &str = "Scene, equation or probe changed since the last check; press Check residual to evaluate the current selection.";
 
 /// The documented normalized-residual scale.
 pub const MAXWELL_NORMALIZED_SCALE: &str =
@@ -50,6 +54,16 @@ pub struct TermExplanation {
     pub terms: Vec<TermNote>,
 }
 
+/// The exact committed inputs a [`ResidualReport`] was computed for. The probe
+/// is kept here too so a plain frame can tell whether the report still belongs
+/// to the scene and selection on screen without evaluating the field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReportInputs {
+    pub scene: MaxwellScene,
+    pub equation: MaxwellEquation,
+    pub probe: [f64; 3],
+}
+
 /// One press-only residual check: the model result plus its term provenance and
 /// the absolute (un-normalized) residual magnitude.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +73,8 @@ pub struct ResidualReport {
     /// Absolute residual magnitude; `None` whenever any required term is
     /// missing or singular.
     pub absolute: Option<f64>,
+    /// The committed scene, equation and probe this report describes.
+    pub inputs: ReportInputs,
 }
 
 /// Session-only state of the learning section.
@@ -85,8 +101,10 @@ impl Default for MaxwellLearningPanel {
 
 impl MaxwellLearningPanel {
     /// Draw the section. Field work happens only when `Check residual` is
-    /// pressed; a plain frame never evaluates the field or changes the report.
-    pub fn show(&mut self, ui: &mut egui::Ui, scene: &mut MaxwellScene, bem: Option<&BemSolution>) {
+    /// pressed; a plain frame compares the stored report with the committed
+    /// scene and selection and drops a stale result without evaluating the
+    /// field.
+    pub fn show(&mut self, ui: &mut egui::Ui, scene: &MaxwellScene, bem: Option<&BemSolution>) {
         ui.label("Maxwell equations (learning and diagnostics)");
         ui.label("Normalized teaching units; this is a teaching aid, not a solver.");
 
@@ -99,8 +117,6 @@ impl MaxwellLearningPanel {
                     && self.equation != equation
                 {
                     self.equation = equation;
-                    self.report = None;
-                    self.message = None;
                 }
             }
         });
@@ -112,6 +128,9 @@ impl MaxwellLearningPanel {
                 (EquationForm::Differential, "Differential"),
             ] {
                 if ui.selectable_label(self.form == form, label).clicked() {
+                    // The form changes only the displayed statement; the
+                    // numeric check is always the pointwise differential form,
+                    // so a stored report stays valid.
                     self.form = form;
                 }
             }
@@ -135,7 +154,6 @@ impl MaxwellLearningPanel {
         }
 
         ui.label("Probe point (normalized display units)");
-        let mut probe_changed = false;
         for (axis, value) in ["x", "y", "z"].into_iter().zip(self.probe.iter_mut()) {
             // Never paint a non-finite probe value; the check still sees the
             // original value and reports Singular.
@@ -148,12 +166,7 @@ impl MaxwellLearningPanel {
                 .inner;
             if response.changed() {
                 *value = shown;
-                probe_changed = true;
             }
-        }
-        if probe_changed {
-            self.report = None;
-            self.message = None;
         }
 
         if ui
@@ -163,6 +176,8 @@ impl MaxwellLearningPanel {
         {
             self.check(scene, bem);
         }
+
+        self.discard_stale_report(scene);
 
         if let Some(report) = self.report.as_ref() {
             ui.separator();
@@ -190,8 +205,37 @@ impl MaxwellLearningPanel {
             residual,
             terms: explanation,
             absolute: absolute_residual(self.equation, &terms),
+            inputs: ReportInputs {
+                scene: scene.clone(),
+                equation: self.equation,
+                probe: self.probe,
+            },
         });
         self.message = message;
+    }
+
+    /// Drop any stored report and its message while keeping the equation and
+    /// probe selections. The panel's mode-entry, restore and Reset seam calls
+    /// this so a report from a previous committed scene cannot survive.
+    pub fn clear_report(&mut self) {
+        self.report = None;
+        self.message = None;
+    }
+
+    /// Compare the stored report's exact inputs with the committed scene and
+    /// current selection. Evaluation stays press-only: this path only clears.
+    fn discard_stale_report(&mut self, scene: &MaxwellScene) {
+        let Some(report) = self.report.as_ref() else {
+            return;
+        };
+        if report.inputs.scene == *scene
+            && report.inputs.equation == self.equation
+            && probe_matches(report.inputs.probe, self.probe)
+        {
+            return;
+        }
+        self.report = None;
+        self.message = Some(MAXWELL_REPORT_STALE.to_owned());
     }
 }
 
@@ -209,6 +253,11 @@ fn show_statements(ui: &mut egui::Ui, record: &EquationSpec, form: EquationForm)
 
 fn show_report(ui: &mut egui::Ui, report: &ResidualReport) {
     let residual = &report.residual;
+    ui.label(format!(
+        "Committed scene: {} · probe {}",
+        case_label(report.inputs.scene.case),
+        probe_label(report.inputs.probe)
+    ));
     ui.label(format!("Equation: {}", residual.equation.title()));
     ui.label(MAXWELL_POINTWISE_NOTE);
     match residual.normalized {
@@ -233,6 +282,28 @@ fn show_report(ui: &mut egui::Ui, report: &ResidualReport) {
         ui.label(term_chip(note));
     }
     ui.label(&residual.explanation);
+}
+
+/// Exact probe comparison: `NaN` must equal the `NaN` it was recorded with, so
+/// a stored singular report survives a plain frame.
+fn probe_matches(left: [f64; 3], right: [f64; 3]) -> bool {
+    left.map(f64::to_bits) == right.map(f64::to_bits)
+}
+
+/// Format the probe for the report label. Non-finite coordinates are named
+/// rather than painted as `NaN`/`inf`, matching the readout's no-NaN rule.
+fn probe_label(probe: [f64; 3]) -> String {
+    let components = probe.map(|value| {
+        if value.is_finite() {
+            // `-0.0` formats as `-0.000`; the readout never paints a negative
+            // zero coordinate.
+            let value = if value == 0.0 { 0.0 } else { value };
+            format!("{value:.3}")
+        } else {
+            "non-finite".to_owned()
+        }
+    });
+    format!("({}, {}, {})", components[0], components[1], components[2])
 }
 
 fn term_chip(note: &TermNote) -> String {
