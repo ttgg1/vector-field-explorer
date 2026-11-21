@@ -5,10 +5,13 @@
 //! This file only measures shipped public APIs and writes nothing.
 
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::wgpu;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
+use vector_field_explorer::app;
+use vector_field_explorer::app::compose_lines_with_frame;
 use vector_field_explorer::arrow_style::ArrowStyle;
 use vector_field_explorer::cli::{self, CliFlags, CliOptions, Mode};
 use vector_field_explorer::custom_density::{
@@ -17,9 +20,13 @@ use vector_field_explorer::custom_density::{
 use vector_field_explorer::field_probe::{GaussianSurface, SurfaceKind};
 use vector_field_explorer::maxwell::MaxwellScene;
 use vector_field_explorer::maxwell_wave::WaveSpec;
+use vector_field_explorer::particles::{self, AdvectSettings, ParticlePalette, Particles};
 use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::presets::presets;
-use vector_field_explorer::renderer::sorted_lines_back_to_front;
+use vector_field_explorer::renderer::{
+    ARROW_KIND, ArrowInstanceGPU, LineInstanceGPU, PARTICLE_KIND, SceneGPU, combined_instances,
+    sort_scene_back_to_front, sorted_arrows_back_to_front, sorted_lines_back_to_front,
+};
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::source_presets::{load_source_preset, source_preset};
 use vector_field_explorer::source_scene::FieldMode;
@@ -137,40 +144,191 @@ fn run_baseline_with_gate(enabled: bool, mut now: impl FnMut() -> Instant) -> bo
                 });
                 report(scene.name, "style_rebuild", &samples);
             }
-            Extra::TrailSort => {
-                // Issue #245: `snapshot`/`sample` never build or sort trails;
-                // the app's per-frame assembly does. Prepare the real scene
-                // once outside the clock, then price only the painter-order
-                // copy over that scene's real trail list. Scramble it once so
-                // the measurement is not flattered by an already-sorted input
-                // (the adaptive stable sort would otherwise take its best
-                // case; live trails arrive in chronological, effectively
-                // arbitrary depth order).
-                // The harness options leave the simulation duration at zero,
-                // which builds no trail history. Preadvance one second at the
-                // shipped fixed step so the measurement sees the scene's real
-                // ~96k-segment trail list (4000 particles x 24 segments).
-                let mut options = scene.options.clone();
-                if options.duration_seconds <= 0.0 {
-                    options.duration_seconds = 1.0;
-                }
-                if options.fixed_step_seconds <= 0.0 {
-                    options.fixed_step_seconds = 0.01;
-                }
+            Extra::ParticleAssembly => {
+                // Issue #247: price the app's steady-state particle frame
+                // separately from the dirty-flag snapshot. `snapshot`/`sample`
+                // never build dots or trails; the live app advances the cloud,
+                // rebuilds dots/trails and re-sorts the cached scene each
+                // frame. Build every input once outside the clock.
+                // One second at the shipped fixed step gives the real trail
+                // history at steady length, matching the CLI particle path.
+                let options = scene.options.clone();
                 let frame =
                     cli::output_frame(&options).expect("benchmark output frame must be valid");
-                let prepared = cli::prepare_scene_with_state(&options, frame, scene.state.clone())
-                    .expect("benchmark worst-particles scene must prepare");
-                let view = prepared.frame.view;
-                let trails = shuffled(prepared.scene.trails.as_ref());
+                let view = frame.view;
+                let state = &scene.state;
+                let domain = state.scene_domain();
+                let flow = state.scene_flow();
+                let appearance = state.particle_appearance.sanitized();
+                let spacing = state.spacing();
+                let layer = state.flow_layer_style();
+                let radius = state.particle_radius(spacing);
+                let time = state.time;
+                let cloud = benchmark_particle_cloud(state, options.seed, 100, 0.01);
                 assert!(
-                    !trails.is_empty(),
-                    "trail_sort scene must actually contain trail segments"
+                    !cloud.pos.is_empty(),
+                    "particle assembly scene must spawn particles"
                 );
+                let (range, stats, mapping) = app::scene_color_facts_for_tests(state);
+                let palette = ParticlePalette {
+                    colormap: state.colormap,
+                    color_range: range,
+                    speed_range: particles::speed_range(&cloud),
+                    mapping: mapping.as_ref(),
+                    stats: &stats,
+                };
+
                 let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
-                    black_box(sorted_lines_back_to_front(&trails, &view))
+                    black_box(particles::dot_instances_styled_at(
+                        &cloud,
+                        &flow,
+                        &domain,
+                        &palette,
+                        &appearance,
+                        radius,
+                        time,
+                        layer,
+                    ))
+                });
+                report(scene.name, "dot_build", &samples);
+
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(particles::trail_instances_styled_at(
+                        &cloud,
+                        &flow,
+                        &palette,
+                        &appearance,
+                        spacing,
+                        time,
+                        layer,
+                    ))
+                });
+                report(scene.name, "trail_build", &samples);
+
+                let built_dots = particles::dot_instances_styled_at(
+                    &cloud,
+                    &flow,
+                    &domain,
+                    &palette,
+                    &appearance,
+                    radius,
+                    time,
+                    layer,
+                );
+                let built_trails = particles::trail_instances_styled_at(
+                    &cloud,
+                    &flow,
+                    &palette,
+                    &appearance,
+                    spacing,
+                    time,
+                    layer,
+                );
+                assert!(
+                    !built_trails.is_empty(),
+                    "particle assembly scene must build trails"
+                );
+                // The live input is chronological, not depth-sorted; sort a
+                // fresh copy each iteration exactly as the app does.
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(sorted_lines_back_to_front(&built_trails, &view))
                 });
                 report(scene.name, "trail_sort", &samples);
+
+                let cached = state.snapshot();
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    let mut combined = combined_instances(cached.arrows.as_slice(), &built_dots);
+                    sort_scene_back_to_front(&mut combined, &view);
+                    black_box(combined)
+                });
+                report(scene.name, "combined_assemble", &samples);
+
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(frame_assembly(
+                        &cached,
+                        &built_dots,
+                        &built_trails,
+                        &view,
+                        state.is_3d(),
+                    ))
+                });
+                report(scene.name, "frame_assembly", &samples);
+
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(compose_lines_with_frame(
+                        cached.lines.as_ref(),
+                        &[],
+                        &domain,
+                        state.is_3d(),
+                        state.plane_frame(),
+                        state.show_grid,
+                        state.show_coordinate_system,
+                    ))
+                });
+                report(scene.name, "compose_lines", &samples);
+
+                // Advection mutates the live cloud, so run it on a working
+                // copy and advance the simulated clock per call, exactly as
+                // the app's fixed-step advance does.
+                let mut advect_cloud = cloud.clone();
+                let mut advect_time = time;
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    advect_time += 1.0 / 60.0;
+                    particles::advect(
+                        &mut advect_cloud,
+                        &flow,
+                        &domain,
+                        AdvectSettings {
+                            dt: 1.0 / 60.0,
+                            time: advect_time,
+                            trail_len: appearance.trail_len,
+                            loop_on_stagnation: appearance.loop_on_stagnation,
+                            stagnation_seconds: appearance.stagnation_seconds,
+                        },
+                    );
+                });
+                report(scene.name, "advect", &samples);
+            }
+            Extra::ArrowAssembly => {
+                // Issue #247: a 3D scene without particles. The app reuses the
+                // cached arrow/line buffers and only rebuilds the combined
+                // sorted stream each frame; `compose_lines` is the dirty-frame
+                // reference build.
+                let options = scene.options.clone();
+                let frame =
+                    cli::output_frame(&options).expect("benchmark output frame must be valid");
+                let view = frame.view;
+                let state = &scene.state;
+                let domain = state.scene_domain();
+                let cached = state.snapshot();
+                assert!(
+                    !cached.arrows.is_empty(),
+                    "arrow assembly scene must build arrows"
+                );
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    let mut combined = combined_instances(cached.arrows.as_slice(), &[]);
+                    sort_scene_back_to_front(&mut combined, &view);
+                    black_box(combined)
+                });
+                report(scene.name, "combined_assemble", &samples);
+
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(frame_assembly(&cached, &[], &[], &view, state.is_3d()))
+                });
+                report(scene.name, "frame_assembly", &samples);
+
+                let samples = time_iterations(&mut now, CPU_WARMUP, CPU_SAMPLES, || {
+                    black_box(compose_lines_with_frame(
+                        cached.lines.as_ref(),
+                        &[],
+                        &domain,
+                        state.is_3d(),
+                        state.plane_frame(),
+                        state.show_grid,
+                        state.show_coordinate_system,
+                    ))
+                });
+                report(scene.name, "compose_lines", &samples);
             }
         }
     }
@@ -221,9 +379,12 @@ enum Extra {
     /// Toggle the arrow family between rebuilds: a style-only change that must
     /// reuse the previous sampling pass (issue #240 hit path).
     StyleRebuild,
-    /// Time the per-frame trail painter sort (#245); the snapshot path leaves
-    /// trails empty, so this prepares the scene once and sorts its real list.
-    TrailSort,
+    /// Price the per-frame particle assembly (#247): advect, dot/trail build,
+    /// painter sorts and the dirty-frame line composition.
+    ParticleAssembly,
+    /// Price the per-frame 3D assembly without particles (#247): the combined
+    /// arrow sort and the dirty-frame line composition.
+    ArrowAssembly,
 }
 
 struct Scene {
@@ -259,7 +420,7 @@ fn build_scenes() -> Vec<Scene> {
         name: "densest-3d",
         options: cli_options(Mode::ThreeD, 16, false, 0, 0),
         state,
-        extra: Extra::None,
+        extra: Extra::ArrowAssembly,
     });
 
     let mut state = State::new(true);
@@ -296,7 +457,7 @@ fn build_scenes() -> Vec<Scene> {
         name: "worst-particles",
         options: cli_options(Mode::ThreeD, 16, true, 4000, 32),
         state,
-        extra: Extra::TrailSort,
+        extra: Extra::ParticleAssembly,
     });
 
     let mut state = State::new(true);
@@ -421,20 +582,40 @@ fn harmonic_density() -> DensitySpec {
     }
 }
 
-/// Deterministic shuffle so the trail-sort measurement does not benefit from
-/// an already-sorted list. The sort cost depends on the key multiset, not on
-/// this particular order; live trails are effectively arbitrary in depth.
-fn shuffled<T: Copy>(items: &[T]) -> Vec<T> {
-    let mut out = items.to_vec();
-    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-    for index in (1..out.len()).rev() {
-        state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        let pick = ((state >> 33) as usize) % (index + 1);
-        out.swap(index, pick);
+/// One second of the real particle advection at the harness fixed step, so a
+/// measurement sees the scene's steady trail history. Mirrors
+/// `cli_scene::particle_cloud`.
+fn benchmark_particle_cloud(state: &State, seed: u64, steps: usize, dt: f32) -> Particles {
+    let target = state
+        .particle_target()
+        .expect("particle assembly scene enables particles");
+    let domain = state.scene_domain();
+    let flow = state.scene_flow();
+    let appearance = state.particle_appearance.sanitized();
+    let mut cloud = Particles::with_seed(seed);
+    particles::spawn(
+        &mut cloud,
+        &domain,
+        target,
+        if state.is_3d() { 3 } else { 2 },
+    );
+    let mut time = 0.0;
+    for _ in 0..steps {
+        particles::advect(
+            &mut cloud,
+            &flow,
+            &domain,
+            AdvectSettings {
+                dt,
+                time,
+                trail_len: appearance.trail_len,
+                loop_on_stagnation: appearance.loop_on_stagnation,
+                stagnation_seconds: appearance.stagnation_seconds,
+            },
+        );
+        time += dt;
     }
-    out
+    cloud
 }
 
 fn time_iterations<T>(
@@ -619,6 +800,157 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     } as u32;
     let year = if month <= 2 { year + 1 } else { year };
     (year, month, day)
+}
+
+/// The buffers `assemble_vector_scene` rebuilds for one frame from the cached
+/// vector scene (`src/app/mod.rs`). Measurement-only mirror of the app path;
+/// the cached `lines` and `dots` are not rebuilt here.
+struct FrameAssembly {
+    arrows: Arc<Vec<ArrowInstanceGPU>>,
+    combined: Vec<ArrowInstanceGPU>,
+    trails: Vec<LineInstanceGPU>,
+}
+
+/// Mirror of the app's per-frame `assemble_vector_scene` for the metrics: 3D
+/// sorts arrows and dots into one combined stream and shares the cached arrow
+/// list; 2D leaves combined empty and paints a sorted arrow copy. Trails sort
+/// far-to-near in both. The cached scene and the input trail list are never
+/// mutated.
+///
+/// Omitted deliberately: the `ode_markers` extension and the `cached.combined`
+/// write-back. Both harness scenes are non-Ode vector scenes, so an Ode-scene
+/// extra must extend this mirror before trusting its numbers.
+fn frame_assembly(
+    cached: &SceneGPU,
+    dots: &[ArrowInstanceGPU],
+    trails: &[LineInstanceGPU],
+    view: &Mat4,
+    mode_3d: bool,
+) -> FrameAssembly {
+    let combined = if mode_3d {
+        let mut instances = combined_instances(cached.arrows.as_slice(), dots);
+        sort_scene_back_to_front(&mut instances, view);
+        instances
+    } else {
+        Vec::new()
+    };
+    let arrows = if mode_3d {
+        Arc::clone(&cached.arrows)
+    } else {
+        Arc::new(sorted_arrows_back_to_front(cached.arrows.as_slice(), view))
+    };
+    FrameAssembly {
+        arrows,
+        combined,
+        trails: sorted_lines_back_to_front(trails, view),
+    }
+}
+
+fn arrow_at_z(z: f32) -> ArrowInstanceGPU {
+    ArrowInstanceGPU {
+        origin: [0.0, 0.0, z, PARTICLE_KIND],
+        dir_len: [0.0, 0.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+    }
+}
+
+fn line_at_z(z: f32) -> LineInstanceGPU {
+    LineInstanceGPU {
+        a: [0.0, 0.0, z, 1.0],
+        b: [0.0, 0.0, z, 0.01],
+        color: [1.0, 1.0, 1.0, 1.0],
+    }
+}
+
+#[test]
+fn frame_assembly_mirrors_the_app_two_and_three_d_paths() {
+    let view = Mat4::IDENTITY;
+    let mut cached = SceneGPU::default();
+    // Identity view: view-space z is world z, ascending is far-to-near.
+    let near = arrow_at_z(1.0);
+    let far = arrow_at_z(-2.0);
+    cached.arrows = Arc::new(vec![near, far]);
+    let dot = arrow_at_z(0.0);
+    let trails = vec![line_at_z(3.0), line_at_z(-1.0)];
+    let before_arrows: Vec<_> = cached
+        .arrows
+        .iter()
+        .map(|arrow| (arrow.origin, arrow.dir_len, arrow.color))
+        .collect();
+    let before_trails: Vec<_> = trails
+        .iter()
+        .map(|line| (line.a, line.b, line.color))
+        .collect();
+
+    let assembled = frame_assembly(&cached, &[dot], &trails, &view, true);
+    assert_eq!(assembled.combined.len(), 3);
+    assert_eq!(
+        assembled
+            .combined
+            .iter()
+            .map(|arrow| arrow.origin[2])
+            .collect::<Vec<_>>(),
+        vec![-2.0, 0.0, 1.0],
+        "3D sorts arrows and dots together far-to-near"
+    );
+    assert_eq!(assembled.combined[0].origin[3], ARROW_KIND);
+    assert_eq!(assembled.combined[1].origin[3], PARTICLE_KIND);
+    assert_eq!(assembled.combined[2].origin[3], ARROW_KIND);
+    assert_eq!(
+        assembled
+            .arrows
+            .iter()
+            .map(|arrow| arrow.origin[2])
+            .collect::<Vec<_>>(),
+        vec![1.0, -2.0],
+        "3D keeps the cached arrow order"
+    );
+    assert_eq!(
+        assembled
+            .trails
+            .iter()
+            .map(|line| line.a[2])
+            .collect::<Vec<_>>(),
+        vec![-1.0, 3.0],
+        "trails sort far-to-near by midpoint"
+    );
+    let after_arrows: Vec<_> = cached
+        .arrows
+        .iter()
+        .map(|arrow| (arrow.origin, arrow.dir_len, arrow.color))
+        .collect();
+    let after_trails: Vec<_> = trails
+        .iter()
+        .map(|line| (line.a, line.b, line.color))
+        .collect();
+    assert_eq!(
+        after_arrows, before_arrows,
+        "cached arrows are never mutated"
+    );
+    assert_eq!(
+        after_trails, before_trails,
+        "input trails are never mutated"
+    );
+
+    let two_d = frame_assembly(&cached, &[dot], &trails, &view, false);
+    assert!(two_d.combined.is_empty(), "2D leaves combined empty");
+    assert_eq!(
+        two_d
+            .arrows
+            .iter()
+            .map(|arrow| arrow.origin[2])
+            .collect::<Vec<_>>(),
+        vec![-2.0, 1.0],
+        "2D paints a sorted copy of the cached arrows"
+    );
+    assert_eq!(
+        two_d
+            .trails
+            .iter()
+            .map(|line| line.a[2])
+            .collect::<Vec<_>>(),
+        vec![-1.0, 3.0]
+    );
 }
 
 #[test]
