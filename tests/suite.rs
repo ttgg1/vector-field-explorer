@@ -93,8 +93,10 @@ mod maxwell_app_test;
 mod maxwell_bem_test;
 mod maxwell_bench_test;
 mod maxwell_export_test;
+mod maxwell_learning_test;
 mod maxwell_panel_test;
 mod maxwell_persistence_test;
+mod maxwell_residual_test;
 mod maxwell_test;
 mod menu_test;
 // POSIX shell scripts: `scripts/nightly-version.sh` and
