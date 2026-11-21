@@ -50,48 +50,41 @@ pub fn show_rail_strip(
                         let font = egui::FontId::proportional(layout::RAIL_LABEL_SIZE);
                         let galley = ui.painter().layout_no_wrap(
                             entry.label.to_owned(),
-                            font.clone(),
+                            font,
                             egui::Color32::PLACEHOLDER,
                         );
-                        let height = (galley.mesh_bounds.width() + layout::RAIL_CHEVRON_ZONE + 8.0)
-                            .max(40.0);
-                        let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), height));
-                        let response =
-                            ui.interact(rect, ui.scope_id().with(entry.id), egui::Sense::click());
-                        if response.clicked() {
-                            *entry.expanded = !*entry.expanded;
-                        }
-                        let visuals = ui.style().interact_selectable(&response, *entry.expanded);
-                        let color = visuals.text_color();
+                        let (_, rect) = ui.allocate_space(egui::vec2(
+                            ui.available_width(),
+                            layout::rail_entry_height(&galley),
+                        ));
                         let placed = RailLabel::place(rect, galley.mesh_bounds, side);
                         let label_bounds = placed.visual_bounds(galley.mesh_bounds);
-                        if ui.is_rect_visible(rect) {
-                            ui.painter()
-                                .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
-                            ui.painter().add(
-                                egui::epaint::TextShape::new(placed.pos, galley, color)
-                                    .with_angle(placed.angle),
-                            );
-                            ui.painter().text(
-                                layout::rail_chevron_pos(rect),
-                                egui::Align2::CENTER_CENTER,
-                                if *entry.expanded {
-                                    layout::collapse_chevron(side)
-                                } else {
-                                    layout::rail_chevron(side)
-                                },
-                                font,
-                                color,
-                            );
-                        }
-                        let action = if *entry.expanded { "Hide" } else { "Show" };
-                        let mut tooltip = format!("{action} {}", entry.label);
-                        if let Some(shortcut) = entry.shortcut {
-                            tooltip.push_str(&format!(" ({shortcut})"));
-                        }
+                        // The shared painter creates its interaction from the
+                        // caller's scope id; pushing the stable entry id here
+                        // keeps the strip's widget ids independent of order.
+                        let response = ui
+                            .push_id(entry.id, |ui| {
+                                let response = layout::rail_entry_interaction(ui, rect);
+                                // Toggle before painting so the click frame
+                                // paints the new selection and chevron instead
+                                // of lagging one frame.
+                                if response.clicked() {
+                                    *entry.expanded = !*entry.expanded;
+                                }
+                                layout::paint_rail_entry_state(
+                                    ui,
+                                    rect,
+                                    &response,
+                                    side,
+                                    entry.label,
+                                    entry.shortcut,
+                                    *entry.expanded,
+                                )
+                            })
+                            .inner;
                         responses.push(RailEntryResponse {
                             id: entry.id,
-                            response: response.on_hover_text(tooltip),
+                            response,
                             label_bounds,
                         });
                     }

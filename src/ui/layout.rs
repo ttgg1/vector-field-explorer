@@ -402,9 +402,16 @@ pub fn rail_chevron_pos(rail: egui::Rect) -> egui::Pos2 {
     egui::pos2(rail.center().x, rail.bottom() - RAIL_CHEVRON_ZONE / 2.0)
 }
 
-/// Tooltip shown over a collapsed rail. Unchanged by ticket 22.
-pub fn rail_tooltip(label: &str, shortcut: &str) -> String {
-    format!("Show {label} ({shortcut})")
+/// Tooltip shown over a rail entry: the action matches its current state, so a
+/// collapsed rail says `Show <label> (<shortcut>)` and an expanded one `Hide`.
+/// This is the one place the tooltip format lives; both rails paint through it.
+pub fn rail_tooltip(label: &str, shortcut: Option<&str>, expanded: bool) -> String {
+    let action = if expanded { "Hide" } else { "Show" };
+    let mut tooltip = format!("{action} {label}");
+    if let Some(shortcut) = shortcut {
+        tooltip.push_str(&format!(" ({shortcut})"));
+    }
+    tooltip
 }
 
 /// Placement of the single rotated rail label: the `pos` pivot handed to
@@ -626,51 +633,131 @@ pub fn clamp_width(width: f32, fallback: f32) -> f32 {
     }
 }
 
-/// Draw a collapsed panel's rail as a clickable vertical strip: one rotated
-/// label reading bottom-to-top on the left and top-to-bottom on the right, a
-/// chevron at the bottom pointing out toward the collapsed panel, and a
-/// tooltip naming the shortcut. Returns true when clicked (the caller expands
-/// and pins the panel).
-pub fn rail(ui: &mut egui::Ui, side: RailSide, label: &str, shortcut: &str) -> bool {
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
+/// Height of one rail entry tile, points: the rotated label's ink plus the
+/// chevron zone and a small breathing margin, with a touch-target floor.
+///
+/// Both rails size their entries with this rule, so a collapsed right-rail
+/// panel and an entry in the ordered left strip paint the same tile.
+pub fn rail_entry_height(galley: &egui::Galley) -> f32 {
+    (galley.mesh_bounds.width() + RAIL_CHEVRON_ZONE + 8.0).max(40.0)
+}
+
+/// Allocate a top-aligned rail entry of [`rail_entry_height`] at the Ui's
+/// current content width. Returns the tile rect; painting is the caller's job.
+fn allocate_rail_entry(ui: &mut egui::Ui, label: &str) -> egui::Rect {
+    let font = egui::FontId::proportional(RAIL_LABEL_SIZE);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER);
+    let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), rail_entry_height(&galley)));
+    rect
+}
+
+/// Create the click interaction for one rail entry tile.
+///
+/// [`paint_rail_entry`] creates this internally. Callers that own a state flag
+/// flip it on the click frame (the ordered strip toggles `expanded`) interact
+/// first, toggle, then pass the response to [`paint_rail_entry_state`] so the
+/// click frame already paints the new state instead of lagging one frame.
+pub fn rail_entry_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> egui::Response {
+    ui.interact(rect, ui.scope_id(), egui::Sense::click())
+}
+
+/// Paint one rail entry tile for a click interaction already created by
+/// [`rail_entry_interaction`]. See [`paint_rail_entry`] for the visuals.
+pub fn paint_rail_entry_state(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    response: &egui::Response,
+    side: RailSide,
+    label: &str,
+    shortcut: Option<&str>,
+    expanded: bool,
+) -> egui::Response {
+    let visuals = ui.style().interact_selectable(response, expanded);
+    let color = visuals.text_color();
+    let font = egui::FontId::proportional(RAIL_LABEL_SIZE);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), color);
+
     if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact(&response);
         ui.painter()
             .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
-
-        let font = egui::FontId::proportional(RAIL_LABEL_SIZE);
-        let color = visuals.text_color();
-        let galley = ui
-            .painter()
-            .layout_no_wrap(label.to_owned(), font.clone(), color);
         let placed = RailLabel::place(rect, galley.mesh_bounds, side);
         ui.painter()
             .add(egui::epaint::TextShape::new(placed.pos, galley, color).with_angle(placed.angle));
         ui.painter().text(
             rail_chevron_pos(rect),
             egui::Align2::CENTER_CENTER,
-            rail_chevron(side),
+            if expanded {
+                collapse_chevron(side)
+            } else {
+                rail_chevron(side)
+            },
             font,
             color,
         );
     }
+
     response
-        .on_hover_text(rail_tooltip(label, shortcut))
-        .clicked()
+        .clone()
+        .on_hover_text(rail_tooltip(label, shortcut, expanded))
 }
 
-/// Geometry of a shown rail panel: the click target / label band
-/// ([`Self::content_rect`]) and the full panel footprint including the frame
-/// margins and separator allowance ([`Self::outer_rect`]).
+/// Paint one rail entry in `rect` and return its click response.
+///
+/// Allocates nothing: the caller owns layout so the ordered strip can scroll
+/// and the single right-rail entry can sit at the top of its panel. The
+/// interaction uses the caller's scope id (`ui.scope_id()`), so a strip caller
+/// wraps each entry in its stable entry id and the right rail's panel scope
+/// keeps one stable id. The tile is the shared visual language of both rails:
+/// the interact-selectable fill and corner radius, the rotated label centred
+/// in the tile, the outward rail chevron (or the inward collapse chevron when
+/// `expanded`) and the `Show`/`Hide <label> (<shortcut>)` tooltip.
+///
+/// Combine [`rail_entry_interaction`] with [`paint_rail_entry_state`] when the
+/// caller must update its own `expanded` flag before the tile is painted.
+pub fn paint_rail_entry(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    side: RailSide,
+    label: &str,
+    shortcut: Option<&str>,
+    expanded: bool,
+) -> egui::Response {
+    let response = rail_entry_interaction(ui, rect);
+    paint_rail_entry_state(ui, rect, &response, side, label, shortcut, expanded)
+}
+
+/// Draw a collapsed panel's rail as a clickable vertical strip: one rotated
+/// label reading bottom-to-top on the left and top-to-bottom on the right, a
+/// chevron at the bottom pointing out toward the collapsed panel, and a
+/// tooltip naming the shortcut. Returns true when clicked (the caller expands
+/// and pins the panel).
+///
+/// The rail lays out a single top-aligned entry of [`rail_entry_height`] at the
+/// panel's content width, exactly like one entry in [`crate::ui::panel_rails::show_rail_strip`].
+pub fn rail(ui: &mut egui::Ui, side: RailSide, label: &str, shortcut: &str) -> bool {
+    let rect = allocate_rail_entry(ui, label);
+    paint_rail_entry(ui, rect, side, label, Some(shortcut), false).clicked()
+}
+
+/// Geometry of a shown rail panel: the entry tile ([`Self::content_rect`]) and
+/// the full panel footprint including the frame margins and separator
+/// allowance ([`Self::outer_rect`]).
 #[derive(Debug, Clone, Copy)]
 pub struct RailPanel {
     /// Whether the rail was clicked this frame.
     pub clicked: bool,
     /// The panel's outer rect; its width is exactly [`RAIL_WIDTH`].
     pub outer_rect: egui::Rect,
-    /// The panel's real content rect: the click target, the tooltip's hover
-    /// area and the space the rotated label must fit. Narrower than
-    /// [`RAIL_WIDTH`] by the frame margins.
+    /// The painted entry tile: the click target and the tooltip's hover area.
+    /// Its width is the panel's real content band (narrower than
+    /// [`RAIL_WIDTH`] by the frame margins); its height is
+    /// [`rail_entry_height`], top-aligned at the panel's content start, so the
+    /// right rail paints one rounded label-sized entry like the left strip
+    /// rather than a full-height strip.
     pub content_rect: egui::Rect,
 }
 
@@ -695,8 +782,9 @@ pub fn rail_panel(
         .exact_size(RAIL_WIDTH)
         .frame(rail_frame(ui.style()))
         .show(ui, |ui| {
-            content_rect = ui.max_rect();
-            rail(ui, side, label, shortcut)
+            let rect = allocate_rail_entry(ui, label);
+            content_rect = rect;
+            paint_rail_entry(ui, rect, side, label, Some(shortcut), false).clicked()
         });
     RailPanel {
         clicked: response.inner,
