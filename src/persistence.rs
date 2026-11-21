@@ -19,7 +19,9 @@ use crate::arrow_style::{ArrowParams, ArrowStyle, ArrowStyle2D};
 use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::{ColorRamp, ScaleMode};
 use crate::colormap::Colormap;
-use crate::custom_density::{DensityFamily, DensitySpec, DensitySupport, SupportKind};
+use crate::custom_density::{
+    DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw, validate_time_law_combination,
+};
 use crate::field_probe::{
     CirculationLoop, GaussianSurface, LoopKind, MAX_LOOPS, MAX_SURFACES, SurfaceKind,
 };
@@ -479,6 +481,36 @@ pub struct DensitySpecRecord {
     pub formula: String,
     pub samples: u32,
     pub softening: f64,
+    /// Optional declared clock (issue #98 slice A). A steady law writes no key,
+    /// so documents written before the field stay byte-identical. An unknown
+    /// token or out-of-range value drops only the law on restore, keeping the
+    /// spatial density with [`TimeLaw::Steady`]. A structurally malformed
+    /// object (missing `kind`, wrong-typed `omega` or `phase`) instead fails the
+    /// whole document at deserialization, like any wrong-typed field. If a
+    /// harmonic current loses its law this way, a still-valid `charge_formula`
+    /// survives on the resulting steady current and is ignored by the
+    /// historical `div J = 0` check; slice B must surface or drop that orphaned
+    /// pairing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_law: Option<TimeLawRecord>,
+    /// Optional independent charge density paired with a harmonic current
+    /// (issue #98 slice A). Missing on older documents and on every steady or
+    /// charge record, so their wire form stays byte-identical. An invalid
+    /// stored formula drops only the pairing on restore, keeping the spatial
+    /// density and its law. A law dropped on restore can leave this pairing
+    /// orphaned on a steady current, where it is ignored; see `time_law`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_formula: Option<String>,
+}
+
+/// Plain-token mirror of one [`TimeLaw`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimeLawRecord {
+    pub kind: String,
+    #[serde(default)]
+    pub omega: f64,
+    #[serde(default)]
+    pub phase: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -502,6 +534,28 @@ fn density_family_from_label(label: &str) -> Option<DensityFamily> {
         "volume_charge" => Some(DensityFamily::VolumeCharge),
         "surface_charge" => Some(DensityFamily::SurfaceCharge),
         "steady_current" => Some(DensityFamily::SteadyCurrent),
+        _ => None,
+    }
+}
+
+fn time_law_record(law: TimeLaw) -> Option<TimeLawRecord> {
+    match law {
+        TimeLaw::Steady => None,
+        TimeLaw::Harmonic { omega, phase } => Some(TimeLawRecord {
+            kind: "harmonic".to_string(),
+            omega,
+            phase,
+        }),
+    }
+}
+
+fn time_law_from_record(record: &TimeLawRecord) -> Option<TimeLaw> {
+    match record.kind.as_str() {
+        "steady" => Some(TimeLaw::Steady),
+        "harmonic" => Some(TimeLaw::Harmonic {
+            omega: record.omega,
+            phase: record.phase,
+        }),
         _ => None,
     }
 }
@@ -538,14 +592,23 @@ impl DensitySpecRecord {
             formula: spec.formula.clone(),
             samples: spec.samples,
             softening: spec.softening,
+            time_law: time_law_record(spec.time_law),
+            charge_formula: spec.charge_formula.clone(),
         }
     }
 
     /// Rebuild the model density. An unknown family or support-kind token
     /// returns `None`; the restore path validates the rest of the record.
+    ///
+    /// An unknown or invalid time law is dropped on its own: the returned
+    /// density keeps the spatial formula with [`TimeLaw::Steady`]. The restore
+    /// path logs one warning for the loss. A structurally malformed
+    /// `time_law` object never reaches here: it fails deserialization, like a
+    /// wrong-typed `samples`.
     pub fn to_spec(&self) -> Option<DensitySpec> {
         let family = density_family_from_label(&self.family)?;
         let kind = support_kind_from_label(&self.support.kind)?;
+        let (time_law, _) = self.restored_time_law();
         Some(DensitySpec {
             name: self.name.clone(),
             family,
@@ -558,7 +621,20 @@ impl DensitySpecRecord {
             formula: self.formula.clone(),
             samples: self.samples,
             softening: self.softening,
+            time_law,
+            charge_formula: self.charge_formula.clone(),
         })
+    }
+
+    /// Decode the optional law and report whether a stored law was dropped.
+    fn restored_time_law(&self) -> (TimeLaw, bool) {
+        let Some(record) = &self.time_law else {
+            return (TimeLaw::Steady, false);
+        };
+        match time_law_from_record(record) {
+            Some(law) if law.validate().is_ok() => (law, false),
+            _ => (TimeLaw::Steady, true),
+        }
     }
 }
 
@@ -1179,10 +1255,61 @@ impl ViewRecord {
         // place, the survivors keep their order, and one warning reports the
         // loss.
         let stored_densities = self.densities.len();
-        let densities: Vec<DensitySpec> = self
+        // An invalid stored clock drops only that law; the spatial density is
+        // kept. One aggregated warning reports the loss without failing the
+        // envelope or dirtying the scene. A structurally malformed `time_law`
+        // never reaches this point: it fails at deserialization, like any
+        // wrong-typed field. If the dropped law belonged to a harmonic current,
+        // a still-valid charge formula stays on the now-steady current and is
+        // ignored by the historical div J = 0 check; slice B must surface or
+        // drop that orphaned pairing.
+        let dropped_laws = self
+            .densities
+            .iter()
+            .filter(|record| record.restored_time_law().1)
+            .count();
+        if dropped_laws > 0 {
+            log::warn!(
+                "ignored {dropped_laws} invalid persisted density time law{}; kept the spatial density",
+                if dropped_laws == 1 { "" } else { "s" }
+            );
+        }
+        let mut densities: Vec<DensitySpec> = self
             .densities
             .iter()
             .filter_map(DensitySpecRecord::to_spec)
+            .collect();
+        // A paired charge formula is optional and independent of the spatial
+        // density. Drop it alone when it cannot parse against the restored
+        // parameters or when it sits on a charge family (whose own formula is
+        // already `rho`); keep the density and never dirty. One warning covers
+        // every loss.
+        let mut dropped_charge_formulas = 0;
+        for spec in &mut densities {
+            if spec.charge_formula.is_none() {
+                continue;
+            }
+            let charge_family = matches!(
+                spec.family,
+                DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge
+            );
+            if charge_family || spec.validate_charge_formula(&state.parameters).is_err() {
+                spec.charge_formula = None;
+                dropped_charge_formulas += 1;
+            }
+        }
+        if dropped_charge_formulas > 0 {
+            log::warn!(
+                "ignored {dropped_charge_formulas} invalid persisted density charge formula{}; kept the spatial density",
+                if dropped_charge_formulas == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+        }
+        let mut densities: Vec<DensitySpec> = densities
+            .into_iter()
             .filter(|spec| spec.validate(&state.parameters).is_ok())
             .take(MAX_DENSITIES)
             .collect();
@@ -1196,6 +1323,28 @@ impl ViewRecord {
                     "ies"
                 }
             );
+        }
+        // The same explicit rule as the edit path: demote a stored harmonic
+        // charge when it would sit beside a steady current. This drops only
+        // the invalid law and keeps every spatial density.
+        if validate_time_law_combination(&densities).is_err() {
+            let mut demoted = 0;
+            for spec in &mut densities {
+                if matches!(
+                    spec.family,
+                    DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge
+                ) && spec.time_law.is_harmonic()
+                {
+                    spec.time_law = TimeLaw::Steady;
+                    demoted += 1;
+                }
+            }
+            if demoted > 0 {
+                log::warn!(
+                    "ignored {demoted} persisted harmonic density law{} that a steady current cannot balance",
+                    if demoted == 1 { "" } else { "s" }
+                );
+            }
         }
         state.restore_densities(densities);
         // Issue #83 colour mapping restores directly, not through the setters:

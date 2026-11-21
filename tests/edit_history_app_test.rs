@@ -15,7 +15,7 @@ use vector_field_explorer::VfApp;
 use vector_field_explorer::camera::OrbitCamera;
 use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::custom_density::{
-    DensityFamily, DensitySpec, DensitySupport, SupportKind,
+    DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw,
 };
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::edit_history::EditScope;
@@ -1002,6 +1002,8 @@ fn parameter_dependent_density() -> DensitySpec {
         formula: "gain".to_string(),
         samples: 8,
         softening: 0.0,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
     }
 }
 

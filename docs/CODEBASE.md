@@ -3465,14 +3465,19 @@ model and its diagnostics. No editing UI, persistence, scene document, renderer
 or new field solver; later slices wire it in.
 
 **Public API.** `MAX_DENSITY_SAMPLES = 110_592`, `MIN_SAMPLES = 8`,
-`MAX_SAMPLES = 48`, `MAX_NAME_BYTES = 48`, `CONTINUITY_TOLERANCE = 0.05`;
+`MAX_SAMPLES = 48`, `MAX_NAME_BYTES = 48`, `CONTINUITY_TOLERANCE = 0.05`,
+`MAX_ANGULAR_FREQUENCY = 1.0e3`;
 `SupportKind {Sphere, Box, Cylinder}`,
 `DensitySupport {kind, center, axis, size}` with `validate`, `contains` and
 `volume`; `DensityFamily {VolumeCharge, SurfaceCharge, SteadyCurrent}`;
-`DensitySpec {name, family, support, formula, samples, softening}` with
-`validate(&ParameterSet)`; `DiagnosticsStatus {Estimate {error}, Unresolved
-{reason}, Violation {reason}}`; `ChargeReport`; `ContinuityReport`;
-`charge_report` and `continuity_report`.
+`TimeLaw {Steady, Harmonic {omega, phase}}` (default `Steady`);
+`DensitySpec {name, family, support, formula, samples, softening, time_law,
+charge_formula}`
+with `validate(&ParameterSet)`; `DiagnosticsStatus {Estimate {error}, Unresolved
+{reason}, Violation {reason}}`; `ContinuityStatus {Estimate {value, error},
+Unresolved {reason}, Violation {residual, tolerance}}`; `ChargeReport`;
+`ContinuityReport`; `charge_report`, `continuity_report` and
+`validate_time_law_combination`.
 
 **Contract.**
 - `size` holds full extents. A sphere uses `size.x` as its diameter, a box uses
@@ -3490,6 +3495,22 @@ or new field solver; later slices wire it in.
   and `ParameterSet` substitution. Validation evaluates every accepted interior
   lattice point at `t = 0`; any non-finite point is rejected with its position,
   never clamped or replaced by zero.
+- `charge_formula: Option<String>` is the independent scalar `rho(x,y,z,t)`
+  paired with a time-dependent current, in the same grammar. Validation parses
+  it when present (including `ParameterSet` substitution) and rejects a
+  non-empty requirement violation, but never decides physical consistency;
+  that is a diagnostic question. It must be absent for `VolumeCharge` and
+  `SurfaceCharge`, whose own `formula` is already `rho`. A steady current
+  ignores it and keeps the historical `div J = 0` check unchanged.
+- `TimeLaw::Steady` is the historical behaviour and is exactly one. A harmonic
+  law requires finite `0 < omega <= MAX_ANGULAR_FREQUENCY` and a finite phase;
+  every report sampler multiplies the spatial density by
+  `cos(omega * t + phase)`. The lattice, `MAX_DENSITY_SAMPLES` and on-demand
+  refresh rules are unchanged, so a time law adds no samples and no per-frame
+  work. A steady current beside a harmonic charge density is rejected
+  explicitly by `validate_time_law_combination` (and therefore by
+  `State::commit_densities`); the current must declare `Harmonic` itself rather
+  than have its input coerced.
 - Sampling is `samples^3` deterministic jittered cell centres over the support's
   axis-aligned bounding box, keyed by a splitmix64 salt over the frozen support
   geometry and lattice index (the streamline seed scheme). Jitter is at most
@@ -3503,14 +3524,30 @@ or new field solver; later slices wire it in.
   `SurfaceCharge` is a slice-A placeholder: it is validated as a scalar `rho`
   with the same interior rule and has no surface integration yet, so
   `charge_report` refuses it as `Unresolved`.
-- `continuity_report` accepts only `SteadyCurrent` (other families are an
-  error string naming steady currents). It uses central differences at jittered
-  interior lattice points. The stencil evaluates one cell outside the support
-  interior, so a field singular just outside may make the report `Unresolved`.
-  `|div J|` larger than `CONTINUITY_TOLERANCE` times the
-  largest sampled `|J|` is `Violation`; a bounded near-zero result is `Estimate`
-  with the full/half-pass difference as `error`; an unevaluable interior is
-  `Unresolved`. `worst_point` is the position of the largest `|div J|`.
+- `continuity_report` accepts a `SteadyCurrent` (and a harmonic charge family,
+  which is `Unresolved`). It uses central differences at jittered interior
+  lattice points. The stencil evaluates one cell outside the support interior,
+  so a field singular just outside may make the report `Unresolved`. There are
+  three distinct cases:
+  - `TimeLaw::Steady` keeps the genuine historical check: `div J` must vanish.
+    `|div J|` larger than `CONTINUITY_TOLERANCE` times the largest sampled
+    `|J|` is `Violation {residual, tolerance}`; a bounded near-zero result is
+    `Estimate {value, error}`.
+  - A harmonic current requires `charge_formula`. The sampler evaluates that
+    independent `rho` at `t` and `t + dt` with the bounded step
+    `dt = min(1e-3 / omega, 1e-3)` and compares sampled `div J(t)` with the
+    finite difference `-(rho(t + dt) - rho(t)) / dt`. This is a
+    finite-difference check, not an analytic identity: its truncation error is
+    `O(dt)` and stays far below `CONTINUITY_TOLERANCE`. The residual is
+    normalized by the largest sampled `|div J|` or `|-(Delta rho)/dt|` term.
+    A missing paired formula or a non-finite sample is `Unresolved`, never a
+    silent pass.
+  - A harmonic charge family's `formula` is `rho`, but this build does not
+    model its induced current, so the report is explicitly `Unresolved` with a
+    reason. It never derives a current from the same spec and never fabricates
+    an `Estimate` or `Violation`.
+  `worst_point` is the position of the largest residual (or `|div J|` when
+  steady).
 - Normalized teaching units (`eps0 = mu0 = 1`); no SI claim, and electric and
   magnetic results are never combined.
 
@@ -3518,8 +3555,14 @@ or new field solver; later slices wire it in.
 name/geometry/budget validation (including the f32 report bound), non-finite-
 inside-support rejection, the analytic uniform-sphere total, sign-change counting
 (including the zero-exclusion rule), zero and divergent steady currents,
-`Unresolved` instead of fabricated zeros, parameter re-evaluation, and
-deterministic bounded sampling.
+`Unresolved` instead of fabricated zeros, parameter re-evaluation, deterministic
+bounded sampling, steady-document byte identity, harmonic envelope round-trip,
+invalid-law rejection/drop-on-restore, clock-following charge samples, a
+consistent finite-difference harmonic pair, a deliberately inconsistent pair
+that must violate, a missing pair and a harmonic charge that must be
+`Unresolved`, charge-formula round-trip/drop-on-restore, a discontinuous flow's
+numeric violation, the steady-current/harmonic-charge rejection, and the
+unchanged sample budget.
 
 **Limitations.** Validation samples the declared lattice, not the continuum; a
 singularity between accepted points is not detected. Slice B1 wires the list
@@ -3538,17 +3581,32 @@ Option<ContinuityReport> }`, `State::densities()`,
 `add_density`, `remove_density` and `commit_density`.
 
 **Contract.**
-- `ViewRecord.densities: Vec<DensitySpec>` is serde-defaulted and capped at
-  `MAX_DENSITIES`; capture copies the committed list, and restore drops entries
-  that fail `validate` against the already restored parameters, keeps the
-  survivors in order, logs once and adds no dirtying beyond the enclosing
-  restore. Scenes and the edit history inherit the field through the existing
-  `ViewRecord`/`EditSnapshot` seams.
+- `ViewRecord.densities: Vec<DensitySpecRecord>` is serde-defaulted and capped
+  at `MAX_DENSITIES`; capture copies the committed list, and restore drops
+  entries that fail `validate` against the already restored parameters, keeps
+  the survivors in order, logs once and adds no dirtying beyond the enclosing
+  restore. Each mirror record carries an optional `time_law` with plain
+  tokens/numbers (`kind`, `omega`, `phase`) and an optional `charge_formula`
+  string; both are serde-defaulted and omitted when `None`, so older documents
+  stay byte-identical. An unknown law token or an out-of-range value drops only
+  that law (the density keeps its spatial formula as `Steady`) with one warning.
+  A structurally malformed `time_law` object — a missing `kind` or a wrong JSON
+  type for `omega` — is not field-level recovery: it fails the whole document at
+  deserialization, exactly like a wrong-typed `samples`, which is the existing
+  envelope convention. An invalid stored `charge_formula` (or one on a charge
+  family) drops only the pairing, keeping the spatial density and its law, with
+  one warning. A stored steady-current/harmonic-charge conflict is demoted the
+  same way, and restore never dirties. When a harmonic current loses its law
+  this way, a still-valid `charge_formula` survives on what is now a steady
+  current, where `continuity_report` silently ignores it and runs the historical
+  `div J = 0` check; slice B must either surface or drop that orphaned pairing,
+  and that decision is owed to slice B. Scenes and the edit history inherit the
+  field through the existing `ViewRecord`/`EditSnapshot` seams.
 - `commit_densities` validates the whole list (cap, unique names, support,
-  formula parsing/evaluation and sample budget) atomically; a stale list is
-  untouched on rejection, an equal list is a no-op and a real change dirties
-  once and clears stale reports. `reset_densities` clears without dirtying when
-  already empty.
+  formula parsing/evaluation, sample budget, time law and the cross-spec
+  steady-current/harmonic-charge rule) atomically; a stale list is untouched on
+  rejection, an equal list is a no-op and a real change dirties once and clears
+  stale reports. `reset_densities` clears without dirtying when already empty.
 - Reports are computed only by `refresh_density_reports`, called by the panel's
   Compute action or after an accepted edit, never per frame. Volume charges get
   a charge report, steady currents a continuity report, and a surface charge

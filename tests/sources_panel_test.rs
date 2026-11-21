@@ -3,7 +3,8 @@
 use eframe::egui;
 use eframe::egui::{Pos2, Rect, vec2};
 use vector_field_explorer::custom_density::{
-    DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus, SupportKind,
+    ContinuityStatus, DensityFamily, DensitySpec, DensitySupport, DiagnosticsStatus, SupportKind,
+    TimeLaw,
 };
 use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::source_scene::{
@@ -720,6 +721,8 @@ fn density_spec(name: &str, family: DensityFamily, formula: &str) -> DensitySpec
         formula: formula.to_string(),
         samples: 8,
         softening: 0.0,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
     }
 }
 
@@ -798,24 +801,28 @@ fn unresolved_and_violation_reasons_are_shown_verbatim() {
         ])
         .expect("both fixtures are valid at t = 0");
     state.refresh_density_reports();
-    let expected: Vec<String> = state
-        .density_reports()
-        .iter()
-        .flat_map(|row| {
-            let charge = row.charge.as_ref().map(|report| &report.status).into_iter();
-            let continuity = row
-                .continuity
-                .as_ref()
-                .map(|report| &report.status)
-                .into_iter();
-            charge.chain(continuity)
-        })
-        .map(|status| match status {
-            DiagnosticsStatus::Estimate { error } => format!("Estimate: {error}"),
-            DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
-            DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
-        })
-        .collect();
+    let mut expected = Vec::new();
+    for row in state.density_reports() {
+        if let Some(report) = &row.charge {
+            expected.push(match &report.status {
+                DiagnosticsStatus::Estimate { error } => format!("Estimate: {error}"),
+                DiagnosticsStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+                DiagnosticsStatus::Violation { reason } => format!("Violation: {reason}"),
+            });
+        }
+        if let Some(report) = &row.continuity {
+            expected.push(match &report.status {
+                ContinuityStatus::Estimate { value, error } => {
+                    format!("Estimate: div J in [{:.6e}, {:.6e}], residual = {value:.6e}, error = {error:.6e}", report.div_j_min, report.div_j_max)
+                }
+                ContinuityStatus::Unresolved { reason } => format!("Unresolved: {reason}"),
+                ContinuityStatus::Violation {
+                    residual,
+                    tolerance,
+                } => format!("Violation: residual = {residual:.6e}, tolerance = {tolerance:.6e}"),
+            });
+        }
+    }
     assert!(
         expected.iter().any(|line| line.starts_with("Unresolved: ")),
         "the fixture produces an unresolved report: {expected:?}"

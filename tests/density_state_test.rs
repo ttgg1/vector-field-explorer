@@ -6,7 +6,7 @@
 use glam::Vec3;
 use vector_field_explorer::appearance_profile::AppearanceProfile;
 use vector_field_explorer::custom_density::{
-    DensityFamily, DensitySpec, DensitySupport, SupportKind,
+    DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw,
 };
 use vector_field_explorer::edit_history::{EditHistory, EditSnapshot};
 use vector_field_explorer::persistence::ViewRecord;
@@ -30,6 +30,8 @@ fn spec(name: &str, family: DensityFamily, formula: &str) -> DensitySpec {
         formula: formula.to_string(),
         samples: 8,
         softening: 0.0,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
     }
 }
 

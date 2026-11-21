@@ -49,6 +49,20 @@ pub const MAX_NAME_BYTES: usize = 48;
 /// and a larger one is a violation.
 pub const CONTINUITY_TOLERANCE: f64 = 0.05;
 
+/// Largest accepted angular frequency for a harmonic time law, in normalized
+/// units. The bound keeps the declared clock finite and bounded without
+/// offering an arbitrary high-frequency source.
+pub const MAX_ANGULAR_FREQUENCY: f64 = 1.0e3;
+
+/// Clock step cap for the harmonic continuity finite difference, in seconds.
+///
+/// The check compares the sampled `div J(t)` with
+/// `-(rho(t + dt) - rho(t)) / dt` from the *independent* paired charge formula,
+/// not with an analytically differentiated expression. `dt` is
+/// `min(1e-3 / omega, 1e-3)`, so `omega * dt <= 1e-3` and the forward
+/// difference's truncation error stays far below [`CONTINUITY_TOLERANCE`].
+const HARMONIC_DIFFERENCE_STEP: f64 = 1.0e-3;
+
 /// Floor for the divergence normalization scale, so an identically zero
 /// current is still compared against a finite, meaningful scale.
 const CONTINUITY_MIN_SCALE: f64 = 1e-12;
@@ -89,6 +103,63 @@ pub enum DensityFamily {
     SteadyCurrent,
 }
 
+/// The declared clock of a density.
+///
+/// `Steady` is the historical behaviour and multiplies the spatial density by
+/// one. `Harmonic` multiplies it by `cos(omega * t + phase)`; the spatial
+/// formula itself stays independent of the law.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TimeLaw {
+    #[default]
+    Steady,
+    Harmonic {
+        omega: f64,
+        phase: f64,
+    },
+}
+
+impl TimeLaw {
+    /// Validate the law's parameters without sampling a formula.
+    ///
+    /// A harmonic frequency must be finite and satisfy
+    /// `0 < omega <= MAX_ANGULAR_FREQUENCY`; the phase must be finite.
+    pub fn validate(&self) -> Result<(), String> {
+        match *self {
+            TimeLaw::Steady => Ok(()),
+            TimeLaw::Harmonic { omega, phase } => {
+                if !omega.is_finite() || omega <= 0.0 || omega > MAX_ANGULAR_FREQUENCY {
+                    return Err(format!(
+                        "harmonic angular frequency omega must be finite and satisfy \
+                         0 < omega <= MAX_ANGULAR_FREQUENCY ({MAX_ANGULAR_FREQUENCY}); found {omega}"
+                    ));
+                }
+                if !phase.is_finite() {
+                    return Err(format!("harmonic phase must be finite; found {phase}"));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Whether this law varies with the clock.
+    #[must_use]
+    pub fn is_harmonic(self) -> bool {
+        matches!(self, TimeLaw::Harmonic { .. })
+    }
+
+    /// The multiplicative clock factor at `time`, or `None` when the declared
+    /// clock is not finite. `Steady` is always exactly one.
+    fn scale(self, time: f64) -> Option<f64> {
+        match self {
+            TimeLaw::Steady => Some(1.0),
+            TimeLaw::Harmonic { omega, phase } => {
+                let factor = omega.mul_add(time, phase).cos();
+                factor.is_finite().then_some(factor)
+            }
+        }
+    }
+}
+
 /// One declared density over a bounded support.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DensitySpec {
@@ -102,6 +173,16 @@ pub struct DensitySpec {
     pub samples: u32,
     /// Normalized softening in `0..=1`.
     pub softening: f64,
+    /// Declared clock; `Steady` is the historical zero-frequency behaviour.
+    pub time_law: TimeLaw,
+    /// Independent charge density paired with a harmonic current.
+    ///
+    /// A scalar `rho(x,y,z,t)` in the same shared grammar as `formula`. It is
+    /// required for a genuine harmonic-current continuity check and must be
+    /// absent for the charge families, whose own `formula` is already `rho`.
+    /// It is ignored by a steady law, which keeps the historical `div J = 0`
+    /// comparison unchanged.
+    pub charge_formula: Option<String>,
 }
 
 /// Why a diagnostic is or is not a usable estimate.
@@ -113,6 +194,23 @@ pub enum DiagnosticsStatus {
     Unresolved { reason: String },
     /// A steady-current divergence exceeded [`CONTINUITY_TOLERANCE`].
     Violation { reason: String },
+}
+
+/// Why a continuity diagnostic is or is not a usable estimate.
+///
+/// Unlike [`DiagnosticsStatus`], a violation carries the measured number so the
+/// caller can show exactly how far the sampled divergence missed the charge
+/// derivative (zero for a steady law, the paired finite difference for a
+/// harmonic current).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContinuityStatus {
+    /// Both terms were finite; `value` is the largest sampled residual and
+    /// `error` is the full/half-pass difference.
+    Estimate { value: f64, error: f64 },
+    /// The comparison could not be made; the reason names the missing term.
+    Unresolved { reason: String },
+    /// The residual exceeded the normalized tolerance; both numbers are kept.
+    Violation { residual: f64, tolerance: f64 },
 }
 
 /// Volume-charge diagnostics over the sampled interior.
@@ -127,13 +225,13 @@ pub struct ChargeReport {
     pub status: DiagnosticsStatus,
 }
 
-/// Steady-current continuity diagnostics over the sampled interior.
+/// Current continuity diagnostics over the sampled interior.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContinuityReport {
     pub div_j_min: f64,
     pub div_j_max: f64,
     pub worst_point: Option<Vec3>,
-    pub status: DiagnosticsStatus,
+    pub status: ContinuityStatus,
 }
 
 impl DensitySupport {
@@ -280,6 +378,18 @@ impl DensitySpec {
     pub fn validate(&self, parameters: &ParameterSet) -> Result<(), String> {
         self.validate_name()?;
         self.support.validate()?;
+        self.time_law.validate()?;
+        if matches!(
+            self.family,
+            DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge
+        ) && self.charge_formula.is_some()
+        {
+            return Err(
+                "a charge density's formula is its charge density; charge_formula must be absent"
+                    .to_string(),
+            );
+        }
+        self.validate_charge_formula(parameters)?;
         if !self.softening.is_finite() || !(0.0..=1.0).contains(&self.softening) {
             return Err(format!(
                 "softening must be finite and in 0..=1; found {}",
@@ -310,12 +420,12 @@ impl DensitySpec {
         match self.family {
             DensityFamily::SteadyCurrent => {
                 validate_interior(&self.support, self.samples, salt, |point| {
-                    eval_current(&expression, point, 0.0).map(|_| ())
+                    eval_current(&expression, point, 0.0, self.time_law).map(|_| ())
                 })
             }
             DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge => {
                 validate_interior(&self.support, self.samples, salt, |point| {
-                    eval_scalar(&expression, point, 0.0).map(|_| ())
+                    eval_scalar(&expression, point, 0.0, self.time_law).map(|_| ())
                 })
             }
         }
@@ -370,6 +480,35 @@ impl DensitySpec {
             }
         }
     }
+
+    /// Validate the optional paired charge formula without sampling it.
+    ///
+    /// A present formula must be non-empty and parse under the shared grammar
+    /// with the committed parameters. It is a scalar, so it is wrapped exactly
+    /// like a charge family's `formula` before `FieldExpr` sees it. Whether the
+    /// formula is physically consistent with the current is a diagnostic
+    /// question, answered only by [`continuity_report`]; validation checks
+    /// syntax, not the continuity identity.
+    pub fn validate_charge_formula(&self, parameters: &ParameterSet) -> Result<(), String> {
+        self.parse_charge_expression(parameters).map(|_| ())
+    }
+
+    fn parse_charge_expression(
+        &self,
+        parameters: &ParameterSet,
+    ) -> Result<Option<FieldExpr>, String> {
+        let Some(formula) = self.charge_formula.as_deref() else {
+            return Ok(None);
+        };
+        let formula = formula.trim();
+        if formula.is_empty() {
+            return Err("paired charge formula must not be empty".to_string());
+        }
+        let source = format!("(0,({formula}),0)");
+        FieldExpr::parse_with_parameters(&source, parameters)
+            .map(Some)
+            .map_err(|error| format!("paired charge formula: {error}"))
+    }
 }
 
 /// Midpoint-weighted volume charge total and interior diagnostics.
@@ -391,12 +530,12 @@ pub fn charge_report(
 
     let expression = spec.parse_expression(parameters)?;
     let salt = support_salt(&spec.support);
-    let full = match charge_pass(spec, &expression, spec.samples, time, salt) {
+    let full = match charge_pass(spec, &expression, spec.samples, time, salt, &spec.time_law) {
         Ok(pass) => pass,
         Err(reason) => return Ok(unresolved_charge(reason)),
     };
     let half_samples = (spec.samples / 2).max(MIN_SAMPLES / 2);
-    let half = match charge_pass(spec, &expression, half_samples, time, salt) {
+    let half = match charge_pass(spec, &expression, half_samples, time, salt, &spec.time_law) {
         Ok(pass) => pass,
         Err(reason) => {
             return Ok(ChargeReport {
@@ -428,50 +567,294 @@ pub fn charge_report(
     })
 }
 
-/// Central-difference divergence bounded by [`CONTINUITY_TOLERANCE`].
+/// Continuity diagnostic bounded by [`CONTINUITY_TOLERANCE`].
 ///
-/// Only a [`DensityFamily::SteadyCurrent`] is accepted; any other family is an
-/// error. A current whose interior cannot be sampled finitely is `Unresolved`.
+/// A [`DensityFamily::SteadyCurrent`] is checked against `div J = 0`
+/// ([`TimeLaw::Steady`]) or against an independently declared paired charge
+/// density ([`TimeLaw::Harmonic`]). A harmonic charge family has no modelled
+/// induced current, so it reports `Unresolved` instead of inventing one. A
+/// steady charge family remains an error because continuity is not defined for
+/// it here.
 pub fn continuity_report(
     spec: &DensitySpec,
     parameters: &ParameterSet,
     time: f64,
 ) -> Result<ContinuityReport, String> {
-    if spec.family != DensityFamily::SteadyCurrent {
-        return Err("continuity applies to steady currents only".to_string());
+    match spec.family {
+        DensityFamily::SteadyCurrent => {}
+        DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge => {
+            if spec.time_law.is_harmonic() {
+                spec.validate(parameters)?;
+                return Ok(unresolved_continuity(
+                    "a harmonic charge density needs its induced current, which this build \
+                     does not model, so continuity cannot be checked"
+                        .to_string(),
+                ));
+            }
+            return Err("continuity applies to steady currents only".to_string());
+        }
     }
     spec.validate(parameters)?;
 
     let expression = spec.parse_expression(parameters)?;
     let salt = support_salt(&spec.support);
-    let full = match divergence_pass(spec, &expression, spec.samples, time, salt) {
+    match spec.time_law {
+        TimeLaw::Steady => steady_continuity(spec, &expression, time, salt),
+        TimeLaw::Harmonic { .. } => harmonic_continuity(spec, &expression, parameters, time, salt),
+    }
+}
+
+/// Today's zero-derivative comparison for a steady current.
+fn steady_continuity(
+    spec: &DensitySpec,
+    expression: &FieldExpr,
+    time: f64,
+    salt: u64,
+) -> Result<ContinuityReport, String> {
+    let full = match divergence_pass(spec, expression, spec.samples, time, salt, TimeLaw::Steady) {
         Ok(pass) => pass,
         Err(reason) => return Ok(unresolved_continuity(reason)),
     };
     let scale = full.max_j.max(CONTINUITY_MIN_SCALE);
     let threshold = CONTINUITY_TOLERANCE * scale;
     let status = if full.max_abs > threshold {
-        DiagnosticsStatus::Violation {
-            reason: format!(
-                "max |div J| {:.6e} exceeds the normalized tolerance {:.6e}",
-                full.max_abs, threshold
-            ),
+        ContinuityStatus::Violation {
+            residual: full.max_abs,
+            tolerance: threshold,
         }
     } else {
         let half_samples = (spec.samples / 2).max(MIN_SAMPLES / 2);
-        match divergence_pass(spec, &expression, half_samples, time, salt) {
+        match divergence_pass(spec, expression, half_samples, time, salt, TimeLaw::Steady) {
             Ok(half) => {
                 let error = (full.max_abs - half.max_abs).abs();
                 if error.is_finite() {
-                    DiagnosticsStatus::Estimate { error }
+                    ContinuityStatus::Estimate {
+                        value: full.max_abs,
+                        error,
+                    }
                 } else {
-                    DiagnosticsStatus::Unresolved {
+                    ContinuityStatus::Unresolved {
                         reason: "the full and half divergence estimates were not finite"
                             .to_string(),
                     }
                 }
             }
-            Err(reason) => DiagnosticsStatus::Unresolved { reason },
+            Err(reason) => ContinuityStatus::Unresolved { reason },
+        }
+    };
+    Ok(ContinuityReport {
+        div_j_min: full.min,
+        div_j_max: full.max,
+        worst_point: Some(full.worst.as_vec3()),
+        status,
+    })
+}
+
+struct HarmonicPass {
+    min: f64,
+    max: f64,
+    worst: DVec3,
+    residual: f64,
+    scale: f64,
+}
+
+/// The bounded clock step for a harmonic law, or `None` for a non-harmonic or
+/// invalid frequency. See [`HARMONIC_DIFFERENCE_STEP`].
+fn harmonic_difference_step(law: TimeLaw) -> Option<f64> {
+    match law {
+        TimeLaw::Steady => None,
+        TimeLaw::Harmonic { omega, .. } => {
+            if !omega.is_finite() || omega <= 0.0 {
+                return None;
+            }
+            let step = (HARMONIC_DIFFERENCE_STEP / omega).min(HARMONIC_DIFFERENCE_STEP);
+            (step.is_finite() && step > 0.0).then_some(step)
+        }
+    }
+}
+
+/// Compare the harmonic current with an independent paired charge density.
+///
+/// The convention remains `J(t) = J0 cos(omega t + phase)`, but the charge is
+/// now `charge_formula`, evaluated directly at `t` and `t + dt`. The check is
+/// the finite-difference continuity statement
+/// `div J(t) ~ -(rho(t + dt) - rho(t)) / dt`, not an analytic identity and not a
+/// self-derived `rho0 = div J0 / omega` comparison. A non-finite clock, current
+/// or charge sample makes the pass `Err`; the measured residual is always kept.
+fn harmonic_pass(
+    spec: &DensitySpec,
+    expression: &FieldExpr,
+    charge: &FieldExpr,
+    samples: u32,
+    time: f64,
+    salt: u64,
+    law: TimeLaw,
+) -> Result<HarmonicPass, String> {
+    let lattice = Lattice::new(&spec.support, samples)?;
+    let Some(clock) = law.scale(time) else {
+        return Err(format!(
+            "the declared harmonic clock is not finite at t = {time}"
+        ));
+    };
+    let Some(step) = harmonic_difference_step(law) else {
+        return Err(format!(
+            "the declared harmonic frequency has no finite difference step at t = {time}"
+        ));
+    };
+    let next_time = time + step;
+    if !next_time.is_finite() {
+        return Err(format!(
+            "the finite-difference time t + dt is not finite at t = {time}"
+        ));
+    }
+
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    let mut worst = DVec3::ZERO;
+    let mut residual = -1.0f64;
+    let mut scale = 0.0f64;
+    let mut accepted = 0u32;
+
+    for index in 0..lattice.len() {
+        let Some(position) = lattice.position(index, salt) else {
+            continue;
+        };
+        if !spec.support.contains_dvec(position) {
+            continue;
+        }
+        if eval_current_raw(expression, position, time).is_none() {
+            return Err(format!(
+                "current is non-finite at ({:.6}, {:.6}, {:.6}) inside the support",
+                position.x, position.y, position.z
+            ));
+        }
+        let mut divergence = 0.0;
+        for axis in 0..3 {
+            let cell = lattice.cell[axis];
+            if !(cell.is_finite() && cell > 0.0) {
+                return Err("interior divergence step is degenerate".to_string());
+            }
+            let mut forward = position;
+            let mut backward = position;
+            forward[axis] += cell;
+            backward[axis] -= cell;
+            let Some(plus) = eval_current_raw(expression, forward, time) else {
+                return Err(format!(
+                    "current is non-finite at ({:.6}, {:.6}, {:.6}) on a divergence stencil",
+                    forward.x, forward.y, forward.z
+                ));
+            };
+            let Some(minus) = eval_current_raw(expression, backward, time) else {
+                return Err(format!(
+                    "current is non-finite at ({:.6}, {:.6}, {:.6}) on a divergence stencil",
+                    backward.x, backward.y, backward.z
+                ));
+            };
+            divergence += (plus[axis] - minus[axis]) / (2.0 * cell);
+        }
+        if !divergence.is_finite() {
+            return Err(format!(
+                "divergence was not finite at ({:.6}, {:.6}, {:.6})",
+                position.x, position.y, position.z
+            ));
+        }
+
+        let Some(rho_now) = eval_scalar_raw(charge, position, time) else {
+            return Err(format!(
+                "the paired charge density is non-finite at ({:.6}, {:.6}, {:.6}) at t = {time}",
+                position.x, position.y, position.z
+            ));
+        };
+        let Some(rho_next) = eval_scalar_raw(charge, position, next_time) else {
+            return Err(format!(
+                "the paired charge density is non-finite at ({:.6}, {:.6}, {:.6}) at t = {next_time}",
+                position.x, position.y, position.z
+            ));
+        };
+        let charge_derivative = -(rho_next - rho_now) / step;
+        if !charge_derivative.is_finite() {
+            return Err(format!(
+                "the paired charge finite difference was not finite at ({:.6}, {:.6}, {:.6})",
+                position.x, position.y, position.z
+            ));
+        }
+
+        let sampled = divergence * clock;
+        let difference = (sampled - charge_derivative).abs();
+        if !sampled.is_finite() || !difference.is_finite() {
+            return Err(format!(
+                "the harmonic continuity terms were not finite at ({:.6}, {:.6}, {:.6})",
+                position.x, position.y, position.z
+            ));
+        }
+
+        scale = scale.max(sampled.abs()).max(charge_derivative.abs());
+        if !scale.is_finite() {
+            return Err("the harmonic continuity scale was not finite".to_string());
+        }
+        min = min.min(sampled);
+        max = max.max(sampled);
+        if difference > residual {
+            residual = difference;
+            worst = position;
+        }
+        accepted += 1;
+    }
+
+    if accepted == 0 || !min.is_finite() || !max.is_finite() || !residual.is_finite() {
+        return Err("the support interior could not be sampled finitely".to_string());
+    }
+    Ok(HarmonicPass {
+        min,
+        max,
+        worst,
+        residual,
+        scale,
+    })
+}
+
+fn harmonic_continuity(
+    spec: &DensitySpec,
+    expression: &FieldExpr,
+    parameters: &ParameterSet,
+    time: f64,
+    salt: u64,
+) -> Result<ContinuityReport, String> {
+    let law = spec.time_law;
+    let Some(charge) = spec.parse_charge_expression(parameters)? else {
+        return Ok(unresolved_continuity(
+            "a harmonic current needs its paired charge density (charge_formula) for a \
+             continuity check"
+                .to_string(),
+        ));
+    };
+    let full = match harmonic_pass(spec, expression, &charge, spec.samples, time, salt, law) {
+        Ok(pass) => pass,
+        Err(reason) => return Ok(unresolved_continuity(reason)),
+    };
+    let threshold = CONTINUITY_TOLERANCE * full.scale.max(CONTINUITY_MIN_SCALE);
+    let status = if full.residual > threshold {
+        ContinuityStatus::Violation {
+            residual: full.residual,
+            tolerance: threshold,
+        }
+    } else {
+        let half_samples = (spec.samples / 2).max(MIN_SAMPLES / 2);
+        match harmonic_pass(spec, expression, &charge, half_samples, time, salt, law) {
+            Ok(half) => {
+                let error = (full.residual - half.residual).abs();
+                if error.is_finite() {
+                    ContinuityStatus::Estimate {
+                        value: full.residual,
+                        error,
+                    }
+                } else {
+                    ContinuityStatus::Unresolved {
+                        reason: "the full and half harmonic residuals were not finite".to_string(),
+                    }
+                }
+            }
+            Err(reason) => ContinuityStatus::Unresolved { reason },
         }
     };
     Ok(ContinuityReport {
@@ -498,8 +881,35 @@ fn unresolved_continuity(reason: String) -> ContinuityReport {
         div_j_min: f64::NAN,
         div_j_max: f64::NAN,
         worst_point: None,
-        status: DiagnosticsStatus::Unresolved { reason },
+        status: ContinuityStatus::Unresolved { reason },
     }
+}
+
+/// Reject a density list that pairs a steady current with a harmonic charge
+/// density.
+///
+/// A steady current has a zero time derivative, so it cannot balance a charge
+/// density that varies with the clock. The rule is deliberately cross-spec and
+/// explicit: the current may declare [`TimeLaw::Harmonic`] itself instead of
+/// the input being silently coerced.
+pub fn validate_time_law_combination(densities: &[DensitySpec]) -> Result<(), String> {
+    let steady_current = densities
+        .iter()
+        .any(|spec| spec.family == DensityFamily::SteadyCurrent && !spec.time_law.is_harmonic());
+    let harmonic_charge = densities.iter().any(|spec| {
+        matches!(
+            spec.family,
+            DensityFamily::VolumeCharge | DensityFamily::SurfaceCharge
+        ) && spec.time_law.is_harmonic()
+    });
+    if steady_current && harmonic_charge {
+        return Err(
+            "a steady current cannot balance a harmonic charge density; declare the current \
+             harmonic or keep the charge steady"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn samples_cubed(samples: u32) -> Option<u64> {
@@ -553,6 +963,7 @@ fn charge_pass(
     samples: u32,
     time: f64,
     salt: u64,
+    law: &TimeLaw,
 ) -> Result<ChargePass, String> {
     let lattice = Lattice::new(&spec.support, samples)?;
     let mut interior: Vec<(u32, u32, u32, f64)> = Vec::new();
@@ -567,7 +978,7 @@ fn charge_pass(
         if !spec.support.contains_dvec(position) {
             continue;
         }
-        let Some(value) = eval_scalar(expression, position, time) else {
+        let Some(value) = eval_scalar(expression, position, time, *law) else {
             return Err(format!(
                 "density formula is non-finite at ({:.6}, {:.6}, {:.6}) inside the support",
                 position.x, position.y, position.z
@@ -612,6 +1023,7 @@ fn divergence_pass(
     samples: u32,
     time: f64,
     salt: u64,
+    law: TimeLaw,
 ) -> Result<DivergencePass, String> {
     let lattice = Lattice::new(&spec.support, samples)?;
     let mut min = f64::INFINITY;
@@ -628,7 +1040,7 @@ fn divergence_pass(
         if !spec.support.contains_dvec(position) {
             continue;
         }
-        let Some(current) = eval_current(expression, position, time) else {
+        let Some(current) = eval_current(expression, position, time, law) else {
             return Err(format!(
                 "steady current is non-finite at ({:.6}, {:.6}, {:.6}) inside the support",
                 position.x, position.y, position.z
@@ -644,13 +1056,13 @@ fn divergence_pass(
             let mut backward = position;
             forward[axis] += step;
             backward[axis] -= step;
-            let Some(plus) = eval_current(expression, forward, time) else {
+            let Some(plus) = eval_current(expression, forward, time, law) else {
                 return Err(format!(
                     "steady current is non-finite at ({:.6}, {:.6}, {:.6}) on a divergence stencil",
                     forward.x, forward.y, forward.z
                 ));
             };
-            let Some(minus) = eval_current(expression, backward, time) else {
+            let Some(minus) = eval_current(expression, backward, time, law) else {
                 return Err(format!(
                     "steady current is non-finite at ({:.6}, {:.6}, {:.6}) on a divergence stencil",
                     backward.x, backward.y, backward.z
@@ -753,13 +1165,33 @@ pub fn count_sign_changes(side: u32, samples: &[(u32, u32, u32, f64)]) -> u32 {
     sign_changes
 }
 
-fn eval_scalar(expression: &FieldExpr, point: DVec3, time: f64) -> Option<f64> {
+fn eval_scalar(expression: &FieldExpr, point: DVec3, time: f64, law: TimeLaw) -> Option<f64> {
+    let value = eval_scalar_raw(expression, point, time)?;
+    let scaled = value * law.scale(time)?;
+    scaled.is_finite().then_some(scaled)
+}
+
+fn eval_scalar_raw(expression: &FieldExpr, point: DVec3, time: f64) -> Option<f64> {
     let components = expression.eval3_components_at_f64(point, time)?;
     let value = components[1];
     value.is_finite().then_some(value)
 }
 
-fn eval_current(expression: &FieldExpr, point: DVec3, time: f64) -> Option<[f64; 3]> {
+fn eval_current(expression: &FieldExpr, point: DVec3, time: f64, law: TimeLaw) -> Option<[f64; 3]> {
+    let current = eval_current_raw(expression, point, time)?;
+    let factor = law.scale(time)?;
+    let scaled = [
+        current[0] * factor,
+        current[1] * factor,
+        current[2] * factor,
+    ];
+    scaled
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(scaled)
+}
+
+fn eval_current_raw(expression: &FieldExpr, point: DVec3, time: f64) -> Option<[f64; 3]> {
     expression.eval3_components_at_f64(point, time)
 }
 
