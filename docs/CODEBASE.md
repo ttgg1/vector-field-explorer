@@ -2062,6 +2062,79 @@ context binding.
 **Limitations.** Only the explicitly approved grammar is supported; this is not
 a general-purpose CAS, and it makes no global domain-preservation guarantee.
 
+#### `src/cas_backend.rs` — CAS backend bridge, detection and process bounds
+
+**Purpose.** One `CasBackend` seam over the optional external CAS binaries
+(`qalc`, `sage`, `sympy`) and the built-in reduced evaluator in `src/cas.rs`.
+It owns capability reporting, `PATH`-only detection, the argv/stdin subprocess
+protocol, fixed timeouts, bounded output, cancellation, and the honest fallback.
+
+**Public API.** `CasBackend` (`capabilities`, `evaluate`), `CasRequest`
+(`operation`, bounded `expression`, `variable`, optional `point`),
+`CasBackendOp`, `CasCapability`, `CasCapabilities`, `CasBackendKind`
+(`qalc|sage|sympy|builtin`, serde lowercase) with `ALL`, `detect_order()` and
+`label()`, `CasBackendError`, `BuiltinBackend::new(reason)`,
+`select_backend(kind, path_env)`, `detect_candidates(path_env)`, and the
+native-only `CasRunner` (`start`/`poll`/`cancel`) plus its `CancelToken`.
+Constants: `MAX_EXPRESSION_BYTES = 512`, `MAX_VARIABLE_BYTES = 32`,
+`MAX_RESULT_BYTES = 4096`, `MAX_STDOUT_BYTES = 64 KiB`,
+`MAX_STDERR_BYTES = 1 KiB`, `MAX_LINES = 512`,
+`REQUEST_TIMEOUT_SECONDS = 5`, `PROBE_TIMEOUT_SECONDS = 2`.
+
+**Invariants.** Detection resolves `qalc → sage → sympy` through the supplied
+`PATH` only (no shell, globbing, empty-entry/current-directory fallback, or
+auto-install) and probes with a 2 s timeout and 1 KiB caps. A missing binary is
+omitted. A qalc/sage binary whose version probe fails is still listed with the
+failure reason, but it advertises **no** capabilities and is never selected;
+sympy is omitted unless a working `python3` with the `sympy` module probes
+successfully. Selection probes too: it returns the requested backend only when
+both the executable and its version probe succeed, otherwise `BuiltinBackend`
+with a reason naming the missing binary or the failed probe.
+Native requests validate first (expression ≤512 bytes and one control-free
+line, identifier-shaped variable, finite point, dimension/order bounds), then
+spawn an explicit argv with the expression on stdin: `qalc -t -c 0` receives
+the raw expression; `sage`/`sympy` run a fixed `-c` program that reads a
+`CAS1`-headed stdin payload. The fixed programs honour the payload's `point`
+(Evaluate substitutes the point and simplifies) and `bounds` (Integrate uses a
+definite integral with those limits). The child runs in a fresh temporary
+working directory with a cleared environment (`PATH`, `LANG=C`, and the parent
+`HOME` when set), 5 s wall-clock limit with kill, 64 KiB stdout / 1 KiB stderr
+/ 512-line hard caps with kill, bounded non-zero exit reporting, and
+single-line result validation; the temporary directory is removed on every
+path. Reader threads hand their bounded buffer back over a channel; the worker
+waits only until the request deadline or a fixed post-exit grace, so a
+surviving grandchild holding a pipe open yields an honest error instead of a
+hang. An unexpected read error is reported, never treated as clean EOF and a
+successful answer. `CasRunner` enforces one live request (`Busy`), joins
+finished work, and cancellation kills the child through the shared cancel
+token; `cancel` and `Drop` wait at most a fixed bound and detach a worker that
+outlives it. The built-in fallback supports differentiation (first order),
+gradient, divergence and curl by reusing `src/cas.rs`; `DifferentiateN` and
+every other capability is `Unsupported`, matching its advertised list. Process
+code and the runner are gated to non-wasm targets; because `src/cas.rs` is
+itself native-only, wasm compiles the types, detection (empty) and a
+capability-free fallback that returns an honest `Unavailable` reason rather
+than faking a backend.
+
+**Pinned by.** `tests/cas_backend_test.rs`: empty-PATH honesty, documented
+detection order, trimmed single-line success, timeout kill, oversized-output
+kill, bounded non-zero stderr and its `Display` exit code, empty/control-
+character malformed output, cancel of an in-flight request, bounded
+evaluate/cancel/`Drop` when a surviving grandchild holds stdout open, fallback
+with a reason, pre-spawn request validation, probe-failed candidates with no
+capabilities that are not selected, sympy payload `point`/`bounds` fields,
+built-in capability, `DifferentiateN` error consistency and
+derivative/gradient/divergence behavior, and one in-flight `Busy` enforcement.
+Test-only seams pin unexpected-read-error handling and the fixed sympy/sage
+programs' point/bounds handling, since those internals are not otherwise
+reachable from integration tests. Fixtures are shell scripts written to per-test
+temp directories; no real qalc/sage/sympy, network or model output is used.
+
+**Limitations.** The external protocol is exercised only by fixtures in this
+slice; actual binary behavior is not a test dependency, and selection is
+session state (no persistence until #170). No UI wiring, grammar change,
+typesetting, app actions, plot preview or dependency addition lives here.
+
 #### `src/cas_intent.rs` — tolerant CAS input grammar and intent
 
 **Purpose.** Bound, normalise and classify a CAS input line before any engine
