@@ -1002,6 +1002,66 @@ fn structured_errors_are_never_typeset() {
     assert!(has_text(&output.platform_output, "Error:"));
     assert!(!has_text(&output.platform_output, "Showing linear result"));
     assert!(!has_katex_text(&output.shapes));
+    assert!(
+        panel.preview_texture().is_none(),
+        "a structured error shows no scalar preview"
+    );
+}
+
+#[test]
+fn test_cas_panel_shows_a_preview_for_a_scalar_result() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    let mut panel = CasPanelState::default();
+    panel.input = "(x, x*y)".into();
+    panel.operation = Operation::Curl;
+    let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert_eq!(
+        panel.preview.as_ref().expect("scalar preview").kind,
+        ResultKind::Scalar
+    );
+    assert!(
+        panel.preview_texture().is_some(),
+        "a scalar result uploads and caches a preview texture"
+    );
+    assert!(
+        has_text(&output.platform_output, "Normalized teaching preview"),
+        "the panel captions the normalized teaching preview: {:?}",
+        output.platform_output.accesskit_update
+    );
+}
+
+#[test]
+fn test_cas_panel_hides_the_preview_for_a_vector_result() {
+    let ctx = crate::support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    let mut panel = CasPanelState::default();
+    panel.input = "(x, x*y)".into();
+    panel.operation = Operation::Curl;
+    let _ = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert!(
+        panel.preview_texture().is_some(),
+        "the scalar result first caches a preview"
+    );
+    panel.input = "x*y".into();
+    panel.operation = Operation::Gradient;
+    let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
+    assert_eq!(
+        panel.preview.as_ref().expect("vector preview").kind,
+        ResultKind::Vector
+    );
+    assert!(
+        panel.preview_texture().is_none(),
+        "a vector result never builds a scalar heatmap"
+    );
+    assert!(
+        !has_text(&output.platform_output, "Normalized teaching preview"),
+        "a vector result shows no scalar preview caption"
+    );
 }
 
 #[test]
