@@ -8,7 +8,7 @@ Type a vector field as a formula and explore it as arrows, streamlines, and
 particles in 2D or 3D. Runs natively on Linux, macOS, and Windows, and in the
 browser as a WebAssembly build.
 
-![Vector Field Explorer showing a 2D vortex with arrows and streamlines](docs/images/vector-field-explorer.png)
+![Vector Field Explorer showing a 2D vortex with arrows and streamlines](docs/images/screenshot.png)
 
 Download the latest release from
 [github.com/ttgg1/vector-field-explorer/releases/latest](https://github.com/ttgg1/vector-field-explorer/releases/latest),
