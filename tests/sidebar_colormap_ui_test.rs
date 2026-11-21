@@ -75,7 +75,14 @@ impl Sidebar {
             let state = &mut self.state;
             let controls = &mut self.controls;
             self.ctx.run_ui(input, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| sidebar::show(ui, state, controls));
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    sidebar::show(
+                        ui,
+                        state,
+                        controls,
+                        &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+                    );
+                });
             })
         };
         output.textures_delta.clear();

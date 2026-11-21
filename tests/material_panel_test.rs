@@ -389,7 +389,12 @@ fn materials_features_and_cas_are_disabled() {
     let mut controls = Controls::default();
     let out = run_frame(&ctx, 400.0, 1400.0, Vec::new(), |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
-            sidebar::show(ui, &mut state, &mut controls);
+            sidebar::show(
+                ui,
+                &mut state,
+                &mut controls,
+                &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+            );
         });
     });
     let painted = nodes(&out);

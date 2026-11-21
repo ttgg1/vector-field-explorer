@@ -4,9 +4,18 @@
 // sidebar frame would change settings the user never touched (and the status
 // bar would count a scene the user never asked for).
 
+use eframe::egui;
+
+use crate::support;
+
+use vector_field_explorer::seed_layout::{SeedLayout, SeedPoint};
+use vector_field_explorer::seed_layout_library::{
+    DEFAULT_LAYOUT_NAME, SEED_LAYOUT_FORMAT_VERSION, SeedLayoutDocument, SeedLayoutLibrary,
+    SeedLayoutProfile,
+};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::sidebar::{
-    ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, SEED_LAYOUT_DENSITY_INACTIVE_NOTE,
+    self, ArrowStyleSet, Controls, DomainAxis, PlaneControlMode, SEED_LAYOUT_DENSITY_INACTIVE_NOTE,
     apply, arrow_scale_enabled, arrow_style_set, domain_axes, domain_summary, fixed_color_opaque,
     fixed_color_rgb, head_control_enabled, magnitude_scale_enabled, particle_count_label,
     particle_fixed_color_enabled, particle_size_enabled, plane_control_mode,
@@ -1230,4 +1239,659 @@ fn streamline_count_control_is_auto_only_and_mirrors_the_state() {
     apply(&mut state, &mut controls);
     assert_eq!(state.streamline_count, 37);
     assert_eq!(controls.streamline_count, 37);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #87 slice S3b: named seed layouts inside Flow -> Seed layout.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct Node {
+    role: egui::Role,
+    label: Option<String>,
+    value: Option<String>,
+    rect: egui::Rect,
+}
+
+impl Node {
+    fn center(&self) -> egui::Pos2 {
+        self.rect.center()
+    }
+}
+
+struct NamedLayouts {
+    ctx: egui::Context,
+    state: State,
+    controls: Controls,
+    layouts: SeedLayoutLibrary,
+    time: f64,
+}
+
+impl NamedLayouts {
+    fn new(layouts: SeedLayoutLibrary) -> Self {
+        let ctx = support::context();
+        ctx.enable_accesskit();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut controls = Controls::new();
+        controls.streamlines = true;
+        Self {
+            ctx,
+            state: State::new(false),
+            controls,
+            layouts,
+            time: 0.0,
+        }
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(600.0, 4000.0),
+            )),
+            time: Some(self.time),
+            predicted_dt: 1.0 / 60.0,
+            events,
+            ..Default::default()
+        };
+        self.time += 1.0 / 60.0;
+        let mut output = {
+            let state = &mut self.state;
+            let controls = &mut self.controls;
+            let layouts = &mut self.layouts;
+            self.ctx.run_ui(input, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    sidebar::show(ui, state, controls, layouts);
+                });
+            })
+        };
+        output.textures_delta.clear();
+        output
+    }
+
+    fn idle(&mut self) -> egui::FullOutput {
+        self.frame(Vec::new())
+    }
+
+    fn click(&mut self, pos: egui::Pos2) -> egui::FullOutput {
+        self.frame(pointer(pos, true));
+        self.frame(pointer(pos, false))
+    }
+
+    fn open_header(&mut self, text: &str) {
+        let out = self.idle();
+        let rows = nodes(&out);
+        let node = rows
+            .iter()
+            .find(|node| node.label.as_deref() == Some(text) || node.value.as_deref() == Some(text))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the {text:?} header is exposed; values: {:?}",
+                    rows.iter()
+                        .filter_map(|node| node.value.as_deref())
+                        .collect::<Vec<_>>()
+                )
+            });
+        self.click(node.center());
+        // Let the open animation finish so lower rows accept clicks.
+        for _ in 0..20 {
+            self.idle();
+        }
+    }
+
+    fn open_named_layouts(&mut self) {
+        self.open_header("Seed layout");
+        self.open_header("Named layouts");
+    }
+
+    fn click_button(&mut self, label: &str) -> egui::FullOutput {
+        self.click_nth_button(label, 0)
+    }
+
+    fn click_nth_button(&mut self, label: &str, index: usize) -> egui::FullOutput {
+        let out = self.idle();
+        let pos = nth_button_center(&out, label, index)
+            .unwrap_or_else(|| panic!("the {label:?} button {index} is painted"));
+        self.click(pos)
+    }
+}
+
+fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+
+fn nodes(output: &egui::FullOutput) -> Vec<Node> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let bounds = node.bounds()?;
+            Some(Node {
+                role: node.role(),
+                label: node.label().map(str::to_owned),
+                value: node.value().map(str::to_owned),
+                rect: egui::Rect::from_min_max(
+                    egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                    egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                ),
+            })
+        })
+        .collect()
+}
+
+fn button_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    let mut rects: Vec<egui::Rect> = nodes(output)
+        .into_iter()
+        .filter(|node| node.role == egui::Role::Button && node.label.as_deref() == Some(label))
+        .map(|node| node.rect)
+        .collect();
+    rects.sort_by(|a, b| {
+        a.center()
+            .y
+            .total_cmp(&b.center().y)
+            .then(a.center().x.total_cmp(&b.center().x))
+    });
+    rects
+}
+
+fn nth_button_center(output: &egui::FullOutput, label: &str, index: usize) -> Option<egui::Pos2> {
+    button_rects(output, label)
+        .get(index)
+        .map(egui::Rect::center)
+}
+
+fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out
+}
+
+fn accesskit_labels(output: &egui::FullOutput) -> Vec<String> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            node.label()
+                .map(str::to_owned)
+                .or_else(|| node.value().map(str::to_owned))
+        })
+        .collect()
+}
+
+fn painted(output: &egui::FullOutput) -> String {
+    painted_texts(output)
+        .into_iter()
+        .chain(accesskit_labels(output))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn label_rect(output: &egui::FullOutput, text: &str) -> Option<egui::Rect> {
+    nodes(output)
+        .into_iter()
+        .find(|node| node.value.as_deref() == Some(text) || node.label.as_deref() == Some(text))
+        .map(|node| node.rect)
+}
+
+fn copied_text(output: &egui::FullOutput) -> Vec<String> {
+    output
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn profile(name: &str, seeds: &[Vec3]) -> SeedLayoutProfile {
+    SeedLayoutProfile {
+        name: name.to_owned(),
+        seeds: SeedLayout {
+            seeds: seeds
+                .iter()
+                .map(|position| SeedPoint {
+                    position: *position,
+                    anchor: None,
+                })
+                .collect(),
+        },
+    }
+}
+
+fn library(profiles: Vec<SeedLayoutProfile>) -> SeedLayoutLibrary {
+    SeedLayoutLibrary::new(profiles, &Domain::default())
+        .expect("the test layouts are valid in the default domain")
+}
+
+#[test]
+fn named_layouts_list_builtin_default_first_and_user_layouts_after() {
+    let mut h = NamedLayouts::new(library(vec![
+        profile("Alpha", &[Vec3::ZERO, Vec3::new(0.4, 0.0, 0.0)]),
+        profile("Beta", &[Vec3::new(0.0, 0.4, 0.0)]),
+    ]));
+    h.open_named_layouts();
+    let out = h.idle();
+    let text = painted(&out);
+
+    assert!(
+        text.contains("Default (generated grid)"),
+        "the built-in Default row is labelled with its generated-grid meaning: {text}"
+    );
+    assert!(
+        text.contains("Alpha (2 seeds)"),
+        "user layouts show their seed count: {text}"
+    );
+    assert!(
+        text.contains("Beta (1 seed)"),
+        "singular seed counts read naturally: {text}"
+    );
+
+    let default =
+        label_rect(&out, "Default (generated grid)").expect("the built-in label is exposed");
+    let alpha = label_rect(&out, "Alpha (2 seeds)").expect("the Alpha label is exposed");
+    let beta = label_rect(&out, "Beta (1 seed)").expect("the Beta label is exposed");
+    assert!(
+        default.center().y < alpha.center().y,
+        "the built-in Default row comes first"
+    );
+    assert!(
+        alpha.center().y < beta.center().y,
+        "user layouts keep library order"
+    );
+}
+
+#[test]
+fn applying_a_layout_replaces_seeds_and_reports_the_name() {
+    let mut h = NamedLayouts::new(library(vec![profile(
+        "Mine",
+        &[Vec3::ZERO, Vec3::new(0.4, 0.0, 0.0)],
+    )]));
+    h.open_named_layouts();
+    h.controls.selected_seed = Some(0);
+    h.controls.seed_drag = Some(0);
+    h.controls.place_seed = true;
+
+    // The built-in row is first, so "Mine" is the second Apply button.
+    let _ = h.click_nth_button("Apply", 1);
+    let out = h.idle();
+
+    assert_eq!(
+        h.state.seed_layout().len(),
+        2,
+        "the stored layout replaced the seeds"
+    );
+    assert_eq!(
+        h.controls.seed_layout_message, "Applied layout \"Mine\"",
+        "the status slot names the applied layout"
+    );
+    assert_eq!(h.controls.selected_seed, None, "selection resets");
+    assert_eq!(h.controls.seed_drag, None, "drag state resets");
+    assert!(!h.controls.place_seed, "placement disarms");
+    assert!(
+        painted(&out).contains("Applied layout \"Mine\""),
+        "the message is painted inline"
+    );
+}
+
+#[test]
+fn applying_an_invalid_layout_reports_the_reason_and_keeps_seeds() {
+    let mut h = NamedLayouts::new(library(vec![profile(
+        "Outside",
+        &[Vec3::new(0.9, 0.0, 0.0)],
+    )]));
+    // Narrow the domain after the library was built: the stored layout now
+    // fails validation against the current scene.
+    h.state.set_domain(Vec3::splat(-0.5), Vec3::splat(0.5));
+    // Keep the sidebar mirror in step: `show` hands it back through `apply`
+    // and would otherwise restore the default unit cube.
+    h.controls.domain_min = Vec3::splat(-0.5);
+    h.controls.domain_max = Vec3::splat(0.5);
+    h.state
+        .commit_seed_layout(SeedLayout {
+            seeds: vec![SeedPoint {
+                position: Vec3::ZERO,
+                anchor: None,
+            }],
+        })
+        .expect("the in-domain seed commits");
+    let before = h.state.seed_layout().clone();
+    h.open_named_layouts();
+
+    let _ = h.click_nth_button("Apply", 1);
+    let out = h.idle();
+
+    assert_eq!(
+        h.state.seed_layout(),
+        &before,
+        "a rejected layout leaves the current seeds untouched"
+    );
+    assert!(
+        h.controls
+            .seed_layout_message
+            .contains("outside the scene domain"),
+        "the validation reason is reported: {}",
+        h.controls.seed_layout_message
+    );
+    assert!(
+        painted(&out).contains("outside the scene domain"),
+        "the reason is painted inline"
+    );
+}
+
+#[test]
+fn saving_current_seeds_rejects_empty_builtin_and_oversized_names() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    h.state
+        .commit_seed_layout(SeedLayout {
+            seeds: vec![SeedPoint {
+                position: Vec3::ZERO,
+                anchor: None,
+            }],
+        })
+        .expect("the seed commits");
+    h.open_named_layouts();
+
+    for (name, expected) in [
+        ("", "layout name must not be empty"),
+        (DEFAULT_LAYOUT_NAME, "built-in"),
+        (&"x".repeat(49), "the limit is 48"),
+    ] {
+        h.controls.seed_layout_name = name.to_owned();
+        let _ = h.click_button("Save current");
+        assert!(
+            h.controls.seed_layout_message.contains(expected),
+            "saving {name:?} reports the library error text: {}",
+            h.controls.seed_layout_message
+        );
+        assert!(
+            h.layouts.is_empty(),
+            "a rejected save never stores a layout: {name:?}"
+        );
+    }
+}
+
+#[test]
+fn saving_twice_with_one_name_replaces_in_place() {
+    let mut h = NamedLayouts::new(library(vec![profile("Zed", &[Vec3::ZERO])]));
+    h.open_named_layouts();
+    h.state
+        .commit_seed_layout(SeedLayout {
+            seeds: vec![
+                SeedPoint {
+                    position: Vec3::ZERO,
+                    anchor: None,
+                },
+                SeedPoint {
+                    position: Vec3::new(0.2, 0.0, 0.0),
+                    anchor: None,
+                },
+            ],
+        })
+        .expect("the seeds commit");
+
+    h.controls.seed_layout_name = "  Mine  ".to_owned();
+    let _ = h.click_button("Save current");
+    assert_eq!(
+        h.controls.seed_layout_message, "Saved layout \"Mine\"",
+        "a new layout reports Saved"
+    );
+    assert_eq!(h.layouts.len(), 2);
+    assert_eq!(h.layouts.user()[1].name, "Mine", "a new layout appends");
+    assert_eq!(h.layouts.user()[1].seeds.len(), 2);
+    assert!(
+        h.controls.seed_layout_name.is_empty(),
+        "a successful save clears the name draft"
+    );
+
+    h.state
+        .commit_seed_layout(SeedLayout {
+            seeds: vec![
+                SeedPoint {
+                    position: Vec3::new(-0.2, 0.0, 0.0),
+                    anchor: None,
+                },
+                SeedPoint {
+                    position: Vec3::ZERO,
+                    anchor: None,
+                },
+                SeedPoint {
+                    position: Vec3::new(0.2, 0.0, 0.0),
+                    anchor: None,
+                },
+            ],
+        })
+        .expect("the replacement seeds commit");
+    h.controls.seed_layout_name = "Mine".to_owned();
+    let _ = h.click_button("Save current");
+
+    assert_eq!(
+        h.controls.seed_layout_message, "Replaced layout \"Mine\"",
+        "an existing name reports Replaced"
+    );
+    assert_eq!(h.layouts.len(), 2, "the save replaces in place");
+    let names: Vec<&str> = h.layouts.user().iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, vec!["Zed", "Mine"], "library order is preserved");
+    assert_eq!(
+        h.layouts.user()[1].seeds.len(),
+        3,
+        "the stored seeds are the current committed seeds"
+    );
+}
+
+#[test]
+fn deleting_a_user_layout_needs_two_clicks_and_clears_on_other_actions() {
+    let mut h = NamedLayouts::new(library(vec![profile("Mine", &[Vec3::ZERO])]));
+    h.open_named_layouts();
+
+    let _ = h.click_button("Delete");
+    assert_eq!(h.layouts.len(), 1, "the first click only arms the delete");
+    assert_eq!(h.controls.pending_layout_delete.as_deref(), Some("Mine"));
+    assert_eq!(
+        h.controls.seed_layout_message,
+        "Click Delete again to remove \"Mine\""
+    );
+    assert!(
+        button_rects(&h.idle(), "Confirm delete").len() == 1,
+        "the armed row labels the second click"
+    );
+
+    let _ = h.click_button("Confirm delete");
+    assert!(h.layouts.is_empty(), "the second click removes the layout");
+    assert_eq!(h.controls.pending_layout_delete, None, "arming clears");
+    assert_eq!(h.controls.seed_layout_message, "Deleted layout \"Mine\"");
+
+    // Re-populate and check a successful save clears an armed delete.
+    h.state
+        .commit_seed_layout(SeedLayout {
+            seeds: vec![SeedPoint {
+                position: Vec3::ZERO,
+                anchor: None,
+            }],
+        })
+        .expect("a seed commits");
+    h.controls.seed_layout_name = "Mine".to_owned();
+    let _ = h.click_button("Save current");
+    assert_eq!(h.layouts.len(), 1);
+    let _ = h.click_button("Delete");
+    assert_eq!(h.controls.pending_layout_delete.as_deref(), Some("Mine"));
+    h.controls.seed_layout_name = "Other".to_owned();
+    let _ = h.click_button("Save current");
+    assert_eq!(
+        h.controls.pending_layout_delete, None,
+        "a successful save clears the armed delete"
+    );
+
+    // And a successful apply clears it too.
+    let _ = h.click_button("Delete");
+    assert_eq!(h.controls.pending_layout_delete.as_deref(), Some("Mine"));
+    let _ = h.click_nth_button("Apply", 0);
+    assert_eq!(
+        h.controls.pending_layout_delete, None,
+        "a successful apply clears the armed delete"
+    );
+}
+
+#[test]
+fn export_copy_and_import_report_deltas_and_reject_bad_documents_atomically() {
+    let mut h = NamedLayouts::new(library(vec![profile("Mine", &[Vec3::ZERO])]));
+    h.open_named_layouts();
+
+    let out = h.click_button("Export text");
+    assert!(
+        !h.controls.seed_layout_text.is_empty(),
+        "Export refreshes the portable buffer"
+    );
+    assert!(
+        h.controls.seed_layout_text.contains("\"version\":1"),
+        "the export uses the versioned compact document"
+    );
+    assert!(
+        painted(&out).contains("\"version\":1"),
+        "the read-only editor paints the export"
+    );
+
+    let out = h.click_button("Copy");
+    assert_eq!(
+        copied_text(&out),
+        vec![h.controls.seed_layout_text.clone()],
+        "Copy hands the export buffer to the clipboard"
+    );
+
+    let before = h.layouts.len();
+    let document = SeedLayoutDocument {
+        version: SEED_LAYOUT_FORMAT_VERSION,
+        layouts: vec![
+            profile("Mine", &[Vec3::new(0.2, 0.0, 0.0)]),
+            profile("New one", &[Vec3::ZERO]),
+            profile("New two", &[Vec3::new(0.0, 0.2, 0.0)]),
+        ],
+    };
+    h.controls.seed_layout_import = document.to_json().expect("the document serializes");
+    let _ = h.click_button("Apply text");
+    assert_eq!(
+        h.controls.seed_layout_message, "Imported 2 new layouts",
+        "the delta counts only new user layouts"
+    );
+    assert_eq!(h.layouts.len(), before + 2);
+
+    let replaced_only = SeedLayoutDocument {
+        version: SEED_LAYOUT_FORMAT_VERSION,
+        layouts: vec![
+            profile("Mine", &[Vec3::new(-0.2, 0.0, 0.0)]),
+            profile("New one", &[Vec3::new(0.0, -0.2, 0.0)]),
+        ],
+    };
+    h.controls.seed_layout_import = replaced_only.to_json().expect("the document serializes");
+    let _ = h.click_button("Apply text");
+    assert_eq!(
+        h.controls.seed_layout_message, "Import replaced existing layouts; no new layouts imported",
+        "replacement-only imports say so honestly"
+    );
+    assert_eq!(h.layouts.len(), before + 2, "nothing was added");
+
+    let singular = SeedLayoutDocument {
+        version: SEED_LAYOUT_FORMAT_VERSION,
+        layouts: vec![profile("Only new", &[Vec3::ZERO])],
+    };
+    h.controls.seed_layout_import = singular.to_json().expect("the document serializes");
+    let _ = h.click_button("Apply text");
+    assert_eq!(h.controls.seed_layout_message, "Imported 1 new layout");
+
+    let stable = h.layouts.clone();
+    h.controls.seed_layout_import = "{not json".to_owned();
+    let _ = h.click_button("Apply text");
+    assert!(
+        h.controls
+            .seed_layout_message
+            .contains("invalid seed layout JSON"),
+        "a malformed document reports its parse error: {}",
+        h.controls.seed_layout_message
+    );
+    assert_eq!(
+        h.layouts, stable,
+        "a rejected import leaves the library untouched"
+    );
+
+    h.controls.seed_layout_import = r#"{"version":2,"layouts":[]}"#.to_owned();
+    let _ = h.click_button("Apply text");
+    assert!(
+        h.controls
+            .seed_layout_message
+            .contains("version 2 is not supported"),
+        "a future version is reported before parsing: {}",
+        h.controls.seed_layout_message
+    );
+    assert_eq!(h.layouts, stable, "a future-version import stays atomic");
+}
+
+#[test]
+fn empty_import_document_reports_nothing_to_import_and_changes_nothing() {
+    let mut h = NamedLayouts::new(library(vec![profile("Mine", &[Vec3::ZERO])]));
+    h.open_named_layouts();
+    // Prime the panel so the empty import has observable buffer and arming state.
+    let _ = h.click_button("Export text");
+    let exported = h.controls.seed_layout_text.clone();
+    assert!(
+        !exported.is_empty(),
+        "the export buffer holds the user layout before the import"
+    );
+    h.controls.pending_layout_delete = Some("Mine".to_owned());
+    let stable = h.layouts.clone();
+
+    h.controls.seed_layout_import = SeedLayoutDocument {
+        version: SEED_LAYOUT_FORMAT_VERSION,
+        layouts: Vec::new(),
+    }
+    .to_json()
+    .expect("the empty document serializes");
+    let out = h.click_button("Apply text");
+    let text = painted(&out);
+
+    assert!(
+        text.contains("Nothing to import"),
+        "an empty document says there is nothing to import:\n{text}"
+    );
+    assert!(
+        !text.contains("replaced") && !text.contains("no new layouts"),
+        "an empty document is not painted as a replacement:\n{text}"
+    );
+    assert_eq!(h.layouts, stable, "the library is unchanged");
+    assert_eq!(
+        h.controls.seed_layout_text, exported,
+        "the export buffer is unchanged"
+    );
+    assert_eq!(
+        h.controls.pending_layout_delete.as_deref(),
+        Some("Mine"),
+        "the armed delete is unchanged"
+    );
 }

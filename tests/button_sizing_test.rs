@@ -332,7 +332,13 @@ fn real_sidebar_buttons_fit_in_wide_and_compact_panels() {
                 egui::Panel::left("button_sidebar")
                     .exact_size(if compact { 360.0 } else { 460.0 })
                     .show(ui, |ui| {
-                        sidebar::show_compact(ui, &mut state, &mut controls, compact);
+                        sidebar::show_compact(
+                            ui,
+                            &mut state,
+                            &mut controls,
+                            &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+                            compact,
+                        );
                     });
             };
             for _ in 0..3 {

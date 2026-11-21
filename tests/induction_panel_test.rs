@@ -233,7 +233,12 @@ fn features_controls_are_disabled_in_induction_mode() {
     let mut controls = Controls::default();
     let output = run_frame(&ctx, 400.0, 1200.0, Vec::new(), |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
-            sidebar::show(ui, &mut state, &mut controls);
+            sidebar::show(
+                ui,
+                &mut state,
+                &mut controls,
+                &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+            );
         });
     });
     let painted = nodes(&output);

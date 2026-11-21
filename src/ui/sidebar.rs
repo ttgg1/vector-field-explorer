@@ -42,6 +42,7 @@ use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedLayout, SeedPoint, circle_seeds,
     line_seeds, region_seeds,
 };
+use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, SeedLayoutDocument, SeedLayoutProfile};
 use crate::source_scene::{FieldMode, SourceDisplay};
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
@@ -826,6 +827,18 @@ pub struct Controls {
     /// Whether the in-progress seed gesture has actually moved; a click that
     /// only selects a seed must not snap or record it.
     pub seed_drag_moved: bool,
+    /// The save-current name draft for the named seed-layout library.
+    pub seed_layout_name: String,
+    /// The cached portable seed-layout export, refreshed by Export and after
+    /// every successful library mutation.
+    pub seed_layout_text: String,
+    /// The import draft for the portable seed-layout document.
+    pub seed_layout_import: String,
+    /// The last named-layout result or rejection, kept distinct from
+    /// [`seed_error`] (generator and placement failures).
+    pub seed_layout_message: String,
+    /// The user layout awaiting the second delete click.
+    pub pending_layout_delete: Option<String>,
     /// What one explicit left click does (ticket 60).
     pub left_click_action: LeftClickAction,
     pub particles: bool,
@@ -895,6 +908,11 @@ impl Controls {
             selected_seed: None,
             seed_drag: None,
             seed_drag_moved: false,
+            seed_layout_name: String::new(),
+            seed_layout_text: String::new(),
+            seed_layout_import: String::new(),
+            seed_layout_message: String::new(),
+            pending_layout_delete: None,
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -1024,7 +1042,12 @@ fn seed_anchor_frame(state: &State, anchor: &SeedAnchor) -> PlaneFrame {
 }
 
 /// The collapsed-by-default "Seed layout" editor inside Flow.
-fn seed_layout_editor(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
+fn seed_layout_editor(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+) {
     let count = state.seed_layout().len();
     ui.horizontal(|ui| {
         ui.label(seed_layout_count_label(count))
@@ -1134,109 +1157,324 @@ fn seed_layout_editor(ui: &mut egui::Ui, state: &mut State, controls: &mut Contr
         }
     }
 
-    if count == 0 {
-        return;
+    if count > 0 {
+        egui::CollapsingHeader::new("Seeds")
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut next: Option<SeedLayout> = None;
+                let seeds = state.seed_layout().seeds.clone();
+                for (index, seed) in seeds.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let selected = controls.selected_seed == Some(index);
+                        if ui
+                            .selectable_label(selected, format!("Seed {}", index + 1))
+                            .clicked()
+                        {
+                            controls.selected_seed = Some(index);
+                        }
+                        let mut edited = *seed;
+                        let changed = if let Some(anchor) = seed.anchor {
+                            let frame = seed_anchor_frame(state, &anchor);
+                            let local = frame.to_local(seed.position);
+                            let mut u = local.x;
+                            let mut v = local.y;
+                            let u_changed = ui
+                                .add(egui::DragValue::new(&mut u).speed(0.01).prefix("u "))
+                                .changed();
+                            let v_changed = ui
+                                .add(egui::DragValue::new(&mut v).speed(0.01).prefix("v "))
+                                .changed();
+                            if u_changed || v_changed {
+                                edited = SeedPoint {
+                                    position: frame.to_world(Vec3::new(u, v, 0.0)),
+                                    anchor: Some(SeedAnchor { u, v, ..anchor }),
+                                };
+                                true
+                            } else {
+                                ui.label(format!(
+                                    "world ({:.2}, {:.2}, {:.2})",
+                                    seed.position.x, seed.position.y, seed.position.z
+                                ));
+                                false
+                            }
+                        } else {
+                            let mut position = seed.position;
+                            let changed = ui
+                                .add(
+                                    egui::DragValue::new(&mut position.x)
+                                        .speed(0.01)
+                                        .prefix("x "),
+                                )
+                                .changed()
+                                | ui.add(
+                                    egui::DragValue::new(&mut position.y)
+                                        .speed(0.01)
+                                        .prefix("y "),
+                                )
+                                .changed()
+                                | ui.add(
+                                    egui::DragValue::new(&mut position.z)
+                                        .speed(0.01)
+                                        .prefix("z "),
+                                )
+                                .changed();
+                            if changed {
+                                edited = SeedPoint {
+                                    position,
+                                    anchor: None,
+                                };
+                            }
+                            changed
+                        };
+                        if changed {
+                            let mut layout = state.seed_layout().clone();
+                            layout.seeds[index] = edited;
+                            next = Some(layout);
+                        }
+                        if ui.button("Delete").clicked() {
+                            let mut layout = state.seed_layout().clone();
+                            layout.seeds.remove(index);
+                            next = Some(layout);
+                            controls.selected_seed = None;
+                        }
+                    });
+                }
+                if let Some(layout) = next {
+                    match state.commit_seed_layout(layout) {
+                        Ok(()) => {
+                            controls.seed_error.clear();
+                            if controls
+                                .selected_seed
+                                .is_some_and(|index| index >= state.seed_layout().len())
+                            {
+                                controls.selected_seed = None;
+                            }
+                        }
+                        Err(error) => controls.seed_error = error,
+                    }
+                }
+            });
     }
-    egui::CollapsingHeader::new("Seeds")
+
+    named_seed_layouts(ui, state, controls, layouts);
+}
+
+/// The "Named layouts" library inside the Seed layout editor. Apply replaces
+/// the committed seeds through the one existing history seam; saving, deleting
+/// and importing mutate only settings-side library data and never dirty the
+/// document.
+fn named_seed_layouts(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+) {
+    egui::CollapsingHeader::new("Named layouts")
+        .id_salt("named_seed_layouts")
         .default_open(false)
         .show(ui, |ui| {
-            let mut next: Option<SeedLayout> = None;
-            let seeds = state.seed_layout().seeds.clone();
-            for (index, seed) in seeds.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    let selected = controls.selected_seed == Some(index);
+            let domain = state.scene_domain();
+            let all = layouts.all(&domain);
+            let mut apply: Option<SeedLayoutProfile> = None;
+            let mut delete: Option<String> = None;
+            for profile in &all {
+                let builtin = profile.name == DEFAULT_LAYOUT_NAME;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(named_layout_row_label(profile));
                     if ui
-                        .selectable_label(selected, format!("Seed {}", index + 1))
+                        .button("Apply")
+                        .on_hover_text("Replace the explicit seeds with this layout")
                         .clicked()
                     {
-                        controls.selected_seed = Some(index);
+                        apply = Some(profile.clone());
                     }
-                    let mut edited = *seed;
-                    let changed = if let Some(anchor) = seed.anchor {
-                        let frame = seed_anchor_frame(state, &anchor);
-                        let local = frame.to_local(seed.position);
-                        let mut u = local.x;
-                        let mut v = local.y;
-                        let u_changed = ui
-                            .add(egui::DragValue::new(&mut u).speed(0.01).prefix("u "))
-                            .changed();
-                        let v_changed = ui
-                            .add(egui::DragValue::new(&mut v).speed(0.01).prefix("v "))
-                            .changed();
-                        if u_changed || v_changed {
-                            edited = SeedPoint {
-                                position: frame.to_world(Vec3::new(u, v, 0.0)),
-                                anchor: Some(SeedAnchor { u, v, ..anchor }),
-                            };
-                            true
-                        } else {
-                            ui.label(format!(
-                                "world ({:.2}, {:.2}, {:.2})",
-                                seed.position.x, seed.position.y, seed.position.z
-                            ));
-                            false
+                    if !builtin {
+                        let armed = controls.pending_layout_delete.as_deref()
+                            == Some(profile.name.as_str());
+                        let label = if armed { "Confirm delete" } else { "Delete" };
+                        if ui
+                            .button(label)
+                            .on_hover_text("Delete this user layout")
+                            .clicked()
+                        {
+                            delete = Some(profile.name.clone());
                         }
-                    } else {
-                        let mut position = seed.position;
-                        let changed = ui
-                            .add(
-                                egui::DragValue::new(&mut position.x)
-                                    .speed(0.01)
-                                    .prefix("x "),
-                            )
-                            .changed()
-                            | ui.add(
-                                egui::DragValue::new(&mut position.y)
-                                    .speed(0.01)
-                                    .prefix("y "),
-                            )
-                            .changed()
-                            | ui.add(
-                                egui::DragValue::new(&mut position.z)
-                                    .speed(0.01)
-                                    .prefix("z "),
-                            )
-                            .changed();
-                        if changed {
-                            edited = SeedPoint {
-                                position,
-                                anchor: None,
-                            };
-                        }
-                        changed
-                    };
-                    if changed {
-                        let mut layout = state.seed_layout().clone();
-                        layout.seeds[index] = edited;
-                        next = Some(layout);
-                    }
-                    if ui.button("Delete").clicked() {
-                        let mut layout = state.seed_layout().clone();
-                        layout.seeds.remove(index);
-                        next = Some(layout);
-                        controls.selected_seed = None;
                     }
                 });
             }
-            if let Some(layout) = next {
-                match state.commit_seed_layout(layout) {
-                    Ok(()) => {
-                        controls.seed_error.clear();
-                        if controls
-                            .selected_seed
-                            .is_some_and(|index| index >= state.seed_layout().len())
-                        {
-                            controls.selected_seed = None;
-                        }
-                    }
-                    Err(error) => controls.seed_error = error,
+
+            if let Some(profile) = apply {
+                apply_named_layout(state, controls, &profile);
+            } else if let Some(name) = delete {
+                delete_named_layout(controls, layouts, &name);
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Name");
+                ui.add(
+                    egui::TextEdit::singleline(&mut controls.seed_layout_name)
+                        .hint_text("Layout name")
+                        .desired_width(180.0),
+                );
+            });
+            if ui
+                .button("Save current")
+                .on_hover_text("Save the committed explicit seeds under this name")
+                .clicked()
+            {
+                save_named_layout(state, controls, layouts);
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Export text").clicked() {
+                    controls.seed_layout_text = layouts.export_text();
                 }
+                let can_copy = !layouts.is_empty();
+                if ui
+                    .add_enabled(can_copy, egui::Button::new("Copy"))
+                    .on_hover_text("Copy the user layout document")
+                    .clicked()
+                {
+                    if controls.seed_layout_text.is_empty() {
+                        controls.seed_layout_text = layouts.export_text();
+                    }
+                    ui.ctx().copy_text(controls.seed_layout_text.clone());
+                    controls.seed_layout_message = "Copied layout text".to_owned();
+                }
+            });
+            ui.add(
+                egui::TextEdit::multiline(&mut controls.seed_layout_text)
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+
+            ui.label("Import layouts");
+            ui.add(
+                egui::TextEdit::multiline(&mut controls.seed_layout_import)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Paste a seed layout document"),
+            );
+            if ui
+                .button("Apply text")
+                .on_hover_text("Merge the document into the user layouts atomically")
+                .clicked()
+            {
+                import_named_layouts(state, controls, layouts);
+            }
+
+            if !controls.seed_layout_message.is_empty() {
+                ui.label(&controls.seed_layout_message);
             }
         });
 }
 
-pub fn show(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
-    let _ = show_with_plot_action(ui, state, controls, false);
+fn named_layout_row_label(profile: &SeedLayoutProfile) -> String {
+    if profile.name == DEFAULT_LAYOUT_NAME {
+        return format!("{DEFAULT_LAYOUT_NAME} (generated grid)");
+    }
+    match profile.seeds.len() {
+        1 => format!("{} (1 seed)", profile.name),
+        count => format!("{} ({count} seeds)", profile.name),
+    }
+}
+
+fn apply_named_layout(state: &mut State, controls: &mut Controls, profile: &SeedLayoutProfile) {
+    match state.commit_seed_layout(profile.seeds.clone()) {
+        Ok(()) => {
+            controls.seed_error.clear();
+            controls.selected_seed = None;
+            controls.seed_drag = None;
+            controls.place_seed = false;
+            controls.pending_layout_delete = None;
+            controls.seed_layout_message = format!("Applied layout {:?}", profile.name);
+        }
+        Err(reason) => controls.seed_layout_message = reason,
+    }
+}
+
+fn save_named_layout(
+    state: &State,
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+) {
+    let name = controls.seed_layout_name.trim().to_owned();
+    let replaces = layouts.user().iter().any(|profile| profile.name == name);
+    let profile = SeedLayoutProfile {
+        name: name.clone(),
+        seeds: state.seed_layout().clone(),
+    };
+    match layouts.upsert(profile, &state.scene_domain()) {
+        Ok(()) => {
+            let action = if replaces { "Replaced" } else { "Saved" };
+            controls.seed_layout_name.clear();
+            controls.pending_layout_delete = None;
+            controls.seed_layout_text = layouts.export_text();
+            controls.seed_layout_message = format!("{action} layout {name:?}");
+        }
+        Err(error) => controls.seed_layout_message = error,
+    }
+}
+
+fn delete_named_layout(
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+    name: &str,
+) {
+    if controls.pending_layout_delete.as_deref() != Some(name) {
+        controls.pending_layout_delete = Some(name.to_owned());
+        controls.seed_layout_message = format!("Click Delete again to remove {name:?}");
+        return;
+    }
+
+    controls.pending_layout_delete = None;
+    if layouts.remove(name) {
+        controls.seed_layout_text = layouts.export_text();
+        controls.seed_layout_message = format!("Deleted layout {name:?}");
+    } else {
+        controls.seed_layout_message = format!("Layout {name:?} was not found");
+    }
+}
+
+fn import_named_layouts(
+    state: &State,
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+) {
+    let before = layouts.len();
+    match layouts.import_text(&controls.seed_layout_import, &state.scene_domain()) {
+        Ok(after) => {
+            let added = after.saturating_sub(before);
+            if added == 0
+                && SeedLayoutDocument::from_json(&controls.seed_layout_import)
+                    .is_ok_and(|document| document.layouts.is_empty())
+            {
+                // An empty document changes nothing, so leave the cached
+                // export and any armed delete exactly as they were.
+                controls.seed_layout_message = "Nothing to import".to_owned();
+                return;
+            }
+            let message = match added {
+                0 => "Import replaced existing layouts; no new layouts imported".to_owned(),
+                1 => "Imported 1 new layout".to_owned(),
+                count => format!("Imported {count} new layouts"),
+            };
+            controls.pending_layout_delete = None;
+            controls.seed_layout_text = layouts.export_text();
+            controls.seed_layout_message = message;
+        }
+        Err(error) => controls.seed_layout_message = error,
+    }
+}
+
+pub fn show(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+) {
+    let _ = show_with_plot_action(ui, state, controls, layouts, false);
 }
 
 /// Wide entry that also reports a Plot action the app must run (Fit plot).
@@ -1244,14 +1482,21 @@ pub fn show_with_plot_action(
     ui: &mut egui::Ui,
     state: &mut State,
     controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
     compact: bool,
 ) -> Option<crate::ui::plot_panel::PlotPanelAction> {
-    show_inner(ui, state, controls, compact)
+    show_inner(ui, state, controls, layouts, compact)
 }
 
 /// Compact-mode entry: applies the compact row floor and spacing, then draws.
-pub fn show_compact(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls, compact: bool) {
-    let _ = show_compact_with_plot_action(ui, state, controls, compact);
+pub fn show_compact(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
+    compact: bool,
+) {
+    let _ = show_compact_with_plot_action(ui, state, controls, layouts, compact);
 }
 
 /// Compact entry that also reports a Plot action the app must run.
@@ -1259,19 +1504,21 @@ pub fn show_compact_with_plot_action(
     ui: &mut egui::Ui,
     state: &mut State,
     controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
     compact: bool,
 ) -> Option<crate::ui::plot_panel::PlotPanelAction> {
     if compact {
         ui.spacing_mut().interact_size.y = layout::COMPACT_ROW_HEIGHT;
         ui.spacing_mut().item_spacing.y = layout::COMPACT_ITEM_SPACING;
     }
-    show_inner(ui, state, controls, compact)
+    show_inner(ui, state, controls, layouts, compact)
 }
 
 fn show_inner(
     ui: &mut egui::Ui,
     state: &mut State,
     controls: &mut Controls,
+    layouts: &mut crate::seed_layout_library::SeedLayoutLibrary,
     compact: bool,
 ) -> Option<crate::ui::plot_panel::PlotPanelAction> {
     // The Plot section is drawn first and may switch kind within this frame;
@@ -1774,7 +2021,7 @@ fn show_inner(
             if seed_layout_visible(state.field_mode, controls.streamlines, vector_mode) {
                 egui::CollapsingHeader::new("Seed layout")
                     .default_open(false)
-                    .show(ui, |ui| seed_layout_editor(ui, state, controls));
+                    .show(ui, |ui| seed_layout_editor(ui, state, controls, layouts));
             } else {
                 // The editor is the only place the user can arm placement. If
                 // it disappears (Streamlines off or leaving the formula/vector

@@ -50,7 +50,13 @@ impl Sidebar {
             let controls = &mut self.controls;
             self.ctx.run_ui(input, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    sidebar::show_compact(ui, state, controls, compact)
+                    sidebar::show_compact(
+                        ui,
+                        state,
+                        controls,
+                        &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+                        compact,
+                    )
                 });
             })
         };
@@ -182,7 +188,13 @@ fn compact_controls_do_not_offer_a_fly_camera_toggle() {
                 egui::vec2(600.0, 1200.0),
             )),
             ..Default::default()
-        }, |ui| sidebar::show_compact(ui, state, controls, true))
+        }, |ui| sidebar::show_compact(
+            ui,
+            state,
+            controls,
+            &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+            true,
+        ))
     };
     let labels: Vec<_> = nodes(&output)
         .into_iter()

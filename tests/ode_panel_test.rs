@@ -546,7 +546,12 @@ fn ode_mode_disables_features_and_cas() {
     let mut controls = Controls::default();
     let output = run_frame(&ctx, 400.0, 2400.0, Vec::new(), |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
-            sidebar::show(ui, &mut state, &mut controls);
+            sidebar::show(
+                ui,
+                &mut state,
+                &mut controls,
+                &mut vector_field_explorer::seed_layout_library::SeedLayoutLibrary::default(),
+            );
         });
     });
     let painted = nodes(&output);
