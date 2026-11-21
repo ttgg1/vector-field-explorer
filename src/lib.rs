@@ -72,6 +72,7 @@ pub mod source_presets;
 pub mod source_scene;
 pub mod sources;
 pub mod streamlines;
+pub mod tour;
 pub mod ui;
 pub mod version;
 pub mod view_command;
