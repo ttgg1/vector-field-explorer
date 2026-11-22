@@ -154,6 +154,9 @@ impl VfApp {
             self.appearance_open = false;
             self.help_open = false;
             self.layout.help_visible = false;
+            // Issue #228: Escape always returns the viewport click tool to
+            // Inspect and cancels any armed one-shot placement.
+            crate::ui::viewport_tool::inspect(&mut self.controls);
         }
         domain_before
     }
@@ -589,9 +592,21 @@ impl VfApp {
         // it and report why instead of silently running the default click.
         if self.controls.scalar_place_probe {
             if self.scalar_probes_editable() {
-                self.place_scalar_probe(pos, rect, aspect);
+                let placed = self.place_scalar_probe(pos, rect, aspect);
+                if placed {
+                    // Issue #228: the strip's placement mode owns what happens
+                    // after a probe lands. A one-shot (or enable-and-place)
+                    // returns to Inspect; "Keep placing" leaves the probe armed
+                    // for the next click. The arming is always consumed.
+                    let one_shot = crate::ui::viewport_tool::placement_is_one_shot(&self.controls);
+                    self.controls.viewport_armed_one_shot = false;
+                    if one_shot {
+                        crate::ui::viewport_tool::inspect(&mut self.controls);
+                    }
+                }
             } else {
                 self.controls.scalar_place_probe = false;
+                self.controls.viewport_armed_one_shot = false;
                 self.controls.scalar_message = "Probes are unavailable in this view".to_owned();
                 restart_hint(
                     &mut self.status.hint,
@@ -615,8 +630,28 @@ impl VfApp {
             self.last_click_seed = None;
             return;
         }
-        let action = self.state.left_click_action;
-        self.apply_click_action(action, pos, rect, aspect, time);
+        // Issue #228: the click uses the derived effective tool, not a stale
+        // selector. Inspect places nothing; a gated action is not effective and
+        // the strip offers enable-and-place instead.
+        let view = crate::ui::viewport_tool::derive_for(&self.state, &self.controls);
+        let action = match view.selected {
+            crate::ui::viewport_tool::ViewportTool::SeedStreamline => {
+                LeftClickAction::SeedStreamline
+            }
+            crate::ui::viewport_tool::ViewportTool::AddParticles => LeftClickAction::AddParticles,
+            crate::ui::viewport_tool::ViewportTool::Inspect
+            | crate::ui::viewport_tool::ViewportTool::PlaceProbe => {
+                self.last_click_seed = None;
+                return;
+            }
+        };
+        if self.apply_click_action(action, pos, rect, aspect, time) {
+            let one_shot = crate::ui::viewport_tool::placement_is_one_shot(&self.controls);
+            self.controls.viewport_armed_one_shot = false;
+            if one_shot {
+                self.controls.viewport_inspect = true;
+            }
+        }
     }
 
     /// Test seam: run the viewport click path without a wgpu frame. The
@@ -709,19 +744,22 @@ impl VfApp {
 
     /// Plant one point probe at a viewport pick on the scalar plane. The pick
     /// maps through the active [`crate::plane::PlaneFrame`] and is rejected when
-    /// it misses the scene domain or the shared probe cap is full.
-    fn place_scalar_probe(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) {
+    /// it misses the scene domain or the shared probe cap is full. Returns
+    /// whether a probe was actually placed.
+    fn place_scalar_probe(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> bool {
         let Some((position, anchor)) = self.probe_world_point(pos, rect, aspect) else {
             // A pick outside the scene domain is retryable, so the probe stays
             // armed for the next click; only the message reports the miss.
             self.controls.scalar_message =
                 "Click inside the scene domain to place a probe".to_owned();
-            return;
+            return false;
         };
         match self.state.add_point_probe(position, anchor) {
             Ok(_) => {
-                self.controls.scalar_place_probe = false;
+                // The caller applies the placement mode: one-shot disarms via
+                // `inspect`, sticky leaves the probe armed for another click.
                 self.controls.scalar_message.clear();
+                true
             }
             Err(error) => {
                 // Retrying a cap rejection cannot succeed until a probe is
@@ -732,8 +770,10 @@ impl VfApp {
                     crate::scalar_view::ScalarViewError::ProbeLimit { .. }
                 ) {
                     self.controls.scalar_place_probe = false;
+                    self.controls.viewport_armed_one_shot = false;
                 }
                 self.controls.scalar_message = error.to_string();
+                false
             }
         }
     }
@@ -1019,7 +1059,7 @@ impl VfApp {
 
     /// Apply one explicit click action at `pos`. Shared by the mouse and the
     /// S/P shortcuts; a shortcut passes its own action, so it works whatever
-    /// the selector says.
+    /// the selector says. Returns whether the action actually placed something.
     pub(super) fn apply_click_action(
         &mut self,
         action: LeftClickAction,
@@ -1027,12 +1067,12 @@ impl VfApp {
         rect: egui::Rect,
         aspect: f32,
         time: f64,
-    ) {
+    ) -> bool {
         if !self.state.is_vector_mode() {
             // Plot mode never seeds or bursts, including the captured-pointer
             // and S/P routes that share this wrapper.
             self.last_click_seed = None;
-            return;
+            return false;
         }
         if matches!(
             self.state.field_mode,
@@ -1045,7 +1085,7 @@ impl VfApp {
             // These modes are static and Ode owns precomputed trajectories:
             // no streamline seeds and no particle bursts.
             self.last_click_seed = None;
-            return;
+            return false;
         }
         match view_command::click_action_plan(
             action,
@@ -1059,13 +1099,14 @@ impl VfApp {
                 // repeated no-op does not inherit the old countdown.
                 restart_hint(&mut self.status.hint, &mut self.hint_elapsed, hint);
                 self.last_click_seed = None;
+                false
             }
             view_command::ClickActionPlan::SeedStreamline => {
                 let Some(seed) = self.click_world_seed(pos, rect, aspect) else {
                     // A click that lands off the domain plants nothing, so it
                     // cannot be the first half of a seeding double-click either.
                     self.last_click_seed = None;
-                    return;
+                    return false;
                 };
                 if self.click_seeds.len() >= MAX_CLICK_SEEDS {
                     self.click_seeds.remove(0);
@@ -1101,11 +1142,12 @@ impl VfApp {
                     time,
                     stored: true,
                 });
+                true
             }
             view_command::ClickActionPlan::AddParticles => {
                 let Some(seed) = self.click_world_seed(pos, rect, aspect) else {
                     self.last_click_seed = None;
-                    return;
+                    return false;
                 };
                 // Particles exist for any three-component field: the 3D view or
                 // a 2D plane slice (the plan already gated this). If the cloud
@@ -1137,6 +1179,7 @@ impl VfApp {
                     time,
                     stored: false,
                 });
+                true
             }
         }
     }

@@ -1047,6 +1047,18 @@ pub struct Controls {
     pub pending_layout_delete: Option<String>,
     /// What one explicit left click does (ticket 60).
     pub left_click_action: LeftClickAction,
+    /// Session-only Inspect choice for the viewport tool strip (issue #228).
+    /// While set, a viewport click places nothing even when a left-click action
+    /// is selected; choosing an action in the strip or sidebar clears it.
+    pub viewport_inspect: bool,
+    /// Placement mode shown by the viewport tool strip (issue #228): `true`
+    /// keeps the tool selected across clicks, `false` returns to Inspect after
+    /// one successful placement.
+    pub viewport_sticky: bool,
+    /// One placement armed by the strip's enable-and-place entry (issue #228).
+    /// It forces one-shot even when sticky mode is selected, so enabling a
+    /// prerequisite cannot leave the tool firing on later clicks.
+    pub viewport_armed_one_shot: bool,
     pub particles: bool,
     /// Dot radius multiplier on the grid spacing (ticket 30).
     pub particle_size: f32,
@@ -1134,6 +1146,13 @@ impl Controls {
             seed_layout_message: String::new(),
             pending_layout_delete: None,
             left_click_action: LeftClickAction::SeedStreamline,
+            viewport_inspect: false,
+            // Keep placing preserves the historical repeated-click behaviour:
+            // before issue #228, every viewport click seeded or burst again.
+            // The standalone Scalar "Place probe" checkbox still arms one
+            // placement through `viewport_armed_one_shot`.
+            viewport_sticky: true,
+            viewport_armed_one_shot: false,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
             particle_count: 0,
@@ -1184,6 +1203,9 @@ impl Controls {
         self.seed_mode = defaults.seed_mode;
         self.streamline_count = defaults.streamline_count;
         self.left_click_action = defaults.left_click_action;
+        self.viewport_inspect = defaults.viewport_inspect;
+        self.viewport_sticky = defaults.viewport_sticky;
+        self.viewport_armed_one_shot = defaults.viewport_armed_one_shot;
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
         self.particle_count = defaults.particle_count;
@@ -1476,6 +1498,7 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
             if let Some(reason) = scalar_view_unsupported_reason(state) {
                 ui.label(&reason);
                 controls.scalar_place_probe = false;
+                controls.viewport_armed_one_shot = false;
                 // Keep the toggle visible but disabled so the section explains
                 // why no heatmap can be painted instead of silently hiding a
                 // persisted setting.
@@ -1522,8 +1545,15 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
 
             scalar_analysis_section(ui, state, controls);
 
-            ui.checkbox(&mut controls.scalar_place_probe, "Place probe")
-                .on_hover_text("Click the viewport plane to add one point probe");
+            // The standalone checkbox is the historical one-shot arm: it must
+            // not inherit the strip's "Keep placing" mode.
+            if ui
+                .checkbox(&mut controls.scalar_place_probe, "Place probe")
+                .on_hover_text("Click the viewport plane to add one point probe")
+                .changed()
+            {
+                controls.viewport_armed_one_shot = controls.scalar_place_probe;
+            }
 
             let mut remove = None;
             let domain = state.scene_domain();
@@ -2673,6 +2703,9 @@ fn show_inner(
             }
             // Ticket 60: the left click action stays visible even while its feature
             // is off; the click is then a hinted no-op rather than a dead control.
+            // Issue #228: choosing an action here also leaves Inspect, so the
+            // viewport strip and this selector stay synchronized.
+            let action_before = controls.left_click_action;
             button_row(ui, |ui| {
                 ui.label("Left click");
                 for action in LeftClickAction::ALL {
@@ -2691,6 +2724,14 @@ fn show_inner(
                         .on_hover_text(hover);
                 }
             });
+            if controls.left_click_action != action_before {
+                controls.viewport_inspect = false;
+                // An armed probe is still a one-shot placement: changing the
+                // left-click action must not turn it into a sticky probe.
+                if !controls.scalar_place_probe {
+                    controls.viewport_armed_one_shot = false;
+                }
+            }
             ui.checkbox(&mut controls.particles, "Particles")
                 .on_hover_text(
                     "Animate dots carried by the field; 2D needs a three-component field and \

@@ -841,6 +841,9 @@ fn probe_placement_adds_one_undo_entry_and_respects_the_cap() {
     let base = app.history_len();
 
     app.controls.scalar_place_probe = true;
+    // The Scalar "Place probe" checkbox arms one placement even while the
+    // viewport strip's Keep placing default is active.
+    app.controls.viewport_armed_one_shot = true;
     let _ = frame(&ctx, &mut app, vec![moved(center), button(center, true)]);
     app.test_seed_click(center, rect, aspect, 0.0);
     let _ = frame(&ctx, &mut app, vec![button(center, false)]);
@@ -869,6 +872,7 @@ fn probe_placement_adds_one_undo_entry_and_respects_the_cap() {
             .expect("room for the capped test probes");
     }
     app.controls.scalar_place_probe = true;
+    app.controls.viewport_armed_one_shot = true;
     app.test_seed_click(center, rect, aspect, 0.0);
     assert_eq!(
         app.state.probes.points.len(),
@@ -896,6 +900,7 @@ fn leaving_the_scalar_mode_while_armed_disarms_and_reports() {
 
     app.state.set_streamlines(true);
     app.controls.scalar_place_probe = true;
+    app.controls.viewport_armed_one_shot = true;
     assert!(
         app.state.set_field_mode(FieldMode::Sources),
         "the fixture leaves the formula field"
@@ -906,6 +911,10 @@ fn leaving_the_scalar_mode_while_armed_disarms_and_reports() {
     assert!(
         !app.controls.scalar_place_probe,
         "an armed probe click disarms when the probe path is gone"
+    );
+    assert!(
+        !app.controls.viewport_armed_one_shot,
+        "the cancelled one-shot marker does not leak"
     );
     assert!(
         !app.controls.scalar_message.is_empty(),
