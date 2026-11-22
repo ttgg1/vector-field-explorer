@@ -407,6 +407,36 @@ fn the_local_undo_stack_is_bounded_and_session_only() {
 }
 
 #[test]
+fn selection_and_probe_edits_never_touch_durable_state() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Maxwell);
+    assert!(state.set_maxwell_scene(hollow(1.0)));
+    let surfaces = state.probe_surfaces().to_vec();
+    let scene = state.maxwell.clone();
+
+    let mut gauss = GaussShellState::default();
+    gauss.activate(&state.maxwell);
+    gauss.select(GaussObject::Shell);
+    gauss.select(GaussObject::MeasuringSurface);
+    assert!(gauss.set_probe_radius(2.0));
+    assert!(gauss.double_probe_radius());
+    assert!(gauss.undo_last().is_some());
+    // A shell request waits for the app's ordinary scene-control handler.
+    assert!(gauss.request_shell_radius(1.2));
+    assert_eq!(gauss.take_pending_shell_radius(), Some(1.2));
+
+    assert_eq!(
+        state.probe_surfaces(),
+        surfaces.as_slice(),
+        "the activity never adds or mutates a durable probe surface"
+    );
+    assert_eq!(
+        state.maxwell, scene,
+        "selection and measuring-radius edits never mutate the committed scene"
+    );
+}
+
+#[test]
 fn interface_boundary_readings_stay_explicitly_excluded() {
     let scene = hollow(1.0);
     let mut state = active_state(&scene, 1.0);
