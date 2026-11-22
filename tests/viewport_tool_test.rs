@@ -156,6 +156,30 @@ fn an_armed_probe_or_inspect_choice_wins_over_the_left_click_action() {
 }
 
 #[test]
+fn a_stale_armed_probe_selects_inspect_instead_of_advertising_a_seed_tool() {
+    // The probe arm is the click that is really queued. If its path is gone it
+    // is unavailable, so the strip must not claim a seed action that the click
+    // will not perform.
+    let mut input = inputs();
+    input.scalar_place_probe = true;
+    input.probes_supported = false;
+    input.streamlines = true;
+    input.particles = true;
+    for action in [
+        LeftClickAction::SeedStreamline,
+        LeftClickAction::AddParticles,
+    ] {
+        input.left_click_action = action;
+        let view = viewport_tool::derive(input);
+        assert_eq!(
+            view.selected,
+            ViewportTool::Inspect,
+            "a stale armed probe must not advertise {action:?}"
+        );
+    }
+}
+
+#[test]
 fn the_sticky_choice_is_carried_through_derivation() {
     let mut input = inputs();
     input.sticky = false;
@@ -236,6 +260,99 @@ fn sticky_placement_keeps_the_tool_across_two_clicks() {
     assert!(
         !app.controls.viewport_inspect,
         "sticky keeps the tool selected"
+    );
+}
+
+fn probe_app(sticky: bool) -> VfApp {
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.controls.viewport_sticky = sticky;
+    app.controls.scalar_place_probe = true;
+    app
+}
+
+fn probe_viewport() -> egui::Rect {
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))
+}
+
+#[test]
+fn sticky_probe_placement_stays_armed_for_a_second_probe() {
+    let mut app = probe_app(true);
+    let rect = probe_viewport();
+    let aspect = rect.width() / rect.height();
+
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(app.state.probes.points.len(), 1, "the first click places");
+    assert!(
+        app.controls.scalar_place_probe,
+        "Keep placing leaves the probe armed for the next click"
+    );
+    assert!(
+        !app.controls.viewport_inspect,
+        "Keep placing does not fall back to Inspect"
+    );
+
+    app.test_seed_click(rect.center() + egui::vec2(40.0, 0.0), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        2,
+        "the second sticky click places another probe"
+    );
+}
+
+#[test]
+fn one_shot_probe_placement_arms_once_then_inspects() {
+    let mut app = probe_app(false);
+    let rect = probe_viewport();
+    let aspect = rect.width() / rect.height();
+
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(app.state.probes.points.len(), 1, "the first click places");
+    assert!(
+        !app.controls.scalar_place_probe,
+        "one-shot disarms after a successful placement"
+    );
+    assert!(
+        app.controls.viewport_inspect,
+        "one-shot returns to Inspect after one placement"
+    );
+
+    app.test_seed_click(rect.center() + egui::vec2(40.0, 0.0), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        1,
+        "the second click places nothing"
+    );
+}
+
+#[test]
+fn an_outside_domain_probe_click_keeps_the_arm_for_a_retry() {
+    let mut app = probe_app(true);
+    let rect = probe_viewport();
+    let aspect = rect.width() / rect.height();
+
+    app.test_seed_click(rect.left_top() + egui::vec2(1.0, 1.0), rect, aspect, 0.0);
+    assert!(
+        app.state.probes.points.is_empty(),
+        "an outside-domain pick places nothing"
+    );
+    assert!(
+        app.controls.scalar_place_probe,
+        "the miss stays armed so the user can retry"
+    );
+    assert!(
+        app.controls
+            .scalar_message
+            .contains("inside the scene domain"),
+        "the miss is reported: {:?}",
+        app.controls.scalar_message
+    );
+
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        1,
+        "the retry places the probe"
     );
 }
 
@@ -374,6 +491,39 @@ fn nodes(output: &egui::FullOutput) -> Vec<WidgetNode> {
         .collect()
 }
 
+fn node_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            (node.label() == Some(label))
+                .then_some(node.bounds())
+                .flatten()
+        })
+        .map(|bounds| {
+            egui::Rect::from_min_max(
+                egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+            )
+        })
+        .collect()
+}
+
+fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+
 fn frame_with_width(
     ctx: &egui::Context,
     app: &mut VfApp,
@@ -434,6 +584,54 @@ fn the_strip_is_present_in_wide_and_compact_layouts_and_clicks_place_once() {
             "width {width}: one placement click performs exactly one action"
         );
     }
+}
+
+#[test]
+fn a_full_frame_strip_click_selects_seed_streamline_and_one_placement_follows() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state.set_formula("y, -x, 1".into());
+    app.state.set_streamlines(true);
+    app.controls.streamlines = true;
+    app.controls.viewport_inspect = true;
+    app.controls.viewport_sticky = false;
+
+    let _ = frame_with_width(&ctx, &mut app, 1200.0, Vec::new());
+    let _ = frame_with_width(&ctx, &mut app, 1200.0, Vec::new());
+    let out = frame_with_width(&ctx, &mut app, 1200.0, Vec::new());
+    let button = node_rects(&out, "Seed streamline")
+        .into_iter()
+        .min_by(|a, b| a.center().y.total_cmp(&b.center().y))
+        .expect("the strip offers Seed streamline in the full app frame");
+
+    let _ = frame_with_width(&ctx, &mut app, 1200.0, pointer(button.center(), true));
+    let _ = frame_with_width(&ctx, &mut app, 1200.0, pointer(button.center(), false));
+    assert_eq!(
+        app.controls.left_click_action,
+        LeftClickAction::SeedStreamline,
+        "the full-frame strip click selects the tool"
+    );
+    assert!(
+        !app.controls.viewport_inspect,
+        "selecting a tool leaves Inspect"
+    );
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        0,
+        "selecting a tool in the strip places nothing by itself"
+    );
+    // The headless frame returns before the wgpu viewport body, so the
+    // placement click enters through the documented production seam.
+    let _ = frame_with_width(&ctx, &mut app, 1200.0, Vec::new());
+    let rect = viewport();
+    app.test_seed_click(rect.center(), rect, 1.0, 0.0);
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        1,
+        "one placement click after selecting the tool performs exactly one action"
+    );
 }
 
 #[test]

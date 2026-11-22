@@ -1437,6 +1437,8 @@ fn left_click_action_offers_both_choices_with_the_features_default_off() {
 fn features_reset_returns_the_left_click_action_to_seed_streamline() {
     let mut c = Controls::new();
     c.left_click_action = LeftClickAction::AddParticles;
+    let default_sticky = c.viewport_sticky;
+    c.viewport_sticky = !default_sticky;
 
     c.reset_features();
 
@@ -1444,6 +1446,10 @@ fn features_reset_returns_the_left_click_action_to_seed_streamline() {
         c.left_click_action,
         LeftClickAction::SeedStreamline,
         "Reset Features restores Seed streamline",
+    );
+    assert_eq!(
+        c.viewport_sticky, default_sticky,
+        "Reset Features restores the strip's session-only placement mode",
     );
 }
 

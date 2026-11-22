@@ -67,7 +67,9 @@ impl ViewportTool {
     /// The one-line explanation, also the button tooltip when ready.
     pub fn tooltip(self) -> &'static str {
         match self {
-            ViewportTool::Inspect => "The next viewport click selects nothing and places nothing",
+            ViewportTool::Inspect => {
+                "The next viewport click places nothing; an existing seed can still be selected"
+            }
             ViewportTool::PlaceProbe => "The next viewport click plants one point probe",
             ViewportTool::SeedStreamline => "The next viewport click plants one streamline seed",
             ViewportTool::AddParticles => "The next viewport click adds one particle burst",
@@ -205,8 +207,15 @@ pub fn derive(input: ToolInputs) -> ToolView {
     // tool. This is what makes "Add particles selected while Particles is off"
     // impossible: the gated action falls back to Inspect while the strip still
     // offers the enable-and-place entry.
-    let selected = if input.scalar_place_probe && probe == ToolAvailability::Ready {
-        ViewportTool::PlaceProbe
+    let selected = if input.scalar_place_probe {
+        // The armed probe is the click that is really queued. When its path is
+        // gone the strip says Inspect rather than advertising the left-click
+        // action that this click will not perform.
+        if probe == ToolAvailability::Ready {
+            ViewportTool::PlaceProbe
+        } else {
+            ViewportTool::Inspect
+        }
     } else if input.inspect {
         ViewportTool::Inspect
     } else {

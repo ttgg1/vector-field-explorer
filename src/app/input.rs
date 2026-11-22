@@ -594,9 +594,15 @@ impl VfApp {
             if self.scalar_probes_editable() {
                 let placed = self.place_scalar_probe(pos, rect, aspect);
                 if placed {
-                    // A point probe is one shot; issue #228's strip shows
-                    // Inspect once it has landed.
-                    crate::ui::viewport_tool::inspect(&mut self.controls);
+                    // Issue #228: the strip's placement mode owns what happens
+                    // after a probe lands. A one-shot (or enable-and-place)
+                    // returns to Inspect; "Keep placing" leaves the probe armed
+                    // for the next click. The arming is always consumed.
+                    let one_shot = crate::ui::viewport_tool::placement_is_one_shot(&self.controls);
+                    self.controls.viewport_armed_one_shot = false;
+                    if one_shot {
+                        crate::ui::viewport_tool::inspect(&mut self.controls);
+                    }
                 }
             } else {
                 self.controls.scalar_place_probe = false;
@@ -749,7 +755,8 @@ impl VfApp {
         };
         match self.state.add_point_probe(position, anchor) {
             Ok(_) => {
-                self.controls.scalar_place_probe = false;
+                // The caller applies the placement mode: one-shot disarms via
+                // `inspect`, sticky leaves the probe armed for another click.
                 self.controls.scalar_message.clear();
                 true
             }

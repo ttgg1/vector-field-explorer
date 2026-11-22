@@ -1147,7 +1147,9 @@ impl Controls {
             pending_layout_delete: None,
             left_click_action: LeftClickAction::SeedStreamline,
             viewport_inspect: false,
-            viewport_sticky: true,
+            // One-shot is the conservative default: a placement click places
+            // once unless the strip's "Keep placing" is chosen.
+            viewport_sticky: false,
             viewport_armed_one_shot: false,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -1200,6 +1202,7 @@ impl Controls {
         self.streamline_count = defaults.streamline_count;
         self.left_click_action = defaults.left_click_action;
         self.viewport_inspect = defaults.viewport_inspect;
+        self.viewport_sticky = defaults.viewport_sticky;
         self.viewport_armed_one_shot = defaults.viewport_armed_one_shot;
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
