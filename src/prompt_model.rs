@@ -17,13 +17,12 @@ use std::fmt;
 
 use glam::DVec3;
 
+use crate::cas_intent::MAX_INPUT_BYTES;
 use crate::plot::PlotKind;
 use crate::source_scene::{FieldMode, SourceEntry, SourceKindTag, SourceScene};
 use crate::sources::SourceKind;
 use crate::viewmodel::State;
 
-/// The shared #168 input bound, in UTF-8 bytes.
-pub const MAX_PROMPT_BYTES: usize = 512;
 /// Normalized teaching default for an unspecified dipole separation.
 pub const DEFAULT_SEPARATION: f64 = 1.0;
 /// Normalized teaching default for an unspecified charge magnitude.
@@ -91,7 +90,7 @@ impl Quantity {
     }
 }
 
-/// Whether the interpretation is ideal, softened, or both.
+/// How the sampled interpretation is softened.
 ///
 /// The displayed equations are the ideal analytic form; the shipped source
 /// evaluator always samples with a finite softening length. The two are kept
@@ -447,7 +446,7 @@ impl fmt::Display for PromptModelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => f.write_str("the prompt is empty"),
-            Self::TooLong => write!(f, "the prompt exceeds the {MAX_PROMPT_BYTES}-byte limit"),
+            Self::TooLong => write!(f, "the prompt exceeds the {MAX_INPUT_BYTES}-byte limit"),
             Self::NoModel => f.write_str("there is no interpreted model to apply"),
             Self::Ambiguous(reason) => write!(f, "the interpretation is ambiguous: {reason}"),
             Self::Unsupported(reason) => write!(f, "unsupported prompt: {reason}"),
@@ -480,7 +479,7 @@ pub fn parse_prompt(input: &str) -> Result<PromptModel, PromptModelError> {
     if trimmed.is_empty() {
         return Err(PromptModelError::Empty);
     }
-    if input.len() > MAX_PROMPT_BYTES {
+    if input.len() > MAX_INPUT_BYTES {
         return Err(PromptModelError::TooLong);
     }
     let normalized = normalize(input);
@@ -583,16 +582,61 @@ fn normalize(input: &str) -> String {
     unified.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn has_distribution_noun(lower: &str) -> bool {
+    lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| {
+            matches!(
+                token,
+                "sphere"
+                    | "cube"
+                    | "disc"
+                    | "disk"
+                    | "ring"
+                    | "line"
+                    | "sheet"
+                    | "uniformly"
+                    | "distributed"
+            )
+        })
+}
+
+fn dipole_is_negated(lower: &str) -> bool {
+    [
+        "not a dipole",
+        "not dipole",
+        "not the dipole",
+        "isn't a dipole",
+        "isn't dipole",
+        "no dipole",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+}
+
 fn looks_like_dipole(lower: &str) -> bool {
-    if lower.contains("dipole") {
-        return true;
+    if has_distribution_noun(lower) {
+        return false;
     }
+    if lower.contains("dipole") {
+        return !dipole_is_negated(lower);
+    }
+    let signed_pair = lower.contains("positive charge") && lower.contains("negative charge");
     let pair = lower.contains("two") || lower.contains("pair");
-    pair && lower.contains("charge") && (lower.contains("opposite") || lower.contains("equal"))
+    signed_pair
+        || (pair
+            && lower.contains("charge")
+            && (lower.contains("opposite") || lower.contains("equal")))
 }
 
 fn looks_like_point_charge(lower: &str) -> bool {
-    lower.contains("charge") && lower.contains("origin")
+    if has_distribution_noun(lower) {
+        return false;
+    }
+    lower.contains("origin")
+        && (lower.contains("point charge")
+            || lower.contains("positive charge")
+            || lower.contains("negative charge"))
 }
 
 fn requested_quantities(lower: &str) -> Vec<Quantity> {
@@ -705,6 +749,8 @@ fn axis_in(lower: &str) -> Option<Axis> {
             format!("{label} direction"),
             format!("{label}="),
             format!("{label} ="),
+            format!("+{label}"),
+            format!("-{label}"),
         ];
         if patterns.iter().any(|pattern| lower.contains(pattern)) {
             return Some(axis);

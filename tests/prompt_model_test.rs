@@ -132,6 +132,99 @@ fn parses_point_charge_paraphrases() {
 }
 
 #[test]
+fn unsupported_distributions_are_not_misclassified_as_point_charges() {
+    for prompt in [
+        "a uniformly charged sphere at the origin",
+        "a uniformly charged cube at the origin",
+        "a finite line charge at the origin",
+        "a line of charge at the origin",
+        "a disc of charge at the origin",
+        "a charged ring at the origin",
+        "a sheet of charge at the origin",
+        "a charge distributed uniformly on a sphere at the origin",
+    ] {
+        let model = prompt_model::parse_prompt(prompt)
+            .unwrap_or_else(|error| panic!("`{prompt}` should parse, got {error:?}"));
+        assert!(model.sources.is_empty(), "`{prompt}` is not a point charge");
+        assert!(
+            !model.limitations.is_empty(),
+            "`{prompt}` explains why it is unsupported"
+        );
+        assert!(
+            !model.can_apply(),
+            "`{prompt}` cannot be applied as a supported source"
+        );
+    }
+}
+
+#[test]
+fn negated_or_distribution_shaped_dipoles_are_not_misclassified() {
+    for prompt in [
+        "not a dipole",
+        "this is not a dipole",
+        "a dipole sheet at the origin",
+        "a dipole inside a uniformly charged sphere at the origin",
+    ] {
+        let model = prompt_model::parse_prompt(prompt)
+            .unwrap_or_else(|error| panic!("`{prompt}` should parse, got {error:?}"));
+        assert!(model.sources.is_empty(), "`{prompt}` is not a dipole");
+        assert!(
+            !model.limitations.is_empty(),
+            "`{prompt}` explains why it is unsupported"
+        );
+        assert!(!model.can_apply(), "`{prompt}` cannot apply");
+    }
+}
+
+#[test]
+fn explicit_signed_placements_pin_the_axis_and_orientation() {
+    for (prompt, axis, positive, negative) in [
+        (
+            "positive charge at +x, negative charge at -x, separated by d",
+            Axis::X,
+            DVec3::new(0.5, 0.0, 0.0),
+            DVec3::new(-0.5, 0.0, 0.0),
+        ),
+        (
+            "positive charge at +y, negative charge at -y, separated by d",
+            Axis::Y,
+            DVec3::new(0.0, 0.5, 0.0),
+            DVec3::new(0.0, -0.5, 0.0),
+        ),
+        (
+            "negative charge at +x, positive charge at -x, separated by d",
+            Axis::X,
+            DVec3::new(-0.5, 0.0, 0.0),
+            DVec3::new(0.5, 0.0, 0.0),
+        ),
+    ] {
+        let model = prompt_model::parse_prompt(prompt)
+            .unwrap_or_else(|error| panic!("`{prompt}` should parse, got {error:?}"));
+        assert_eq!(
+            model.dipole.as_ref().expect("dipole geometry").axis,
+            axis,
+            "`{prompt}` names its axis through the signed placements"
+        );
+        assert!(
+            model.ambiguities.is_empty(),
+            "`{prompt}` is fully specified, got {:?}",
+            model.ambiguities
+        );
+        assert!(model.can_apply(), "`{prompt}` can apply");
+        assert_eq!(
+            dipole_position(&model, SourceRole::DipolePositive),
+            positive,
+            "`{prompt}`"
+        );
+        assert_eq!(
+            dipole_position(&model, SourceRole::DipoleNegative),
+            negative,
+            "`{prompt}`"
+        );
+    }
+}
+
+#[test]
 fn reversed_signs_reverse_the_model_instead_of_normalizing_away() {
     let negative = prompt_model::parse_prompt("a negative point charge at the origin").unwrap();
     assert_eq!(negative.sources[0].sign, -1);
@@ -325,7 +418,7 @@ fn empty_and_oversized_prompts_are_rejected() {
         prompt_model::parse_prompt("   "),
         Err(PromptModelError::Empty)
     );
-    let long = "a".repeat(prompt_model::MAX_PROMPT_BYTES + 1);
+    let long = "a".repeat(vector_field_explorer::cas_intent::MAX_INPUT_BYTES + 1);
     assert_eq!(
         prompt_model::parse_prompt(&long),
         Err(PromptModelError::TooLong)
