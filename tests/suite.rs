@@ -220,3 +220,4 @@ mod viewport_style_test;
 mod viewport_tool_test;
 mod web_assets_test;
 mod window_test;
+mod wire_lesson_test;

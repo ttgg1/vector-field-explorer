@@ -425,11 +425,12 @@ The welcome card also carries the optional **Try a Griffiths problem** button
 
 **Purpose.** A session-only four-route picker reachable from the welcome card
 and the Help window. `GriffithsRoute::ALL` lists ring, shell, plane and wire with
-their edition/locator labels; `Ring` and `Shell` are available in this slice. The
-picker draws into `GriffithsState` (`picker_open`, `placeholder`, `lesson`,
-`shell`) and returns `GriffithsAction::{OpenRing, OpenShell, Placeholder(route),
-Dismiss}`. Selecting an unavailable route never touches the scene; it sets a
-plainly labelled "not available yet" placeholder that the learner can close.
+their edition/locator labels; `Ring`, `Shell` and `Wire` are available in this
+slice. The picker draws into `GriffithsState` (`picker_open`, `placeholder`,
+`lesson`, `shell`, `wire`) and returns `GriffithsAction::{OpenRing, OpenShell,
+OpenWire, Placeholder(route), Dismiss}`. Selecting an unavailable route never
+touches the scene; it sets a plainly labelled "not available yet" placeholder
+that the learner can close.
 
 **Pinned by.** [tests/griffiths_tour_test.rs](../tests/griffiths_tour_test.rs):
 `the_welcome_card_offers_the_optional_griffiths_branch`,
@@ -510,6 +511,48 @@ The app loads the route through the ordinary `set_field_mode(Maxwell)` and
 `pinning_inside_and_outside_then_returning_completes_and_help_replay_resets`,
 `back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_shell`, and
 `the_shell_lesson_stays_usable_in_wide_and_compact_layouts`.
+
+#### `src/ui/wire_lesson.rs` — surface-current wire B/circulation activity (#227)
+
+**Purpose.** The Griffiths 5.14(a) route. It loads the shipped
+`MaxwellCase::InfiniteWire` scene and wraps the shipped `maxwell_field` and
+`field_probe::circulation` loop in a prediction-gated tour activity. It adds no
+physical case, quadrature rule, tolerance or durable probe surface; the movable
+oriented loop and both readings are session-only. The route opens the 2D
+z-normal front view, so the viewport is a transverse slice looking down the
+wire axis.
+
+**Invariants.** The question and the separate compass-direction/inside-loop
+prompts precede every result; `can_reveal` requires both predictions or an
+explicit skip, and predictions remain revisable until the reveal. The direction
+hint anchors the shipped `+z` current and the right-hand rule; the orientation
+hint anchors the loop's positive normal and the signed circulation, and the
+selected normal/contour stays visible above the controls. The shell radius
+`a` is the fixed `MaxwellScene::radius`; the loop radius `r` is the movable
+activity radius. Inside (`r < a`) the reading reports `B = 0` and circulation
+`0`. The ideal interface is excluded by the shipped field's own
+`Unsupported` decision, never a second tolerance; the excluded card states
+`WIRE_INTERFACE_NOTE`. When both circles are outside the shell, `|B(r)|/|B(2r)| = 2`;
+for a mixed inside/outside pair the lesson withholds the halving claim and
+states that the ratio applies only when both circles are outside. The circulation
+is equal within the reported half-resolution quadrature uncertainty. Reversing
+only the loop normal flips the signed integral and leaves the field vectors
+and viewport arrows unchanged. The result labels normalized teaching
+amplitudes and states the ideal thin surface-current assumption. Back/Exit
+restores the scene, projection, camera and history snapshot; Keep exploring
+adopts the wire scene.
+
+**Pinned by.** [tests/wire_lesson_test.rs](../tests/wire_lesson_test.rs):
+`the_wire_route_is_selectable_from_the_picker_and_replayable_from_help`,
+`the_prompt_precedes_the_reveal_and_the_hints_anchor_the_current_and_normal`,
+`inside_the_shell_reports_zero_field_and_zero_circulation`,
+`the_ideal_interface_is_excluded_and_explained`,
+`the_excluded_boundary_reading_is_visible_in_the_lesson`,
+`outside_doubling_the_loop_radius_halves_b_and_preserves_the_circulation`,
+`the_halving_claim_is_withheld_unless_both_circles_are_outside_the_shell`,
+`reversing_only_the_loop_orientation_flips_the_signed_circulation_and_keeps_the_field`,
+`back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_wire`, and
+`the_wire_lesson_stays_usable_in_wide_and_compact_layouts`.
 
 #### `src/main.rs` — native and wasm bootstrap
 
@@ -5712,7 +5755,7 @@ and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
 `ring_lesson`, `shell_lesson`, `sidebar`,
 `sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
-`viewport_tool`.
+`viewport_tool`, `wire_lesson`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 

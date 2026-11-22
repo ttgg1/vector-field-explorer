@@ -9,6 +9,7 @@ use crate::color_ramp::ScaleMode;
 use crate::colormap::Colormap;
 use crate::field::FieldExpr;
 use crate::field_probe::{CirculationLoop, GaussianSurface, LoopKind, SurfaceKind};
+use crate::plane::PlaneView;
 use crate::scalar::{ScalarContext, ScalarExpr};
 use crate::scalar_view::MAX_PROBES;
 use crate::scene_document::{SceneCamera, SceneDocument};
@@ -19,6 +20,9 @@ use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
 use crate::ui::presets::SceneAction;
 use crate::ui::ring_lesson::{RingLessonAction, RingPrediction, RingReading};
 use crate::ui::shell_lesson::{ShellFieldPrediction, ShellFluxPrediction, ShellLessonAction};
+use crate::ui::wire_lesson::{
+    WireDirectionPrediction, WireInsidePrediction, WireLessonAction, WireOrientation,
+};
 use crate::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, MIN_DENSITY};
 
 impl VfApp {
@@ -1206,8 +1210,9 @@ impl VfApp {
     /// Start one Griffiths route. The ring route captures the starting scene
     /// once and loads the shipped `Uniform ring` preset through its ordinary
     /// loader; the shell route loads the shipped Hollow sphere case and opens
-    /// the #225 activity over #219's measurement state; unavailable routes only
-    /// set a safe placeholder message.
+    /// the #225 activity over #219's measurement state; the wire route loads
+    /// the shipped Infinite wire case in a transverse 2D slice; unavailable
+    /// routes only set a safe placeholder message.
     pub fn start_griffiths_route(&mut self, route: GriffithsRoute) {
         if !route.available() {
             self.griffiths.placeholder = Some(route);
@@ -1229,6 +1234,7 @@ impl VfApp {
         match route {
             GriffithsRoute::Ring => {
                 self.griffiths.shell.deactivate();
+                self.griffiths.wire.deactivate();
                 let preset = crate::source_presets::source_preset("Uniform ring")
                     .expect("the shipped Uniform ring preset exists");
                 if !crate::source_presets::load_source_preset(preset, &mut self.state) {
@@ -1249,6 +1255,7 @@ impl VfApp {
             }
             GriffithsRoute::Shell => {
                 self.griffiths.lesson.deactivate();
+                self.griffiths.wire.deactivate();
                 // The shell lesson owns its own #219 measurement session; reset
                 // any guided panel session so the two surfaces cannot disagree.
                 self.maxwell.gauss.reset();
@@ -1263,7 +1270,32 @@ impl VfApp {
                 self.griffiths.shell_completed = false;
                 self.griffiths.shell.activate(&self.state.maxwell);
             }
-            GriffithsRoute::Plane | GriffithsRoute::Wire => {
+            GriffithsRoute::Wire => {
+                self.griffiths.lesson.deactivate();
+                self.griffiths.shell.deactivate();
+                self.maxwell.gauss.reset();
+                let scene = crate::maxwell::MaxwellScene {
+                    case: crate::maxwell::MaxwellCase::InfiniteWire,
+                    ..crate::maxwell::MaxwellScene::default()
+                };
+                self.state.set_field_mode(FieldMode::Maxwell);
+                self.state.set_maxwell_scene(scene);
+                // Look down the wire axis in a transverse slice: the 2D front
+                // view is the exact z-normal cross-section, with the shell and
+                // field arrows in the xy plane.
+                self.state.set_mode(false);
+                self.state.plane = PlaneView::middle(self.state.plane_grid());
+                self.state.refresh_maxwell_sampling();
+                self.maxwell.sync_from(&self.state);
+                self.orbit.yaw = 0.0;
+                self.orbit.pitch = 0.0;
+                self.orbit.distance = 4.0;
+                self.orbit.target = Vec3::ZERO;
+                self.camera.position = [0.0, 0.0];
+                self.camera.scale = 1.0;
+                self.griffiths.wire.activate(&self.state.maxwell);
+            }
+            GriffithsRoute::Plane => {
                 unreachable!("unavailable routes returned before the scene changed")
             }
         }
@@ -1287,11 +1319,12 @@ impl VfApp {
         }
         self.griffiths.lesson.deactivate();
         self.griffiths.shell.deactivate();
+        self.griffiths.wire.deactivate();
         self.griffiths.close();
     }
 
     /// Adopt the activity scene: drop the starting snapshot and keep the
-    /// loaded ring or shell scene.
+    /// loaded ring, shell or wire scene.
     pub fn keep_griffiths_scene(&mut self) {
         if self.griffiths.shell.active() && self.griffiths.shell.finish(&self.state.maxwell) {
             self.griffiths.shell_completed = true;
@@ -1299,6 +1332,7 @@ impl VfApp {
         self.griffiths_start = None;
         self.griffiths.lesson.deactivate();
         self.griffiths.shell.deactivate();
+        self.griffiths.wire.deactivate();
         self.griffiths.close();
     }
 
@@ -1470,11 +1504,53 @@ impl VfApp {
         self.griffiths.shell.comparison_ready(&self.state.maxwell)
     }
 
+    /// Test seam: whether the wire activity is active.
+    #[doc(hidden)]
+    pub fn wire_lesson_active_for_test(&self) -> bool {
+        self.griffiths.wire.active()
+    }
+
+    /// Test seam: whether the wire result has been revealed.
+    #[doc(hidden)]
+    pub fn wire_lesson_revealed_for_test(&self) -> bool {
+        self.griffiths.wire.revealed()
+    }
+
+    /// Test seam: commit both wire predictions.
+    #[doc(hidden)]
+    pub fn predict_wire_for_test(
+        &mut self,
+        direction: WireDirectionPrediction,
+        inside: WireInsidePrediction,
+    ) {
+        self.griffiths.wire.select_direction_prediction(direction);
+        self.griffiths.wire.select_inside_prediction(inside);
+    }
+
+    /// Test seam: reveal the wire result.
+    #[doc(hidden)]
+    pub fn reveal_wire_for_test(&mut self) -> bool {
+        self.griffiths.wire.reveal()
+    }
+
+    /// Test seam: move the wire lesson's loop radius.
+    #[doc(hidden)]
+    pub fn set_wire_loop_for_test(&mut self, radius: f64) -> bool {
+        self.griffiths.wire.set_loop_radius(radius)
+    }
+
+    /// Test seam: select the wire loop orientation without changing the field.
+    #[doc(hidden)]
+    pub fn set_wire_orientation_for_test(&mut self, orientation: WireOrientation) {
+        self.griffiths.wire.set_orientation(orientation);
+    }
+
     /// Draw the optional Griffiths branch and apply its one-shot actions.
     fn show_griffiths_overlays(&mut self, ctx: &egui::Context) {
         match crate::ui::griffiths::show_picker(ctx, &mut self.griffiths) {
             GriffithsAction::OpenRing => self.start_griffiths_route(GriffithsRoute::Ring),
             GriffithsAction::OpenShell => self.start_griffiths_route(GriffithsRoute::Shell),
+            GriffithsAction::OpenWire => self.start_griffiths_route(GriffithsRoute::Wire),
             GriffithsAction::Placeholder(route) => self.griffiths.placeholder = Some(route),
             GriffithsAction::Dismiss => self.griffiths.close(),
             GriffithsAction::None => {}
@@ -1495,6 +1571,17 @@ impl VfApp {
             ShellLessonAction::Back => self.exit_griffiths_lesson(),
             ShellLessonAction::KeepExploring => self.keep_griffiths_scene(),
             ShellLessonAction::None => {}
+        }
+        match crate::ui::wire_lesson::show(
+            ctx,
+            &mut self.griffiths.wire,
+            &self.state.maxwell,
+            FieldFamily::Magnetic,
+            f64::from(self.state.time),
+        ) {
+            WireLessonAction::Back => self.exit_griffiths_lesson(),
+            WireLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            WireLessonAction::None => {}
         }
     }
 

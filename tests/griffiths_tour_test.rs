@@ -1,9 +1,10 @@
 //! Issue #223 phase 1: the optional Griffiths branch from the quick-tour
 //! welcome card and the Help window, plus its safe four-route picker.
 //!
-//! Only the charged-ring (#224) and charged-shell (#225) routes ship in this
-//! slice. The other two routes must stay reachable without changing the scene
-//! and must say plainly that their lesson is not available yet.
+//! The charged-ring (#224), charged-shell (#225) and surface-current wire
+//! (#227) routes ship in this slice. The grounded-plane route must stay
+//! reachable without changing the scene and must say plainly that its lesson
+//! is not available yet.
 
 use eframe::egui;
 
@@ -263,27 +264,26 @@ fn unavailable_routes_are_safe_labelled_placeholders() {
     h.idle();
     let before = h.app.capture_document_for_test();
     h.app.open_griffiths_branch();
-    for route in [GriffithsRoute::Plane, GriffithsRoute::Wire] {
-        assert!(!route.available(), "{route:?} is not implemented yet");
-        h.app.start_griffiths_route(route);
-        assert!(
-            h.app.griffiths_picker_open_for_test(),
-            "an unavailable route leaves the picker open instead of changing scene"
-        );
-        h.idle();
-        let out = h.frame(Vec::new());
-        let text = texts(&out).join("\n");
-        assert!(
-            text.contains("not available yet"),
-            "{route:?} explains its placeholder: {text}"
-        );
-        assert_eq!(
-            h.app.capture_document_for_test().view,
-            before.view,
-            "{route:?} must not change the scene"
-        );
-        assert!(!h.app.ring_lesson_active_for_test());
-    }
+    let route = GriffithsRoute::Plane;
+    assert!(!route.available(), "{route:?} is not implemented yet");
+    h.app.start_griffiths_route(route);
+    assert!(
+        h.app.griffiths_picker_open_for_test(),
+        "an unavailable route leaves the picker open instead of changing scene"
+    );
+    h.idle();
+    let out = h.frame(Vec::new());
+    let text = texts(&out).join("\n");
+    assert!(
+        text.contains("not available yet"),
+        "{route:?} explains its placeholder: {text}"
+    );
+    assert_eq!(
+        h.app.capture_document_for_test().view,
+        before.view,
+        "{route:?} must not change the scene"
+    );
+    assert!(!h.app.ring_lesson_active_for_test());
     assert!(
         h.app.close_griffiths_placeholder(),
         "the placeholder has a safe close action"

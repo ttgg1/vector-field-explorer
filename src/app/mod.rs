@@ -266,8 +266,8 @@ pub struct VfApp {
     /// persisted or recorded in history.
     pub tour: Option<TourProgress>,
     /// Issue #223 phase 1: the optional Griffiths branch, its four-route picker
-    /// and the ring/shell lessons. Session-only; never persisted or recorded in
-    /// history.
+    /// and the ring/shell/wire lessons. Session-only; never persisted or
+    /// recorded in history.
     pub griffiths: GriffithsState,
     /// The scene and camera captured before a Griffiths lesson opened, used by
     /// Back/Exit. `None` outside the lesson or after Keep exploring adopts.
