@@ -6083,7 +6083,7 @@ browser or JavaScript engine.
 **Public API.** `shared_context() -> &'static KatexContext`;
 `install_math_fonts(ctx)` (idempotent startup registration);
 `layout_math(ui, tex, context) -> Option<MathLayout>`;
-`MathLayout::{is_empty, size, paint}`;
+`MathLayout::{is_empty, size, paint_bounds, content_size, paint}`;
 `paint_tex_or_linear(ui, tex, linear) -> bool`; `show_linear(ui, linear)`;
 and the `#[doc(hidden)] math_layout_from_items` finiteness test seam.
 
@@ -6097,9 +6097,14 @@ at app startup (before the first frame, on native and WebAssembly through
 text, rectangles, line segments, and convex paths wholly inside their clip are
 emitted; radicals and other non-convex or clipped paths fall back to linear. A
 layout wider or taller than the available space falls back to linear instead of
-painting a clipped fragment. Dimensions use the body text size and the layout's
-baseline/depth. `Layout.tag` and `equation_numbers` are ignored because the
-settings never enable numbering and the printer never emits `\tag`.
+painting a clipped fragment. The painted extent is the union of every converted
+shape's `visual_bounding_rect`, not just KaTeX's width/height metadata; the
+caller allocates that union plus a small padding and [`MathLayout::paint`]
+offsets the shapes into it, so overhanging glyphs are never clipped to an empty
+strip. Both the metadata box and the painted bounds are checked against the
+available space before allocating. Dimensions use the body text size and the
+layout's baseline/depth. `Layout.tag` and `equation_numbers` are ignored because
+the settings never enable numbering and the printer never emits `\tag`.
 
 **wasm evidence.** `katex-rs` and `katex-native` are target-independent
 dependencies, and `math_view` compiles for `wasm32-unknown-unknown` so the
