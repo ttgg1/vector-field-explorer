@@ -36,8 +36,9 @@ use crate::custom_density::{
     DiagnosticsStatus, charge_report, continuity_report, validate_time_law_combination,
 };
 use crate::induction::{
-    InductionPrepared, InductionSampling, InductionScene, MAX_INDUCTION_DENSITY_2D,
-    MAX_INDUCTION_DENSITY_3D, induction_key, prepare_induction, sample_induction,
+    InductionPrepared, InductionSampling, InductionScene, InductionUnitMagneticField,
+    MAX_INDUCTION_DENSITY_2D, MAX_INDUCTION_DENSITY_3D, induction_key, prepare_induction,
+    sample_induction,
 };
 use crate::layer_style::{LayerId, LayerStyles, PhysicsFamily, ResolvedLayerStyle};
 
@@ -409,6 +410,11 @@ enum ProbeAdapterKind {
         scene: Box<InductionScene>,
         softening: f64,
         derivative: f64,
+        current: f64,
+        /// The unit-current magnetic half of the induction model, built only
+        /// when the caller asks for a magnetic family. The circulation and
+        /// point-probe E path is unchanged and never uses it.
+        magnetic: Option<InductionUnitMagneticField>,
     },
     Maxwell {
         scene: Box<MaxwellScene>,
@@ -437,7 +443,14 @@ impl ProbeField for ProbeAdapter {
                 scene,
                 softening,
                 derivative,
+                current,
+                magnetic,
             } => {
+                if self.family == FieldFamily::Magnetic {
+                    let unit = magnetic.as_ref()?.eval(point, 0.0)?;
+                    let value = unit.as_dvec3() * *current;
+                    return value.is_finite().then(|| value.as_vec3());
+                }
                 let point = point.as_dvec3();
                 let potential = scene.unit_vector_potential(point, *softening).ok()?;
                 let offset = point - scene.center;
@@ -3541,21 +3554,27 @@ impl State {
                 })
             }
             FieldMode::Induction => {
-                if self.probe_family == FieldFamily::Magnetic {
-                    return Err(
-                        "Induction mode supplies the induced electric field only; a magnetic probe is unsupported."
-                            .to_string(),
-                    );
-                }
                 self.induction
                     .validate()
                     .map_err(|error| format!("Induction scene is invalid: {error}"))?;
+                let magnetic = if self.probe_family == FieldFamily::Magnetic {
+                    Some(
+                        InductionUnitMagneticField::new(&self.induction, self.sources.softening)
+                            .map_err(|error| {
+                                format!("Induction magnetic field is unavailable: {error}")
+                            })?,
+                    )
+                } else {
+                    None
+                };
                 Ok(ProbeAdapter {
                     family: self.probe_family,
                     kind: ProbeAdapterKind::Induction {
                         scene: Box::new(self.induction.clone()),
                         softening: self.sources.softening,
                         derivative: self.induction.current_derivative(self.time),
+                        current: self.induction.current(self.time),
+                        magnetic,
                     },
                 })
             }

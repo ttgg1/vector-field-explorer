@@ -222,8 +222,10 @@ fn unsupported_modes_report_a_reason_instead_of_a_number() {
         other => panic!("Ode must be unsupported, got {other:?}"),
     }
 
-    // Induction supplies the induced electric field only; a magnetic check is
-    // refused with text instead of a number.
+    // Issue #220: Induction supplies the induced electric field and its
+    // unit-current magnetic field, so a magnetic check now resolves instead of
+    // being refused. The closed surface encloses no magnetic charge, so its
+    // flux stays zero within the reported spread.
     state.set_field_mode(FieldMode::Induction);
     state.set_probe_family(FieldFamily::Magnetic);
     state.refresh_probe_reports(true);
@@ -232,20 +234,14 @@ fn unsupported_modes_report_a_reason_instead_of_a_number() {
         .expect("a report exists")
         .status
     {
-        IntegralStatus::Unresolved { reason } | IntegralStatus::Singular { reason } => {
-            let reason = reason.to_lowercase();
+        IntegralStatus::Estimate { value, error } => {
+            assert!(value.is_finite());
             assert!(
-                reason.contains("induction"),
-                "a refused induction check names the mode: {reason}"
-            );
-            assert!(
-                reason.contains("magnetic"),
-                "a refused induction check names the family: {reason}"
+                value.abs() <= error + 1e-6,
+                "a closed surface around the induction B has zero net flux, got {value} ± {error}"
             );
         }
-        IntegralStatus::Estimate { value, .. } => {
-            panic!("a magnetic induction check must not claim a number: {value}")
-        }
+        other => panic!("an induction magnetic check must now resolve, got {other:?}"),
     }
 }
 
