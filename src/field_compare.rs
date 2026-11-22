@@ -13,6 +13,7 @@ use glam::Vec3;
 
 use crate::domain::Domain;
 use crate::field::FieldExpr;
+use crate::plane::PlaneFrame;
 
 /// The identity disclaimer every sampled reading carries.
 pub const NOT_IDENTITY_NOTE: &str = "Agreement is sampled at the shown points, not a symbolic identity; no symbolic check is performed.";
@@ -176,13 +177,84 @@ pub fn compare_samples(
     time: f64,
     domain: &Domain,
 ) -> ComparisonReport {
+    compare_in_frame(model, candidate, first, second, time, domain, None)
+}
+
+/// Compare at two slice-local points, lifting them through the active
+/// [`PlaneFrame`] before sampling the world field. Without a frame this is
+/// [`compare_samples`] over `local_domain`.
+///
+/// `local_domain` validates the ordinary, frame-free path; `world_domain`
+/// validates the lifted points. The report points are world coordinates,
+/// while the UI keeps the editable inputs in slice-local `(u, v, w)`.
+#[allow(clippy::too_many_arguments)]
+pub fn compare_samples_in_frame(
+    model: &FieldExpr,
+    candidate: &FieldExpr,
+    first: Vec3,
+    second: Vec3,
+    time: f64,
+    local_domain: &Domain,
+    world_domain: &Domain,
+    frame: Option<&PlaneFrame>,
+) -> ComparisonReport {
+    match frame {
+        Some(frame) => compare_in_frame(
+            model,
+            candidate,
+            frame.to_world(first),
+            frame.to_world(second),
+            time,
+            world_domain,
+            Some(frame),
+        ),
+        None => compare_in_frame(model, candidate, first, second, time, local_domain, None),
+    }
+}
+
+fn compare_in_frame(
+    model: &FieldExpr,
+    candidate: &FieldExpr,
+    first: Vec3,
+    second: Vec3,
+    time: f64,
+    domain: &Domain,
+    frame: Option<&PlaneFrame>,
+) -> ComparisonReport {
     let first = compare_point(model, candidate, first, time, domain);
     let second = compare_point(model, candidate, second, time, domain);
-    let note = sampled_agreement_note(&first, &second);
+    let mut note = sampled_agreement_note(&first, &second);
+    if frame.is_some() {
+        note.push_str(
+            " Inputs are slice-local (u, v, w); sampling and values use their world coordinates.",
+        );
+    }
     ComparisonReport {
         first,
         second,
         note,
+    }
+}
+
+/// Compare one slice-local point through the active frame.
+pub fn compare_point_in_frame(
+    model: &FieldExpr,
+    candidate: &FieldExpr,
+    local_point: Vec3,
+    time: f64,
+    local_domain: &Domain,
+    world_domain: &Domain,
+    frame: Option<&PlaneFrame>,
+) -> PointComparison {
+    match frame {
+        Some(frame) => compare_point(
+            model,
+            candidate,
+            frame.to_world(local_point),
+            time,
+            world_domain,
+        ),
+        None => compare_point(model, candidate, local_point, time, local_domain),
     }
 }
 

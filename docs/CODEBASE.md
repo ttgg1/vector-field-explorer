@@ -400,7 +400,10 @@ card has a title and body and uses a `UiKind::Modal` stack kind for an
 accessible dialog role without blocking viewport pointer input. There is no
 pulsing, timer or auto-advance. `VfApp::tour` is the only new state: it is
 session-only, never in `ViewRecord`/`AppSettings`, and start/advance/back/
-dismiss/finish never touch `dirty`, the document or the edit history. Collapsed
+dismiss/finish never touch `dirty`, the document or the edit history. Session
+progress and the document are separate contracts: the flux stop's adapter
+switch is a real undoable document edit through `State::set_field_mode`, not a
+tour-only mutation. Collapsed
 targets open through `LayoutState::toggle_*` in wide layout and the existing
 compact sheet in compact layout; a second layout path does not exist.
 

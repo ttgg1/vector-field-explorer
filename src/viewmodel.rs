@@ -693,6 +693,13 @@ pub struct State {
     /// Pending lazy solve while Ode is active. Private: callers use the scene
     /// setters and [`State::refresh_ode_if_dirty`].
     ode_dirty: bool,
+    /// Bumped whenever a whole persisted view is restored. Panel drafts compare
+    /// it to resync after a load or undo without sampling every frame.
+    pub(crate) view_restore_epoch: u64,
+    /// Inputs behind the stored `CurrentField` solution. Presentation-only
+    /// restores compare this so an unchanged solution survives undo without a
+    /// lazy re-solve; typed-equation solutions need no field key.
+    ode_solution_inputs: Option<(String, ParameterSet, Domain, usize)>,
     pub dirty: bool,
     /// Transient simulated time mirrored from the clock. Not persisted.
     pub time: f32,
@@ -1623,6 +1630,8 @@ impl State {
             ode_chart: OdeChart::Phase,
             ode_variables: [true, true, false],
             ode_dirty: false,
+            view_restore_epoch: 0,
+            ode_solution_inputs: None,
             dirty: true,
             time: 0.0,
             field_sample_cache: RefCell::new(FieldSampleCache::default()),
@@ -1633,6 +1642,12 @@ impl State {
             field_bake_error: None,
             field_sample_passes: Cell::new(0),
         }
+    }
+
+    /// How many whole-view restores have replaced the document. Session-only;
+    /// never persisted or part of history.
+    pub fn view_restore_epoch(self: &State) -> u64 {
+        self.view_restore_epoch
     }
 
     /// The formula the field bar holds. Re-parsing it marks the scene dirty
@@ -1811,6 +1826,7 @@ impl State {
             Ok(solution) => {
                 self.ode = scene;
                 self.ode_solution = Some(Arc::new(solution));
+                self.ode_solution_inputs = Some(self.current_field_ode_key());
                 self.ode_error = None;
                 self.ode_epoch = self.ode_epoch.wrapping_add(1);
                 self.ode_dirty = false;
@@ -1840,6 +1856,7 @@ impl State {
         match solve_ode(self, &self.ode) {
             Ok(solution) => {
                 self.ode_solution = Some(Arc::new(solution));
+                self.ode_solution_inputs = Some(self.current_field_ode_key());
                 self.ode_error = None;
                 self.ode_epoch = self.ode_epoch.wrapping_add(1);
                 self.dirty = true;
@@ -1871,9 +1888,25 @@ impl State {
         } else {
             [true, true, false]
         };
+        // A restore that asks for exactly the live ODE document must not queue
+        // a re-solve or reset playback. This is the undo/presentation path:
+        // the durable inputs are unchanged even though the whole document was
+        // reapplied. A changed CurrentField input still invalidates the key.
+        let current_field_key = self.current_field_ode_key();
+        let unchanged_solution = !self.ode_dirty
+            && self.ode_solution.is_some()
+            && self.ode == scene
+            && self.ode_chart == chart
+            && self.ode_variables == variables
+            && (scene.source != crate::ode::OdeSource::CurrentField
+                || self.ode_solution_inputs.as_ref() == Some(&current_field_key));
+        if unchanged_solution {
+            return Ok(());
+        }
         self.ode_chart = chart;
         self.ode_variables = variables;
         self.ode_solution = None;
+        self.ode_solution_inputs = None;
         match prepare_ode(self, &scene) {
             Ok(_) => {
                 self.ode = scene;
@@ -1904,15 +1937,27 @@ impl State {
             }
             Err(error) => {
                 self.ode_solution = None;
+                self.ode_solution_inputs = None;
                 self.ode_error = Some(error.to_string());
             }
         }
         self.ode = scene;
         self.ode_chart = OdeChart::Phase;
         self.ode_variables = [true, true, false];
+        self.ode_solution_inputs = Some(self.current_field_ode_key());
         self.ode_epoch = self.ode_epoch.wrapping_add(1);
         self.ode_dirty = false;
         self.dirty = true;
+    }
+
+    /// The field inputs a `CurrentField` solution depends on.
+    fn current_field_ode_key(&self) -> (String, ParameterSet, Domain, usize) {
+        (
+            self.formula.clone(),
+            self.parameters.clone(),
+            self.domain,
+            self.field.dimension,
+        )
     }
 
     /// Select the ODE chart. Returns whether it changed.
@@ -4110,12 +4155,19 @@ impl State {
     /// Turn the opt-in on (building once at the current resolution) or off
     /// (clearing the lattice so the exact flow resumes byte-identically).
     pub fn set_field_bake_enabled(self: &mut State, enabled: bool) {
+        let was_enabled = self.field_bake_enabled;
+        let had_lattice = self.field_bake.is_some();
         self.field_bake_enabled = enabled;
         if enabled {
             let resolution = self.bake_resolution();
             let _ = self.rebuild_field_bake(resolution);
         } else {
             self.clear_field_bake();
+            if was_enabled && had_lattice {
+                // The painted streamlines/particles must not keep tracing the
+                // dropped lattice while the arrows return to the exact field.
+                self.mark_dirty();
+            }
         }
     }
 
@@ -4142,6 +4194,9 @@ impl State {
         }
         *slot = resolution;
         self.clear_field_bake();
+        // The old lattice no longer matches the selected resolution, so any
+        // cached streamlines traced through it must be rebuilt.
+        self.mark_dirty();
         true
     }
 
@@ -4192,6 +4247,8 @@ impl State {
             Ok(baked) => {
                 self.field_bake = Some(baked);
                 self.field_bake_error = None;
+                // Installing a new evaluator invalidates cached flow geometry.
+                self.mark_dirty();
                 Ok(())
             }
             Err(error) => {

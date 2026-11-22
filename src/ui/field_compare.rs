@@ -196,8 +196,25 @@ pub fn show_body(ui: &mut egui::Ui, state: &State, controls: &mut FieldCompareCo
 
     ui.add_space(ui.spacing().item_spacing.y);
     let domain = state.scene_domain();
-    ui.horizontal_wrapped(|ui| point_row(ui, "Point A", &mut controls.point_a, &domain));
-    ui.horizontal_wrapped(|ui| point_row(ui, "Point B", &mut controls.point_b, &domain));
+    let slice = state.plane_frame();
+    ui.horizontal_wrapped(|ui| {
+        point_row(
+            ui,
+            "Point A",
+            &mut controls.point_a,
+            &domain,
+            slice.is_some(),
+        )
+    });
+    ui.horizontal_wrapped(|ui| {
+        point_row(
+            ui,
+            "Point B",
+            &mut controls.point_b,
+            &domain,
+            slice.is_some(),
+        )
+    });
     if ui
         .button("Use 2× A")
         .on_hover_text(
@@ -238,13 +255,16 @@ pub fn show_body(ui: &mut egui::Ui, state: &State, controls: &mut FieldCompareCo
         return;
     }
 
-    let report = field_compare::compare_samples(
+    let frame = state.plane_frame();
+    let report = field_compare::compare_samples_in_frame(
         &state.field,
         &candidate,
         controls.point_a,
         controls.point_b,
         state.time as f64,
         &domain,
+        &state.domain,
+        frame.as_ref(),
     );
 
     ui.add_space(ui.spacing().item_spacing.y);
@@ -252,12 +272,14 @@ pub fn show_body(ui: &mut egui::Ui, state: &State, controls: &mut FieldCompareCo
         // Grade at the point the student predicted, not at any later edit of
         // Point A; the comparison itself still shows the current points.
         let predicted_point = controls.prediction_point_a.unwrap_or(controls.point_a);
-        let predicted = field_compare::compare_point(
+        let predicted = field_compare::compare_point_in_frame(
             &state.field,
             &candidate,
             predicted_point,
             state.time as f64,
             &domain,
+            &state.domain,
+            frame.as_ref(),
         );
         ui.label(format!("Prediction: {}.", prediction.label()));
         ui.label(format!(
@@ -297,27 +319,49 @@ pub fn show_body(ui: &mut egui::Ui, state: &State, controls: &mut FieldCompareCo
     ui.label(TEACHING_UNITS_NOTE);
 }
 
-fn point_row(ui: &mut egui::Ui, label: &str, point: &mut Vec3, domain: &Domain) {
+fn point_row(ui: &mut egui::Ui, label: &str, point: &mut Vec3, domain: &Domain, slice_local: bool) {
     ui.label(label);
-    for (axis, value) in [
-        ("x", &mut point.x),
-        ("y", &mut point.y),
-        ("z", &mut point.z),
-    ] {
-        let range = match axis {
-            "x" => domain.min.x..=domain.max.x,
-            "y" => domain.min.y..=domain.max.y,
+    let axes = if slice_local {
+        ["u", "v", "w"]
+    } else {
+        ["x", "y", "z"]
+    };
+    for (index, (axis, value)) in [
+        (axes[0], &mut point.x),
+        (axes[1], &mut point.y),
+        (axes[2], &mut point.z),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // Select the range by component index, never by the display label:
+        // slice-local labels are u/v/w, but they address the same local
+        // x/y/z components and therefore the same local domain ranges.
+        let range = match index {
+            0 => domain.min.x..=domain.max.x,
+            1 => domain.min.y..=domain.max.y,
             _ => domain.min.z..=domain.max.z,
         };
-        ui.add(
-            egui::DragValue::new(value)
-                .speed(0.01)
-                .range(range)
-                .max_decimals(3),
-        )
-        .on_hover_text(format!(
-            "{label} {axis}; constrained to the visible sampled domain"
-        ));
+        let mut drag = egui::DragValue::new(value)
+            .speed(0.01)
+            .range(range)
+            .max_decimals(3);
+        if slice_local {
+            // The local-axis name is the visible label of the value.
+            drag = drag.prefix(format!("{axis} "));
+        }
+        ui.add(drag)
+        .on_hover_text(if slice_local {
+            if index == 2 {
+                format!(
+                    "{label} slice-local {axis} is the out-of-plane offset and stays at 0 for a plane slice; u and v are lifted through the active plane before sampling"
+                )
+            } else {
+                format!("{label} slice-local {axis}; lifted through the active plane before sampling")
+            }
+        } else {
+            format!("{label} {axis}; constrained to the visible sampled domain")
+        });
     }
 }
 

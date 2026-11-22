@@ -486,6 +486,11 @@ impl Bindings {
                     // create a duplicate.
                     return Err(BindError::Conflict(owner));
                 };
+                // Validate the reverse move before mutating either row: the
+                // displaced chord must also be legal for its new owner. A
+                // grandfathered chord (for example Screenshot's Mod+Shift+S)
+                // cannot migrate to another action.
+                Self::check_target(owner, replacement)?;
                 self.set(owner, replacement);
                 self.set(action, chord);
             }

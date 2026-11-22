@@ -19,13 +19,17 @@ use vector_field_explorer::custom_density::{
 };
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::edit_history::EditScope;
+use vector_field_explorer::material::{MaterialCase, MaterialScene};
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::persistence::ViewRecord;
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::scalar::ScalarContext;
 use vector_field_explorer::scalar_view::MAX_PROBES;
+use vector_field_explorer::scene_document::{SceneCamera, SceneDocument};
 use vector_field_explorer::seed_layout::{SeedAnchor, SeedLayout, SeedPoint, clamp_seed_local};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::menu::MenuAction;
+use vector_field_explorer::ui::presets::PresetPanel;
 use vector_field_explorer::viewport_style::ViewportStyle;
 
 /// Run one full production frame with the given events at a desktop size.
@@ -561,6 +565,111 @@ fn menu_camera_reset_is_reachable_recorded_and_reversible() {
     assert_eq!(app.state.formula, formula);
     assert_eq!(app.history_len(), 1);
     assert_eq!(app.history_redo_len(), 1);
+}
+
+#[test]
+fn same_mode_load_resyncs_the_materials_draft() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    idle(&ctx, &mut app);
+    app.state.set_field_mode(FieldMode::Materials);
+    let saved = MaterialScene {
+        case: MaterialCase::PermeableSphere,
+        radius: 0.8,
+        ..MaterialScene::default()
+    };
+    app.state
+        .set_material_scene(saved.clone())
+        .expect("the saved material scene is valid");
+    let document = SceneDocument::capture(
+        "Saved materials",
+        ViewRecord::capture(&app.state),
+        app.state.parameters.clone(),
+        SceneCamera::default(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut presets = PresetPanel::new_with_dir(dir.path().to_path_buf()).unwrap();
+    presets.insert_scene(document).expect("the scene saves");
+    app.presets = presets;
+
+    // A same-mode state change with a stale user draft: the draft still names
+    // the old scene and would overwrite the restored one on the next edit.
+    app.state
+        .set_material_scene(MaterialScene::default())
+        .expect("a valid live material scene");
+    app.material.sync_from(&app.state);
+    app.material.draft.case = MaterialCase::DielectricBoundary;
+
+    app.test_load_scene("Saved materials");
+    assert_eq!(app.state.material, saved);
+    assert_eq!(
+        app.material.draft, app.state.material,
+        "loading must rebind the panel draft to the restored model"
+    );
+}
+
+#[test]
+fn same_mode_undo_resyncs_the_materials_draft() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    idle(&ctx, &mut app);
+    app.state.set_field_mode(FieldMode::Materials);
+    idle(&ctx, &mut app);
+    app.material.sync_from(&app.state);
+    let restored = app.state.material.clone();
+
+    // A direct durable edit is recorded by the next idle frame. The panel
+    // draft stays on the old scene until a restore replaces the model.
+    app.state
+        .set_material_scene(MaterialScene {
+            case: MaterialCase::PermeableSphere,
+            ..MaterialScene::default()
+        })
+        .expect("a valid live material scene");
+    app.material.draft.case = MaterialCase::DielectricBoundary;
+    idle(&ctx, &mut app);
+
+    assert!(app.undo_document(&ctx));
+    idle(&ctx, &mut app);
+    assert_eq!(app.state.material, restored);
+    assert_eq!(
+        app.material.draft, app.state.material,
+        "undo must rebind the panel draft to the restored model"
+    );
+}
+
+#[test]
+fn undo_after_an_ode_step_preserves_the_solution_and_playback_clock() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    idle(&ctx, &mut app);
+    app.state.set_field_mode(FieldMode::Ode);
+    app.test_harness().advance_simulation();
+    app.test_harness().ode_step();
+    let clock = app.clock.time;
+    let epoch = app.state.ode_epoch;
+    let solution = app.state.ode_solution.clone().expect("solved");
+
+    // An unrelated document edit records one history entry; undoing it must
+    // restore the document without restarting ODE playback.
+    app.state.set_formula("(y, -x)".into());
+    idle(&ctx, &mut app);
+    assert_eq!(app.history_len(), 1);
+    assert!(app.undo_document(&ctx));
+    app.test_harness().advance_simulation();
+
+    assert_eq!(
+        app.state.ode_epoch, epoch,
+        "the solution epoch is unchanged"
+    );
+    assert!(
+        std::sync::Arc::ptr_eq(
+            &solution,
+            app.state.ode_solution.as_ref().expect("preserved solution")
+        ),
+        "the unchanged solution is preserved, not re-solved"
+    );
+    assert_eq!(app.clock.time, clock, "stepped playback time survives undo");
 }
 
 #[test]

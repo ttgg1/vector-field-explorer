@@ -12,8 +12,10 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::field_compare::{
     ComparisonReport, DirectionRelation, SideSample, compare_point, compare_samples,
+    compare_samples_in_frame,
 };
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::field_compare::{
     FieldCompareControls, Prediction, show_body, visible,
@@ -62,6 +64,49 @@ fn a_matching_candidate_agrees_at_regular_sampled_points() {
     assert!(
         report.note.contains("not a symbolic identity"),
         "no identity is claimed: {}",
+        report.note
+    );
+}
+
+#[test]
+fn a_plane_comparison_lifts_local_points_to_world_before_sampling() {
+    let domain = Domain::default();
+    // An X-normal slice through the domain centre: local u is world -z, local
+    // v is world y, and local w is the world x offset from the chosen plane.
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            enabled: true,
+            axis: PlaneAxis::X,
+            index: 8,
+        },
+        glam::UVec3::new(17, 17, 17),
+    );
+    let local_first = Vec3::new(0.5, -0.25, 0.0);
+    let local_second = Vec3::new(-0.75, 0.5, 0.0);
+    let model = FieldExpr::parse("(x, y, z)").expect("model parses");
+    let candidate = model.clone();
+
+    let report = compare_samples_in_frame(
+        &model,
+        &candidate,
+        local_first,
+        local_second,
+        0.0,
+        &domain,
+        &domain,
+        Some(&frame),
+    );
+
+    for (reading, local) in [(&report.first, local_first), (&report.second, local_second)] {
+        let world = frame.to_world(local);
+        assert_vector_close(reading.point, world);
+        assert_vector_close(available(&reading.model), world);
+        assert_vector_close(available(&reading.candidate), world);
+    }
+    assert!(
+        report.note.contains("world"),
+        "the note distinguishes world sampling from slice-local inputs: {}",
         report.note
     );
 }
@@ -470,6 +515,48 @@ fn the_comparison_body_fits_a_compact_sidebar_and_names_the_second_point() {
             .iter()
             .any(|label| label.contains("2×") || label.contains("2x")),
         "the second point offers the radial 2x reading: {labels:?}"
+    );
+}
+
+#[test]
+fn a_plane_slice_keeps_local_u_v_points_and_labels_them() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut state = State::new(false);
+    // A three-component field in 2D is a plane slice, so the editable points
+    // are slice-local (u, v, w) rather than world (x, y, z).
+    state.set_formula("(x, y, z)".to_owned());
+    state.set_plane_axis(PlaneAxis::X);
+    state.set_plane_index(8);
+    assert!(
+        state.plane_frame().is_some(),
+        "the three-component field renders through a plane frame"
+    );
+
+    let mut controls = FieldCompareControls::default();
+    controls.candidate_text = "(x, y, z)".to_owned();
+    controls.apply(&state.parameters);
+    controls.skip();
+    controls.point_a = Vec3::new(0.5, -0.25, 0.0);
+    controls.point_b = Vec3::new(-0.75, 0.5, 0.0);
+
+    let labels = run_body(&ctx, &state, &mut controls, true);
+
+    for axis in ["u", "v", "w"] {
+        assert!(
+            labels.iter().any(|label| label == axis),
+            "the slice-local {axis} axis is labelled: {labels:?}"
+        );
+    }
+    assert_eq!(
+        controls.point_a,
+        Vec3::new(0.5, -0.25, 0.0),
+        "a nonzero local u/v point survives the frame instead of being clamped to zero"
+    );
+    assert_eq!(
+        controls.point_b,
+        Vec3::new(-0.75, 0.5, 0.0),
+        "the second nonzero local u/v point survives the frame"
     );
 }
 

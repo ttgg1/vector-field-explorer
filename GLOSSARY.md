@@ -143,8 +143,9 @@ _Avoid_: 2D slice
 **CAS**:
 The optional symbolic tool that differentiates formulas and derives gradient,
 divergence, and curl without solving equations. It edits the formula field only,
-never a source, induction, materials, or ODE scene; it is disabled outside
-Formula.
+never a source, induction, materials, Maxwell, or ODE scene; it is disabled
+outside Formula. Its result rows are session-only scratch until explicitly
+added to a scene or overlay, which is a separate document edit.
 _Avoid_: solver, evaluator
 
 **Source scene**:
@@ -156,9 +157,10 @@ _Avoid_: source preset, source configuration
 **Field mode**:
 The exclusive choice among Formula (a typed vector expression), Sources (the
 editable source scene), Induction (the Faraday teaching demo), Materials (the
-bounded analytic material cases), and Ode (the precomputed trajectory
-workbench). Switching preserves every durable state and never merges them;
-loading a classic preset returns to Formula.
+bounded analytic material cases), Maxwell (the bounded analytic Maxwell cases),
+and Ode (the precomputed trajectory workbench). Switching preserves every
+durable state and never merges them; loading a classic preset returns to
+Formula.
 _Avoid_: source toggle, plot kind
 
 **Material case**:

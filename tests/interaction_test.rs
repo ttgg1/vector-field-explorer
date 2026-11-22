@@ -303,6 +303,32 @@ fn replace_swaps_chords_so_no_duplicate_exists() {
 }
 
 #[test]
+fn replace_refuses_a_swap_that_would_move_a_grandfathered_chord() {
+    let mut bindings = Bindings::default_bindings();
+    let before = bindings.clone();
+    let add_particles = documented_default(InteractionAction::AddParticles);
+
+    // Swapping would move Screenshot's grandfathered Mod+Shift+S onto
+    // AddParticles, leaving an invalid table that a restart would repair by
+    // silently dropping the bind. Refuse the whole move instead.
+    assert_eq!(
+        bindings.replace(InteractionAction::Screenshot, add_particles),
+        Err(BindError::BrowserReserved),
+        "the displaced chord must also be valid for its new owner"
+    );
+    assert_eq!(bindings, before, "a refused swap changes nothing");
+    assert!(bindings.validate().is_ok());
+    assert_eq!(
+        bindings.chord(InteractionAction::Screenshot),
+        Some(chord(Key::S, true, true, false))
+    );
+    assert_eq!(
+        bindings.chord(InteractionAction::AddParticles),
+        Some(add_particles)
+    );
+}
+
+#[test]
 fn browser_reserved_chords_are_refused_with_a_reason() {
     let browser = [
         command(Key::W),
