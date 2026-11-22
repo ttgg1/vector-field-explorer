@@ -555,3 +555,49 @@ fn opening_and_closing_help_in_the_cas_panel_leaves_the_document_unchanged() {
     assert_eq!(app.capture_document_for_test(), document);
     assert_eq!(app.history_len(), history, "closing help is not an edit");
 }
+
+#[test]
+fn escape_in_the_cas_panel_dismisses_help_and_leaves_the_document_unchanged() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.cas_expanded = true;
+    app.layout.controls_width = 460.0;
+    app.layout.cas_width = 460.0;
+
+    let seeded = parsed_state();
+    ctx.data_mut(|data| data.insert_temp(prompt_model_ui::state_id(), seeded.clone()));
+
+    let mut output = app_frame(&ctx, &mut app, Vec::new());
+    for _ in 0..3 {
+        output = app_frame(&ctx, &mut app, Vec::new());
+    }
+    let document = app.capture_document_for_test();
+    let history = app.history_len();
+
+    let toggle = button_rect(&output, prompt_help::TOGGLE_LABEL)
+        .expect("the CAS panel renders the Help / Glossary control");
+    let output = app_click(&ctx, &mut app, toggle.center());
+    assert!(
+        stored_state(&ctx).help_open,
+        "the in-panel control opens the glossary before Escape arrives"
+    );
+    assert!(painted(&output, prompt_help::TITLE));
+
+    let output = app_frame(&ctx, &mut app, vec![key_event(egui::Key::Escape)]);
+    let state = stored_state(&ctx);
+    assert!(
+        !state.help_open,
+        "Escape through the real app frame dismisses the in-panel glossary"
+    );
+    assert!(
+        !painted(&output, prompt_help::TITLE),
+        "the dismissed glossary no longer paints"
+    );
+    assert_eq!(state.input, seeded.input);
+    assert_eq!(state.model, seeded.model);
+    assert_eq!(app.capture_document_for_test(), document);
+    assert_eq!(app.history_len(), history, "dismissing help is not an edit");
+}

@@ -3199,8 +3199,10 @@ key so the app and tests share one state instance.
 session-only; opening it does not parse, apply, persist or edit anything.
 Accepted and rejected examples are validated against
 `prompt_model::parse_prompt` in `tests/prompt_help_test.rs`, so the help cannot
-drift into a second grammar. Rejected distribution nouns appear only under the
-rejected examples.
+drift into a second grammar. Each `UNSUPPORTED_DISTRIBUTION_TERMS` noun is
+absent from `ACCEPTED_EXAMPLES` and has a matching `REJECTED_EXAMPLES` prompt;
+that restriction covers the example tables, not prose that merely names an
+unsupported distribution.
 
 **Limitations.** The help is a long in-panel glossary, not a separate window or
 saved document.
