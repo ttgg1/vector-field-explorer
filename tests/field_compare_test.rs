@@ -519,6 +519,48 @@ fn the_comparison_body_fits_a_compact_sidebar_and_names_the_second_point() {
 }
 
 #[test]
+fn a_plane_slice_keeps_local_u_v_points_and_labels_them() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut state = State::new(false);
+    // A three-component field in 2D is a plane slice, so the editable points
+    // are slice-local (u, v, w) rather than world (x, y, z).
+    state.set_formula("(x, y, z)".to_owned());
+    state.set_plane_axis(PlaneAxis::X);
+    state.set_plane_index(8);
+    assert!(
+        state.plane_frame().is_some(),
+        "the three-component field renders through a plane frame"
+    );
+
+    let mut controls = FieldCompareControls::default();
+    controls.candidate_text = "(x, y, z)".to_owned();
+    controls.apply(&state.parameters);
+    controls.skip();
+    controls.point_a = Vec3::new(0.5, -0.25, 0.0);
+    controls.point_b = Vec3::new(-0.75, 0.5, 0.0);
+
+    let labels = run_body(&ctx, &state, &mut controls, true);
+
+    for axis in ["u", "v", "w"] {
+        assert!(
+            labels.iter().any(|label| label == axis),
+            "the slice-local {axis} axis is labelled: {labels:?}"
+        );
+    }
+    assert_eq!(
+        controls.point_a,
+        Vec3::new(0.5, -0.25, 0.0),
+        "a nonzero local u/v point survives the frame instead of being clamped to zero"
+    );
+    assert_eq!(
+        controls.point_b,
+        Vec3::new(-0.75, 0.5, 0.0),
+        "the second nonzero local u/v point survives the frame"
+    );
+}
+
+#[test]
 fn a_prediction_grade_names_the_point_it_was_made_at() {
     let ctx = support::context();
     ctx.enable_accesskit();

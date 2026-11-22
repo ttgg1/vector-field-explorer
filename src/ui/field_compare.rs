@@ -326,24 +326,39 @@ fn point_row(ui: &mut egui::Ui, label: &str, point: &mut Vec3, domain: &Domain, 
     } else {
         ["x", "y", "z"]
     };
-    for (axis, value) in [
+    for (index, (axis, value)) in [
         (axes[0], &mut point.x),
         (axes[1], &mut point.y),
         (axes[2], &mut point.z),
-    ] {
-        let range = match axis {
-            "x" => domain.min.x..=domain.max.x,
-            "y" => domain.min.y..=domain.max.y,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // Select the range by component index, never by the display label:
+        // slice-local labels are u/v/w, but they address the same local
+        // x/y/z components and therefore the same local domain ranges.
+        let range = match index {
+            0 => domain.min.x..=domain.max.x,
+            1 => domain.min.y..=domain.max.y,
             _ => domain.min.z..=domain.max.z,
         };
-        ui.add(
-            egui::DragValue::new(value)
-                .speed(0.01)
-                .range(range)
-                .max_decimals(3),
-        )
+        let mut drag = egui::DragValue::new(value)
+            .speed(0.01)
+            .range(range)
+            .max_decimals(3);
+        if slice_local {
+            // The local-axis name is the visible label of the value.
+            drag = drag.prefix(format!("{axis} "));
+        }
+        ui.add(drag)
         .on_hover_text(if slice_local {
-            format!("{label} slice-local {axis}; lifted through the active plane before sampling")
+            if index == 2 {
+                format!(
+                    "{label} slice-local {axis} is the out-of-plane offset and stays at 0 for a plane slice; u and v are lifted through the active plane before sampling"
+                )
+            } else {
+                format!("{label} slice-local {axis}; lifted through the active plane before sampling")
+            }
         } else {
             format!("{label} {axis}; constrained to the visible sampled domain")
         });
