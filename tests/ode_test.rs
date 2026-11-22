@@ -74,6 +74,33 @@ fn rk4_halving_the_step_reduces_error_by_at_least_eight() {
 }
 
 #[test]
+fn a_short_final_remainder_reaches_the_requested_endpoint() {
+    let state = State::new(true);
+    let mut scene = typed(["-y", "x", "0"], 2);
+    scene.duration = 0.007;
+    let prepared = prepare_ode(&state, &scene).expect("prepared");
+    let solution = integrate_ode_with_step(&prepared, 0.005, ODE_MAX_SAMPLES);
+    let trajectory = &solution.trajectories[0];
+
+    assert_eq!(
+        trajectory.stop,
+        OdeStop::Complete,
+        "a bounded remainder step completes the requested span"
+    );
+    let last = trajectory.points.last().expect("at least the start sample");
+    assert!(
+        (last.time - scene.duration).abs() < 1e-12,
+        "the last stored sample is the requested endpoint, got {}",
+        last.time
+    );
+    let end = solution.sample_at(0, scene.duration).expect("endpoint");
+    assert_eq!(
+        end.position, last.position,
+        "the endpoint is not relabelled"
+    );
+}
+
+#[test]
 fn step_limit_is_explicit_and_bounded() {
     let state = State::new(true);
     let mut scene = typed(["-y", "x", "0"], 2);

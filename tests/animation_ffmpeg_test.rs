@@ -290,6 +290,49 @@ mod unix_fake_ffmpeg {
     }
 
     #[test]
+    fn a_stalled_encoder_fails_without_blocking_the_calling_thread() {
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("out.mp4");
+        // This encoder never reads stdin, so its pipe fills.
+        let program = script(dir.path(), "#!/bin/sh\nsleep 2\n");
+        let spec = AnimationSpec {
+            width: 256,
+            height: 256,
+            duration: 1.0,
+            fps: 10,
+            ..spec(AnimationFormat::Mp4)
+        };
+
+        let mut sink = open_video_sink(&spec, &output, &provenance(), &program);
+        let frame = frame(&spec);
+        let started = std::time::Instant::now();
+        let mut failure = None;
+        for _ in 0..frame_count(&spec).unwrap() {
+            if let Err(error) = sink.push_frame(&frame, spec.width, spec.height) {
+                failure = Some(error);
+                break;
+            }
+        }
+        let elapsed = started.elapsed();
+        let failure = failure.expect("a stalled encoder must fail visibly, not accept frames");
+        assert!(
+            matches!(
+                failure,
+                AnimationError::External(_) | AnimationError::Encoder(_) | AnimationError::Io(_)
+            ),
+            "the failure names the encoder problem: {failure:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "the failure is bounded, got {elapsed:?}"
+        );
+        assert!(
+            !output.exists(),
+            "a failed export leaves no destination file"
+        );
+    }
+
+    #[test]
     fn nonzero_ffmpeg_exit_surfaces_stderr_and_removes_the_temp_file() {
         let dir = tempdir().unwrap();
         let output = dir.path().join("out.webm");

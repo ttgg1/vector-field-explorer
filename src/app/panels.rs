@@ -42,6 +42,7 @@ impl VfApp {
         self.show_top_bar(ui, ctx);
         self.show_formula_bar(ui);
         self.apply_pending_panel_request();
+        self.sync_panel_drafts_after_restore();
         self.sync_materials_draft_on_entry();
         self.sync_maxwell_draft_on_entry();
         self.reveal_tour_probe_section();
@@ -222,6 +223,27 @@ impl VfApp {
         }
     }
 
+    /// Rebind the active panel drafts once after a whole-view restore (load,
+    /// undo/redo, startup). A draft survives ordinary frames, but a restore
+    /// replaced the model underneath it.
+    fn sync_panel_drafts_after_restore(&mut self) {
+        let epoch = self.state.view_restore_epoch();
+        if epoch == self.last_restore_epoch {
+            return;
+        }
+        self.last_restore_epoch = epoch;
+        self.sync_panel_drafts_from_state();
+    }
+
+    pub(crate) fn sync_panel_drafts_from_state(&mut self) {
+        match self.state.field_mode {
+            FieldMode::Materials => self.material.sync_from(&self.state),
+            FieldMode::Maxwell => self.maxwell.sync_from(&self.state),
+            FieldMode::Ode => self.ode.sync_from(&self.state),
+            FieldMode::Formula | FieldMode::Sources | FieldMode::Induction => {}
+        }
+    }
+
     /// Materials owns a draft separate from the committed scene. Entering the
     /// mode (or Reset, routed below) refreshes it once; a dirty draft survives
     /// every ordinary frame.
@@ -295,6 +317,7 @@ impl VfApp {
 
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
+        self.sync_panel_drafts_after_restore();
         self.sync_materials_draft_on_entry();
         self.sync_maxwell_draft_on_entry();
         let pin_snapshot = self.pin_snapshot();
@@ -2149,6 +2172,9 @@ impl VfApp {
             return;
         }
         self.apply_scene_camera(&document.camera);
+        // The load replaced the durable model; rebind any same-mode panel draft
+        // before the next interaction can submit the stale one.
+        self.sync_panel_drafts_from_state();
         // Bind the live document to the loaded scene, using the post-clamp live
         // capture as the unchanged baseline so merely visiting a scene writes
         // nothing back.
@@ -3121,6 +3147,12 @@ impl VfApp {
             snapshot,
             provenance,
         })
+    }
+
+    /// Test seam: load a named scene through the production load path.
+    #[doc(hidden)]
+    pub fn test_load_scene(&mut self, name: &str) {
+        self.load_scene(name);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

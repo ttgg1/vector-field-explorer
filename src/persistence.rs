@@ -1155,6 +1155,7 @@ impl ViewRecord {
     /// — while the other non-finite numbers fall back to defaults so a corrupt
     /// record cannot poison the sampling grid.
     pub fn restore(&self, state: &mut State, controls: &mut Controls) {
+        state.view_restore_epoch = state.view_restore_epoch.wrapping_add(1);
         // A bake is runtime-only and cannot be described by a `ViewRecord`;
         // restoring a document snapshot never revives one.
         state.clear_field_bake();

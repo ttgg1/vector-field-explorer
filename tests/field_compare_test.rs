@@ -12,8 +12,10 @@ use vector_field_explorer::domain::Domain;
 use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::field_compare::{
     ComparisonReport, DirectionRelation, SideSample, compare_point, compare_samples,
+    compare_samples_in_frame,
 };
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::field_compare::{
     FieldCompareControls, Prediction, show_body, visible,
@@ -62,6 +64,49 @@ fn a_matching_candidate_agrees_at_regular_sampled_points() {
     assert!(
         report.note.contains("not a symbolic identity"),
         "no identity is claimed: {}",
+        report.note
+    );
+}
+
+#[test]
+fn a_plane_comparison_lifts_local_points_to_world_before_sampling() {
+    let domain = Domain::default();
+    // An X-normal slice through the domain centre: local u is world -z, local
+    // v is world y, and local w is the world x offset from the chosen plane.
+    let frame = PlaneFrame::new(
+        &domain,
+        PlaneView {
+            enabled: true,
+            axis: PlaneAxis::X,
+            index: 8,
+        },
+        glam::UVec3::new(17, 17, 17),
+    );
+    let local_first = Vec3::new(0.5, -0.25, 0.0);
+    let local_second = Vec3::new(-0.75, 0.5, 0.0);
+    let model = FieldExpr::parse("(x, y, z)").expect("model parses");
+    let candidate = model.clone();
+
+    let report = compare_samples_in_frame(
+        &model,
+        &candidate,
+        local_first,
+        local_second,
+        0.0,
+        &domain,
+        &domain,
+        Some(&frame),
+    );
+
+    for (reading, local) in [(&report.first, local_first), (&report.second, local_second)] {
+        let world = frame.to_world(local);
+        assert_vector_close(reading.point, world);
+        assert_vector_close(available(&reading.model), world);
+        assert_vector_close(available(&reading.candidate), world);
+    }
+    assert!(
+        report.note.contains("world"),
+        "the note distinguishes world sampling from slice-local inputs: {}",
         report.note
     );
 }
