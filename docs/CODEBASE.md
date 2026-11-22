@@ -227,6 +227,18 @@ successfully without constructing eframe. There is deliberately no WebGL2 or
 CPU fallback. `scripts/check-web-bootstrap.sh` pins both the DOM guidance and
 the ordering of the Rust gate.
 
+The panel keeps the detected problem, **Retry**, and **Download desktop app**
+together at the top; browser guidance lives in the keyboard-focusable
+`<details id="webgpu-diagnostics">` disclosure. A recognized static exercise
+link is `?exercise=<id>` with `id` one of `ring`, `shell`, `plane`, or `wire`
+(case-insensitive; an optional `preview=1` marker is accepted but not
+required). When — and only when — the gate has shown the panel, `web/webgpu.js`
+reveals the matching fixed question and inline SVG diagram instead of the
+generic recovery view. Unknown or missing ids keep the generic view, the
+preview's Back button restores it in place, and every preview block is hidden
+by default so a capable browser still starts the app directly. The helper never
+reads `navigator.gpu`, never starts the app, and never substitutes a renderer.
+
 `index.html` is the Trunk shell; `web/style.css`, `web/pointer_lock.js` and
 `web/webgpu.js` are copied/served by Trunk ([Trunk.toml](../Trunk.toml)). The
 `vfe-canvas` id is the mount point.
@@ -494,7 +506,10 @@ including the pre-start WebGPU gate and the static fallback UI.
 
 **Pinned by.** `tests/version_test.rs::the_startup_log_reports_the_build_version`
 (source-level check), `tests/web_assets_test.rs`, and
-`scripts/check-web-bootstrap.sh` (not a Rust test; run by CI's wasm job).
+`scripts/check-web-bootstrap.sh` (not a Rust test; run by CI's wasm job). The
+bootstrap check runs `scripts/check-webgpu-preview.mjs`, which parses the panel
+order and hidden defaults and exercises `web/webgpu.js` in a fake DOM for the
+recognized/generic exercise selection.
 
 **Limitations.** The browser matrix is manual; the gate only proves that
 `navigator.gpu` and an adapter exist, not that every WebGPU feature the app uses
@@ -7347,6 +7362,7 @@ scripts/test.sh --incremental
 cargo clippy --all-targets -- -D warnings
 scripts/smoke-run.sh 15
 scripts/check-web-bootstrap.sh
+node scripts/check-webgpu-preview.mjs  # panel order, hidden defaults, preview query
 scripts/check-site.sh            # site HTML/text gate (delegates to scripts/check_site.py)
 scripts/test-web.sh              # wasm check + trunk build --release + dist asset checks
 cargo test -- --list             # inventory, no build of the app
@@ -7430,7 +7446,8 @@ deadline), behind `VFE_PERF_PRESENT=1` and driven by
 | New persistence field | `persistence.rs` + `ui/sidebar.rs` | Choose a serde default; keep old records loading; add a legacy test; never persist camera/fly/clock |
 | New render pass | `renderer.rs` `DrawPass`/`draw_passes`/`record` | No depth attachment; keep the painter order deterministic; add a structural test |
 | New screenshot behavior | `screenshot.rs` pure contract first | RGBA only; 256-byte rows; physical pixels; test without a GPU |
-| New wasm behavior | `main.rs` gate + `web/*.js` | Update `scripts/check-web-bootstrap.sh`; keep native build unaffected |
+| New wasm behavior | `main.rs` gate + `web/*.js` | Update `scripts/check-web-bootstrap.sh`; keep `scripts/check-webgpu-preview.mjs` green; keep native build unaffected |
+| New exercise preview link | `index.html` `[data-exercise]` + `web/webgpu.js` `EXERCISES` | Keep both lists in sync; the id must stay lowercase and hidden by default |
 | UI text or shortcut | `ui/menu.rs` / `ui/help_overlay.rs` | One table; tests pin reachability and exact matching |
 
 Hazards worth knowing before editing:
