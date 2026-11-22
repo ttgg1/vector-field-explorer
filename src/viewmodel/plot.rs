@@ -159,6 +159,15 @@ impl State {
         parameters.validate()?;
         let source = normalize_formula_input(&source);
         let expr = parse_scalar_source(&source, ScalarContext::Surface, &parameters)?;
+        let mesh = sample_surface_at(
+            &expr,
+            &self.domain,
+            UVec2::splat(self.plot.settings.surface_resolution),
+            self.time,
+        );
+        if mesh.indices.is_empty() {
+            return Err("no drawable cells on the current sampling grid".into());
+        }
         // Both inputs already validated, so the parameter commit cannot reject
         // them; only after it succeeds is the draft replaced.
         // The old draft need not be rebound; the validated replacement below
@@ -167,8 +176,8 @@ impl State {
         let draft = &mut self.plot.surface;
         draft.source = source;
         draft.accepted = Some(expr);
-        draft.samples = None;
-        draft.sampled_at = None;
+        draft.samples = Some(Arc::new(SampledPlot::Surface(mesh)));
+        draft.sampled_at = Some(self.time);
         draft.error = None;
         self.plot_changed();
         Ok(())

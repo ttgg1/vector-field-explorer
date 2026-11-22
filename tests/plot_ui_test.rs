@@ -559,6 +559,7 @@ fn vector_only_controls_and_svg_explain_disabled_state() {
 #[test]
 fn analytic_dipole_route_loads_d_only_after_a_successful_commit() {
     let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    h.state.set_plot_resolution(5);
     h.idle();
     assert!(h.state.parameters.value("d").is_none());
     let before_source = h.state.plot.surface.source.clone();
@@ -571,16 +572,34 @@ fn analytic_dipole_route_loads_d_only_after_a_successful_commit() {
     assert_ne!(h.state.plot.surface.source, before_source);
     assert!(h.state.plot.surface.source.contains('d'));
     assert!(h.state.plot.surface.accepted.is_some());
-    assert!(
-        h.state.plot.surface.samples.is_some(),
-        "the successful route rebuilds the surface mesh"
-    );
+    let Some(vector_field_explorer::plot_state::SampledPlot::Surface(mesh)) =
+        h.state.plot.surface.samples.as_deref()
+    else {
+        panic!("missing sampled dipole");
+    };
+    assert!(mesh.diagnostics.rejected_cells > 0 && !mesh.indices.is_empty());
     assert!(h.state.plot_scene().bounds.is_some());
     assert!(
         nodes(&out).iter().any(|node| node.label.contains("Loaded")),
         "success is reported only after the mesh exists: {:?}",
         nodes(&out).iter().map(|n| &n.label).collect::<Vec<_>>()
     );
+    let mut parameters = h.state.parameters.clone();
+    parameters.entries[0].value = 2.0;
+    h.state.commit_parameters(parameters).unwrap();
+    let painted = nodes(&h.idle());
+    assert!(painted.iter().any(|n| n.label.contains("At load: d = 1")));
+}
+
+#[test]
+fn analytic_dipole_route_undrawable_candidate_rolls_back() {
+    let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    // Normal dipole: both poles project onto the single cell's center.
+    h.state.set_plot_resolution(2);
+    h.idle();
+    h.click_label("Analytic dipole potential");
+    h.click_label("z");
+    assert_failed_dipole_rollback(&mut h);
 }
 
 #[test]
@@ -602,12 +621,27 @@ fn analytic_dipole_route_failure_changes_nothing_and_has_no_loaded_status() {
         .commit_parameters(parameters)
         .expect("a full-but-valid set");
     h.idle();
+    h.click_label("Analytic dipole potential");
+    assert_failed_dipole_rollback(&mut h);
+}
+
+fn assert_failed_dipole_rollback(h: &mut PlotHarness) {
     let before_parameters = h.state.parameters.clone();
     let before_source = h.state.plot.surface.source.clone();
     let before_samples = h.state.plot.surface.samples.clone().expect("sampled mesh");
     let before_generation = h.state.plot.generation;
+    let accepted = |h: &PlotHarness| {
+        h.state
+            .plot
+            .surface
+            .accepted
+            .as_ref()
+            .unwrap()
+            .eval(0.2, 0.3)
+    };
+    let before_value = accepted(h);
+    let before_error = h.state.plot.surface.error.clone();
 
-    h.click_label("Analytic dipole potential");
     h.click_label("Use analytic potential");
     let out = h.idle();
     let painted = nodes(&out);
@@ -620,6 +654,8 @@ fn analytic_dipole_route_failure_changes_nothing_and_has_no_loaded_status() {
         h.state.plot.surface.source, before_source,
         "source unchanged"
     );
+    assert_eq!(accepted(h), before_value);
+    assert_eq!(h.state.plot.surface.error, before_error);
     assert!(
         Arc::ptr_eq(
             &before_samples,

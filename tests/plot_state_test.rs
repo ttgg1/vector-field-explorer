@@ -76,7 +76,10 @@ fn parameterized_surface_install_accepts_d_and_rebuilds_the_mesh() {
     assert_eq!(s.parameters.value("d"), Some(1.5));
     assert_eq!(s.plot.surface.source, "d*x");
     assert!(s.plot.surface.accepted.is_some());
-    assert!(s.plot.surface.samples.is_none(), "the mesh is invalidated");
+    assert!(
+        s.plot.surface.samples.is_some(),
+        "the validated mesh is installed"
+    );
     assert!(s.plot_scene().bounds.is_some(), "the mesh rebuilds from d");
     assert!(
         !Arc::ptr_eq(

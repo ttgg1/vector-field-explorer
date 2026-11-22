@@ -270,7 +270,7 @@ fn apply_dipole_route(state: &mut State, axis: PlaneAxis, separation: f64) -> St
     }
     match state.apply_parameterized_surface(parameters, dipole.expr) {
         Ok(()) => format!(
-            "Loaded on the {}. {} Separation d = {separation}.",
+            "Loaded on the {}. {} At load: d = {separation}.",
             slice_label(&frame),
             dipole.valid_region
         ),
