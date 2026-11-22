@@ -21,6 +21,7 @@ pub mod panel_rails;
 pub mod pins;
 pub mod plot_panel;
 pub mod presets;
+pub mod prompt_help;
 pub mod prompt_model;
 pub mod ring_lesson;
 pub mod shell_lesson;
