@@ -80,6 +80,7 @@ mod field_probe_test;
 mod field_test;
 mod fly_camera_test;
 mod fonts_test;
+mod formula_unicode_test;
 mod gauss_shell_selection_test;
 mod gauss_shell_test;
 mod griffiths_checkpoint_test;

@@ -1477,9 +1477,16 @@ informational only.
 them at a point.
 
 **Public API.** `FieldExpr { dimension, .. }`, `FieldExpr::parse`,
-`FieldExpr::eval3`, `FieldExpr::eval2`, `FieldError::Parse`.
+`FieldExpr::eval3`, `FieldExpr::eval2`, `FieldError::Parse`,
+`normalize_formula_input`.
 
 **Invariants.**
+- `normalize_formula_input` is a pure full-width/Unicode punctuation normalizer:
+  full-width ASCII (U+FF01..U+FF5E), ideographic/non-breaking spaces, dash and
+  division/multiplication variants, and angular grouping brackets become their
+  ASCII spelling; ASCII and math alphanumerics (U+1D400 block) pass through.
+  The formula and scalar setters call it before comparison, parsing and storage,
+  so unsupported punctuation never reaches the faces or the stored draft.
 - Outer parentheses are optional list delimiters; commas split only at top level
   (nested parentheses are respected).
 - Exactly 2 or 3 components are accepted; anything else is `Parse`.
@@ -4102,6 +4109,11 @@ decisions that do not need a window.
   active_dimension() == 3`. This gates the cube grid, density cap, plane
   frame/slice and streamline depth, so source/induction/materials mode uses the
   existing 2D plane path in 2D and the world cube in 3D. Ode never hardcodes 3.
+- `set_formula` and the scalar `update_scalar_source` normalize Unicode
+  punctuation with `field::normalize_formula_input` before the equality check,
+  parse and storage, so a pasted full-width formula stores its ASCII spelling
+  and leaves no unsupported glyphs. An invalid normalized draft is still stored
+  with its error while the last good field or accepted scalar remains.
 - `set_field_mode` preserves the formula, source scene, induction scene and the
   current 2D/3D projection, clears the cached sampling/notice and marks dirty.
   Entering Induction never rewrites the stored density or the projection;

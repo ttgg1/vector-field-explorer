@@ -29,6 +29,32 @@ impl std::fmt::Display for FieldError {
 
 impl std::error::Error for FieldError {}
 
+/// Normalize the Unicode punctuation a formula editor commonly receives from
+/// pasted or IME-composed text into the ASCII spelling the parser understands.
+///
+/// Only the input is rewritten: ASCII and the math alphanumeric block
+/// (U+1D400..U+1D7FF) pass through unchanged, so callers can compare and store
+/// the returned text without a second normalization step. Invalid text is still
+/// returned as-is (normalized); the caller's parser remains the authority on
+/// validity.
+pub fn normalize_formula_input(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for ch in src.chars() {
+        out.push(match ch {
+            // Full-width ASCII forms, U+FF01..U+FF5E.
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(ch as u32 - 0xFEE0).unwrap_or(ch),
+            '\u{3000}' | '\u{00A0}' => ' ',
+            '\u{2212}' | '\u{2013}' | '\u{2014}' => '-',
+            '\u{00D7}' => '*',
+            '\u{00F7}' | '\u{2215}' | '\u{2044}' => '/',
+            '\u{2329}' | '\u{27E8}' | '\u{3008}' => '(',
+            '\u{232A}' | '\u{27E9}' | '\u{3009}' => ')',
+            _ => ch,
+        });
+    }
+    out
+}
+
 /// Splits `src` on commas that are not nested inside parentheses.
 fn split_top_level(src: &str) -> Vec<&str> {
     let mut parts = Vec::new();
