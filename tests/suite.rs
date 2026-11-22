@@ -81,6 +81,7 @@ mod help_overlay_test;
 mod induction_app_test;
 mod induction_bench_test;
 mod induction_export_test;
+mod induction_flux_test;
 mod induction_panel_test;
 mod induction_test;
 mod interaction_panel_test;

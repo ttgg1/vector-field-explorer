@@ -1408,11 +1408,12 @@ families remain separate.
 **Public API.** `InductionCase`, `InductionScene` (`Debug`, `Clone`,
 `PartialEq`, `Default`), `InductionKey`, `InductionPrepared`,
 `InductionSampling`, `InductionFamilyResult`, `InductionEstimate`,
-`InductionFamilyStatus`, `InductionPointSample`, `induction_key`,
+`InductionFamilyStatus`, `InductionPointSample`, `InductionFluxComparison`,
+`induction_flux_comparison`, `loop_orientation_label`, `induction_key`,
 `prepare_induction`, `sample_induction`, `evaluate_induction_point`, and the
 frozen caps `MAX_INDUCTION_DENSITY_3D = 20` / `MAX_INDUCTION_DENSITY_2D = 80`.
 `InductionScene` exposes `current`, `current_derivative`, `is_animated`,
-`validate`, `unit_source` and `unit_vector_potential`.
+`validate`, `unit_source`, `unit_vector_potential` and `electric_field`.
 
 **Invariants.** The waveform derivative is analytic; `is_animated()` is exactly
 `amplitude != 0.0 && frequency > 0.0`. Softening is one positive finite shared
@@ -1445,6 +1446,20 @@ diagnostics; the induced field itself never depends on CAS.
 `induction_legacy_colours_are_byte_identical_without_a_mapping`, and the
 native-only `cas_derivative_matches_the_analytic_waveform`. Fixtures and their
 independent mpmath generator live in `tests/support/induction/`.
+[tests/induction_flux_test.rs](../tests/induction_flux_test.rs) pins the
+issue #220 comparison: static-current exact zero, the nontrivial sinusoidal
+phase with a positive signed pair, contour/normal reversal, orientation labels,
+explicit unavailable states, and the session-only panel behaviour.
+
+**Faraday comparison (#220).** `induction_flux_comparison` evaluates the two
+sides independently at one time: `∮E·dl` through `field_probe::circulation`
+over the loop's `E`, and the magnetic flux through the open planar surface
+bounded by the same loop (the loop axis is the positive normal) using the
+unit-current B evaluator; the displayed `−dΦB/dt` scales that unit flux by the
+analytic `−dI/dt`. Both reuse `IntegralStatus` and the full/half-resolution
+difference as the uncertainty; values are normalized teaching units. A static
+current gives an exact zero on both sides. Accuracy-not-met or unavailable
+samples are withheld and counted, never converted to a confident value.
 
 **App integration (Task 2).** `State::induction` is the durable scene;
 `induction_prepared` caches the unit-current geometry and `induction_sampling`
@@ -2139,8 +2154,9 @@ and magnetic contributions are never added. All values are normalized teaching
 units, not SI measurements.
 
 **Public API.** `SurfaceKind`, `LoopKind`, `GaussianSurface`, `CirculationLoop`,
-`ProbeField`, `IntegralStatus`, `FluxReport`, `CirculationReport`, `flux`,
-`circulation`, `GaussianSurface::validate`, `GaussianSurface::area`,
+`ProbeField`, `IntegralStatus`, `FluxReport`, `CirculationReport`,
+`OpenSurfaceFluxReport`, `flux`, `circulation`, `open_surface_flux`,
+`GaussianSurface::validate`, `GaussianSurface::area`,
 `CirculationLoop::validate`, `MAX_SURFACES`, `MAX_LOOPS`, `MAX_PROBE_SAMPLES`,
 `MIN_SEGMENTS`, and `MAX_SEGMENTS`. `size` holds full extents along the local
 axes (sphere/circle diameter, box/rectangle width-height, cylinder diameter and
@@ -2171,6 +2187,11 @@ height); local `z` follows the explicit axis.
   contributions. A failed full pass skips the half-resolution pass.
 - Electric and magnetic families remain separate inputs and separate reports.
   Supported loops are closed, so `one_sided` is currently always false.
+- `open_surface_flux` is the one open surface: the disk or rectangle bounded by
+  a loop, with the normalized loop axis as its positive area normal and the
+  same right-hand contour orientation. It reuses the midpoint, `segments²`
+  patch budget and full/half-resolution conventions above because a closed
+  `GaussianSurface` cannot express this planar surface.
 
 **Pinned by.** [tests/field_probe_test.rs](../tests/field_probe_test.rs):
 `sphere_flux_of_a_point_charge_follows_the_enclosed_charge_relation`,
@@ -5831,8 +5852,9 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
 **Purpose.** The wide left rail/compact sheet body for the `FieldMode::Induction`
 teaching demo.
 
-**Public API.** `InductionPanelState { scene, error, advanced }`,
-`InductionPanelState::default`, `commit(&mut State) -> bool`,
+**Public API.** `InductionPanelState { scene, error, advanced, faraday_open,
+faraday_loop, faraday_reverse }`, `InductionPanelState::default`,
+`commit(&mut State) -> bool`,
 `show(ui, &mut panel, &mut State, compact) -> Option<InductionPanelAction>`,
 `InductionPanelAction::{Fit, Reset}`, and `status_text`.
 
@@ -5850,6 +5872,14 @@ teaching demo.
   derivative provenance when available.
 - Induction is arrows-only; the panel states that streamlines, particles and
   click seeding stay off.
+- The collapsed-by-default Faraday comparison reads the committed scene and the
+  selected committed probe loop without editing either. `faraday_loop` selects
+  an existing loop, and `faraday_reverse` flips a session-only copy of its axis
+  (and therefore both the contour and the normal). The one-period series is
+  keyed by the loop, scene and softening; only the live current readout is
+  quantised to 100 ms. Both show the method, sample counts, softening and
+  full/half-resolution spread, and paint an explicit unavailable/inaccurate
+  state instead of a confident number.
 
 **Pinned by.** `tests/induction_panel_test.rs`
 (`induction_panel_wide_and_compact_expose_all_controls`,
