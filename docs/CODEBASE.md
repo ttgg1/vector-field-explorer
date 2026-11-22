@@ -806,10 +806,13 @@ scoped resets without touching persistence or the renderer.
   edit. Applying a snapshot also unbinds the active saved scene
   (`clear_active_scene`): the restored document may belong to another
   experiment, and an automatic sync would otherwise overwrite the previously
-  bound scene with it. Re-binding needs an explicit load or save.
-  Fly pose, time, particles and layout are never in a snapshot.
+  bound scene with it. Only an explicit load re-binds; saving under a name
+  creates a separate entry. Fly pose, time, particles and layout are never in a
+  snapshot.
 - `Color`, `Camera` and `All` reset one document scope and are recorded once,
-  named `reset colour` / `reset camera` / `reset document`; `Simulation` resets
+  named `reset colour` / `reset camera` / `reset document`; `All` also unbinds
+  the active saved scene (`reset_all_document`), for the same reason as
+  undo/redo. `Simulation` resets
   runtime state (clock time zero, particles and click bursts cleared) and is
   undo-free because the snapshot cannot see it.
   `State::reset_color_scope` bumps `plot.generation` once and marks dirty once;
@@ -6507,9 +6510,21 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
   `clear_active_scene` before restoring. The restored content can belong to a
   different experiment; keeping the old binding would let the next sync write
   that content under the previous scene's name and overwrite it. After undo the
-  live document is untitled until an explicit `Load` or `Save current scene`
-  re-binds it. `tests/edit_history_named_test.rs::undoing_after_switching_scenes_never_rewrites_the_bound_scene`
+  live document is untitled until an explicit `Load` re-binds it; `Save current
+  scene` writes a separate entry and does not bind.
+  `tests/edit_history_named_test.rs::undoing_after_switching_scenes_never_rewrites_the_bound_scene`
   pins the two-scene case.
+- A whole-document reset (`EditScope::All`) is the same kind of replacement, so
+  `reset_all_document` also unbinds before resetting the state. Without it the
+  next idle sync would write the default document under the just-loaded
+  scene's name and a later flush would persist that overwrite.
+  `resetting_all_after_loading_a_scene_does_not_rewrite_the_saved_scene` pins
+  the load → reset → flush case.
+- Undo restores only the live document; it does not roll the saved-scene store
+  back. Pending in-memory edits made while a scene was bound stay in that
+  scene's stored document and keep their dirty flag (by design), so undoing a
+  live edit and then flushing persists the edited scene, not the pre-edit one.
+  `undoing_a_live_edit_keeps_the_scene_store_edit` pins that tradeoff.
 - `flush_scenes` clears `scenes_dirty` only after a successful write. A failed
   flush keeps the in-memory edits, their binding and the dirty flag, returns the
   reason, and leaves the pending scene action unapplied; a later retry writes

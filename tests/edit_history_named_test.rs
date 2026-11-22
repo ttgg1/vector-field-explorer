@@ -15,6 +15,7 @@ use vector_field_explorer::edit_history::EditHistory;
 use vector_field_explorer::field_probe::{GaussianSurface, SurfaceKind};
 use vector_field_explorer::scene_document::SceneCamera;
 use vector_field_explorer::scene_store::MAX_SCENES;
+use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::presets::PresetPanel;
 
 fn frame(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) -> egui::FullOutput {
@@ -605,6 +606,123 @@ fn undoing_after_switching_scenes_never_rewrites_the_bound_scene() {
         b.view.probe_surfaces[0].center,
         [1.0, 0.0, 0.0],
         "B keeps its own probe surface"
+    );
+}
+
+#[test]
+fn resetting_all_after_loading_a_scene_does_not_rewrite_the_saved_scene() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+
+    // A saved experiment with a distinct formula and one probe surface.
+    app.state.set_formula("x + y".to_string());
+    app.state
+        .add_probe_surface(sphere(Vec3::new(1.0, 0.0, 0.0), 0.5))
+        .expect("the probe surface is valid");
+    app.presets.set_scene_name("Experiment");
+    click_app_label(&ctx, &mut app, "Save current scene");
+
+    // Load it so the live document is bound to the saved scene.
+    click_app_label(&ctx, &mut app, "Load");
+    idle(&ctx, &mut app);
+    assert_eq!(app.presets.active_scene(), Some("Experiment"));
+
+    // The menu's whole-document reset replaces the live document with the
+    // defaults. It is not a normal edit against the loaded experiment, so the
+    // binding must be dropped before the next sync can write the defaults back.
+    app.apply_menu_action_for_test(MenuAction::ResetDocument, &ctx);
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "reset All unbinds the active saved scene"
+    );
+    idle(&ctx, &mut app);
+
+    // Any scene action flushes pending in-memory scene edits.
+    click_app_label(&ctx, &mut app, "Duplicate");
+
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    let saved = persisted.get("Experiment").expect("the scene survives");
+    assert_eq!(
+        saved.view.formula, "x + y",
+        "the saved scene keeps its own formula"
+    );
+    assert_eq!(
+        saved.view.probe_surfaces.len(),
+        1,
+        "the saved scene keeps its own probe surface"
+    );
+    assert_eq!(
+        saved.view.probe_surfaces[0].center,
+        [1.0, 0.0, 0.0],
+        "the probe configuration is not replaced by defaults"
+    );
+}
+
+#[test]
+fn undoing_a_live_edit_keeps_the_scene_store_edit() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+
+    app.state.set_formula("x + y".to_string());
+    app.presets.set_scene_name("Experiment");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    click_app_label(&ctx, &mut app, "Load");
+    idle(&ctx, &mut app);
+    assert_eq!(app.presets.active_scene(), Some("Experiment"));
+
+    // A live edit while bound: the driver records it in document history and
+    // the per-frame sync copies it into the saved scene in memory.
+    app.state.set_formula("x - y".to_string());
+    idle(&ctx, &mut app);
+    assert_eq!(app.next_undo_label(), Some("change formula"));
+    assert_eq!(
+        app.presets
+            .scenes()
+            .get("Experiment")
+            .expect("the bound scene")
+            .view
+            .formula,
+        "x - y",
+        "the live edit is synced into the scene store"
+    );
+
+    // Undo restores only the live document. The scene store is intentionally
+    // outside document undo, so its edited document and dirty flag survive.
+    assert!(app.undo_document(&ctx));
+    assert_eq!(
+        app.state.formula, "x + y",
+        "undo restores the live document"
+    );
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "undo unbinds the scene so the restored document cannot overwrite it"
+    );
+    assert_eq!(
+        app.presets
+            .scenes()
+            .get("Experiment")
+            .expect("the bound scene")
+            .view
+            .formula,
+        "x - y",
+        "undo does not roll back the scene-store edit"
+    );
+
+    // A later flush persists the scene-store edit, not the undone live value.
+    click_app_label(&ctx, &mut app, "Duplicate");
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted
+            .get("Experiment")
+            .expect("the scene persists")
+            .view
+            .formula,
+        "x - y",
+        "the pending scene edit is flushed to its own scene"
     );
 }
 

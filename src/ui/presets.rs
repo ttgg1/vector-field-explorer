@@ -414,7 +414,8 @@ impl PresetPanel {
     /// restore content that belongs to a different experiment, so keeping the
     /// old binding would let the next sync write that content under the old
     /// scene's name, overwriting it. Unbinding leaves the restored document
-    /// untitled until the user loads or saves a scene explicitly. Pending
+    /// untitled until the user explicitly loads a scene. Saving under a name
+    /// creates a separate entry and does not re-bind the live document. Pending
     /// in-memory edits stay in [`Self::scenes`] and keep their dirty flag; the
     /// next flush writes them to the scene they were actually made against.
     pub fn clear_active_scene(&mut self) {

@@ -204,8 +204,9 @@ impl VfApp {
         // A snapshot replaces the whole document, possibly with content from a
         // different saved scene than the one currently bound. Unbind first so
         // the next idle sync cannot write the restored document under the old
-        // scene's name and overwrite it. Re-binding needs an explicit load or
-        // save; an ordinary edit is never attributed to a scene across undo.
+        // scene's name and overwrite it. Re-binding needs an explicit load; an
+        // ordinary edit (or a save under a name) is never attributed to a
+        // scene across undo.
         self.presets.clear_active_scene();
         apply_document(
             snapshot,
@@ -240,8 +241,9 @@ impl VfApp {
     /// one named entry here. Recording directly (rather than waiting for the
     /// idle driver) is what keeps the explicit `Camera` reset in history even
     /// though ordinary orbit/zoom navigation is deliberately outside the undo
-    /// stack. `Simulation` touches runtime state only and is undo-free by
-    /// construction: the snapshot cannot see it.
+    /// stack. `All` replaces the whole document, so it also unbinds the active
+    /// saved scene (see `reset_all_document`). `Simulation` touches runtime
+    /// state only and is undo-free by construction: the snapshot cannot see it.
     pub fn reset_scope(&mut self, scope: EditScope) {
         let before = self.last_committed.clone();
         match scope {
@@ -305,7 +307,13 @@ impl VfApp {
 
     /// Whole-document reset: state plus the app-owned camera and cached scalar
     /// view. Layout, profiles, the clock and particles stay untouched.
+    ///
+    /// Like undo/redo, this is a whole-document replacement, so it unbinds the
+    /// active saved scene first. Otherwise the next per-frame sync would write
+    /// the fresh default document under the previously loaded scene's name and
+    /// overwrite the saved experiment.
     fn reset_all_document(&mut self) {
+        self.presets.clear_active_scene();
         self.state.reset_document();
         self.controls = Controls::new();
         self.orbit = OrbitCamera::default();
