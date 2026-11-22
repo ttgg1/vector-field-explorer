@@ -13,7 +13,7 @@ use vector_field_explorer::field::FieldExpr;
 use vector_field_explorer::field_compare::{
     ComparisonReport, DirectionRelation, SideSample, compare_point, compare_samples,
 };
-use vector_field_explorer::parameters::ParameterSet;
+use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::field_compare::{
     FieldCompareControls, Prediction, show_body, visible,
@@ -70,7 +70,7 @@ fn a_matching_candidate_agrees_at_regular_sampled_points() {
 fn reversing_the_model_sign_exposes_the_opposite_reading() {
     let model = FieldExpr::parse("(x, y)").expect("model");
     let candidate = FieldExpr::parse("(-x, -y)").expect("candidate");
-    // The midpoint of a radial field is a regular point.
+    // A non-zero regular point, so both directions are defined.
     let point = Vec3::new(0.5, 0.25, 0.0);
     let reading = compare_point(&model, &candidate, point, 0.0, &Domain::default());
 
@@ -87,6 +87,41 @@ fn reversing_the_model_sign_exposes_the_opposite_reading() {
     assert!(
         reading.relative_difference.expect("the model is non-zero") > 1.9,
         "a sign reversal differs by twice the model magnitude"
+    );
+}
+
+#[test]
+fn a_reversed_model_sign_also_reads_as_against() {
+    let model = FieldExpr::parse("(-x, -y)").expect("model");
+    let candidate = FieldExpr::parse("(x, y)").expect("candidate");
+    let point = Vec3::new(0.5, 0.25, 0.0);
+    let reading = compare_point(&model, &candidate, point, 0.0, &Domain::default());
+
+    assert_eq!(reading.relation, DirectionRelation::Against);
+    let model_vector = available(&reading.model);
+    let candidate_vector = available(&reading.candidate);
+    assert_vector_close(candidate_vector, -model_vector);
+    assert!(
+        reading.relative_difference.expect("the model is non-zero") > 1.9,
+        "a reversed model differs by twice its magnitude"
+    );
+}
+
+#[test]
+fn a_direction_disagreement_between_points_is_named() {
+    let report = sampled(
+        "(x, y)",
+        "(x*y, y*y)",
+        Vec3::new(0.5, 0.5, 0.0),
+        Vec3::new(0.5, -0.5, 0.0),
+    );
+
+    assert_eq!(report.first.relation, DirectionRelation::With);
+    assert_eq!(report.second.relation, DirectionRelation::Against);
+    assert!(
+        report.note.contains("disagree in direction"),
+        "the note names the disagreement: {}",
+        report.note
     );
 }
 
@@ -224,6 +259,55 @@ fn a_two_times_candidate_reports_a_defined_relative_difference() {
         report.note.contains("uniform scale"),
         "an unchanged relative difference is a scale error, not a power law: {}",
         report.note
+    );
+}
+
+#[test]
+fn a_named_parameter_binds_in_the_candidate_and_a_change_marks_it_stale() {
+    let mut parameters = ParameterSet {
+        version: 1,
+        entries: vec![Parameter {
+            name: "d".to_owned(),
+            value: 2.0,
+            min: None,
+            max: None,
+            step: 1.0,
+        }],
+    };
+    let mut controls = FieldCompareControls::default();
+    controls.candidate_text = "(d*x, d*y)".to_owned();
+    assert!(
+        controls.apply(&parameters),
+        "the named parameter binds: {}",
+        controls.error
+    );
+    let point = Vec3::new(1.0, 0.0, 0.0);
+    assert_eq!(
+        controls
+            .candidate
+            .as_ref()
+            .expect("candidate applied")
+            .eval3_at(point, 0.0),
+        Some(Vec3::new(2.0, 0.0, 0.0)),
+        "the candidate evaluates with the committed parameter value"
+    );
+    assert!(!controls.parameters_stale(&parameters));
+
+    parameters.entries[0].value = 3.0;
+    assert!(
+        controls.parameters_stale(&parameters),
+        "a changed parameter marks the applied candidate stale"
+    );
+    assert!(controls.apply(&parameters));
+    assert!(!controls.parameters_stale(&parameters));
+    assert_eq!(
+        controls
+            .candidate
+            .as_ref()
+            .expect("candidate reapplied")
+            .eval3_at(point, 0.0),
+        Some(Vec3::new(3.0, 0.0, 0.0)),
+        "reapplying refreshes the evaluation"
     );
 }
 
@@ -386,6 +470,39 @@ fn the_comparison_body_fits_a_compact_sidebar_and_names_the_second_point() {
             .iter()
             .any(|label| label.contains("2×") || label.contains("2x")),
         "the second point offers the radial 2x reading: {labels:?}"
+    );
+}
+
+#[test]
+fn a_prediction_grade_names_the_point_it_was_made_at() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let state = State::new(false);
+    let mut controls = FieldCompareControls::default();
+    // At (0.5, 0.5) this candidate points with the model; at (0.5, -0.5) it
+    // points against the model, so editing Point A after predicting would
+    // otherwise flip the grade.
+    controls.candidate_text = "(x*y, y*y)".to_owned();
+    controls.apply(&state.parameters);
+    controls.predict(Prediction::With);
+
+    controls.point_a = Vec3::new(0.5, -0.5, 0.0);
+    let labels = run_body(&ctx, &state, &mut controls, true);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("matches the first-point sampled direction")),
+        "the grade still applies to the prediction point, not the edited point: {labels:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("prediction was made at Point A")),
+        "the prediction point is labelled: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| label.contains("0.5, 0.5, 0")),
+        "the label names the prediction point: {labels:?}"
     );
 }
 

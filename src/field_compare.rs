@@ -259,30 +259,32 @@ fn sampled_agreement_note(first: &PointComparison, second: &PointComparison) -> 
         };
         format!("The candidate {phrase} at both sampled points.")
     } else {
-        "The sampled direction agreement changes between the two points; a second point is needed to read which kind of error is present."
+        "The two points disagree in direction, so no single sign or scale reading applies below."
             .to_owned()
     };
     format!("{body} {NOT_IDENTITY_NOTE}")
 }
 
 fn matching_note(first: &PointComparison, second: &PointComparison) -> String {
-    match (first.relative_difference, second.relative_difference) {
-        (Some(first_relative), Some(second_relative)) => {
-            if first_relative <= AGREEMENT_TOLERANCE && second_relative <= AGREEMENT_TOLERANCE {
-                "The candidate matches the model at both sampled points to within numerical agreement.".to_owned()
-            } else if (first_relative - second_relative).abs()
-                <= RELATIVE_CHANGE_TOLERANCE * first_relative.max(second_relative).max(1.0)
-            {
-                "The relative difference is unchanged between the two sampled points, which is consistent with a uniform scale error rather than a sign or power-law error."
-                    .to_owned()
-            } else {
-                "The relative difference changes between the two sampled points, which is consistent with a power-law magnitude error rather than a sign error."
-                    .to_owned()
-            }
-        }
-        _ => {
-            "The directions agree at both sampled points, but the relative difference is undefined where the model magnitude is zero."
-                .to_owned()
-        }
+    // Both directions agree (`With`), so both model magnitudes are non-zero and
+    // both relative differences are defined by `compare_point`.
+    let first_relative = first
+        .relative_difference
+        .expect("directions agree, so the first model magnitude is non-zero");
+    let second_relative = second
+        .relative_difference
+        .expect("directions agree, so the second model magnitude is non-zero");
+
+    if first_relative <= AGREEMENT_TOLERANCE && second_relative <= AGREEMENT_TOLERANCE {
+        "The candidate matches the model at both sampled points to within numerical agreement."
+            .to_owned()
+    } else if (first_relative - second_relative).abs()
+        <= RELATIVE_CHANGE_TOLERANCE * first_relative.max(second_relative).max(1.0)
+    {
+        "The relative difference is unchanged between the two sampled points, which is consistent with a uniform scale error rather than a sign or power-law error."
+            .to_owned()
+    } else {
+        "The relative difference changes between the two sampled points, which is consistent with a power-law magnitude error rather than a sign error."
+            .to_owned()
     }
 }

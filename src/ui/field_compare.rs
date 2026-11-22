@@ -64,6 +64,8 @@ pub struct FieldCompareControls {
     pub prediction: Option<Prediction>,
     /// Whether the student explicitly skipped the prediction.
     pub skipped: bool,
+    /// Point A when the prediction was made, so the grade stays tied to it.
+    prediction_point_a: Option<Vec3>,
     /// Parameters the applied candidate was parsed with, for a stale warning.
     applied_parameters: ParameterSet,
 }
@@ -79,6 +81,7 @@ impl Default for FieldCompareControls {
             point_b: point_a * 2.0,
             prediction: None,
             skipped: false,
+            prediction_point_a: None,
             applied_parameters: ParameterSet::default(),
         }
     }
@@ -106,12 +109,14 @@ impl FieldCompareControls {
     /// Record a prediction, revealing the comparison.
     pub fn predict(&mut self, prediction: Prediction) {
         self.prediction = Some(prediction);
+        self.prediction_point_a = Some(self.point_a);
         self.skipped = false;
     }
 
     /// Explicitly skip the prediction and reveal the comparison.
     pub fn skip(&mut self) {
         self.prediction = None;
+        self.prediction_point_a = None;
         self.skipped = true;
     }
 
@@ -127,6 +132,7 @@ impl FieldCompareControls {
 
     fn reset_gate(&mut self) {
         self.prediction = None;
+        self.prediction_point_a = None;
         self.skipped = false;
     }
 }
@@ -195,7 +201,7 @@ pub fn show_body(ui: &mut egui::Ui, state: &State, controls: &mut FieldCompareCo
     if ui
         .button("Use 2× A")
         .on_hover_text(
-            "Sample the second point at twice the first point's distance from the origin",
+            "Sample Point B at twice Point A's distance from the origin, clamped to the visible domain",
         )
         .clicked()
     {
@@ -243,17 +249,31 @@ pub fn show_body(ui: &mut egui::Ui, state: &State, controls: &mut FieldCompareCo
 
     ui.add_space(ui.spacing().item_spacing.y);
     if let Some(prediction) = controls.prediction {
+        // Grade at the point the student predicted, not at any later edit of
+        // Point A; the comparison itself still shows the current points.
+        let predicted_point = controls.prediction_point_a.unwrap_or(controls.point_a);
+        let predicted = field_compare::compare_point(
+            &state.field,
+            &candidate,
+            predicted_point,
+            state.time as f64,
+            &domain,
+        );
         ui.label(format!("Prediction: {}.", prediction.label()));
-        if report.first.relation == DirectionRelation::Undefined {
+        ui.label(format!(
+            "The prediction was made at Point A ({}); the grade applies to that point.",
+            point_text(predicted_point)
+        ));
+        if predicted.relation == DirectionRelation::Undefined {
             ui.label(
-                "The first-point sampled direction is undefined, so the prediction is not graded.",
+                "The predicted point's sampled direction is undefined, so the prediction is not graded.",
             );
-        } else if prediction.relation() == report.first.relation {
-            ui.label("Your prediction matches the first-point sampled direction.");
+        } else if prediction.relation() == predicted.relation {
+            ui.label("Your prediction matches the first-point sampled direction at that point.");
         } else {
             ui.label(format!(
-                "Your prediction does not match the first-point sampled reading ({}).",
-                report.first.relation.label()
+                "Your prediction does not match the first-point sampled reading at that point ({}).",
+                predicted.relation.label()
             ));
         }
     } else if controls.skipped {
