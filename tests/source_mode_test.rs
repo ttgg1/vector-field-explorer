@@ -1,12 +1,17 @@
 //! Task 2 field modes, source sampling and source-mode gating coverage.
 
 use glam::{DVec3, UVec3};
+use vector_field_explorer::color_ramp::Rgb;
+use vector_field_explorer::layer_style::PhysicsFamily;
 use vector_field_explorer::source_scene::{
-    FamilyDisposition, FieldMode, SourceDisplay, SourceKindTag, SourceScene, classify_family_result,
+    FamilyColors, FamilyDisposition, FieldMode, SourceDisplay, SourceKindTag, SourceScene,
+    classify_family_result,
 };
 use vector_field_explorer::sources::{
     Diagnostics, Estimate, FamilyResult, FieldFamily, StopReason,
 };
+use vector_field_explorer::ui::appearance_panel::{AppearanceEdit, apply_edit};
+use vector_field_explorer::ui::sources_panel::both_legend;
 use vector_field_explorer::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, State};
 
 fn one_point() -> SourceScene {
@@ -125,6 +130,217 @@ fn both_display_uses_two_family_colours_without_summing() {
         .collect();
     assert!(!electric.is_empty(), "E family is drawn");
     assert!(!magnetic.is_empty(), "B family is drawn");
+}
+
+fn both_scene() -> SourceScene {
+    let mut scene = SourceScene::default();
+    scene
+        .add(SourceKindTag::PointCharge.default_source())
+        .unwrap();
+    scene
+        .add(SourceKindTag::CurrentLoop.default_source())
+        .unwrap();
+    scene.set_display(SourceDisplay::Both);
+    scene
+}
+
+fn family_rgb(color: Rgb) -> [f32; 3] {
+    color.0.map(|channel| f32::from(channel) / 255.0)
+}
+
+#[test]
+fn both_arrows_follow_appearance_family_colours_and_reset_to_defaults() {
+    let mut state = State::new(true);
+    state.set_source_scene(both_scene());
+    state.set_field_mode(FieldMode::Sources);
+    state.snapshot_if_dirty();
+    assert_eq!(
+        state.source_family_colors(),
+        FamilyColors::default(),
+        "an unset Appearance record keeps the shipped family colours"
+    );
+
+    let electric = Rgb([12, 34, 56]);
+    let magnetic = Rgb([200, 150, 100]);
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Magnetic, Some(magnetic)),
+    )
+    .unwrap();
+
+    // Same-frame read: the helper and the legend read the committed record
+    // before any explicit resample.
+    assert_eq!(
+        state.source_family_colors(),
+        FamilyColors {
+            electric: electric.0,
+            magnetic: magnetic.0,
+        }
+    );
+    assert_eq!(
+        both_legend(state.source_family_colors()),
+        [("E", electric.0), ("B", magnetic.0)]
+    );
+
+    // The edit dirties the scene, so the very next rebuild recolours Both.
+    state
+        .snapshot_if_dirty()
+        .expect("an Appearance edit dirties the source scene");
+    let sampling = state.source_sampling().expect("source mode sampled");
+    let mut saw_electric = false;
+    let mut saw_magnetic = false;
+    for arrow in &sampling.arrows {
+        match arrow.color {
+            color if color == electric.0 => saw_electric = true,
+            color if color == magnetic.0 => saw_magnetic = true,
+            other => panic!("Both kept a stale arrow colour {other:?}"),
+        }
+    }
+    assert!(saw_electric, "electric arrows carry the override");
+    assert!(saw_magnetic, "magnetic arrows carry the override");
+
+    let instances = state.arrow_instances(&sampling.arrows);
+    assert!(
+        instances
+            .iter()
+            .any(|instance| instance.color[..3] == family_rgb(electric)),
+        "the GPU instances use the electric override"
+    );
+    assert!(
+        instances
+            .iter()
+            .any(|instance| instance.color[..3] == family_rgb(magnetic)),
+        "the GPU instances use the magnetic override"
+    );
+
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, None),
+    )
+    .unwrap();
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Magnetic, None),
+    )
+    .unwrap();
+    state
+        .snapshot_if_dirty()
+        .expect("clearing an override dirties the source scene");
+    let arrows = &state.source_sampling().expect("source mode sampled").arrows;
+    assert!(
+        arrows
+            .iter()
+            .any(|arrow| arrow.color == FamilyColors::default().electric),
+        "resetting restores the shipped electric colour"
+    );
+    assert!(
+        arrows
+            .iter()
+            .any(|arrow| arrow.color == FamilyColors::default().magnetic),
+        "resetting restores the shipped magnetic colour"
+    );
+    assert!(
+        arrows
+            .iter()
+            .all(|arrow| arrow.color != electric.0 && arrow.color != magnetic.0),
+        "the cleared overrides no longer paint any arrow"
+    );
+}
+
+#[test]
+fn mixed_family_override_keeps_the_other_family_on_the_shipped_fallback() {
+    let mut state = State::new(true);
+    state.set_source_scene(both_scene());
+    state.set_field_mode(FieldMode::Sources);
+    state.snapshot_if_dirty();
+
+    let electric = Rgb([12, 34, 56]);
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+
+    // Only one family is overridden; the other must fall back family by
+    // family to the shipped constant rather than inheriting the override.
+    let defaults = FamilyColors::default();
+    let resolved = FamilyColors {
+        electric: electric.0,
+        magnetic: defaults.magnetic,
+    };
+    assert_eq!(state.source_family_colors(), resolved);
+    assert_eq!(
+        both_legend(state.source_family_colors()),
+        [("E", electric.0), ("B", defaults.magnetic)]
+    );
+
+    state
+        .snapshot_if_dirty()
+        .expect("an Appearance edit dirties the source scene");
+    let sampling = state.source_sampling().expect("source mode sampled");
+    let mut saw_electric = false;
+    let mut saw_magnetic = false;
+    for arrow in &sampling.arrows {
+        match arrow.color {
+            color if color == electric.0 => saw_electric = true,
+            color if color == defaults.magnetic => saw_magnetic = true,
+            other => panic!("Both kept an unaccounted arrow colour {other:?}"),
+        }
+    }
+    assert!(saw_electric, "electric arrows carry the override");
+    assert!(
+        saw_magnetic,
+        "magnetic arrows keep the shipped fallback while electric is overridden"
+    );
+
+    let instances = state.arrow_instances(&sampling.arrows);
+    assert!(
+        instances
+            .iter()
+            .any(|instance| instance.color[..3] == family_rgb(electric)),
+        "the GPU instances use the electric override"
+    );
+    assert!(
+        instances
+            .iter()
+            .any(|instance| instance.color[..3] == family_rgb(Rgb(defaults.magnetic))),
+        "the GPU instances keep the shipped magnetic fallback"
+    );
+}
+
+#[test]
+fn single_family_display_keeps_its_colormap_when_a_family_colour_is_overridden() {
+    let mut scene = both_scene();
+    scene.set_display(SourceDisplay::Electric);
+    let mut state = State::new(true);
+    state.set_source_scene(scene);
+    state.set_field_mode(FieldMode::Sources);
+    state.snapshot_if_dirty();
+
+    let electric = Rgb([1, 2, 3]);
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+    state
+        .snapshot_if_dirty()
+        .expect("an Appearance edit dirties the source scene");
+    let arrows = &state.source_sampling().expect("source mode sampled").arrows;
+    assert!(!arrows.is_empty(), "the electric display drew arrows");
+    assert!(
+        arrows.iter().all(|arrow| arrow.color != electric.0),
+        "a single-family display colours through its colormap, not the family override"
+    );
+    assert!(
+        arrows.iter().any(|arrow| arrow.color != arrows[0].color),
+        "the colormap still varies with magnitude"
+    );
 }
 
 #[test]

@@ -23,7 +23,8 @@ use super::renderer::{
 };
 use super::sampling::{ArrowData, ViewOptions, magnitude_range, sample_field_at, sample_plane_at};
 use super::source_scene::{
-    ELECTRIC_COLOR, FieldMode, MAGNETIC_COLOR, SourceSampling, SourceScene, sample_source_scene,
+    ELECTRIC_COLOR, FamilyColors, FieldMode, MAGNETIC_COLOR, SourceSampling, SourceScene,
+    sample_source_scene,
 };
 use super::streamlines::{
     CLICK_BURST_SEEDS, StreamlineOpts, burst_seeds, explicit_streamline_seeds, seed_grid, trace_at,
@@ -2002,14 +2003,23 @@ impl State {
             return;
         }
         let plane = self.plane_frame();
+        let family_colors = FamilyColors::resolve(self.layer_styles());
         let sampling = sample_source_scene(
             &self.sources,
             &self.domain,
             self.grid(),
             plane.as_ref(),
             &self.view_options(),
+            family_colors,
         );
         self.source_sampling = Some(sampling);
+    }
+
+    /// The effective E/B arrow colours for a two-family Sources display: the
+    /// committed Appearance family overrides, falling back to the shipped
+    /// constants family by family.
+    pub fn source_family_colors(self: &State) -> FamilyColors {
+        FamilyColors::resolve(self.layer_styles())
     }
 
     /// The cached source sampling, if the source mode has sampled this scene.

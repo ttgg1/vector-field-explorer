@@ -15,8 +15,9 @@ use crate::custom_density::{
 };
 use crate::object_scene::ObjectStyle;
 use crate::source_scene::{
-    MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag,
-    SourceSampling, SourceScene, error_message, scene_error_message, validate_source,
+    FamilyColors, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay, SourceEntry, SourceFamilyStatus,
+    SourceKindTag, SourceSampling, SourceScene, error_message, scene_error_message,
+    validate_source,
 };
 use crate::sources::{MAX_SOURCES, Source, SourceKind};
 use crate::viewmodel::{DensityReportRow, MAX_DENSITIES, State};
@@ -660,20 +661,17 @@ fn family_status_text(name: &str, family: &SourceFamilyStatus, parts: &mut Vec<S
     }
 }
 
-/// The `Both` display legend segments: each family's label and its fixed
+/// The `Both` display legend segments: each family's label and its effective
 /// arrow colour, in painting order. Single-family displays use the shared
-/// colormap instead, so they have no fixed-colour legend.
-pub fn both_legend() -> [(&'static str, [u8; 3]); 2] {
-    [
-        ("E amber", crate::source_scene::ELECTRIC_COLOR),
-        ("B cyan", crate::source_scene::MAGNETIC_COLOR),
-    ]
+/// colormap instead, so they have no family-colour legend.
+pub fn both_legend(colors: FamilyColors) -> [(&'static str, [u8; 3]); 2] {
+    [("E", colors.electric), ("B", colors.magnetic)]
 }
 
 /// Paint the `Both` display legend as one line at `pos`: the family labels in
-/// their fixed colours, separated by a neutral dot. The viewport overlay and
-/// tests share this exact painting path.
-pub fn paint_both_legend(painter: &egui::Painter, pos: egui::Pos2) {
+/// their effective colours, separated by a neutral dot. The viewport overlay
+/// and tests share this exact painting path.
+pub fn paint_both_legend(painter: &egui::Painter, pos: egui::Pos2, colors: FamilyColors) {
     let font = egui::FontId::proportional(12.0);
     let neutral = egui::Color32::from_gray(220);
     let mut x = pos.x;
@@ -684,7 +682,7 @@ pub fn paint_both_legend(painter: &egui::Painter, pos: egui::Pos2) {
         x += width;
     };
     draw("Both: ", neutral);
-    for (index, (label, rgb)) in both_legend().into_iter().enumerate() {
+    for (index, (label, rgb)) in both_legend(colors).into_iter().enumerate() {
         if index > 0 {
             draw(" · ", neutral);
         }
@@ -798,23 +796,11 @@ fn show_display(ui: &mut egui::Ui, state: &mut State, panel: &mut SourcesPanelSt
         }
     });
     if state.sources.display == SourceDisplay::Both {
+        let colors = state.source_family_colors();
         ui.horizontal(|ui| {
-            ui.colored_label(
-                egui::Color32::from_rgb(
-                    crate::source_scene::ELECTRIC_COLOR[0],
-                    crate::source_scene::ELECTRIC_COLOR[1],
-                    crate::source_scene::ELECTRIC_COLOR[2],
-                ),
-                "E amber",
-            );
-            ui.colored_label(
-                egui::Color32::from_rgb(
-                    crate::source_scene::MAGNETIC_COLOR[0],
-                    crate::source_scene::MAGNETIC_COLOR[1],
-                    crate::source_scene::MAGNETIC_COLOR[2],
-                ),
-                "B cyan",
-            );
+            for (label, rgb) in both_legend(colors) {
+                ui.colored_label(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), label);
+            }
         });
     }
     ui.horizontal(|ui| {
