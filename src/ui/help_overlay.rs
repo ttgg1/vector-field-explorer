@@ -655,6 +655,28 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
 
 /// [`help_window`] with the live bindings driving the Global rows.
 pub fn help_window_with_bindings(ctx: &egui::Context, open: &mut bool, bindings: &Bindings) {
+    help_window_inner(ctx, open, bindings, None);
+}
+
+/// [`help_window_with_bindings`] plus the optional Griffiths branch entry.
+/// `branch_requested` is set when the learner asks for the four-route picker.
+pub fn help_window_with_branch(
+    ctx: &egui::Context,
+    open: &mut bool,
+    bindings: &Bindings,
+    branch_requested: &mut bool,
+) {
+    help_window_inner(ctx, open, bindings, Some(branch_requested));
+}
+
+/// The shared Help window body. The branch row is drawn only when the caller
+/// can act on it; the legacy bindings-only path must not show an inert button.
+fn help_window_inner(
+    ctx: &egui::Context,
+    open: &mut bool,
+    bindings: &Bindings,
+    branch_requested: Option<&mut bool>,
+) {
     let heading_color = window_heading_color(&ctx.style_of(ctx.theme()).visuals);
     let global_rows = live_global_rows(bindings);
     egui::Window::new(title_text("Keyboard & mouse", heading_color))
@@ -662,6 +684,19 @@ pub fn help_window_with_bindings(ctx: &egui::Context, open: &mut bool, bindings:
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
+            if let Some(requested) = branch_requested {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Practice an optional electrodynamics problem:");
+                    if ui
+                        .button(crate::ui::griffiths::GRIFFITHS_PICKER_TITLE)
+                        .on_hover_text("Open the four-route Griffiths picker")
+                        .clicked()
+                    {
+                        *requested = true;
+                    }
+                });
+                ui.separator();
+            }
             let mut all: Vec<&'static HelpSection> = HELP_SECTIONS.iter().collect();
             all.push(&SCALAR_HELP_SECTION);
             all.push(&SOURCES_HELP_SECTION);

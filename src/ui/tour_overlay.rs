@@ -247,6 +247,8 @@ pub enum TourAction {
     Back,
     Next,
     Dismiss,
+    /// The welcome stop's optional Griffiths branch.
+    Griffiths,
 }
 
 /// One overlay pass's painted geometry and requested action.
@@ -322,6 +324,18 @@ pub fn show(
                             }
                             ui.add_space(6.0);
                             ui.weak(format!("Step {} of {}", progress.index() + 1, TOUR.len()));
+                            if stop.id == "welcome" {
+                                ui.add_space(4.0);
+                                if ui
+                                    .button(crate::ui::griffiths::GRIFFITHS_PICKER_TITLE)
+                                    .on_hover_text(
+                                        "Optional Griffiths practice; the quick tour stays available",
+                                    )
+                                    .clicked()
+                                {
+                                    action = TourAction::Griffiths;
+                                }
+                            }
                             ui.horizontal_wrapped(|ui| {
                                 if ui
                                     .add_enabled(progress.index() > 0, egui::Button::new("Back"))
