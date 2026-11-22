@@ -1652,7 +1652,7 @@ target-met, accuracy-not-met total/drawn and unavailable per family.
 `disabled_entries_are_not_part_of_the_validated_scene`,
 `source_arrows_follow_the_active_colour_mapping`,
 `source_legacy_colours_are_byte_identical_without_a_mapping`,
-`both_display_keeps_fixed_family_colours_with_a_mapping` and
+`both_display_falls_back_to_fixed_family_colours_when_unset_with_a_mapping` and
 `both_sampling_accepts_the_effective_family_colours`; source-mode behaviour,
 including Appearance family-colour overrides and reset, is in
 [tests/source_mode_test.rs](../tests/source_mode_test.rs).

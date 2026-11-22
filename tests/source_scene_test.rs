@@ -245,7 +245,7 @@ fn source_legacy_colours_are_byte_identical_without_a_mapping() {
 }
 
 #[test]
-fn both_display_keeps_fixed_family_colours_with_a_mapping() {
+fn both_display_falls_back_to_fixed_family_colours_when_unset_with_a_mapping() {
     let mut scene = point_charge_scene();
     scene.entries.push(SourceEntry {
         enabled: true,

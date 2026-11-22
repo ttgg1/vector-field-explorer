@@ -731,6 +731,40 @@ fn both_source_display_paints_the_viewport_family_legend() {
             .any(|(text, _)| text.contains("amber") || text.contains("cyan")),
         "the legend never names a fixable colour"
     );
+
+    // A live Appearance override must repaint the real overlay while the other
+    // family keeps its shipped fallback.
+    let electric = Rgb([12, 34, 56]);
+    apply_edit(
+        &mut app.state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+    let mut repainted = None;
+    for _ in 0..2 {
+        let mut frame = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut app, ui, &mut eframe_frame),
+        );
+        frame.textures_delta.clear();
+        repainted = Some(frame);
+    }
+    let repainted = coloured_texts(&repainted.unwrap());
+    assert!(
+        repainted
+            .iter()
+            .any(|(text, color)| text == "E" && *color == rgb(electric.0)),
+        "the viewport legend follows the live electric override"
+    );
+    assert!(
+        repainted
+            .iter()
+            .any(|(text, color)| text == "B" && *color == rgb(defaults.magnetic)),
+        "the magnetic legend keeps its shipped fallback while electric is overridden"
+    );
 }
 
 #[test]

@@ -253,6 +253,67 @@ fn both_arrows_follow_appearance_family_colours_and_reset_to_defaults() {
 }
 
 #[test]
+fn mixed_family_override_keeps_the_other_family_on_the_shipped_fallback() {
+    let mut state = State::new(true);
+    state.set_source_scene(both_scene());
+    state.set_field_mode(FieldMode::Sources);
+    state.snapshot_if_dirty();
+
+    let electric = Rgb([12, 34, 56]);
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+
+    // Only one family is overridden; the other must fall back family by
+    // family to the shipped constant rather than inheriting the override.
+    let defaults = FamilyColors::default();
+    let resolved = FamilyColors {
+        electric: electric.0,
+        magnetic: defaults.magnetic,
+    };
+    assert_eq!(state.source_family_colors(), resolved);
+    assert_eq!(
+        both_legend(state.source_family_colors()),
+        [("E", electric.0), ("B", defaults.magnetic)]
+    );
+
+    state
+        .snapshot_if_dirty()
+        .expect("an Appearance edit dirties the source scene");
+    let sampling = state.source_sampling().expect("source mode sampled");
+    let mut saw_electric = false;
+    let mut saw_magnetic = false;
+    for arrow in &sampling.arrows {
+        match arrow.color {
+            color if color == electric.0 => saw_electric = true,
+            color if color == defaults.magnetic => saw_magnetic = true,
+            other => panic!("Both kept an unaccounted arrow colour {other:?}"),
+        }
+    }
+    assert!(saw_electric, "electric arrows carry the override");
+    assert!(
+        saw_magnetic,
+        "magnetic arrows keep the shipped fallback while electric is overridden"
+    );
+
+    let instances = state.arrow_instances(&sampling.arrows);
+    assert!(
+        instances
+            .iter()
+            .any(|instance| instance.color[..3] == family_rgb(electric)),
+        "the GPU instances use the electric override"
+    );
+    assert!(
+        instances
+            .iter()
+            .any(|instance| instance.color[..3] == family_rgb(Rgb(defaults.magnetic))),
+        "the GPU instances keep the shipped magnetic fallback"
+    );
+}
+
+#[test]
 fn single_family_display_keeps_its_colormap_when_a_family_colour_is_overridden() {
     let mut scene = both_scene();
     scene.set_display(SourceDisplay::Electric);
