@@ -1549,7 +1549,8 @@ persistence dependency.
 `PartialEq`, `Default`, serde), `MaxwellError`, `MaxwellSampling`,
 `MaxwellLine`, `BemConvergence`, `BemSolution`, `MaxwellStop`, `maxwell_family`,
 `maxwell_assumptions`, `maxwell_warning`, `validate_maxwell`, `maxwell_field`,
-`maxwell_field_with_bem`, `maxwell_outline`, `solve_bem`, `sample_maxwell`, and
+`maxwell_field_with_bem`, `hollow_sphere_interface_tolerance`, `maxwell_outline`,
+`solve_bem`, `sample_maxwell`, and
 `sample_maxwell_with_bem`. `BemSolution` exposes `field_at`, `check_net_charge`,
 `convergence`, `matches_scene` and the doc-hidden net-charge test seam. Constants
 are `MAXWELL_MAX_DENSITY_3D`, `MAXWELL_MAX_DENSITY_2D`,

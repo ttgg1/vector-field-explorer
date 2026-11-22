@@ -6,17 +6,17 @@ use eframe::egui;
 
 use crate::support;
 
-use vector_field_explorer::VfApp;
 use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::sources::FieldFamily;
 use vector_field_explorer::ui::gauss_shell::{
-    GAUSS_SHELL_INSIDE_NOTE, GAUSS_SHELL_INTERFACE_NOTE, GAUSS_SHELL_QUESTION,
-    GaussShellReadingKind, GaussShellState, compute_reading,
+    compute_reading, GaussShellReadingKind, GaussShellState, GAUSS_SHELL_INSIDE_NOTE,
+    GAUSS_SHELL_INTERFACE_NOTE, GAUSS_SHELL_QUESTION,
 };
 use vector_field_explorer::ui::layout::SheetState;
 use vector_field_explorer::ui::maxwell_panel::{self, MaxwellPanelState};
 use vector_field_explorer::viewmodel::State;
+use vector_field_explorer::VfApp;
 
 struct WidgetNode {
     label: String,
@@ -168,6 +168,35 @@ fn exterior_r_and_double_r_show_quarter_field_fourfold_area_and_equal_flux() {
         difference < 1e-6,
         "the shipped midpoint rule resolves this radial flux exactly to float tolerance"
     );
+
+    // The cancellation identity itself: the sampled flux must match the
+    // analytic `E * A`, not merely be equal at the two radii. A zero or wrong
+    // constant from the adapter cannot satisfy this.
+    let analytic_flux = 4.0 * std::f64::consts::PI * scene.e0 * scene.radius * scene.radius;
+    for (label, field, area, flux, error) in [
+        ("r", field_first, area_first, flux_first, error_first),
+        ("2r", field_second, area_second, flux_second, error_second),
+    ] {
+        // The extra 1e-6 covers the f32 `size` cast of the sampled surface;
+        // the reported quadrature error alone is tighter than that rounding.
+        let tolerance = error + 1e-6;
+        assert!(
+            close(field * area, analytic_flux, 1e-5),
+            "{label}: E * A = {} must equal 4*pi*e0*R^2 = {analytic_flux}",
+            field * area
+        );
+        assert!(
+            close(flux, field * area, tolerance),
+            "{label}: sampled flux {flux} must equal E * A = {} within the reported \
+             +/− {error} quadrature error",
+            field * area
+        );
+        assert!(
+            close(flux, analytic_flux, tolerance),
+            "{label}: sampled flux {flux} must equal 4*pi*e0*R^2 = {analytic_flux} within \
+             the reported +/− {error} quadrature error"
+        );
+    }
 }
 
 #[test]
@@ -202,6 +231,25 @@ fn the_ideal_interface_reports_an_excluded_sample_not_a_finite_reading() {
     };
     assert!(reason.contains("excluded"));
     assert!(GAUSS_SHELL_INTERFACE_NOTE.contains("excluded"));
+}
+
+#[test]
+fn activate_clamps_the_initial_probe_radius_to_the_control_range() {
+    let mut large = GaussShellState::default();
+    large.activate(&hollow(100.0));
+    assert!(large.active);
+    assert_eq!(
+        large.probe_radius, 100.0,
+        "a large R keeps the initial probe radius inside the UI control range 0.01..=100.0"
+    );
+    assert!((0.01..=100.0).contains(&large.probe_radius));
+
+    let mut normal = GaussShellState::default();
+    normal.activate(&hollow(1.0));
+    assert_eq!(
+        normal.probe_radius, 1.5,
+        "the normal R=1 path still starts at 1.5*R"
+    );
 }
 
 #[test]
@@ -331,6 +379,107 @@ fn wide_and_compact_panels_render_the_prompt_and_guided_controls() {
             );
         }
     }
+}
+
+#[test]
+fn panel_pin_buttons_pin_both_readings_and_show_the_pinned_cancellation() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Maxwell);
+    assert!(state.set_maxwell_scene(hollow(1.0)));
+    let mut panel = MaxwellPanelState::default();
+    panel.sync_from(&state);
+    panel.gauss.activate(&state.maxwell);
+
+    let out = panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        Vec::new(),
+    );
+    let pin_r = find(&nodes(&out), "Pin r reading")
+        .expect("the panel offers the r pin button")
+        .rect
+        .center();
+    panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        pointer(pin_r, true),
+    );
+    panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        pointer(pin_r, false),
+    );
+    assert_eq!(
+        panel.gauss.pinned().len(),
+        1,
+        "clicking Pin r reading snapshots the r reading"
+    );
+
+    let out = panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        Vec::new(),
+    );
+    let pin_2r = find(&nodes(&out), "Pin 2r reading")
+        .expect("the panel offers the 2r pin button")
+        .rect
+        .center();
+    panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        pointer(pin_2r, true),
+    );
+    let out = panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        pointer(pin_2r, false),
+    );
+    assert_eq!(
+        panel.gauss.pinned().len(),
+        2,
+        "clicking Pin 2r reading snapshots the 2r reading too"
+    );
+
+    let texts = painted_texts(&out);
+    let cards = texts
+        .iter()
+        .filter(|text| text.starts_with("Pinned r = "))
+        .count();
+    assert_eq!(cards, 2, "two pinned cards are drawn: {texts:?}");
+    let joined = texts.join("\n");
+    assert!(
+        joined.contains("Pinned cancellation in normalized units"),
+        "the pinned cancellation algebra appears once both readings are pinned: {joined}"
+    );
+    assert!(
+        joined.contains("E * A ="),
+        "the pinned cards show the E * A cancellation: {joined}"
+    );
 }
 
 #[test]

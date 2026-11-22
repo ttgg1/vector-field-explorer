@@ -11,10 +11,10 @@ use eframe::egui;
 use glam::Vec3;
 
 use crate::field_probe::{
-    FluxReport, GaussianSurface, IntegralStatus, ProbeField, SurfaceKind, flux,
+    flux, FluxReport, GaussianSurface, IntegralStatus, ProbeField, SurfaceKind,
 };
 use crate::maxwell::{
-    MaxwellCase, MaxwellError, MaxwellScene, hollow_sphere_interface_tolerance, maxwell_field,
+    hollow_sphere_interface_tolerance, maxwell_field, MaxwellCase, MaxwellError, MaxwellScene,
 };
 use crate::sources::FieldFamily;
 
@@ -224,7 +224,7 @@ impl GaussShellState {
         self.pinned.clear();
         self.invalidate_report();
         self.probe_radius = if scene.radius.is_finite() && scene.radius > 0.0 {
-            scene.radius * 1.5
+            (scene.radius * 1.5).clamp(0.01, 100.0)
         } else {
             1.5
         };
