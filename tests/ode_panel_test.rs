@@ -581,7 +581,7 @@ fn ode_mode_disables_features_and_cas() {
             });
         });
         let painted = nodes(&output);
-        let apply = find(&painted, "Apply vector").expect("CAS Apply button");
+        let apply = find(&painted, "Replace field").expect("CAS Replace field button");
         assert!(apply.disabled, "CAS Apply is disabled in Ode");
         assert!(
             has(&painted, "CAS edits the formula field; switch to Formula."),

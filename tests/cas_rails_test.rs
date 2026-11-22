@@ -206,7 +206,7 @@ fn cas_apply_and_formula_bar_remain_explicit() {
             .any(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == &preview))
     );
     assert_eq!(h.app.state.formula, "(y,-x)");
-    h.pick("Apply vector");
+    h.pick("Replace field");
     assert_eq!(h.app.state.formula, preview);
     h.idle();
     assert_eq!(h.app.bar.text, preview);

@@ -65,6 +65,9 @@ use crate::scalar::{ScalarContext, ScalarExpr};
 use crate::scalar_analysis::{
     ComparisonSeries, ComparisonSet, GradientSample, GradientSpec, SeriesRole, sample_gradient,
 };
+use crate::scalar_overlay::{
+    OverlayId, OverlayLayer, OverlayLive, OverlayResolution, OverlayUnavailable, ScalarOverlaySet,
+};
 use crate::scalar_view::{
     MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MIN_GRID_SIDE, PointProbe, ProbeSet,
     SCALAR_RESAMPLE_INTERVAL, ScalarViewCache, ScalarViewError, ScalarViewIdentity,
@@ -573,6 +576,10 @@ pub struct State {
     /// [`State::set_gradient`] replaces it in response to an edit; startup
     /// restore assigns directly.
     pub gradient: Option<GradientSpec>,
+    /// Durable bounded CAS overlays with explicit linked/frozen dependency
+    /// semantics (issue #233). Only the overlay setters replace it in response
+    /// to an edit; scene restore assigns directly.
+    overlays: ScalarOverlaySet,
     /// Durable bounded custom densities (issue #96 slice B1), capped by
     /// [`MAX_DENSITIES`]. Only [`State::commit_densities`], reset and the
     /// startup restore replace the list; they never feed the sampled E/B
@@ -1568,6 +1575,7 @@ impl State {
             probe_reports: ProbeReportsCache::default(),
             comparison_series: ComparisonSet::default(),
             gradient: None,
+            overlays: ScalarOverlaySet::default(),
             densities: Vec::new(),
             density_reports: Vec::new(),
             density_report_generation: 0,
@@ -3186,6 +3194,85 @@ impl State {
         self.gradient = next;
         self.mark_dirty();
         Ok(())
+    }
+
+    /// The durable CAS overlay collection.
+    pub fn overlays(self: &State) -> &ScalarOverlaySet {
+        &self.overlays
+    }
+
+    /// Replace the overlay collection after validating it. A rejected set
+    /// leaves the previous collection and dirty flag untouched; an accepted
+    /// real change dirties once.
+    pub fn set_overlays(self: &mut State, next: ScalarOverlaySet) -> Result<(), String> {
+        next.validate()?;
+        if next == self.overlays {
+            return Ok(());
+        }
+        self.overlays = next;
+        self.mark_dirty();
+        Ok(())
+    }
+
+    /// Add a linked overlay that will follow the live committed parameters,
+    /// frame and time. The record is structural; the panel validates the
+    /// current result before calling this.
+    pub fn add_linked_overlay(
+        self: &mut State,
+        formula: impl Into<String>,
+        layer: OverlayLayer,
+    ) -> Result<OverlayId, String> {
+        crate::scalar_analysis::validate_plane_frame(&self.scalar_view_frame())?;
+        let id = self.overlays.add_linked(formula, layer, "")?;
+        self.mark_dirty();
+        Ok(id)
+    }
+
+    /// Add a frozen copy capturing the current parameters, frame and time.
+    pub fn add_frozen_overlay(
+        self: &mut State,
+        formula: impl Into<String>,
+        layer: OverlayLayer,
+    ) -> Result<OverlayId, String> {
+        let frame = self.scalar_view_frame();
+        crate::scalar_analysis::validate_plane_frame(&frame)?;
+        let id = self.overlays.add_frozen(
+            formula,
+            layer,
+            "",
+            self.parameters.clone(),
+            frame,
+            f64::from(self.time),
+        )?;
+        self.mark_dirty();
+        Ok(id)
+    }
+
+    /// Remove one overlay by id.
+    pub fn remove_overlay(
+        self: &mut State,
+        id: OverlayId,
+    ) -> Option<crate::scalar_overlay::ScalarOverlay> {
+        let removed = self.overlays.remove(id);
+        if removed.is_some() {
+            self.mark_dirty();
+        }
+        removed
+    }
+
+    /// Resolve one overlay against the current live document.
+    pub fn resolve_overlay(
+        self: &State,
+        id: OverlayId,
+    ) -> Result<OverlayResolution, OverlayUnavailable> {
+        self.overlays.resolve(
+            id,
+            OverlayLive {
+                parameters: &self.parameters,
+                frame: self.scalar_view_frame(),
+                time: f64::from(self.time),
+            },
+        )
     }
 
     /// Append one point probe through the shared cap and validation seam. The

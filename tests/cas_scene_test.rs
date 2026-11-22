@@ -279,7 +279,7 @@ fn cas_scalar_result_overlays_minus_grad_v_on_the_current_slice() {
     let live = state.scalar_view_frame();
     assert!(spec.frame.half_u > 0.0 && spec.frame.half_v > 0.0);
     assert!(live.half_u > 0.0 && spec.frame.half_u == live.half_u);
-    assert_eq!(panel.take_scene_edit(), Some("overlay E = -∇V"));
+    assert_eq!(panel.take_scene_edit(), Some("add linked CAS overlay"));
     let _ = frame; // the live frame depends on the test's domain and plane.
 }
 
@@ -379,7 +379,7 @@ fn each_cas_scene_action_is_one_undo_entry() {
         "the contour click is exactly one undo entry"
     );
 
-    click_app_button(&ctx, &mut app, "Overlay E = -∇V");
+    click_app_button(&ctx, &mut app, "Add linked overlay");
     assert!(app.state.gradient.is_some(), "the overlay is installed");
     assert_eq!(app.state.plot.surface.source, "y", "contours stay put");
     assert_eq!(
