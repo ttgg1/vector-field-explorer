@@ -5,6 +5,7 @@ pub mod branding;
 pub mod cas_panel;
 pub mod cas_preview;
 pub mod formula_bar;
+pub mod gauss_shell;
 pub mod help_overlay;
 pub mod induction_panel;
 pub mod interaction_panel;
