@@ -546,6 +546,9 @@ impl VfApp {
         if state.field_mode == FieldMode::Maxwell {
             maxwell.sync_from(&state);
         }
+        // Issue #222: restore the persisted notebook without applying a scene
+        // or measurement. `load` already sanitized the bounded entries.
+        maxwell.notebook = settings.notebook.clone();
         // ODE restores lazily but the durable scene is already present, so the
         // panel draft must start from it instead of the default scene.
         let mut ode = OdePanelState::default();

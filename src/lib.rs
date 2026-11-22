@@ -39,6 +39,7 @@ pub mod maxwell;
 pub mod maxwell_learning;
 pub mod maxwell_residual;
 pub mod maxwell_wave;
+pub mod notebook;
 pub mod object_renderer;
 pub mod object_scene;
 pub mod ode;
