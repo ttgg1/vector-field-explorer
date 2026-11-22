@@ -916,6 +916,9 @@ same production entry points because the headless viewport returns before
   or a lost web lock tears fly down.
 - A left click runs exactly one of `ClickActionPlan`: seed one streamline, add
   one particle burst, or set a one-line hint. The pure plan owns the gates.
+  Issue #221 adds one earlier branch: while the Ode workbench's frozen-line
+  seed pick is armed, the click replaces the Ode scene seed, solves once,
+  updates the comparison seed and clears the arm; Escape cancels it.
 - `click_world_seed` maps the point through the active `ViewCamera` (orbit or
   fly) via `streamlines::click_seed`; 2D passes the padded plane size.
 - A double-click calls `undo_click_seed` (0.3 s window) before resetting the
@@ -1030,7 +1033,10 @@ overlay is desktop-sized. No test drives the whole panel assembly end to end.
   it lazily solves a pending Ode scene, rebuilds trajectory lines once when the
   epoch or dirty flag changes, auto-fits the first solution after mode entry,
   resets the clock time on a new epoch, and never samples the field, retraces
-  clicks, spawns particles or appends source/induction glyphs.
+  clicks, spawns particles or appends source/induction glyphs. When the
+  session-only frozen-line comparison is enabled on a `CurrentField` scene, the
+  same rebuild caches and appends the `v(x, 0)` polyline; playback never
+  rebuilds or moves it.
 - Materials branches before the formula/scalar path: it runs
   `sync_scene_frame` and the dirty rebuild, then returns. It never samples the
   formula, advects particles, retraces clicks, appends glyphs or refreshes the
@@ -1288,6 +1294,29 @@ through [src/ui/ode_panel.rs](../src/ui/ode_panel.rs),
 [src/viewmodel.rs](../src/viewmodel.rs) and
 [src/export_provenance.rs](../src/export_provenance.rs). Particle RK4 is
 untouched.
+
+#### `src/ode_compare.rs` — frozen field line vs time-dependent trajectory
+
+**Purpose.** Session-only Issue #221 comparison geometry. It traces the field
+line of the durable formula field `v(x, 0)` and pairs it with the ordinary
+[`crate::ode`] RK4 trajectory of `dx/dt = v(x, t)` from the same seed. Nothing
+here is persisted or integrated separately.
+
+**Public API.** `FrozenLine`, `OdeCompareState` (with `Default`),
+`trace_frozen_line`, `apply_time_dependent_reference`,
+`apply_steady_reference`, `reference_formula`, `steady_formula`,
+`FROZEN_COLOR`, `FROZEN_REFERENCE_TIME`, `REFERENCE_SEED`,
+`REFERENCE_DURATION`, `FROZEN_STEP_FACTOR`, `FROZEN_MAX_STEPS`, and the panel
+labels `FROZEN_LABEL`, `TRAJECTORY_LABEL`, `CAVEAT`.
+
+**Invariants.** The frozen line always evaluates the field at `t = 0`; it is a
+fixed display polyline stepped along the unit field direction by
+`FROZEN_STEP_FACTOR * view extent`, bounded per direction by
+`FROZEN_MAX_STEPS` and clipped to the supplied domain. Both directions are
+traced. The trajectory remains the shipped fixed-step RK4 solve. Both reference
+actions set `(1, t)` or `(1, 0)`, a 2D `CurrentField` Ode scene seeded at the
+origin, and return the previous formula so the panel can restore it. The
+comparison state, seed, cached line and previous formula are session-only.
 
 #### `src/source_scene.rs` — validated source scene, catalogue and sampling adapter
 
@@ -6052,11 +6081,15 @@ selector (equations/current field), typed dimension and equation rows, bounded
 initial conditions, scene duration, chart selector, time-series variables,
 Step/Fit/Reset actions, CPU charts and a closed Advanced solver/status block.
 
-**Public API.** `OdePanelState { draft, error, advanced }`,
+**Public API.** `OdePanelState { draft, error, advanced, compare }`,
 `OdePanelState::default`, `commit(&mut State) -> bool`,
-`sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
-Option<OdePanelAction>`, `OdePanelAction::{Step, Fit, Reset}`,
-`ode_help_rows`, `ODE_HELP_SECTION`.
+`sync_from(&State)`, `use_time_dependent_reference(&mut State) -> bool`,
+`use_steady_reference(&mut State) -> bool`,
+`restore_previous_formula(&mut State) -> bool`,
+`show(ui, &mut panel, &mut State, compact) -> Option<OdePanelAction>`,
+`OdePanelAction::{Step, Fit, Reset, ReferenceTimeDependent, ReferenceSteady,
+RestoreFormula, CompareVisibilityChanged { enabled }}`, `ode_help_rows`,
+`ODE_HELP_SECTION`.
 
 **Invariants.**
 - `commit` calls `State::set_ode_scene`; invalid text keeps both the committed
@@ -6075,6 +6108,10 @@ Option<OdePanelAction>`, `OdePanelAction::{Step, Fit, Reset}`,
   solutions paint an explanation and no fabricated lines.
 - Advanced states the fixed-step RK4 `h`, sample/step/stop counts and the current
   field dimension when that source is active.
+- Issue #221 adds a session-only "Frozen line vs trajectory" section: enable
+  toggle, shared-seed readout and viewport pick arm, one-click `(1, t)` and
+  `(1, 0)` references, restore-previous-formula, distinct legend colours,
+  playback note and the velocity-field caveat. It is never persisted.
 - The panel returns actions only; the app owns clock seeking, Fit, scene reset
   and camera reset.
 

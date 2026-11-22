@@ -121,6 +121,7 @@ mod object_gpu_test;
 mod object_scene_test;
 mod ode_app_test;
 mod ode_bench_test;
+mod ode_compare_test;
 mod ode_export_test;
 mod ode_panel_test;
 mod ode_persistence_test;

@@ -226,6 +226,7 @@ impl VfApp {
     /// a new solution or an Ode-relevant edit, never per frame.
     fn rebuild_ode_lines(&mut self) {
         let Some(solution) = self.state.ode_solution.as_ref() else {
+            self.ode.compare.frozen = None;
             self.ode_lines = Arc::new(Vec::new());
             self.set_ode_scene_geometry();
             return;
@@ -241,6 +242,40 @@ impl VfApp {
                 b: [end[0], end[1], end[2], width],
                 color,
             });
+        }
+        // Issue #221: the frozen field line is display geometry of v(x, 0), not
+        // another integrated trajectory, so it is appended only while the
+        // session-only comparison is enabled and the scene uses the durable
+        // formula field. It is cached here because the clock never rebuilds it.
+        let frozen = if self.ode.compare.enabled
+            && self.state.ode.source == crate::ode::OdeSource::CurrentField
+            && self.state.parse_error.is_empty()
+        {
+            crate::ode_compare::trace_frozen_line(
+                &self.state.field,
+                self.ode.compare.seed,
+                solution.dimension,
+                domain,
+                crate::ode_compare::FROZEN_MAX_STEPS,
+            )
+        } else {
+            None
+        };
+        self.ode.compare.frozen = frozen;
+        if let Some(frozen) = self.ode.compare.frozen.as_ref() {
+            for pair in frozen.points.windows(2) {
+                let start: [f32; 3] = std::array::from_fn(|axis| pair[0][axis] as f32);
+                let end: [f32; 3] = std::array::from_fn(|axis| pair[1][axis] as f32);
+                if start.iter().all(|value| value.is_finite())
+                    && end.iter().all(|value| value.is_finite())
+                {
+                    lines.push(LineInstanceGPU {
+                        a: [start[0], start[1], start[2], 1.0],
+                        b: [end[0], end[1], end[2], width],
+                        color: frozen.color,
+                    });
+                }
+            }
         }
         if self.state.show_coordinate_system {
             // `active_dimension` reads the solved scene; never hardcode 3.

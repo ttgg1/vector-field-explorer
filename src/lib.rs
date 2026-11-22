@@ -41,6 +41,7 @@ pub mod maxwell_wave;
 pub mod object_renderer;
 pub mod object_scene;
 pub mod ode;
+pub mod ode_compare;
 pub mod palette_io;
 pub mod parameters;
 pub mod particles;

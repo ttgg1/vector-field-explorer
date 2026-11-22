@@ -920,6 +920,34 @@ impl VfApp {
                 self.apply_view_command(ViewCommand::Reset);
                 self.ode.sync_from(&self.state);
             }
+            crate::ui::ode_panel::OdePanelAction::ReferenceTimeDependent => {
+                if self.ode.use_time_dependent_reference(&mut self.state) {
+                    // A fresh reference is a fresh playback; let the ODE frame
+                    // path reset the shared clock and rebuild the frozen line.
+                    self.state.dirty = true;
+                }
+            }
+            crate::ui::ode_panel::OdePanelAction::ReferenceSteady => {
+                if self.ode.use_steady_reference(&mut self.state) {
+                    self.state.dirty = true;
+                }
+            }
+            crate::ui::ode_panel::OdePanelAction::RestoreFormula => {
+                if self.ode.restore_previous_formula(&mut self.state) {
+                    self.state.dirty = true;
+                }
+            }
+            crate::ui::ode_panel::OdePanelAction::CompareVisibilityChanged { enabled } => {
+                if !enabled {
+                    // The panel already cleared its cache; make sure the drawn
+                    // segments go away with it in this frame.
+                    self.ode.compare.frozen = None;
+                }
+                // Checkbox visibility is display state, not a scene edit.
+                // Mark dirty so `advance_ode`, which runs after chrome in the
+                // same frame, rebuilds the cached lines for both transitions.
+                self.state.dirty = true;
+            }
         }
     }
 
