@@ -4225,7 +4225,14 @@ does not include per-frame particles by design, so a caller that only reads
 sample caches while preserving vector state. Plot setters reconcile transitions,
 sanitize controls and invalidate relevant caches; `plot_scene` lazily samples
 accepted expressions and delegates scene construction to `plot_scene`.
-`tests/plot_state_test.rs` covers editing, transitions, settings and caching.
+Surface drafts parse through `scalar_view_expr`, so committed parameters are
+substituted by the same parser the scalar overlay uses (curve drafts keep the
+curve-only `x` binding). `apply_parameterized_surface` validates a candidate
+parameter set and its surface source through that parser before committing
+either; on failure the parameter set, source, accepted expression, samples and
+generation are untouched, and on success the samples are invalidated once.
+`tests/plot_state_test.rs` covers editing, transitions, settings, caching and
+the atomic parameter-aware install.
 
 #### `src/parameters.rs` — shared named-parameter records
 
@@ -6501,11 +6508,15 @@ plot-section reset.
   formula; no new shortcut or global settings page is added.
 - Issue #214 adds the collapsed `Analytic dipole potential` route in Surface
   mode. It builds the closed-form potential through
-  `scalar_analysis::analytic_dipole_potential`, commits the editable separation
-  as parameter `d`, and loads the expression through the ordinary source setter.
-  The route and its note are compiled for web and native; the native symbolic
-  CAS boundary is labelled, not reimplemented. Its draft lives in egui temp data
-  and never enters the document.
+  `scalar_analysis::analytic_dipole_potential`, then calls
+  `State::apply_parameterized_surface` so the editable separation `d` and the
+  source commit atomically only after the shipped parameter-aware surface parser
+  accepts the expression. A rejected candidate changes no parameter, source,
+  mesh or status and reports an actionable error; "Loaded" appears only after
+  the successful commit rebuilds the mesh. The route and its note are compiled
+  for web and native; the native symbolic CAS boundary is labelled, not
+  reimplemented. Its draft lives in egui temp data and never enters the
+  document.
 
 **Pinned by.** `tests/plot_ui_test.rs` and
 `tests/cas_scene_test.rs::the_plot_panel_offers_the_analytic_dipole_route`.

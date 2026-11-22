@@ -5,11 +5,14 @@
 //! following `button_sizing_test.rs` / `responsive_test.rs` conventions. They
 //! assert the controls that are actually painted, not a replica of the rules.
 
+use std::sync::Arc;
+
 use eframe::egui;
 
 use crate::support;
 
 use vector_field_explorer::{
+    parameters::{Parameter, ParameterSet},
     plot::PlotKind,
     presets::presets,
     screenshot::SCALAR_SVG_MESSAGE,
@@ -550,6 +553,100 @@ fn vector_only_controls_and_svg_explain_disabled_state() {
             .iter()
             .any(|shortcut| shortcut.label.to_lowercase().contains("fit")),
         "Fit plot adds no keyboard shortcut"
+    );
+}
+
+#[test]
+fn analytic_dipole_route_loads_d_only_after_a_successful_commit() {
+    let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    h.idle();
+    assert!(h.state.parameters.value("d").is_none());
+    let before_source = h.state.plot.surface.source.clone();
+
+    h.click_label("Analytic dipole potential");
+    h.click_label("Use analytic potential");
+    let out = h.idle();
+
+    assert_eq!(h.state.parameters.value("d"), Some(1.0));
+    assert_ne!(h.state.plot.surface.source, before_source);
+    assert!(h.state.plot.surface.source.contains('d'));
+    assert!(h.state.plot.surface.accepted.is_some());
+    assert!(
+        h.state.plot.surface.samples.is_some(),
+        "the successful route rebuilds the surface mesh"
+    );
+    assert!(h.state.plot_scene().bounds.is_some());
+    assert!(
+        nodes(&out).iter().any(|node| node.label.contains("Loaded")),
+        "success is reported only after the mesh exists: {:?}",
+        nodes(&out).iter().map(|n| &n.label).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn analytic_dipole_route_failure_changes_nothing_and_has_no_loaded_status() {
+    let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    // The parameter cap is already full, so adding the separation `d` cannot
+    // commit. The route must reject the whole action before touching anything.
+    let mut parameters = ParameterSet::default();
+    for index in 0..32 {
+        parameters.entries.push(Parameter {
+            name: format!("p{index}"),
+            value: 1.0,
+            min: None,
+            max: None,
+            step: 0.1,
+        });
+    }
+    h.state
+        .commit_parameters(parameters)
+        .expect("a full-but-valid set");
+    h.idle();
+    let before_parameters = h.state.parameters.clone();
+    let before_source = h.state.plot.surface.source.clone();
+    let before_samples = h.state.plot.surface.samples.clone().expect("sampled mesh");
+    let before_generation = h.state.plot.generation;
+
+    h.click_label("Analytic dipole potential");
+    h.click_label("Use analytic potential");
+    let out = h.idle();
+    let painted = nodes(&out);
+
+    assert_eq!(
+        h.state.parameters, before_parameters,
+        "no parameter changed"
+    );
+    assert_eq!(
+        h.state.plot.surface.source, before_source,
+        "source unchanged"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &before_samples,
+            h.state
+                .plot
+                .surface
+                .samples
+                .as_ref()
+                .expect("mesh unchanged")
+        ),
+        "the old mesh is still the one on screen"
+    );
+    assert_eq!(
+        h.state.plot.generation, before_generation,
+        "no scene rebuild was requested"
+    );
+    assert!(
+        painted
+            .iter()
+            .any(|node| node.label.contains("Could not load")
+                && node.label.contains("Nothing was changed")),
+        "an actionable failure is shown: {:?}",
+        painted.iter().map(|n| &n.label).collect::<Vec<_>>()
+    );
+    assert!(
+        !painted.iter().any(|node| node.label.contains("Loaded")),
+        "failure never claims success"
     );
 }
 

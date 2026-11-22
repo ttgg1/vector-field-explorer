@@ -6,12 +6,35 @@ use glam::UVec2;
 use super::State;
 use crate::{
     field::normalize_formula_input,
+    parameters::ParameterSet,
     plot::{PlotKind, curve_edges_at, sample_curve_at, sample_surface_at},
     plot_examples::PlotExample,
     plot_scene::{PlotScene, build_plot_scene},
     plot_state::{PlotSettings, SampledPlot, ScalarDraft},
     scalar::{ScalarContext, ScalarExpr},
+    scalar_view::scalar_view_expr,
 };
+
+/// Parse a scalar draft through the shipped parser for its context.
+///
+/// A surface draft is parsed by [`scalar_view_expr`], the same
+/// parameter-substituting surface parser the scalar overlay uses. A curve draft
+/// keeps its curve-only binding because that parser surface accepts `y` as an
+/// independent variable.
+fn parse_scalar_source(
+    source: &str,
+    context: ScalarContext,
+    parameters: &ParameterSet,
+) -> Result<ScalarExpr, String> {
+    match context {
+        ScalarContext::Surface => {
+            scalar_view_expr(source, parameters).map_err(|error| error.to_string())
+        }
+        ScalarContext::Curve => {
+            ScalarExpr::parse(source, context).map_err(|error| error.to_string())
+        }
+    }
+}
 
 impl State {
     fn scalar_draft(&self, context: ScalarContext) -> &ScalarDraft {
@@ -59,16 +82,18 @@ impl State {
             PlotKind::Surface3D => Some(ScalarContext::Surface),
         };
         if let Some(context) = context {
+            let source = self.scalar_draft(context).source.clone();
+            let parsed = parse_scalar_source(&source, context, &self.parameters);
             let draft = self.scalar_draft_mut(context);
             draft.accepted = None;
             draft.samples = None;
             draft.sampled_at = None;
-            match ScalarExpr::parse(&draft.source, context) {
+            match parsed {
                 Ok(expr) => {
                     draft.accepted = Some(expr);
                     draft.error = None;
                 }
-                Err(err) => draft.error = Some(err.to_string()),
+                Err(error) => draft.error = Some(error),
             }
         }
         self.plot_changed()
@@ -85,21 +110,51 @@ impl State {
         force: bool,
     ) -> bool {
         let source = normalize_formula_input(&source);
-        let draft = self.scalar_draft_mut(context);
-        if !force && draft.source == source {
+        if !force && self.scalar_draft(context).source == source {
             return false;
         }
+        let parsed = parse_scalar_source(&source, context, &self.parameters);
+        let draft = self.scalar_draft_mut(context);
         draft.source = source;
-        match ScalarExpr::parse(&draft.source, context) {
+        match parsed {
             Ok(expr) => {
                 draft.accepted = Some(expr);
                 draft.samples = None;
                 draft.sampled_at = None;
                 draft.error = None;
             }
-            Err(err) => draft.error = Some(err.to_string()),
+            Err(error) => draft.error = Some(error),
         }
         self.plot_changed()
+    }
+
+    /// Validate and atomically install a named-parameter set together with the
+    /// surface expression that consumes it.
+    ///
+    /// Both the parameter set and the source are checked through the shipped
+    /// parameter-aware surface parser before either the committed parameters,
+    /// the draft source, the accepted expression or the sampled mesh changes.
+    /// On error nothing changes, so the caller can report success only after
+    /// this returns `Ok`.
+    pub fn apply_parameterized_surface(
+        &mut self,
+        parameters: ParameterSet,
+        source: String,
+    ) -> Result<(), String> {
+        parameters.validate()?;
+        let source = normalize_formula_input(&source);
+        let expr = parse_scalar_source(&source, ScalarContext::Surface, &parameters)?;
+        // Both inputs already validated, so the parameter commit cannot reject
+        // them; only after it succeeds is the draft replaced.
+        self.commit_parameters(parameters)?;
+        let draft = &mut self.plot.surface;
+        draft.source = source;
+        draft.accepted = Some(expr);
+        draft.samples = None;
+        draft.sampled_at = None;
+        draft.error = None;
+        self.plot_changed();
+        Ok(())
     }
 
     pub fn set_active_source(&mut self, source: String) -> bool {
