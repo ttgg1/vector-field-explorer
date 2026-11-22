@@ -1,20 +1,24 @@
 //! Issue #223 phase 1: the optional Griffiths onboarding branch.
 //!
 //! The branch is deliberately separate from the ordered quick tour. It offers
-//! four selectable activities from the welcome card and the Help window. Only
-//! the charged-ring activity (#224) ships in this slice; the other routes stay
-//! selectable but report a safe, clearly labelled placeholder without touching
-//! the scene.
+//! four selectable activities from the welcome card and the Help window. The
+//! charged-ring (#224) and charged-shell (#225) lessons ship in this slice; the
+//! other routes stay selectable but report a safe, clearly labelled placeholder
+//! without touching the scene.
 
 use eframe::egui;
 
 use crate::ui::ring_lesson::RingLessonState;
+use crate::ui::shell_lesson::ShellLessonState;
 
 /// The picker's window title and accessible label.
 pub const GRIFFITHS_PICKER_TITLE: &str = "Try a Griffiths problem";
 /// The ring route's control label, also used by the picker and tests.
 pub const GRIFFITHS_RING_LABEL: &str =
     "Griffiths 2.5 · Charged ring: where is the axial field strongest?";
+/// The shell route's control label, also used by the picker and tests.
+pub const GRIFFITHS_SHELL_LABEL: &str =
+    "Griffiths 2.11 · Charged shell: field and flux across the shell";
 
 /// One optional activity in the Griffiths branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +61,7 @@ impl GriffithsRoute {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Ring => GRIFFITHS_RING_LABEL,
-            Self::Shell => "Griffiths 2.11 · Charged shell (not available yet)",
+            Self::Shell => GRIFFITHS_SHELL_LABEL,
             Self::Plane => "Griffiths §3.2 · Grounded plane (not available yet)",
             Self::Wire => "Griffiths 5.14(a) · Current-carrying wire (not available yet)",
         }
@@ -65,7 +69,7 @@ impl GriffithsRoute {
 
     /// Whether this route has a shipped lesson in this build.
     pub const fn available(self) -> bool {
-        matches!(self, Self::Ring)
+        matches!(self, Self::Ring | Self::Shell)
     }
 }
 
@@ -78,6 +82,8 @@ pub struct GriffithsState {
     pub placeholder: Option<GriffithsRoute>,
     /// The ring activity's session state.
     pub lesson: RingLessonState,
+    /// The shell activity's session state and completion flag.
+    pub shell: ShellLessonState,
 }
 
 impl GriffithsState {
@@ -105,6 +111,8 @@ pub enum GriffithsAction {
     None,
     /// Open the charged-ring lesson.
     OpenRing,
+    /// Open the charged-shell lesson.
+    OpenShell,
     /// A route without a shipped lesson was selected.
     Placeholder(GriffithsRoute),
     /// Close the picker and return to the current scene.
@@ -138,7 +146,10 @@ pub fn show_picker(ctx: &egui::Context, state: &mut GriffithsState) -> Griffiths
                 );
                 if response.clicked() {
                     if route.available() {
-                        action = GriffithsAction::OpenRing;
+                        action = match route {
+                            GriffithsRoute::Shell => GriffithsAction::OpenShell,
+                            _ => GriffithsAction::OpenRing,
+                        };
                     } else {
                         action = GriffithsAction::Placeholder(route);
                     }

@@ -266,9 +266,10 @@ pub struct VfApp {
     /// persisted or recorded in history.
     pub tour: Option<TourProgress>,
     /// Issue #223 phase 1: the optional Griffiths branch, its four-route picker
-    /// and the ring lesson. Session-only; never persisted or recorded in history.
+    /// and the ring/shell lessons. Session-only; never persisted or recorded in
+    /// history.
     pub griffiths: GriffithsState,
-    /// The scene and camera captured before the ring lesson opened, used by
+    /// The scene and camera captured before a Griffiths lesson opened, used by
     /// Back/Exit. `None` outside the lesson or after Keep exploring adopts.
     griffiths_start: Option<GriffithsStart>,
     /// The value snapshotted for an `AdvanceRule::Changed` stop, keyed by the

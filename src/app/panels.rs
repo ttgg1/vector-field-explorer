@@ -18,6 +18,7 @@ use crate::ui::griffiths::{GriffithsAction, GriffithsRoute};
 use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
 use crate::ui::presets::SceneAction;
 use crate::ui::ring_lesson::{RingLessonAction, RingPrediction, RingReading};
+use crate::ui::shell_lesson::{ShellFieldPrediction, ShellFluxPrediction, ShellLessonAction};
 use crate::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, MIN_DENSITY};
 
 impl VfApp {
@@ -1204,7 +1205,9 @@ impl VfApp {
 
     /// Start one Griffiths route. The ring route captures the starting scene
     /// once and loads the shipped `Uniform ring` preset through its ordinary
-    /// loader; unavailable routes only set a safe placeholder message.
+    /// loader; the shell route loads the shipped Hollow sphere case and opens
+    /// the #225 activity over #219's measurement state; unavailable routes only
+    /// set a safe placeholder message.
     pub fn start_griffiths_route(&mut self, route: GriffithsRoute) {
         if !route.available() {
             self.griffiths.placeholder = Some(route);
@@ -1223,29 +1226,56 @@ impl VfApp {
                 last_committed: self.last_committed.clone(),
             });
         }
-        let preset = crate::source_presets::source_preset("Uniform ring")
-            .expect("the shipped Uniform ring preset exists");
-        if !crate::source_presets::load_source_preset(preset, &mut self.state) {
-            // The shipped preset is validated by tests; if it ever fails, do
-            // not leave a half-open lesson pretending a ring was loaded.
-            self.exit_griffiths_lesson();
-            return;
+        match route {
+            GriffithsRoute::Ring => {
+                self.griffiths.shell.deactivate();
+                let preset = crate::source_presets::source_preset("Uniform ring")
+                    .expect("the shipped Uniform ring preset exists");
+                if !crate::source_presets::load_source_preset(preset, &mut self.state) {
+                    // The shipped preset is validated by tests; if it ever fails, do
+                    // not leave a half-open lesson pretending a ring was loaded.
+                    self.exit_griffiths_lesson();
+                    return;
+                }
+                // Side view: look along +X so the ring is edge-on and the z axis runs
+                // vertically in the viewport.
+                self.orbit.yaw = 0.0;
+                self.orbit.pitch = std::f32::consts::FRAC_PI_2;
+                self.orbit.distance = 4.0;
+                self.orbit.target = Vec3::ZERO;
+                self.camera.position = [0.0, 0.0];
+                self.camera.scale = 1.0;
+                self.griffiths.lesson.activate();
+            }
+            GriffithsRoute::Shell => {
+                self.griffiths.lesson.deactivate();
+                // The shell lesson owns its own #219 measurement session; reset
+                // any guided panel session so the two surfaces cannot disagree.
+                self.maxwell.gauss.reset();
+                let scene = crate::maxwell::MaxwellScene {
+                    case: crate::maxwell::MaxwellCase::HollowSphere,
+                    ..crate::maxwell::MaxwellScene::default()
+                };
+                self.state.set_field_mode(FieldMode::Maxwell);
+                self.state.set_maxwell_scene(scene);
+                self.state.refresh_maxwell_sampling();
+                self.maxwell.sync_from(&self.state);
+                self.griffiths.shell.activate(&self.state.maxwell);
+            }
+            GriffithsRoute::Plane | GriffithsRoute::Wire => {
+                unreachable!("unavailable routes returned before the scene changed")
+            }
         }
-        // Side view: look along +X so the ring is edge-on and the z axis runs
-        // vertically in the viewport.
-        self.orbit.yaw = 0.0;
-        self.orbit.pitch = std::f32::consts::FRAC_PI_2;
-        self.orbit.distance = 4.0;
-        self.orbit.target = Vec3::ZERO;
-        self.camera.position = [0.0, 0.0];
-        self.camera.scale = 1.0;
-        self.griffiths.lesson.activate();
         self.help_open = false;
     }
 
-    /// Back/Exit from the ring lesson: restore the exact scene and camera from
-    /// before the branch opened.
+    /// Back/Exit from a Griffiths lesson: restore the exact scene and camera
+    /// from before the branch opened. The shell activity records completion
+    /// when the learner has pinned both an inside and an outside reading.
     pub fn exit_griffiths_lesson(&mut self) {
+        if self.griffiths.shell.active() {
+            self.griffiths.shell.finish(&self.state.maxwell);
+        }
         if let Some(start) = self.griffiths_start.take() {
             self.state = start.state;
             self.orbit = start.orbit;
@@ -1255,13 +1285,19 @@ impl VfApp {
             self.last_committed = start.last_committed;
         }
         self.griffiths.lesson.deactivate();
+        self.griffiths.shell.deactivate();
         self.griffiths.close();
     }
 
-    /// Adopt the activity scene: drop the starting snapshot and keep the ring.
+    /// Adopt the activity scene: drop the starting snapshot and keep the
+    /// loaded ring or shell scene.
     pub fn keep_griffiths_scene(&mut self) {
+        if self.griffiths.shell.active() {
+            self.griffiths.shell.finish(&self.state.maxwell);
+        }
         self.griffiths_start = None;
         self.griffiths.lesson.deactivate();
+        self.griffiths.shell.deactivate();
         self.griffiths.close();
     }
 
@@ -1328,10 +1364,116 @@ impl VfApp {
         self.send_ring_formula_to_cas();
     }
 
+    /// Test seam: whether the shell activity is active.
+    #[doc(hidden)]
+    pub fn shell_lesson_active_for_test(&self) -> bool {
+        self.griffiths.shell.active()
+    }
+
+    /// Test seam: whether the shell activity has been completed for this branch
+    /// session.
+    #[doc(hidden)]
+    pub fn shell_lesson_completed_for_test(&self) -> bool {
+        self.griffiths.shell.completed()
+    }
+
+    /// Test seam: whether the shell result has been revealed.
+    #[doc(hidden)]
+    pub fn shell_lesson_revealed_for_test(&self) -> bool {
+        self.griffiths.shell.revealed()
+    }
+
+    /// Test seam: commit both shell predictions.
+    #[doc(hidden)]
+    pub fn predict_shell_for_test(
+        &mut self,
+        field: ShellFieldPrediction,
+        flux: ShellFluxPrediction,
+    ) {
+        self.griffiths.shell.select_field_prediction(field);
+        self.griffiths.shell.select_flux_prediction(flux);
+    }
+
+    /// Test seam: reveal the shell result.
+    #[doc(hidden)]
+    pub fn reveal_shell_for_test(&mut self) -> bool {
+        self.griffiths.shell.reveal()
+    }
+
+    /// Test seam: move the shell lesson's measuring radius.
+    #[doc(hidden)]
+    pub fn set_shell_probe_for_test(&mut self, radius: f64) -> bool {
+        self.griffiths.shell.set_probe_radius(radius)
+    }
+
+    /// Test seam: pin the live at-r shell reading.
+    #[doc(hidden)]
+    pub fn pin_shell_radius_for_test(&mut self) -> bool {
+        if !self.griffiths.shell.active() {
+            return false;
+        }
+        let reading = self
+            .griffiths
+            .shell
+            .report_for(
+                &self.state.maxwell,
+                FieldFamily::Electric,
+                f64::from(self.state.time),
+            )
+            .at_radius
+            .clone();
+        let finite = reading.field().is_some();
+        self.griffiths.shell.pin(reading);
+        finite
+    }
+
+    /// Test seam: pin the live at-2r shell reading.
+    #[doc(hidden)]
+    pub fn pin_shell_double_for_test(&mut self) -> bool {
+        if !self.griffiths.shell.active() {
+            return false;
+        }
+        let reading = self
+            .griffiths
+            .shell
+            .report_for(
+                &self.state.maxwell,
+                FieldFamily::Electric,
+                f64::from(self.state.time),
+            )
+            .at_double
+            .clone();
+        let finite = reading.field().is_some();
+        self.griffiths.shell.pin(reading);
+        finite
+    }
+
+    /// Test seam: the shell lesson's live r/2r report.
+    #[doc(hidden)]
+    pub fn shell_report_for_test(&mut self) -> Option<crate::ui::gauss_shell::GaussShellReport> {
+        self.griffiths.shell.active().then(|| {
+            self.griffiths
+                .shell
+                .report_for(
+                    &self.state.maxwell,
+                    FieldFamily::Electric,
+                    f64::from(self.state.time),
+                )
+                .clone()
+        })
+    }
+
+    /// Test seam: whether the pinned readings include inside and outside.
+    #[doc(hidden)]
+    pub fn shell_comparison_ready_for_test(&self) -> bool {
+        self.griffiths.shell.comparison_ready(&self.state.maxwell)
+    }
+
     /// Draw the optional Griffiths branch and apply its one-shot actions.
     fn show_griffiths_overlays(&mut self, ctx: &egui::Context) {
         match crate::ui::griffiths::show_picker(ctx, &mut self.griffiths) {
             GriffithsAction::OpenRing => self.start_griffiths_route(GriffithsRoute::Ring),
+            GriffithsAction::OpenShell => self.start_griffiths_route(GriffithsRoute::Shell),
             GriffithsAction::Placeholder(route) => self.griffiths.placeholder = Some(route),
             GriffithsAction::Dismiss => self.griffiths.close(),
             GriffithsAction::None => {}
@@ -1341,6 +1483,17 @@ impl VfApp {
             RingLessonAction::KeepExploring => self.keep_griffiths_scene(),
             RingLessonAction::SendToCas => self.send_ring_formula_to_cas(),
             RingLessonAction::None => {}
+        }
+        match crate::ui::shell_lesson::show(
+            ctx,
+            &mut self.griffiths.shell,
+            &self.state.maxwell,
+            FieldFamily::Electric,
+            f64::from(self.state.time),
+        ) {
+            ShellLessonAction::Back => self.exit_griffiths_lesson(),
+            ShellLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            ShellLessonAction::None => {}
         }
     }
 

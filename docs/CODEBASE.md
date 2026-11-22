@@ -413,11 +413,11 @@ The welcome card also carries the optional **Try a Griffiths problem** button
 
 **Purpose.** A session-only four-route picker reachable from the welcome card
 and the Help window. `GriffithsRoute::ALL` lists ring, shell, plane and wire with
-their edition/locator labels; only `Ring` is available in this slice. The picker
-draws into `GriffithsState` (`picker_open`, `placeholder`, `lesson`) and returns
-`GriffithsAction::{OpenRing, Placeholder(route), Dismiss}`. Selecting an
-unavailable route never touches the scene; it sets a plainly labelled "not
-available yet" placeholder that the learner can close.
+their edition/locator labels; `Ring` and `Shell` are available in this slice. The
+picker draws into `GriffithsState` (`picker_open`, `placeholder`, `lesson`,
+`shell`) and returns `GriffithsAction::{OpenRing, OpenShell, Placeholder(route),
+Dismiss}`. Selecting an unavailable route never touches the scene; it sets a
+plainly labelled "not available yet" placeholder that the learner can close.
 
 **Pinned by.** [tests/griffiths_tour_test.rs](../tests/griffiths_tour_test.rs):
 `the_welcome_card_offers_the_optional_griffiths_branch`,
@@ -464,6 +464,40 @@ drops it and adopts the ring scene.
 `predicting_or_skipping_unlocks_the_reveal_and_revision_is_allowed`,
 `the_ring_route_loads_the_shipped_preset_and_restores_the_starting_scene`, and
 `keep_exploring_adopts_the_ring_scene`.
+
+#### `src/ui/shell_lesson.rs` — charged-shell field/flux activity (#225)
+
+**Purpose.** The Griffiths 2.11 route. It loads the shipped
+`MaxwellCase::HollowSphere` scene and wraps #219's `GaussShellState` and
+`compute_reading`/`report_for` seam in a prediction-gated tour activity. It adds
+no physical case, quadrature rule, tolerance or durable probe surface; all
+values are normalized teaching units with the shipped half-resolution
+quadrature uncertainty.
+
+**Invariants.** The question and the separate field/flux prompts precede every
+result; `can_reveal` requires both predictions or an explicit skip, and
+predictions remain revisable until the reveal. The first hint distinguishes the
+fixed shell radius `R` (`MaxwellScene::radius`) from the movable measuring
+radius `r` (`GaussShellState::probe_radius`). Before the reveal only the
+question, prompt, hint and radius control are drawn; E, A and Phi stay hidden.
+The reveal adds enclosed charge by region, outward normals, the `r` and `2r`
+readings, the quarter-field/fourfold-area/equal-flux ratios within the reported
+uncertainty, the interior-zero and ideal-boundary exclusion notes, and pin
+controls. Completion requires pinning both an interior and an exterior reading
+and then returning through Back/Exit or Keep exploring; re-entering the route
+(including from Help) starts a fresh prediction and completion state. Back/Exit
+restores the scene and camera snapshot; Keep exploring adopts the shell scene.
+The app loads the route through the ordinary `set_field_mode(Maxwell)` and
+`set_maxwell_scene` seams, so no persistence, history or probe surface changes.
+
+**Pinned by.** [tests/shell_lesson_test.rs](../tests/shell_lesson_test.rs):
+`the_shell_route_is_selectable_from_the_picker_and_replayable_from_help`,
+`the_prompt_precedes_the_reveal_and_the_hint_separates_shell_radius_from_measuring_radius`,
+`inside_reports_zero_field_and_flux_and_the_ideal_boundary_is_excluded`,
+`outside_doubling_r_quarters_the_field_and_keeps_the_flux_within_uncertainty`,
+`pinning_inside_and_outside_then_returning_completes_and_help_replay_resets`,
+`back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_shell`, and
+`the_shell_lesson_stays_usable_in_wide_and_compact_layouts`.
 
 #### `src/main.rs` — native and wasm bootstrap
 
@@ -5660,7 +5694,7 @@ and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `prompt_model`,
-`ring_lesson`, `sidebar`,
+`ring_lesson`, `shell_lesson`, `sidebar`,
 `sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
 `viewport_tool`.
