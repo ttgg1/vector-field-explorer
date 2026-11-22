@@ -2837,6 +2837,37 @@ the panel list/add/remove/bounds/step and
 `scalar_analysis_commits_only_while_the_scalar_view_is_applicable` tests in
 `tests/sidebar_controls_test.rs`.
 
+#### `src/scalar_overlay.rs` — linked and frozen CAS overlay dependencies
+
+**Purpose / API (issue #233).** `ScalarOverlay` records one CAS scalar result
+plotted into the scene. `OverlayDependency::{Linked, Frozen}` says how it
+resolves, `OverlayLayer::{Contours, PotentialField}` says what shipped layer it
+feeds, `OverlayCapture { parameters, frame, time }` holds a frozen copy's
+values, and `ScalarOverlaySet` is the bounded collection
+(`MAX_OVERLAYS = 4`, `MAX_OVERLAY_LABEL_BYTES = 64`). `OverlayLive` is the live
+binding input, `OverlayResolution` the resolved expression/parameters/frame/time,
+and `OverlayUnavailable` the identifiable reason. `bindings_summary`,
+`OVERLAY_ASSUMPTIONS` and `FROZEN_RENDER_NOTE` are the shared UI text.
+
+**Invariants.** A linked overlay always resolves against the live committed
+`ParameterSet`, `State::scalar_view_frame()` and simulated time, so editing the
+dipole separation updates it. A frozen copy resolves against its own capture and
+therefore keeps the expression, parameters, frame and time shown at creation.
+`resolve` reuses `scalar_view_expr` and `scalar_analysis::validate_plane_frame`;
+it adds no grammar, solver, quadrature or physical model. A removed parameter, a
+`z` slice reference or a non-finite captured frame is an `OverlayUnavailable`
+reason rather than a silent empty layer. `push` refuses past the cap and rejects
+duplicate ids or a dependency/capture mismatch; `sanitized` drops empty
+expressions, duplicate ids and frozen entries without a valid capture, truncates
+labels on a character boundary, applies fallback labels and enforces the cap.
+Only one gradient can be drawn, so a frozen copy is an independently stored and
+labelled prediction; `FROZEN_RENDER_NOTE` states that limitation honestly.
+
+**Pinned by.** `tests/cas_overlay_test.rs`: linked-versus-frozen resolution and
+captured values, a separation edit following only the linked overlay, missing
+parameter/frame/`z` reasons, cap and sanitization, panel controls and labels,
+scene JSON round trip/legacy load, and Replace-field undo.
+
 #### `src/plot.rs` — pure bounded scalar geometry and plot types
 
 **Purpose / API.** `PlotKind::{VectorField, Curve2D, Surface3D}` is serializable
@@ -4305,23 +4336,28 @@ the steady-current ignored-pairing note and the omega/phase steady round trip).
 #### `src/scene_document.rs` — versioned scene document
 
 **Purpose.** Issue #90 slice B2a: a strict, versioned JSON form for a whole
-scene (the durable view record, shared parameters and a camera pose). Pure
+scene (the durable view record, shared parameters and a camera pose). Issue
+#233 adds optional CAS overlays with linked/frozen dependency semantics. Pure
 model only; no `State`, storage, UI, renderer or app wiring yet.
 
 **Public API.** `SCENE_FORMAT_VERSION` (currently `1`),
 `MAX_SCENE_NAME_BYTES` (`64`); `SceneCamera { position, scale, yaw, pitch,
 distance, target, fov_y, ortho_zoom }` with `Default` (orbit defaults, 2D
 position zero and scale `1.0`) and `validate`; `SceneDocument { version, name,
-view, parameters, camera }` with `capture`, `validate`, `to_json` and
-`from_json`; `export_scene` and `import_scene`.
+view, parameters, camera, overlays }` with `capture`, `with_overlays`,
+`validate`, `to_json` and `from_json`; `export_scene` and `import_scene`.
+`overlays` is `#[serde(default, skip_serializing_if = "ScalarOverlaySet::is_empty")]`,
+so existing scene JSON without the key still loads as an empty set.
 
 **Contract.**
 - `capture` stores the name unchanged at `SCENE_FORMAT_VERSION`; validation,
-  not capture, rejects an empty or over-long name.
+  not capture, rejects an empty or over-long name. `with_overlays` attaches the
+  live overlay collection without changing the historical `capture` signature.
 - `validate` checks the version first (naming the found and expected versions),
   then the trimmed-non-empty name (at most 64 UTF-8 bytes, no ASCII control
-  characters), the camera and finally `ParameterSet::validate`. The view record
-  is deliberately not re-validated: `ViewRecord::restore` owns those rules.
+  characters), the camera, `ParameterSet::validate`, and finally the bounded
+  overlay set. The view record is deliberately not re-validated:
+  `ViewRecord::restore` owns those rules.
 - Every camera component must be finite. `scale` is `0.05..=50`, `distance`
   `0.05..=1.0e4`, `fov_y` `1°..=179°` in radians and `ortho_zoom` within
   `OrbitCamera::MIN_ORTHO_ZOOM..=OrbitCamera::MAX_ORTHO_ZOOM`; errors name the
@@ -4329,10 +4365,12 @@ view, parameters, camera }` with `capture`, `validate`, `to_json` and
 - Documents and the camera reject unknown fields (`deny_unknown_fields`);
   `from_json` maps serde failures to `invalid scene JSON: {error}` and
   validation failures to `invalid scene: {error}`. Imports never clamp, repair
-  or default a field.
+  or default a field. An overlays array past `MAX_OVERLAYS`, a duplicate id or a
+  dependency/capture mismatch is rejected; an unavailable expression with a
+  missing parameter is retained so the UI can identify it.
 - `to_json` is compact serde output in declaration order `version`, `name`,
   `view`, `parameters`, `camera`, and returns an error rather than an empty
-  string.
+  string. An empty overlay set omits its key.
 - `export_scene` validates before serializing; `import_scene` parses and
   validates.
 
@@ -4342,10 +4380,13 @@ future-version rejection naming both versions, unknown
 document and camera fields, the name rules, non-finite and out-of-range camera
 fields, the exact `ParameterSet` error, malformed-JSON prefixes, export/import
 composition, pinned field order, and validation never mutating the document.
+`tests/cas_overlay_test.rs` adds overlay dependency round trip, an older file
+without `overlays`, an options-preserving import into `State::set_overlays`, and
+bound rejection.
 
 **Limitations.** No UI, file/clipboard I/O, persistence-envelope, camera
-capture or `State` wiring in this slice; later slices call
-`ViewRecord::capture` at the call site.
+capture or `State` wiring in this module; later slices call
+`ViewRecord::capture` and `State::overlays` at the call site.
 
 #### `src/seed_layout.rs` — explicit streamline seed layout
 
@@ -6251,16 +6292,27 @@ when the user hid them) and the potential target installs an
 source untouched. Both bind the committed parameters and current time, report
 the slice and its valid region, and label the result as an analytic expression
 whose drawn values are sampled. The scalar thumbnail now samples the active
-slice and time with parameters substituted. `take_scene_edit` reports one named
-history edit (`plot CAS contours`, `overlay E = -∇V`) which
-`app/panels.rs::show_cas_body` records through `record_explicit_edit`. Each
-click is one action and therefore exactly one undo entry: undoing the overlay
-leaves the contours it did not change, and a second undo restores the contour
-source. The panel states that symbolic operations are native-only, separates
-them from the platform-neutral finite-difference overlay, and names the
-platform-neutral analytic dipole route. Pinned by `tests/cas_scene_test.rs`
-(contour/overlay application, per-action undo,
-parameter-driven layer update, provenance/region wording).
+slice and time with parameters substituted. Issue #233 adds explicit dependency
+control: the shown expression, bindings and assumptions precede `Add linked
+overlay`, `Add frozen copy` and the shipped `Plot contours` action. A linked
+overlay resolves against the live parameters/frame/time; a frozen copy captures
+them and shows its captured values. `add_frozen_overlay` never changes the
+drawn scene, and `FROZEN_RENDER_NOTE` explains the one-gradient limitation.
+`replace_field` accepts only a current vector result and replaces the plotted
+field as one history edit, so one undo restores the original. Missing
+parameters and invalid frames are listed as `Unavailable: <reason>` rather than
+an empty layer. `take_scene_edit` reports one named history edit
+(`plot CAS contours`, `add linked CAS overlay`, `add frozen CAS overlay`,
+`replace field from CAS`) which `app/panels.rs::show_cas_body` records through
+`record_explicit_edit`. Each click is one action and therefore exactly one undo
+entry: undoing the overlay leaves the contours it did not change, and a second
+undo restores the contour source. The panel states that symbolic operations are
+native-only, separates them from the platform-neutral finite-difference overlay,
+and names the platform-neutral analytic dipole route. Pinned by
+`tests/cas_scene_test.rs` (contour/overlay application, per-action undo,
+parameter-driven layer update, provenance/region wording) and
+`tests/cas_overlay_test.rs` (dependency controls and labels, captured values,
+unavailable reasons, narrow/wide panel, replace undo).
 
 #### `src/ui/math_view.rs` — native typeset display-list adapter
 

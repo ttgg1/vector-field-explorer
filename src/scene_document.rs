@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::camera::OrbitCamera;
 use crate::parameters::ParameterSet;
 use crate::persistence::ViewRecord;
+use crate::scalar_overlay::ScalarOverlaySet;
 
 /// The only scene document version this module writes or accepts.
 pub const SCENE_FORMAT_VERSION: u32 = 1;
@@ -139,6 +140,10 @@ pub struct SceneDocument {
     pub parameters: ParameterSet,
     /// The saved camera pose.
     pub camera: SceneCamera,
+    /// Durable CAS overlays with linked/frozen dependency semantics (issue
+    /// #233). Missing on older documents, which load as an empty set.
+    #[serde(default, skip_serializing_if = "ScalarOverlaySet::is_empty")]
+    pub overlays: ScalarOverlaySet,
 }
 
 impl SceneDocument {
@@ -158,10 +163,20 @@ impl SceneDocument {
             view,
             parameters,
             camera,
+            overlays: ScalarOverlaySet::default(),
         }
     }
 
-    /// Check the version, name, camera and parameters, first failure only.
+    /// Attach a validated-or-not overlay collection. Validation still owns the
+    /// acceptance decision; this only keeps `capture` source-compatible for
+    /// documents that predate issue #233.
+    pub fn with_overlays(mut self, overlays: ScalarOverlaySet) -> Self {
+        self.overlays = overlays;
+        self
+    }
+
+    /// Check the version, name, camera, parameters and overlays, first failure
+    /// only.
     ///
     /// `view` is deliberately not re-validated: restoring a `ViewRecord` owns
     /// its own rules.
@@ -175,6 +190,7 @@ impl SceneDocument {
         validate_name(&self.name)?;
         self.camera.validate()?;
         self.parameters.validate()?;
+        self.overlays.validate()?;
         Ok(())
     }
 

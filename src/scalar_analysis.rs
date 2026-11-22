@@ -600,6 +600,12 @@ fn truncate_label(label: &str) -> String {
     label[..end].to_owned()
 }
 
+/// Validate a scalar-view plane frame. Reused by overlay binding so the
+/// overlay model does not add a second frame rule.
+pub fn validate_plane_frame(frame: &PlaneFrame) -> Result<(), String> {
+    validate_frame(frame)
+}
+
 fn validate_frame(frame: &PlaneFrame) -> Result<(), String> {
     let finite = [
         frame.origin,
@@ -715,7 +721,7 @@ fn quantized_time(time: f64) -> i64 {
     }
 }
 
-mod frame_serde {
+pub(crate) mod frame_serde {
     use super::{PlaneAxis, PlaneFrame, Vec3};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

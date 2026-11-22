@@ -1951,7 +1951,8 @@ impl VfApp {
                 ViewRecord::capture(&self.state),
                 self.state.parameters.clone(),
                 self.scene_camera(),
-            );
+            )
+            .with_overlays(self.state.overlays().clone());
             self.presets.sync_active_scene(document);
         }
 
@@ -1995,7 +1996,8 @@ impl VfApp {
             ViewRecord::capture(&self.state),
             self.state.parameters.clone(),
             self.scene_camera(),
-        );
+        )
+        .with_overlays(self.state.overlays().clone());
         if let Err(error) = self.presets.insert_scene(document) {
             self.presets.set_scene_message(Some(error));
         }
@@ -2010,7 +2012,8 @@ impl VfApp {
             ViewRecord::capture(&self.state),
             self.state.parameters.clone(),
             self.scene_camera(),
-        );
+        )
+        .with_overlays(self.state.overlays().clone());
         let _ = self.presets.duplicate_current_experiment(document);
     }
 
@@ -2040,16 +2043,25 @@ impl VfApp {
             )));
             return;
         }
+        if let Err(error) = self.state.set_overlays(document.overlays.clone()) {
+            self.presets.set_scene_message(Some(format!(
+                "Scene {name:?} overlays are invalid: {error}"
+            )));
+            return;
+        }
         self.apply_scene_camera(&document.camera);
         // Bind the live document to the loaded scene, using the post-clamp live
         // capture as the unchanged baseline so merely visiting a scene writes
         // nothing back.
-        self.presets.bind_active_scene(SceneDocument::capture(
-            name,
-            ViewRecord::capture(&self.state),
-            self.state.parameters.clone(),
-            self.scene_camera(),
-        ));
+        self.presets.bind_active_scene(
+            SceneDocument::capture(
+                name,
+                ViewRecord::capture(&self.state),
+                self.state.parameters.clone(),
+                self.scene_camera(),
+            )
+            .with_overlays(self.state.overlays().clone()),
+        );
         self.presets
             .set_scene_message(Some(format!("Loaded scene {name:?}.")));
     }
