@@ -1997,6 +1997,28 @@ impl VfApp {
             );
         }
 
+        // Issue #230: a compact colour legend at the viewport's top-right. It
+        // is a second view of the sidebar's existing mapping and writes through
+        // the same State setters, so both stay in step. Modes whose Coloring
+        // section is hidden keep their existing overlays and do not grow a new
+        // colour editor here.
+        let legend_visible = self.state.is_vector_mode()
+            && !matches!(
+                self.state.field_mode,
+                FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
+            );
+        if legend_visible && let Some(rect) = self.last_viewport_rect {
+            let stats = self.color_facts.stats;
+            crate::ui::viewport_legend::show(
+                ui.ctx(),
+                rect,
+                &mut self.state,
+                &mut self.controls,
+                &stats,
+                self.layout_mode == LayoutMode::Compact,
+            );
+        }
+
         // Help > About (ticket 15): a small window over everything, closed by
         // its × (its open flag is the window's visibility).
         top_bar::about_window(ui.ctx(), &mut self.about_open);

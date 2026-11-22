@@ -1011,7 +1011,9 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   it.
 - Overlays paint last. The help overlay is suppressed in Compact below 520 pt of
   viewport width; the full Help window remains reachable from the menu. In
-  Sources mode a small viewport line shows `sources_panel::status_text`.
+  Sources mode a small viewport line shows `sources_panel::status_text`. The
+  #230 colour legend sits at the viewport's top-right, defaults collapsed in
+  Compact and covers only a narrow column.
 - The Features section is hidden in Sources mode; the exact formula-field note
   is the one-line replacement, and the Sources panel repeats it.
 
@@ -2948,13 +2950,16 @@ no UI; later panel work consumes the stable IDs and metadata.
 PhysicallyValidRegularized }` with `label`; `PresetFilters { dimension, animated }`;
 `ScalarPresetSpec { expr, kind, show_heatmap, contour_levels }`;
 `PresetEntry { id, name, summary, group, filters, assumptions, parameters,
-exploration_prompt, validity, scalar }`; `PresetLibrary::builtin`, `from_entries`,
+exploration_prompt, validity, scalar }`; `ExplorationActivity { UniformFlux }` and
+`exploration_activity(name)`; `PresetLibrary::builtin`, `from_entries`,
 `entries`, `len`, `is_empty`, `search`, `filtered`, `search_filtered`, `get`;
 `PresetLibraryError`.
 
 **Invariants.**
 - IDs match `[a-z0-9][a-z0-9_.-]*`, ASCII, 1..=64 bytes; malformed candidates
   return a descriptive error and never panic.
+- Only `Uniform field` carries a promoted `ExplorationActivity`; every other
+  prompt stays informational text. The prompt strings themselves are unchanged.
 - Formula IDs are `formula.<slug>` (lowercased name with each non-`[a-z0-9]`
   run replaced by `_`) unless ticket 91 metadata fixes an explicit ID;
   `Quadrupole (unequal charges)` uses
@@ -5496,7 +5501,8 @@ and `math_view`, `formula_bar`, `gauss_shell`, `help_overlay`, `induction_panel`
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
-`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_tool`.
+`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
+`viewport_tool`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -5515,6 +5521,22 @@ placement. The strip only surfaces existing S/P bindings; it never assigns or
 repurposes a chord. `tests/viewport_tool_test.rs` covers the derivation table,
 one-shot/sticky placement, enable-and-place, Escape, keyboard selection and both
 layout widths.
+
+#### `src/ui/viewport_legend.rs` — viewport colour legend overlay (#230)
+
+**Purpose.** A collapsible top-right overlay repeats the sidebar's colour
+mapping next to the picture: honest quantity label (`F`, `E`, `B`), normalized
+teaching units, effective numeric range, Auto/Locked state, and the active arrow
+length mode with its meaning. It reuses `State::color_mapping()`/`ColorStats`
+and the existing `freeze_color_range`, `set_color_range` and `set_auto_fit`
+setters; it adds no colour math. Lock, min/max `DragValue` edits and Unlock sync
+the `Controls` mirrors in the same frame, so the sidebar and overlay agree
+without a reload. The `Sources`/`Both` display shows the distinct fixed E/B
+family colours instead of claiming one numeric ramp. The header is a normal
+collapsing widget and compact defaults it shut with a width that leaves most of
+the viewport visible. `tests/viewport_legend_test.rs` covers the snapshot,
+lock/edit/unlock round trips in both directions, Both, collapse/compact, and the
+#219 locked-range invariance under a changed probe radius.
 
 #### `src/ui/appearance_panel.rs` — the Appearance panel
 
@@ -6065,6 +6087,43 @@ Loop, Point}`, `ResidualReport { residual, terms, absolute, inputs }`,
 `incompatible_action_is_explained_and_mutates_nothing`, and
 `differential_action_highlights_the_point_and_names_unavailable_terms`.
 
+#### `src/ui/uniform_flux.rs` — promoted uniform-field flux activity (#218)
+
+**Purpose.** The session-only closed-box flux activity reached from the
+`Uniform field` catalogue prompt. It reads the formula already loaded in the
+scene and never adds a probe surface, saves a document, or changes the
+Formula-mode probe refusal. Everything is normalized teaching units.
+
+**Public API.** `UniformFluxFace`, `UniformBoxFlux` with `incoming`, `outgoing`
+and `cancels`; `UniformFluxExtension { field, extension_formula }`;
+`UniformFluxReading { ThreeComponent, TwoComponent, NotUniform }`;
+`analyze(&FieldExpr)`; `extension_formula([f64; 2])`;
+`UniformFluxState` with `open`, `is_open`, `close`, `is_previewing`,
+`preview_extension`, `cancel_preview`, `restore_point`, `restore_available`,
+`apply_extension` and `restore_original`; `show(ui, &mut State,
+&mut UniformFluxState)`; the `UNIFORM_FLUX_*` notes and the stated
+`UNIFORM_FLUX_TOLERANCE = 1e-9`.
+
+**Invariants.**
+- A genuinely constant field is detected by sampling all three axes and a
+  second clock value; a varying or time-dependent formula reports `NotUniform`
+  rather than a fabricated table.
+- The three-component table is exact for the uniform case: six faces of the
+  unit box, unit outward normals, area 4 each, signed flux `F · n` times area,
+  and a total that cancels within the stated tolerance.
+- A constant two-component field offers only the explicit `F=(Fx,Fy,0)`
+  extension: the preview names that formula, the switch runs through
+  `State::set_formula`/`set_mode` only on confirmation, and the original
+  formula and projection stay available for `restore_original`. Cancelling or
+  closing never rewrites the formula.
+- The generic field is labelled `F`; no electric or magnetic role is assumed.
+
+**Pinned by.** `tests/uniform_flux_test.rs`: the only promoted prompt, the face
+table and cancellation, the `F` label, the two-component preview/switch/restore,
+non-constant refusals, the unchanged Formula probe refusal and empty probe
+surfaces, and the wide/narrow Presets entry with no dead action for other
+prompts.
+
 #### `src/ui/gauss_shell.rs` — guided Gauss-law investigation (#219)
 
 **Purpose.** A self-contained, session-only teaching activity for the shipped
@@ -6414,6 +6473,9 @@ management, and the My-presets whole-scene section (issue #90 slice B2c).
   localStorage) and clears the highlight/request.
 - `take_applied` returns a loaded camera exactly once; the app applies it to
   the orbit camera and leaves fly.
+- The loaded row's catalogue prompt and assumptions render beside the scene;
+  only `Uniform field` gets the session-only `Open flux investigation` action
+  (#218). Other prompts stay informational text with no dead button.
 - A missing preset name changes nothing and returns false.
 - Native `new` logs a load failure and starts empty; wasm storage failure shows
   one note but keeps the in-memory list usable.
