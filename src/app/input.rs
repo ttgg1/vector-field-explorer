@@ -606,6 +606,7 @@ impl VfApp {
                 }
             } else {
                 self.controls.scalar_place_probe = false;
+                self.controls.viewport_armed_one_shot = false;
                 self.controls.scalar_message = "Probes are unavailable in this view".to_owned();
                 restart_hint(
                     &mut self.status.hint,
@@ -769,6 +770,7 @@ impl VfApp {
                     crate::scalar_view::ScalarViewError::ProbeLimit { .. }
                 ) {
                     self.controls.scalar_place_probe = false;
+                    self.controls.viewport_armed_one_shot = false;
                 }
                 self.controls.scalar_message = error.to_string();
                 false

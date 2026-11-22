@@ -8,6 +8,7 @@ use crate::support;
 
 use vector_field_explorer::VfApp;
 use vector_field_explorer::interaction::Bindings;
+use vector_field_explorer::scalar_view::MAX_PROBES;
 use vector_field_explorer::ui::sidebar::Controls;
 use vector_field_explorer::ui::viewport_tool::{self, ToolAvailability, ToolInputs, ViewportTool};
 use vector_field_explorer::view_command::{CLICK_HINT_PARTICLES_OFF, CLICK_HINT_STREAMLINES_OFF};
@@ -375,6 +376,58 @@ fn a_sidebar_probe_arm_stays_one_shot_under_the_sticky_default() {
 }
 
 #[test]
+fn a_cap_rejected_sidebar_arm_clears_the_one_shot_marker() {
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    for _ in 0..MAX_PROBES {
+        app.state
+            .add_point_probe(glam::Vec3::new(0.1, 0.1, 0.0), None)
+            .expect("room for the capped test probes");
+    }
+    app.controls.scalar_place_probe = true;
+    app.controls.viewport_armed_one_shot = true;
+
+    let rect = probe_viewport();
+    let aspect = rect.width() / rect.height();
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        MAX_PROBES,
+        "the cap rejects the placement"
+    );
+    assert!(
+        app.controls.scalar_message.contains("at most 8"),
+        "the cap rejection is reported: {:?}",
+        app.controls.scalar_message
+    );
+    assert!(
+        !app.controls.scalar_place_probe,
+        "a cap rejection disarms the probe"
+    );
+    assert!(
+        !app.controls.viewport_armed_one_shot,
+        "the cancelled one-shot marker must not leak"
+    );
+
+    // The next click is not forced to Inspect/one-shot by the stale arm.
+    app.state.set_formula("y, -x, 1".into());
+    app.state.set_streamlines(true);
+    app.controls.streamlines = true;
+    app.controls.left_click_action = LeftClickAction::SeedStreamline;
+    app.controls.viewport_inspect = false;
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        1,
+        "the next click seeds normally"
+    );
+    assert!(
+        !app.controls.viewport_inspect,
+        "the stale marker does not force the next placement to Inspect"
+    );
+}
+
+#[test]
 fn an_outside_domain_probe_click_keeps_the_arm_for_a_retry() {
     let mut app = probe_app(true);
     let rect = probe_viewport();
@@ -548,7 +601,7 @@ fn node_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
         .nodes
         .iter()
         .filter_map(|(_, node)| {
-            (node.label() == Some(label))
+            (node.label() == Some(label) || node.value() == Some(label))
                 .then_some(node.bounds())
                 .flatten()
         })
@@ -579,12 +632,22 @@ fn frame_with_width(
     width: f32,
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
+    frame_with_size(ctx, app, width, 900.0, events)
+}
+
+fn frame_with_size(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    width: f32,
+    height: f32,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
     let mut native = eframe::Frame::_new_kittest();
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(width, 900.0),
+                egui::vec2(width, height),
             )),
             events,
             ..Default::default()
@@ -680,6 +743,121 @@ fn a_full_frame_strip_click_selects_seed_streamline_and_one_placement_follows() 
         app.test_harness().click_seed_count(),
         1,
         "one placement click after selecting the tool performs exactly one action"
+    );
+}
+
+#[test]
+fn a_one_shot_sidebar_probe_survives_changing_the_left_click_action() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    assert!(
+        app.controls.viewport_sticky,
+        "the default placement mode is Keep placing"
+    );
+
+    let width = 1200.0;
+    let height = 4000.0;
+    let mut out = frame_with_size(&ctx, &mut app, width, height, Vec::new());
+    for _ in 0..3 {
+        out = frame_with_size(&ctx, &mut app, width, height, Vec::new());
+    }
+
+    // 1. Open the Scalar section.
+    let header = node_rects(&out, "Scalar view")
+        .into_iter()
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("the Scalar view header is exposed");
+    for pressed in [true, false] {
+        let _ = frame_with_size(
+            &ctx,
+            &mut app,
+            width,
+            height,
+            pointer(header.center(), pressed),
+        );
+    }
+    for _ in 0..20 {
+        out = frame_with_size(&ctx, &mut app, width, height, Vec::new());
+    }
+
+    // 2. Check the standalone Place probe checkbox, which is a one-shot arm.
+    let checkbox = node_rects(&out, "Place probe")
+        .into_iter()
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("the Scalar Place probe checkbox is exposed");
+    for pressed in [true, false] {
+        let _ = frame_with_size(
+            &ctx,
+            &mut app,
+            width,
+            height,
+            pointer(checkbox.center(), pressed),
+        );
+    }
+    assert!(app.controls.scalar_place_probe, "the checkbox arms a probe");
+    assert!(
+        app.controls.viewport_armed_one_shot,
+        "the checkbox arms exactly one placement"
+    );
+
+    // 3. Change the sidebar left-click action. This must not convert the
+    // one-shot probe arm into a sticky probe tool.
+    out = frame_with_size(&ctx, &mut app, width, height, Vec::new());
+    let add_particles = node_rects(&out, "Add particles")
+        .into_iter()
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("the sidebar Add particles selector is exposed");
+    for pressed in [true, false] {
+        let _ = frame_with_size(
+            &ctx,
+            &mut app,
+            width,
+            height,
+            pointer(add_particles.center(), pressed),
+        );
+    }
+    assert_eq!(
+        app.controls.left_click_action,
+        LeftClickAction::AddParticles,
+        "the sidebar selector changed the left-click action"
+    );
+    assert!(app.controls.scalar_place_probe, "the probe stays armed");
+    assert!(
+        app.controls.viewport_armed_one_shot,
+        "changing the left-click action must preserve the one-shot probe marker"
+    );
+
+    // 4. One click places exactly one probe, applies no seed or particle, and
+    // returns to Inspect. A second click places nothing.
+    let rect = probe_viewport();
+    let aspect = rect.width() / rect.height();
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(app.state.probes.points.len(), 1, "one probe is placed");
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        0,
+        "the armed probe click does not also seed"
+    );
+    assert!(
+        app.test_harness().particle_snapshot().0.is_empty(),
+        "the armed probe click does not also add a particle burst"
+    );
+    assert!(
+        !app.controls.scalar_place_probe,
+        "the one-shot probe disarms after one placement"
+    );
+    assert!(
+        app.controls.viewport_inspect,
+        "the strip returns to Inspect after the one-shot placement"
+    );
+
+    app.test_seed_click(rect.center() + egui::vec2(40.0, 0.0), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        1,
+        "a second click places no second probe"
     );
 }
 

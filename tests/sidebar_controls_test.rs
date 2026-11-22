@@ -2771,6 +2771,8 @@ fn unsupported_z_formula_shows_the_reason_instead_of_controls() {
     let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
     h.state
         .set_scalar_source(ScalarContext::Surface, "z + x".into());
+    h.controls.scalar_place_probe = true;
+    h.controls.viewport_armed_one_shot = true;
     h.open_header("Scalar view");
 
     let out = h.idle();
@@ -2782,6 +2784,14 @@ fn unsupported_z_formula_shows_the_reason_instead_of_controls() {
     assert!(
         !text.contains("Grid resolution") && !text.contains("Contour levels"),
         "no scalar controls are offered for a z formula"
+    );
+    assert!(
+        !h.controls.scalar_place_probe,
+        "the unsupported branch disarms the probe"
+    );
+    assert!(
+        !h.controls.viewport_armed_one_shot,
+        "the unsupported branch must not leak the one-shot marker"
     );
 }
 
@@ -2826,6 +2836,16 @@ fn place_probe_checkbox_arms_one_shot_under_the_sticky_default() {
     assert!(
         h.controls.viewport_sticky,
         "the checkbox does not silently change the strip's mode"
+    );
+
+    // Unchecking cancels the arm without leaking the one-shot marker.
+    let out = h.idle();
+    let probe = label_rect(&out, "Place probe").expect("the Place probe checkbox is exposed");
+    h.click(probe.center());
+    assert!(!h.controls.scalar_place_probe, "the checkbox is unchecked");
+    assert!(
+        !h.controls.viewport_armed_one_shot,
+        "unchecking clears the one-shot marker"
     );
 }
 

@@ -1471,6 +1471,7 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
             if let Some(reason) = scalar_view_unsupported_reason(state) {
                 ui.label(&reason);
                 controls.scalar_place_probe = false;
+                controls.viewport_armed_one_shot = false;
                 // Keep the toggle visible but disabled so the section explains
                 // why no heatmap can be painted instead of silently hiding a
                 // persisted setting.
@@ -1523,9 +1524,8 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
                 .checkbox(&mut controls.scalar_place_probe, "Place probe")
                 .on_hover_text("Click the viewport plane to add one point probe")
                 .changed()
-                && controls.scalar_place_probe
             {
-                controls.viewport_armed_one_shot = true;
+                controls.viewport_armed_one_shot = controls.scalar_place_probe;
             }
 
             let mut remove = None;
@@ -2699,7 +2699,11 @@ fn show_inner(
             });
             if controls.left_click_action != action_before {
                 controls.viewport_inspect = false;
-                controls.viewport_armed_one_shot = false;
+                // An armed probe is still a one-shot placement: changing the
+                // left-click action must not turn it into a sticky probe.
+                if !controls.scalar_place_probe {
+                    controls.viewport_armed_one_shot = false;
+                }
             }
             ui.checkbox(&mut controls.particles, "Particles")
                 .on_hover_text(

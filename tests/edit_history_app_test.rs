@@ -913,6 +913,10 @@ fn leaving_the_scalar_mode_while_armed_disarms_and_reports() {
         "an armed probe click disarms when the probe path is gone"
     );
     assert!(
+        !app.controls.viewport_armed_one_shot,
+        "the cancelled one-shot marker does not leak"
+    );
+    assert!(
         !app.controls.scalar_message.is_empty(),
         "the user is told why the click no longer places a probe"
     );
