@@ -37,14 +37,32 @@ pub fn install_math_fonts(ctx: &egui::Context) {
     }
 }
 
-/// A laid-out formula converted to egui shapes, in points and relative to the
-/// top-left of its bounding box. The baseline sits `height` points from the top.
-#[derive(Clone, Debug, Default)]
+/// Padding around the painted bounds so anti-aliasing and strokes stay inside
+/// the allocated rectangle.
+const PAINT_PADDING: f32 = 2.0;
+
+/// A laid-out formula converted to egui shapes, in points. `width`, `height`
+/// and `depth` are KaTeX metadata; the actual glyphs can overhang that box, so
+/// painting is driven by [`Self::paint_bounds`] instead.
+#[derive(Clone, Debug)]
 pub struct MathLayout {
     pub width: f32,
     pub height: f32,
     pub depth: f32,
     shapes: Vec<Shape>,
+    bounds: egui::Rect,
+}
+
+impl Default for MathLayout {
+    fn default() -> Self {
+        Self {
+            width: 0.0,
+            height: 0.0,
+            depth: 0.0,
+            shapes: Vec::new(),
+            bounds: egui::Rect::ZERO,
+        }
+    }
 }
 
 impl MathLayout {
@@ -53,14 +71,33 @@ impl MathLayout {
         self.shapes.is_empty()
     }
 
-    /// Bounding-box size, including the depth below the baseline.
+    /// KaTeX's metadata box, including the depth below the baseline. This is
+    /// not necessarily the painted extent; use [`Self::content_size`] to
+    /// allocate space for [`Self::paint`].
     pub fn size(&self) -> Vec2 {
         Vec2::new(self.width, self.height + self.depth)
     }
 
-    /// Paint relative to `top_left`; the painter's clip is respected by egui.
+    /// Union of every converted shape's visual bounding rectangle.
+    pub fn paint_bounds(&self) -> egui::Rect {
+        self.bounds
+    }
+
+    /// Size to allocate so every painted shape stays inside the allocated
+    /// rectangle, including a small padding for strokes and anti-aliasing.
+    pub fn content_size(&self) -> Vec2 {
+        self.bounds.size() + Vec2::splat(2.0 * PAINT_PADDING)
+    }
+
+    /// Offset that places the padded painted bounds at `top_left`.
+    fn paint_offset(&self, top_left: Pos2) -> Vec2 {
+        top_left.to_vec2() + Vec2::splat(PAINT_PADDING) - self.bounds.min.to_vec2()
+    }
+
+    /// Paint into a rectangle of [`Self::content_size`] starting at `top_left`,
+    /// so no shape falls outside that rectangle because of an overhanging glyph.
     pub fn paint(&self, painter: &egui::Painter, top_left: Pos2) {
-        let offset = top_left.to_vec2();
+        let offset = self.paint_offset(top_left);
         for shape in &self.shapes {
             let mut shape = shape.clone();
             shape.translate(offset);
@@ -224,11 +261,19 @@ fn convert_items(
     if shapes.is_empty() {
         return None;
     }
+    let mut bounds = egui::Rect::NOTHING;
+    for shape in &shapes {
+        bounds = bounds.union(shape.visual_bounding_rect());
+    }
+    if !bounds.is_finite() {
+        return None;
+    }
     Some(MathLayout {
         width,
         height,
         depth,
         shapes,
+        bounds,
     })
 }
 
@@ -246,14 +291,21 @@ pub fn paint_tex_or_linear(ui: &mut egui::Ui, tex: Option<&str>, linear: &str) -
     {
         // A clipped fragment is less honest than the canonical linear string.
         // The panel is inside a scroll area, so the height check is skipped
-        // when egui reports an unbounded available height.
+        // when egui reports an unbounded available height. Check both the
+        // metadata box and the actual painted bounds so an overhanging glyph
+        // cannot silently leave the allocated rectangle.
         let available = ui.available_size();
-        if layout.width > available.x || layout.size().y > available.y {
+        let content = layout.content_size();
+        if layout.width > available.x
+            || layout.size().y > available.y
+            || content.x > available.x
+            || content.y > available.y
+        {
             show_linear(ui, linear);
             ui.weak("Showing linear result");
             return false;
         }
-        let (response, painter) = ui.allocate_painter(layout.size(), egui::Sense::hover());
+        let (response, painter) = ui.allocate_painter(content, egui::Sense::hover());
         layout.paint(&painter, response.rect.min);
         return true;
     }
