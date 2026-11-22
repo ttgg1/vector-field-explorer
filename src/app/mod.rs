@@ -1279,9 +1279,11 @@ fn compose_vector_lines_with(
     (lines, count)
 }
 
-/// Map the current source or induction mode to the object scene the renderer
-/// composites first. Formula, Materials, Ode and Maxwell have no mapped bodies
-/// and return [`MeshScene::empty`], so their render path stays byte-identical.
+/// Map the current source, induction, Materials or Maxwell mode to the object
+/// scene the renderer composites first. Materials and Maxwell map their bounded
+/// case bodies through [`MeshScene::from_material`] and
+/// [`MeshScene::from_maxwell`]; only Formula and Ode have no mapped bodies and
+/// return [`MeshScene::empty`], so their render path stays byte-identical.
 ///
 /// The induction branch mirrors [`compose_vector_lines`]: the kind's unit
 /// source is mapped through the same [`MeshScene::from_sources`] entry point as
@@ -1302,9 +1304,9 @@ pub fn object_scene_for_state(state: &State) -> MeshScene {
             });
             MeshScene::from_sources(&scene, &domain, frame.as_ref())
         }
-        FieldMode::Formula | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
-            MeshScene::empty()
-        }
+        FieldMode::Materials => MeshScene::from_material(&state.material, &domain, frame.as_ref()),
+        FieldMode::Maxwell => MeshScene::from_maxwell(&state.maxwell, &domain, frame.as_ref()),
+        FieldMode::Formula | FieldMode::Ode => MeshScene::empty(),
     }
 }
 

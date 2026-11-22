@@ -17,6 +17,7 @@ use vector_field_explorer::sources::SourceKind;
 use vector_field_explorer::ui::appearance_panel::{AppearanceEdit, apply_edit};
 use vector_field_explorer::ui::formula_bar::{self, FormulaBarState};
 use vector_field_explorer::ui::layout::{LayoutState, SheetState};
+use vector_field_explorer::ui::object_style_control::OBJECT_STYLE_HELP;
 use vector_field_explorer::ui::sources_panel::{self, SourcesPanelState};
 use vector_field_explorer::viewmodel::{DensityReportRow, MAX_DENSITIES, State};
 
@@ -874,12 +875,8 @@ fn object_style_control_writes_the_enum_and_names_both_modes() {
     let painted = nodes(out.as_ref().unwrap());
     assert!(has(&painted, "Object style"));
     assert!(
-        has(
-            &painted,
-            "Solid draws filled bodies; Wireframe draws edge outlines. \
-             SVG exports keep the line blueprint."
-        ),
-        "the help text names both modes and the SVG line blueprint"
+        has(&painted, OBJECT_STYLE_HELP),
+        "the shared help text names both modes and the SVG line blueprint"
     );
     assert_eq!(state.object_style(), ObjectStyle::Solid);
 
