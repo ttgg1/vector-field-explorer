@@ -2856,6 +2856,67 @@ the probe cap, camera framing, runtime-only transport and neutral no-ops.
 may only be updated, never defined, and no action creates a source, runs a
 solver, writes a file or touches preset storage.
 
+#### `src/prompt_model.rs` — offline electrostatics prompt interpretation
+
+**Purpose.** Issue #213: turn a bounded, offline electrostatics homework prompt
+into an editable model (signs, positions, requested quantities, frame, units and
+an explicit ideal/softened convention) with a preview-before-apply path. It
+extends the #168 grammar's domain vocabulary rather than adding a second
+language or physics model.
+
+**Public API.** `PromptModel`, `SourceSpec`, `SourceRole`, `Magnitude`,
+`Separation`, `DipoleGeometry`, `DipoleEnd`, `Axis`, `Quantity`, `Convention`,
+`Question`, `Preview`, `PromptModelError`, `parse_prompt`, `preview`, `apply`,
+`MAX_PROMPT_BYTES = 512`, `DEFAULT_SEPARATION`, `DEFAULT_MAGNITUDE`,
+`DEFAULT_SOFTENING`, `FRAME_NOTE`, `UNITS_NOTE`, `FORMULA_PATH`.
+
+**Invariants.** The accepted vocabulary is a positive/negative point charge at
+the origin and two equal/opposite point charges (a dipole) along x, y or z.
+Parsing, preview and the editable model are pure. Signs are first-class and are
+never normalized away; an unspecified positive end becomes a concrete
+`Question::DipoleOrientation` and an unspecified axis a `Question::DipoleAxis`,
+and neither model can apply until answered. Unspecified magnitudes and
+separations carry a symbolic label (`q`, `d`) with a clearly labelled normalized
+default. Frame, normalized teaching units and the softened-sampling convention
+are always stated; the ideal analytic equations are distinguished from the
+softened sampled curve and are never graded against it (`grades_against_ideal`
+is false). Editing the separation repositions both charges from the one model.
+`apply` refuses an ambiguous, unsupported or empty model before the first
+mutation, then rebuilds a `SourceScene` through the ordinary
+`set_plot_kind`/`set_field_mode`/`set_mode`/`set_source_scene` setters. An
+unrecognised distribution returns a model with a specific limitation and the
+existing `Formula` path instead of a guessed source.
+
+**Pinned by.** `tests/prompt_model_test.rs`: the two acceptance examples,
+paraphrases, explicit and reversed signs, orientation and axis ambiguity,
+symbolic/editable defaults, editing the separation, apply-through-setters,
+neutral refusal, unsupported-distribution limitation/formula path and the panel
+section.
+
+**Limitations.** The grammar is intentionally narrow (no arbitrary continuous
+distribution, no SI conversion, no solver); the preview is a scene/equation
+summary, not a numeric answer.
+
+#### `src/ui/prompt_model.rs` — session-only prompt interpretation panel
+
+**Purpose.** Issue #213: the capture field, editable interpretation preview,
+ambiguity questions, separation editor and Apply/Cancel controls for one typed
+prompt.
+
+**Public API.** `PromptModelState` (`input`, `model`, `error`, `message`;
+`parse`, `resolve`, `resolve_axis`, `set_separation`, `cancel`, `preview`),
+`PromptModelAction` (`Parse`, `Resolve`, `ResolveAxis`, `SetSeparation`,
+`Apply`, `Cancel`), `show`.
+
+**Invariants.** The panel is session-local: it draws from the model and returns
+at most one explicit action per frame; it never mutates `State`, a saved scene or
+a durable probe. Applying is delegated to
+`VfApp::apply_prompt_model_action`, which uses the ordinary scene setters.
+`tests/prompt_model_test.rs` pins the section's painted title and preview.
+
+**Limitations.** The controls are a section inside the CAS area (native only in
+this slice); they do not add a new top-level layout mode.
+
 #### `src/domain.rs` — sampling box and grid iterator
 
 **Purpose.** Axis-aligned sampling domain and the exact lattice used everywhere
