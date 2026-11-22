@@ -67,6 +67,11 @@ impl VfApp {
             );
         }
 
+        // Issue #229: a wide-layout shell drag applies in the same frame the
+        // panel was drawn; the compact sheet's next frame is covered by the
+        // matching call at the top of `frame_input`.
+        self.apply_gauss_shell_pending();
+
         self.recentre_domain(domain_before);
         if plan.presets_panel {
             self.show_right_panels(ui);
@@ -1030,6 +1035,38 @@ impl VfApp {
             crate::ui::maxwell_panel::MaxwellPanelAction::FreeExploreGaussShell => {
                 self.open_gauss_shell(false);
             }
+        }
+    }
+
+    /// Issue #229: consume the guided Gauss-shell activity's pending shell
+    /// radius and apply it through the ordinary Maxwell scene setter. The
+    /// activity never writes the document or a durable probe; a rejected value
+    /// stays visible in the panel and leaves the committed scene untouched.
+    pub(super) fn apply_gauss_shell_pending(&mut self) {
+        let Some(radius) = self.maxwell.gauss.take_pending_shell_radius() else {
+            return;
+        };
+        if !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
+        if radius.to_bits() == self.state.maxwell.radius.to_bits() {
+            return;
+        }
+        let mut scene = self.state.maxwell.clone();
+        scene.radius = radius;
+        if self.state.set_maxwell_scene(scene) {
+            // Keep the panel's own Geometry draft in step without discarding an
+            // unrelated dirty field; the investigation does not re-sync the
+            // whole Maxwell draft on every drag frame.
+            self.maxwell.draft.radius = radius;
+            self.maxwell.gauss.invalidate_report();
+        } else {
+            let error = self
+                .state
+                .maxwell_error
+                .clone()
+                .unwrap_or_else(|| "The shell radius was rejected.".to_owned());
+            self.maxwell.gauss.note_shell_edit_error(error);
         }
     }
 
@@ -2335,6 +2372,12 @@ impl VfApp {
 
 #[doc(hidden)]
 impl VfApp {
+    /// Test seam: run the #229 shell-edit handler once, exactly as the frame
+    /// does after the Maxwell panel draws.
+    pub fn test_apply_gauss_shell_pending(&mut self) {
+        self.apply_gauss_shell_pending();
+    }
+
     /// Test seam: install an already-built animation job through the same
     /// pause/capture path the dialog uses.
     pub fn test_begin_animation_job(&mut self, job: AnimationJob) {

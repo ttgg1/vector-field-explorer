@@ -18,6 +18,10 @@ impl VfApp {
         // Issue #208: input/picking below must use the same display basis the
         // viewport draws. The assignment is display-only and never dirties.
         self.orbit.up_axis = self.state.up_axis;
+        // Issue #229: apply a shell-radius edit requested by the Gauss shell's
+        // drag handle through the ordinary Maxwell scene control, before this
+        // frame samples or paints with the new radius.
+        self.apply_gauss_shell_pending();
         // #99 slice B: the guided tour owns Enter/Right, Left and Escape before
         // any menu, viewport or camera handler sees them. A focused text field
         // keeps every key, so editing is never interrupted.
@@ -603,6 +607,13 @@ impl VfApp {
                     "The picked point is outside the ODE field domain",
                 );
             }
+            return;
+        }
+        // Issue #229: while the guided Gauss-shell activity is active, a click
+        // on either sphere's outline selects that object through the ordinary
+        // pointer → world mapping. Empty space keeps the current selection.
+        if self.gauss_select_at(pos, rect, aspect) {
+            self.last_click_seed = None;
             return;
         }
         // Issue #92 slice B1: an armed "Place probe" plants one point probe on
@@ -1201,6 +1212,57 @@ impl VfApp {
                 true
             }
         }
+    }
+
+    /// Issue #229: a viewport click selects the shell or the measuring surface
+    /// while the guided Gauss-shell activity is active. The hit test uses the
+    /// ordinary pointer→world/plane mapping in 2D and the shared camera ray in
+    /// 3D; it adds no second click action and leaves Inspect semantics intact.
+    fn gauss_select_at(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> bool {
+        if self.state.field_mode != FieldMode::Maxwell || !self.maxwell.gauss.active {
+            return false;
+        }
+        if crate::ui::viewport_tool::derive_for(&self.state, &self.controls).selected
+            != crate::ui::viewport_tool::ViewportTool::Inspect
+        {
+            return false;
+        }
+        let scene = self.state.maxwell.clone();
+        if scene.case != crate::maxwell::MaxwellCase::HollowSphere {
+            return false;
+        }
+        let Some(point) = self.ray_click_world_seed(pos, rect, aspect) else {
+            return false;
+        };
+        let radial = point.length();
+        let probe = self.maxwell.gauss.probe_radius as f32;
+        let shell = scene.radius as f32;
+        // A proportional pick radius keeps small and large spheres reachable
+        // without turning a near miss into a confident selection.
+        let pick = |radius: f32| 0.12 * radius.max(0.25);
+        let shell_hit = (radial - shell).abs() <= pick(shell);
+        let probe_hit = (radial - probe).abs() <= pick(probe);
+        let object = if self.maxwell.gauss.objects_overlap(&scene) {
+            if !(shell_hit || probe_hit) {
+                return false;
+            }
+            // Coincident objects: the visible overlap selector decides.
+            self.maxwell.gauss.overlap_choice
+        } else if shell_hit && probe_hit {
+            if (radial - shell).abs() <= (radial - probe).abs() {
+                crate::ui::gauss_shell::GaussObject::Shell
+            } else {
+                crate::ui::gauss_shell::GaussObject::MeasuringSurface
+            }
+        } else if shell_hit {
+            crate::ui::gauss_shell::GaussObject::Shell
+        } else if probe_hit {
+            crate::ui::gauss_shell::GaussObject::MeasuringSurface
+        } else {
+            return false;
+        };
+        self.maxwell.gauss.select(object);
+        true
     }
 
     /// Map one viewport point onto the active camera to get a seed position.

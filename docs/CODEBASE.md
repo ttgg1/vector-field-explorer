@@ -6133,10 +6133,17 @@ readings (radial field, area, sampled flux), pin cards and the normalized
 cancellation algebra. No new physical case, quadrature rule or tolerance is
 added.
 
-**Public API.** `GaussShellState { active, probe_radius, pinned, ... }` with
-`Default` inactive, `activate(&MaxwellScene)`, `deactivate`, `reset`,
+**Public API.** `GaussShellState { active, probe_radius, selected, overlap_choice, ... }`
+with `Default` inactive, `activate(&MaxwellScene)`, `deactivate`, `reset`,
 `invalidate_report`, `report_for(&MaxwellScene, FieldFamily, f64)`,
-`pin`, `pinned`, `clear_pinned`; `GaussShellReading { radius, kind }` with
+`pin`, `pinned`, `clear_pinned`; `GaussObject::{Shell, MeasuringSurface}` with
+`select`, `objects_overlap`, `edit_target`, `set_probe_radius`,
+`double_probe_radius`, `request_shell_radius`, `preview_shell_radius`,
+`take_pending_shell_radius`, `pending_shell_radius`, `note_shell_edit_error`,
+`shell_edit_error`, `begin_edit`/`end_edit`, `undo_label`, `undo_last` for the
+bounded activity-local radius undo; `shell_radius_range(&MaxwellScene)` for the
+shell-entry maximum derived from the scene's `outer_radius`;
+`GaussShellReading { radius, kind }` with
 `field`, `area`, `flux`, `flux_estimate`; `GaussShellReadingKind::{Exterior,
 Interior, Excluded}`; `GaussShellReport { radius, at_radius, at_double }`;
 `GaussShellAction::{Investigate, FreeExplore}`;
@@ -6157,11 +6164,22 @@ Interior, Excluded}`; `GaussShellReport { radius, at_radius, at_double }`;
 - Everything is normalized teaching units and labelled as such. The algebra
   line states that equality holds only within the reported quadrature
   uncertainty.
+- Issue #229 adds one session-only selection shared by the keyboard radio list
+  and the viewport click (the existing pointer→world mapping in
+  `src/app/input.rs`). `R` and `r` stay separate: editing the selected radius
+  never resets the other one, the overlap selector resolves a coincident pair,
+  and the bounded undo stack restores one radius without claiming document
+  history. A shell edit travels through the ordinary Maxwell scene setter; no
+  durable probe surface or document field is created.
 
 **Pinned by.** `tests/gauss_shell_test.rs`: the exterior ratios and flux
 uncertainty, interior zero, excluded interface, pin snapshot/clear, inactive
 default/no side effects, wide/compact rendering and the normal Maxwell-panel
-`Investigate` entry.
+`Investigate` entry; `tests/gauss_shell_selection_test.rs`: shared list and
+viewport selection, empty-space inertness, overlap routing, exact numeric
+entry, doubling `r` with `R` fixed, activity-local undo, the still-excluded
+interface reading, the panel drag that commits only through the app handler,
+and the outer-radius limit with its explicit rejection message.
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 
