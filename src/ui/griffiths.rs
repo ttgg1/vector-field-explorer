@@ -19,6 +19,8 @@ pub const GRIFFITHS_RING_LABEL: &str =
 /// The shell route's control label, also used by the picker and tests.
 pub const GRIFFITHS_SHELL_LABEL: &str =
     "Griffiths 2.11 · Charged shell: field and flux across the shell";
+/// The picker summary kept after a completed shell activity.
+pub const GRIFFITHS_SHELL_COMPLETED_NOTE: &str = "Charged shell activity completed this session; choose it again to replay with a fresh prediction.";
 
 /// One optional activity in the Griffiths branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +86,10 @@ pub struct GriffithsState {
     pub lesson: RingLessonState,
     /// The shell activity's session state and completion flag.
     pub shell: ShellLessonState,
+    /// Whether the shell activity was completed in this branch session. This
+    /// survives returning to the picker or Help and is cleared by the next
+    /// shell start so a replay begins uncompleted.
+    pub shell_completed: bool,
 }
 
 impl GriffithsState {
@@ -155,6 +161,9 @@ pub fn show_picker(ctx: &egui::Context, state: &mut GriffithsState) -> Griffiths
                     }
                 }
                 ui.small(route.locator());
+                if route == GriffithsRoute::Shell && state.shell_completed {
+                    ui.small(GRIFFITHS_SHELL_COMPLETED_NOTE);
+                }
                 ui.add_space(2.0);
             }
             if let Some(route) = state.placeholder {

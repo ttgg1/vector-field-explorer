@@ -1260,6 +1260,7 @@ impl VfApp {
                 self.state.set_maxwell_scene(scene);
                 self.state.refresh_maxwell_sampling();
                 self.maxwell.sync_from(&self.state);
+                self.griffiths.shell_completed = false;
                 self.griffiths.shell.activate(&self.state.maxwell);
             }
             GriffithsRoute::Plane | GriffithsRoute::Wire => {
@@ -1273,8 +1274,8 @@ impl VfApp {
     /// from before the branch opened. The shell activity records completion
     /// when the learner has pinned both an inside and an outside reading.
     pub fn exit_griffiths_lesson(&mut self) {
-        if self.griffiths.shell.active() {
-            self.griffiths.shell.finish(&self.state.maxwell);
+        if self.griffiths.shell.active() && self.griffiths.shell.finish(&self.state.maxwell) {
+            self.griffiths.shell_completed = true;
         }
         if let Some(start) = self.griffiths_start.take() {
             self.state = start.state;
@@ -1292,8 +1293,8 @@ impl VfApp {
     /// Adopt the activity scene: drop the starting snapshot and keep the
     /// loaded ring or shell scene.
     pub fn keep_griffiths_scene(&mut self) {
-        if self.griffiths.shell.active() {
-            self.griffiths.shell.finish(&self.state.maxwell);
+        if self.griffiths.shell.active() && self.griffiths.shell.finish(&self.state.maxwell) {
+            self.griffiths.shell_completed = true;
         }
         self.griffiths_start = None;
         self.griffiths.lesson.deactivate();
@@ -1374,7 +1375,7 @@ impl VfApp {
     /// session.
     #[doc(hidden)]
     pub fn shell_lesson_completed_for_test(&self) -> bool {
-        self.griffiths.shell.completed()
+        self.griffiths.shell_completed || self.griffiths.shell.completed()
     }
 
     /// Test seam: whether the shell result has been revealed.
@@ -2526,9 +2527,10 @@ impl VfApp {
             self.open_griffiths_branch();
         }
 
-        // Issue #223 phase 1 / #224: the optional Griffiths picker and ring
-        // activity. Both are session-only windows over the current scene; they
-        // paint after Help so a branch opened from Help is visible immediately.
+        // Issue #223 phase 1 / #224 / #225: the optional Griffiths picker plus
+        // the ring and shell activities. All are session-only windows over the
+        // current scene; they paint after Help so a branch opened from Help is
+        // visible immediately.
         self.show_griffiths_overlays(ui.ctx());
 
         // Animation export: publish the running job's progress, then draw the

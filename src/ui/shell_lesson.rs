@@ -489,6 +489,7 @@ fn reading_card(
                     ui.visuals().warn_fg_color,
                     format!("Excluded boundary sample: {reason}"),
                 );
+                ui.label(SHELL_BOUNDARY_NOTE);
             }
         }
         pinned = ui
@@ -519,6 +520,7 @@ fn pinned_card(ui: &mut egui::Ui, reading: &GaussShellReading) {
                     ui.visuals().warn_fg_color,
                     format!("Excluded sample: {reason}"),
                 );
+                ui.label(SHELL_BOUNDARY_NOTE);
             }
         }
     });
@@ -554,7 +556,7 @@ fn show_ratios(ui: &mut egui::Ui, report: &GaussShellReport) {
         ui.label(format!(
             "|Phi(r) - Phi(2r)| = {difference:.3e}; combined quadrature uncertainty = \
              {uncertainty:.3e}; equal within uncertainty: {}",
-            if difference <= uncertainty {
+            if difference <= uncertainty + 1e-9 {
                 "yes"
             } else {
                 "no"

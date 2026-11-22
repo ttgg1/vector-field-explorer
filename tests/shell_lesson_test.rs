@@ -19,8 +19,8 @@ use vector_field_explorer::ui::griffiths::{
 };
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::shell_lesson::{
-    SHELL_HINT, SHELL_PROMPT, SHELL_QUESTION, ShellFieldPrediction, ShellFluxPrediction,
-    ShellLessonState,
+    SHELL_BOUNDARY_NOTE, SHELL_HINT, SHELL_PROMPT, SHELL_QUESTION, ShellFieldPrediction,
+    ShellFluxPrediction, ShellLessonState,
 };
 
 struct Harness {
@@ -254,6 +254,33 @@ fn inside_reports_zero_field_and_flux_and_the_ideal_boundary_is_excluded() {
 }
 
 #[test]
+fn the_excluded_boundary_reading_explains_why_no_field_is_reported() {
+    let mut h = Harness::new(1200.0, 800.0);
+    h.idle();
+    h.app.open_griffiths_branch();
+    h.app.start_griffiths_route(GriffithsRoute::Shell);
+    h.app.predict_shell_for_test(
+        ShellFieldPrediction::ZeroInside,
+        ShellFluxPrediction::ZeroInside,
+    );
+    assert!(h.app.reveal_shell_for_test());
+    let shell_radius = h.app.state.maxwell.radius;
+    assert!(h.app.set_shell_probe_for_test(shell_radius));
+    h.idle();
+
+    let rendered = texts(&h.frame(Vec::new()));
+    let text = rendered.join("\n");
+    assert!(
+        text.contains("Excluded boundary sample"),
+        "the boundary sample is visibly excluded: {text}"
+    );
+    assert!(
+        rendered.iter().any(|line| line == SHELL_BOUNDARY_NOTE),
+        "the excluded path states the boundary explanation on its own line: {text}"
+    );
+}
+
+#[test]
 fn outside_doubling_r_quarters_the_field_and_keeps_the_flux_within_uncertainty() {
     let scene = hollow(1.0);
     let mut lesson = ShellLessonState::default();
@@ -312,6 +339,17 @@ fn pinning_inside_and_outside_then_returning_completes_and_help_replay_resets() 
     );
 
     h.app.open_griffiths_branch();
+    h.idle();
+    let text = texts(&h.frame(Vec::new())).join("\n");
+    assert!(
+        text.contains("Charged shell activity completed"),
+        "the picker keeps the completed state visible after returning: {text}"
+    );
+    assert!(
+        text.contains(GRIFFITHS_SHELL_LABEL),
+        "the completed shell route is still offered for replay: {text}"
+    );
+
     h.app.start_griffiths_route(GriffithsRoute::Shell);
     assert!(
         !h.app.shell_lesson_completed_for_test(),
