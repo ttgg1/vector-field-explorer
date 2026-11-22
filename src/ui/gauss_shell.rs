@@ -11,10 +11,10 @@ use eframe::egui;
 use glam::Vec3;
 
 use crate::field_probe::{
-    flux, FluxReport, GaussianSurface, IntegralStatus, ProbeField, SurfaceKind,
+    FluxReport, GaussianSurface, IntegralStatus, ProbeField, SurfaceKind, flux,
 };
 use crate::maxwell::{
-    hollow_sphere_interface_tolerance, maxwell_field, MaxwellCase, MaxwellError, MaxwellScene,
+    MaxwellCase, MaxwellError, MaxwellScene, hollow_sphere_interface_tolerance, maxwell_field,
 };
 use crate::sources::FieldFamily;
 
