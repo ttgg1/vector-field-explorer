@@ -16,6 +16,7 @@ use std::hash::{Hash, Hasher};
 use eframe::egui;
 
 use crate::colormap::Colormap;
+use crate::parameters::ParameterSet;
 use crate::plane::PlaneFrame;
 use crate::scalar::ScalarExpr;
 
@@ -170,10 +171,12 @@ pub fn scalar_slice_heatmap(
     })
 }
 
-/// The cache identity of a live-slice preview: expression, slice frame, time,
-/// value range and palette.
+/// The cache identity of a live-slice preview: the source expression, the
+/// committed parameters substituted into it, slice frame, time, value range and
+/// palette.
 pub fn slice_preview_key(
     expr: &str,
+    parameters: &ParameterSet,
     frame: &PlaneFrame,
     time: f64,
     range: [f64; 2],
@@ -181,6 +184,11 @@ pub fn slice_preview_key(
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     expr.hash(&mut hasher);
+    parameters.entries.len().hash(&mut hasher);
+    for entry in &parameters.entries {
+        entry.name.hash(&mut hasher);
+        entry.value.to_bits().hash(&mut hasher);
+    }
     frame.origin.to_array().map(f32::to_bits).hash(&mut hasher);
     frame.right.to_array().map(f32::to_bits).hash(&mut hasher);
     frame.up.to_array().map(f32::to_bits).hash(&mut hasher);

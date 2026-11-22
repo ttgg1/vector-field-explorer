@@ -2629,7 +2629,9 @@ ideal normalized unit charges at `±separation/2` around the slice origin's
 projection; the valid-region text names the slice and both poles, and a dipole
 normal to the slice is reported as degenerate rather than hidden.
 `potential_field_spec` builds the existing `E = -∇V` request with the shipped
-bounds; no second solver or tolerance is introduced.
+bounds; no second solver or tolerance is introduced. `NATIVE_SYMBOLIC_NOTE`
+lists the symbolic operations as native-only without claiming the
+finite-difference overlay, which is platform-neutral, is symbolic.
 
 **Pinned by.** `tests/scalar_analysis_test.rs` (the fourteen contract tests),
 series/gradient envelope and corrupt-record pins in `tests/persistence_test.rs`,
@@ -5942,18 +5944,20 @@ The GPU plot and export paths stay untouched.
 (`Xy`/`Xz`/`Yz`), `PreviewImage { width, height, rgba }`,
 `scalar_heatmap(expr, plane, range, palette)`, `preview_key(expr, range,
 palette)`, the issue #214 live-slice pair `scalar_slice_heatmap(expr, frame,
-time, range, palette)` / `slice_preview_key(expr, frame, time, range, palette)`,
-and `PreviewCache` with `sync(ctx, image, key)` and `texture()`.
+time, range, palette)` / `slice_preview_key(expr, parameters, frame, time,
+range, palette)`, and `PreviewCache` with `sync(ctx, image, key)` and
+`texture()`.
 
 **Invariants.** Both axes are capped at `PREVIEW_MAX_EDGE` (160) texels. The
 expression is parsed through the existing `meval` scalar environment and binds
 `x`, `y`, `z`, `t`; a non-finite sample is fully transparent and never a NaN
 colour. Finite values map through `Colormap::from_unit` after clamping to the
 caller-supplied range. `preview_key` hashes only expression, range, and palette;
-`slice_preview_key` also hashes the frame basis and half extents plus the
-sampled time, so moving the slice or clock invalidates the image. The slice
-painter samples the frame's real half extents through `ScalarExpr::eval_at`
-after the panel substitutes committed parameters. `PreviewCache` uploads one
+`slice_preview_key` also hashes the committed parameter names/values, the frame
+basis and half extents, and the sampled time, so editing a parameter, moving the
+slice or advancing the clock invalidates the image. The slice painter samples
+the frame's real half extents through `ScalarExpr::eval_at` after the panel
+substitutes committed parameters. `PreviewCache` uploads one
 `egui::TextureHandle` and ignores an unchanged key, so the panel neither
 resamples nor allocates a texture per frame.
 
@@ -5962,8 +5966,10 @@ resamples nor allocates a texture per frame.
 `test_preview_matches_palette_endpoints`,
 `test_preview_key_changes_with_expression_range_and_palette`,
 `test_non_finite_samples_are_transparent`,
-`test_cache_does_not_rebuild_for_an_unchanged_key`; and
-`tests/cas_scene_test.rs::the_thumbnail_samples_the_active_slice_time_and_parameters`.
+`test_cache_does_not_rebuild_for_an_unchanged_key`;
+`tests/cas_scene_test.rs::the_thumbnail_samples_the_active_slice_time_and_parameters`
+and `tests/cas_scene_test.rs::a_parameter_only_edit_rebuilds_the_scalar_thumbnail`
+for a parameter-only edit rebuilding the painted thumbnail.
 
 **Limitations.** Normalized teaching thumbnail only, not an SI-scaled plot; the
 shipped `scalar_heatmap` helper still uses a fixed `[-1, 1]` teaching window; no
@@ -6014,10 +6020,13 @@ the slice and its valid region, and label the result as an analytic expression
 whose drawn values are sampled. The scalar thumbnail now samples the active
 slice and time with parameters substituted. `take_scene_edit` reports one named
 history edit (`plot CAS contours`, `overlay E = -∇V`) which
-`app/panels.rs::show_cas_body` records through `record_explicit_edit`, so one
-undo restores both layers. The panel states that symbolic operations are
-native-only and names the platform-neutral analytic dipole route. Pinned by
-`tests/cas_scene_test.rs` (contour/overlay application, one-undo restore,
+`app/panels.rs::show_cas_body` records through `record_explicit_edit`. Each
+click is one action and therefore exactly one undo entry: undoing the overlay
+leaves the contours it did not change, and a second undo restores the contour
+source. The panel states that symbolic operations are native-only, separates
+them from the platform-neutral finite-difference overlay, and names the
+platform-neutral analytic dipole route. Pinned by `tests/cas_scene_test.rs`
+(contour/overlay application, per-action undo,
 parameter-driven layer update, provenance/region wording).
 
 #### `src/ui/math_view.rs` — native typeset display-list adapter

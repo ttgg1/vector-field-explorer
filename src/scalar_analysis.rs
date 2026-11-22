@@ -68,10 +68,11 @@ impl SeriesRole {
 /// route: it is plain expression text and needs no symbolic backend.
 pub const ANALYTIC_DIPOLE_ROUTE_NOTE: &str = "Analytic dipole route: the closed-form potential is built from plain expression text, \
      so it is available on web and native.";
-/// User-facing note naming the capability boundary: CAS differentiation and
-/// simplification rely on the native symbolic engine.
-pub const NATIVE_SYMBOLIC_NOTE: &str = "Symbolic CAS operations (differentiate, gradient, divergence, curl) are native-only; \
-     the analytic dipole potential stays available on web.";
+/// User-facing note naming the capability boundary: symbolic CAS operations
+/// rely on the native engine, while the finite-difference `E = -∇V` overlay is
+/// a separate platform-neutral path.
+pub const NATIVE_SYMBOLIC_NOTE: &str = "Symbolic CAS operations (differentiate, symbolic gradient, divergence, curl) are native-only; \
+     the analytic dipole potential and the finite-difference E = -∇V overlay stay available on web.";
 /// The default finite-difference step for the scene gradient overlay.
 pub const DEFAULT_GRADIENT_STEP: f32 = 1e-3;
 /// The default usable-sample budget for the scene gradient overlay.

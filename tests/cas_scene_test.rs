@@ -23,20 +23,20 @@ use vector_field_explorer::scalar_analysis::{
 };
 use vector_field_explorer::scalar_view::scalar_view_expr;
 use vector_field_explorer::ui::cas_panel::{
-    CasPanelState, Operation, ResultKind, SceneTarget, Variable,
+    CasPanelState, Operation, ResultKind, SceneTarget, Variable, show_scalar_preview,
 };
 use vector_field_explorer::ui::cas_preview::{scalar_slice_heatmap, slice_preview_key};
 use vector_field_explorer::viewmodel::State;
 
-fn frame(ctx: &egui::Context, app: &mut VfApp) -> egui::FullOutput {
+fn app_output(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) -> egui::FullOutput {
     let mut native = eframe::Frame::_new_kittest();
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                vec2(900.0, 700.0),
+                vec2(1280.0, 6000.0),
             )),
-            events: Vec::new(),
+            events,
             ..Default::default()
         },
         |ui| eframe::App::ui(app, ui, &mut native),
@@ -46,7 +46,84 @@ fn frame(ctx: &egui::Context, app: &mut VfApp) -> egui::FullOutput {
 }
 
 fn idle(ctx: &egui::Context, app: &mut VfApp) {
-    let _ = frame(ctx, app);
+    let _ = app_output(ctx, app, Vec::new());
+}
+
+fn render_scalar_preview_texture(
+    ctx: &egui::Context,
+    state: &State,
+    panel: &mut CasPanelState,
+    formula: &str,
+) -> Option<egui::TextureId> {
+    let mut texture = None;
+    for _ in 0..2 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(460.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                show_scalar_preview(ui, state, panel, formula);
+                texture = panel.preview_texture().map(|handle| handle.id());
+            },
+        );
+        output.textures_delta.clear();
+    }
+    texture
+}
+
+fn button_bounds(output: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()?
+        .nodes
+        .iter()
+        .find_map(|(_, node)| {
+            (node.role() == egui::Role::Button && node.label() == Some(label))
+                .then(|| {
+                    node.bounds().map(|r| {
+                        egui::Rect::from_min_max(
+                            egui::pos2(r.x0 as f32, r.y0 as f32),
+                            egui::pos2(r.x1 as f32, r.y1 as f32),
+                        )
+                    })
+                })
+                .flatten()
+        })
+}
+
+fn click_app_button(ctx: &egui::Context, app: &mut VfApp, label: &str) {
+    let output = app_output(ctx, app, Vec::new());
+    let pos = button_bounds(&output, label)
+        .unwrap_or_else(|| panic!("the shipped panel offers the {label:?} button"))
+        .center();
+    app_output(
+        ctx,
+        app,
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    app_output(
+        ctx,
+        app,
+        vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
 }
 
 fn xy_slice(origin_z: f32) -> PlaneFrame {
@@ -78,6 +155,12 @@ fn analytic_dipole_route_is_available_on_web_and_native() {
         NATIVE_SYMBOLIC_NOTE
             .to_ascii_lowercase()
             .contains("symbolic")
+    );
+    assert!(
+        NATIVE_SYMBOLIC_NOTE
+            .to_ascii_lowercase()
+            .contains("finite-difference"),
+        "the note separates the finite-difference overlay from native symbolic work"
     );
 
     let frame = xy_slice(0.0);
@@ -265,34 +348,61 @@ fn a_vector_result_is_refused_by_the_scalar_scene_route() {
 }
 
 #[test]
-fn one_undo_restores_both_cas_scene_layers() {
+fn each_cas_scene_action_is_one_undo_entry() {
     let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.controls_width = 460.0;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
     app.state.set_formula("(0, 0)".into());
     app.state
         .set_scalar_source(ScalarContext::Surface, "x".into());
     app.state.set_gradient(None).expect("clear gradient");
+    app.cas = scalar_panel("x*y", Operation::Differentiate, Variable::X);
     let before_source = app.state.plot.surface.source.clone();
-    let before_levels = app.state.scalar_contour_levels();
     let before_gradient = app.state.gradient.clone();
-    idle(&ctx, &mut app);
+    for _ in 0..4 {
+        idle(&ctx, &mut app);
+    }
+    let base = app.history_len();
 
-    let mut panel = scalar_panel("x*y", Operation::Differentiate, Variable::X);
-    panel
-        .apply_scene(&mut app.state, 2, SceneTarget::Contours)
-        .expect("contours");
-    panel
-        .apply_scene(&mut app.state, 2, SceneTarget::PotentialField)
-        .expect("overlay");
-    assert_eq!(panel.take_scene_edit(), Some("overlay E = -∇V"));
-    idle(&ctx, &mut app);
-    assert_ne!(app.state.plot.surface.source, before_source);
-    assert!(app.state.gradient.is_some());
-
-    assert!(app.undo_document(&ctx), "one undo is available");
-    assert_eq!(app.state.plot.surface.source, before_source);
-    assert_eq!(app.state.scalar_contour_levels(), before_levels);
+    // Drive the shipped expanded CAS body: one click per scene action.
+    click_app_button(&ctx, &mut app, "Plot contours");
+    assert_eq!(app.state.plot.surface.source, "y");
     assert_eq!(app.state.gradient, before_gradient);
+    assert_eq!(
+        app.history_len(),
+        base + 1,
+        "the contour click is exactly one undo entry"
+    );
+
+    click_app_button(&ctx, &mut app, "Overlay E = -∇V");
+    assert!(app.state.gradient.is_some(), "the overlay is installed");
+    assert_eq!(app.state.plot.surface.source, "y", "contours stay put");
+    assert_eq!(
+        app.history_len(),
+        base + 2,
+        "the overlay click is exactly one undo entry"
+    );
+
+    // Each undo restores only the view changed by the preceding action.
+    assert!(app.undo_document(&ctx), "one undo is available");
+    assert_eq!(app.state.gradient, before_gradient);
+    assert_eq!(
+        app.state.plot.surface.source, "y",
+        "undoing the overlay leaves the contours it did not change"
+    );
+    assert_eq!(app.history_len(), base + 1);
+
+    assert!(
+        app.undo_document(&ctx),
+        "the contour action is still undoable"
+    );
+    assert_eq!(app.state.plot.surface.source, before_source);
+    assert_eq!(app.history_len(), base);
 }
 
 #[test]
@@ -303,14 +413,119 @@ fn the_thumbnail_samples_the_active_slice_time_and_parameters() {
     let higher = scalar_slice_heatmap(&expr, &xy_slice(1.0), 0.0, [0.0, 1.0], Colormap::Viridis)
         .expect("slice image");
     assert_eq!(xy.width, higher.width);
-    let key = slice_preview_key("x", &xy_slice(0.0), 0.0, [0.0, 1.0], Colormap::Viridis);
-    assert_ne!(
-        key,
-        slice_preview_key("x", &xy_slice(1.0), 0.0, [0.0, 1.0], Colormap::Viridis)
+    let parameters = ParameterSet::default();
+    let key = slice_preview_key(
+        "x",
+        &parameters,
+        &xy_slice(0.0),
+        0.0,
+        [0.0, 1.0],
+        Colormap::Viridis,
     );
     assert_ne!(
         key,
-        slice_preview_key("x", &xy_slice(0.0), 0.5, [0.0, 1.0], Colormap::Viridis)
+        slice_preview_key(
+            "x",
+            &parameters,
+            &xy_slice(1.0),
+            0.0,
+            [0.0, 1.0],
+            Colormap::Viridis
+        )
+    );
+    assert_ne!(
+        key,
+        slice_preview_key(
+            "x",
+            &parameters,
+            &xy_slice(0.0),
+            0.5,
+            [0.0, 1.0],
+            Colormap::Viridis
+        )
+    );
+
+    // A committed-parameter edit changes what the painter samples, so it must
+    // change the cache identity even when the formula, slice and clock do not.
+    let mut separated = parameters.clone();
+    separated.entries.push(Parameter {
+        name: "d".into(),
+        value: 1.0,
+        min: None,
+        max: None,
+        step: 0.1,
+    });
+    let before = slice_preview_key(
+        "d*x",
+        &separated,
+        &xy_slice(0.0),
+        0.0,
+        [0.0, 1.0],
+        Colormap::Viridis,
+    );
+    separated.entries[0].value = 2.0;
+    let after = slice_preview_key(
+        "d*x",
+        &separated,
+        &xy_slice(0.0),
+        0.0,
+        [0.0, 1.0],
+        Colormap::Viridis,
+    );
+    assert_ne!(before, after, "the key covers the committed parameters");
+}
+
+#[test]
+fn a_parameter_only_edit_rebuilds_the_scalar_thumbnail() {
+    let ctx = support::context();
+    let mut state = State::new(false);
+    let mut parameters = ParameterSet::default();
+    parameters.entries.push(Parameter {
+        name: "d".into(),
+        value: 1.0,
+        min: None,
+        max: None,
+        step: 0.1,
+    });
+    state.commit_parameters(parameters).expect("commit d = 1");
+    let mut panel = CasPanelState::default();
+    let formula = "d*x";
+    let frame = state.scalar_view_frame();
+    let time = f64::from(state.time);
+    let first_key = slice_preview_key(
+        formula,
+        &state.parameters,
+        &frame,
+        time,
+        [-1.0, 1.0],
+        state.colormap,
+    );
+
+    let first = render_scalar_preview_texture(&ctx, &state, &mut panel, formula)
+        .expect("the first thumbnail paints");
+
+    // Change only the committed parameter; the formula, frame and clock stay put.
+    let mut next = state.parameters.clone();
+    next.entries[0].value = 2.0;
+    state.commit_parameters(next).expect("commit d = 2");
+    let second_key = slice_preview_key(
+        formula,
+        &state.parameters,
+        &frame,
+        time,
+        [-1.0, 1.0],
+        state.colormap,
+    );
+    assert_ne!(
+        first_key, second_key,
+        "the cache key must cover the committed parameters the painter samples"
+    );
+
+    let second = render_scalar_preview_texture(&ctx, &state, &mut panel, formula)
+        .expect("the second thumbnail paints");
+    assert_ne!(
+        first, second,
+        "a parameter-only edit must rebuild the thumbnail instead of reusing the old texture"
     );
 }
 

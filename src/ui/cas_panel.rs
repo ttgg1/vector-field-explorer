@@ -537,7 +537,17 @@ const PREVIEW_RANGE: [f64; 2] = [-1.0, 1.0];
 ///
 /// A heatmap build failure is intentionally silent: the scalar result text still
 /// conveys the answer, and storing no image keeps a stale texture off screen.
-fn show_scalar_preview(ui: &mut egui::Ui, state: &State, panel: &mut CasPanelState, formula: &str) {
+///
+/// Exposed as a doc-hidden seam so the integration suite can prove a
+/// parameter-only edit rebuilds the painted texture; ordinary callers use
+/// [`show`].
+#[doc(hidden)]
+pub fn show_scalar_preview(
+    ui: &mut egui::Ui,
+    state: &State,
+    panel: &mut CasPanelState,
+    formula: &str,
+) {
     let frame = state.scalar_view_frame();
     let time = f64::from(state.time);
     let Ok(expr) = scalar_view_expr(formula, &state.parameters) else {
@@ -550,7 +560,14 @@ fn show_scalar_preview(ui: &mut egui::Ui, state: &State, panel: &mut CasPanelSta
         );
         return;
     };
-    let key = cas_preview::slice_preview_key(formula, &frame, time, PREVIEW_RANGE, state.colormap);
+    let key = cas_preview::slice_preview_key(
+        formula,
+        &state.parameters,
+        &frame,
+        time,
+        PREVIEW_RANGE,
+        state.colormap,
+    );
     if panel.preview_image_key != Some(key) {
         panel.preview_image_key = Some(key);
         // Silent on failure: the result text is the answer and `None` drops stale texels.
