@@ -13,7 +13,7 @@
 use eframe::egui;
 
 use crate::tour::{
-    AdvanceRule, PanelId, Region, TOUR, TourAnchor, TourProgress, TourTarget, resolve,
+    AdvanceRule, ControlId, PanelId, Region, TOUR, TourAnchor, TourProgress, TourTarget, resolve,
 };
 
 /// The card width used for placement and painting, before compact clamping.
@@ -54,7 +54,9 @@ pub const fn control_panel(target: TourTarget) -> Option<PanelId> {
 #[derive(Debug, Clone, Default)]
 pub struct TourFrameRects {
     panels: Vec<(PanelId, egui::Rect)>,
+    controls: Vec<(ControlId, egui::Rect)>,
     viewport: Option<egui::Rect>,
+    note: Option<String>,
 }
 
 impl TourFrameRects {
@@ -64,7 +66,19 @@ impl TourFrameRects {
 
     pub fn clear(&mut self) {
         self.panels.clear();
+        self.controls.clear();
         self.viewport = None;
+        self.note = None;
+    }
+
+    /// Record an actionable note for the current stop's card. The frame phase
+    /// clears it, so the note only describes this frame's real state.
+    pub fn set_note(&mut self, note: Option<String>) {
+        self.note = note;
+    }
+
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
     }
 
     /// Record the response rect of a panel surface. A later record in the same
@@ -74,6 +88,20 @@ impl TourFrameRects {
             entry.1 = rect;
         } else {
             self.panels.push((panel, rect));
+        }
+    }
+
+    /// Record the response rect of one live control. Controls that are not
+    /// painted this frame stay absent, never guessed.
+    pub fn record_control(&mut self, control: ControlId, rect: egui::Rect) {
+        if let Some(entry) = self
+            .controls
+            .iter_mut()
+            .find(|(known, _)| *known == control)
+        {
+            entry.1 = rect;
+        } else {
+            self.controls.push((control, rect));
         }
     }
 
@@ -87,10 +115,28 @@ impl TourFrameRects {
             .find_map(|(known, rect)| (*known == panel).then_some(*rect))
     }
 
-    /// Resolve a stop target to the real rectangle recorded this frame.
+    pub fn control_rect(&self, control: ControlId) -> Option<egui::Rect> {
+        self.controls
+            .iter()
+            .find_map(|(known, rect)| (*known == control).then_some(*rect))
+    }
+
+    /// Resolve a stop target to the real rectangle recorded this frame. A
+    /// control with its own live rect uses it; controls without one keep the
+    /// historical panel fallback. [`ControlId::requires_live_rect`] controls
+    /// yield no anchor when absent rather than highlighting the whole panel.
     pub fn anchor_rect(&self, target: TourTarget) -> Option<egui::Rect> {
         match resolve(target) {
-            TourAnchor::Control { panel, .. } | TourAnchor::Panel(panel) => self.panel_rect(panel),
+            TourAnchor::Control { panel, control } => {
+                if let Some(rect) = self.control_rect(control) {
+                    Some(rect)
+                } else if control.requires_live_rect() {
+                    None
+                } else {
+                    self.panel_rect(panel)
+                }
+            }
+            TourAnchor::Panel(panel) => self.panel_rect(panel),
             TourAnchor::Viewport(region) => {
                 let viewport = self.viewport?;
                 Some(region_rect(viewport, region))
@@ -270,6 +316,10 @@ pub fn show(
                             ui.label(egui::RichText::new(stop.title).strong().size(16.0));
                             ui.add_space(4.0);
                             ui.label(stop.body);
+                            if let Some(note) = rects.note() {
+                                ui.add_space(4.0);
+                                ui.colored_label(ui.visuals().warn_fg_color, note);
+                            }
                             ui.add_space(6.0);
                             ui.weak(format!("Step {} of {}", progress.index() + 1, TOUR.len()));
                             ui.horizontal_wrapped(|ui| {

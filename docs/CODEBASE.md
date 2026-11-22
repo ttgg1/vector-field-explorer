@@ -365,16 +365,22 @@ anchored card plus non-colour-only highlight, and evaluate `AdvanceRule`.
 
 **Public API.** `advance_ready(rule, captured, current)` is the pure `Changed`
 comparison; `control_panel(target)` names the panel that owns a control;
-`TourFrameRects::{record_panel, record_viewport, anchor_rect}` hold one frame of
-painted rectangles; `place_card(target, screen, size)` places a card near but
-not over the target inside the screen; `show(ctx, rects, progress, ready)`
-paints the card and returns `TourOutcome { action, card_rect, target_rect }`.
+`TourFrameRects::{record_panel, record_control, record_viewport, anchor_rect}`
+hold one frame of painted rectangles and `set_note`/`note` carry one actionable
+card note; `place_card(target, screen, size)` places a card near but not over
+the target inside the screen; `show(ctx, rects, progress, ready)` paints the
+card and returns `TourOutcome { action, card_rect, target_rect }`.
 
-**Invariants / notes.** `ControlId` anchors resolve to their owning panel's
-recorded rectangle (the app's panel code does not expose independent stable
-control ids); a panel body that is not visible this frame yields no rectangle,
-so the card still draws and the highlight is omitted rather than invented.
-`AdvanceRule::Changed` compares this frame's value with the snapshot captured
+**Invariants / notes.** `ControlId` anchors prefer a live control rectangle
+when the app recorded one and otherwise fall back to the owning panel.
+`ControlId::FieldProbeSurface` (the Field probes `Add sphere` button) requires
+its own live rectangle: when the Field probes body is closed the flux stop has
+no highlight rather than pointing at the whole Controls panel. The tour reveals
+that body once per stop; a user close is respected. On entry it also switches a
+Formula/Ode adapter to Sources through `State::set_field_mode`, so the stop
+reaches a real probe field; when the scalar Plot view has no vector field the
+card carries an actionable note instead of a dead section. An `AdvanceRule::Changed`
+compares this frame's value with the snapshot captured
 when that stop became current; an unavailable value never satisfies it. The
 card has a title and body and uses a `UiKind::Modal` stack kind for an
 accessible dialog role without blocking viewport pointer input. There is no
@@ -390,10 +396,14 @@ compact sheet in compact layout; a second layout path does not exist.
 `escape_dismisses_and_the_menu_restarts_at_the_first_stop`,
 `changed_rule_advances_only_after_the_control_changes`,
 `opening_a_collapsed_panel_uses_the_normal_layout_toggle`,
+`resolved_anchor_paints_a_highlight`,
+`flux_stop_anchors_to_the_real_integral_surface_control_in_wide_and_compact_layouts`,
+`an_absent_integral_control_does_not_fall_back_to_the_whole_panel`,
 `unresolved_anchor_still_shows_the_card_without_a_highlight`,
 `compact_layout_keeps_the_card_on_screen`,
 `tour_keys_do_not_reach_viewport_handlers_but_text_editing_still_works`, and
-`help_menu_entry_is_labelled_start_or_restart_truthfully`.
+`help_menu_entry_is_labelled_start_or_restart_truthfully`; the flux control
+target is also pinned in `tests/tour_test.rs`.
 
 #### `src/main.rs` — native and wasm bootstrap
 
@@ -2193,7 +2203,11 @@ appends them, so every capture path includes them with no `SceneGPU` change.
 The collapsed "Field probes" sidebar section shows the family selector, add rows
 per kind, editable geometry, the readout or status with sample count, and
 Remove; it is disabled with the model's reason when the mode cannot supply a
-field. Drafts are session-only and never persisted.
+field. Drafts are session-only and never persisted. A one-shot
+`ProbeControls::open_section` request opens the body for a Maxwell integral
+action or the guided tour's flux stop, and the `Add sphere` response rectangle
+is recorded for that stop's live anchor; a user close is respected because the
+tour reveals the body once per stop.
 
 **Pinned by (slice B).** `tests/probe_state_test.rs`:
 `adding_and_updating_probes_dirty_once_and_rejected_edits_do_not`,
@@ -5838,7 +5852,8 @@ plus case names, the formula-bar summary and the help rows.
 wave_open, learning }`, `MaxwellPanelState::default`,
 `commit(&mut State) -> bool`, `commit_wave(&mut State) -> bool`,
 `sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
-Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`,
+Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d,
+Measurement}`,
 `case_label`, `summary`, `MAXWELL_HELP_ROWS`, `maxwell_help_rows`,
 `MAXWELL_ONLY_NOTE`, `MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`,
 `WAVE_SCOPE_NOTE`, `WAVE_NORMALIZED_NOTE`, `WAVE_AMPERE_NOTE`, `WAVE_SVG_NOTE`.
@@ -5875,7 +5890,10 @@ Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d}`,
   the committed scene and the read-only cached BEM solution; it never commits a
   scene edit and never samples the field on a plain frame. `sync_from` (mode
   entry, restore and Reset) clears the learning report and message while keeping
-  the equation and probe selections.
+  the equation and probe selections. Its one-shot `MeasurementRequest` becomes
+  `MaxwellPanelAction::Measurement`, which the app applies by selecting the
+  requested family and opening the matching Field probes surface or loop (or
+  running the pointwise check), never by mutating the Maxwell scene.
 - Maxwell is arrows-only, with the exact note
   `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
   Coloring is hidden and CAS is disabled with
@@ -5897,19 +5915,36 @@ symbol table and the active-limit assumptions from
 [`maxwell_learning`](../src/maxwell_learning.rs), then optionally runs one
 bounded residual check through [`maxwell_residual`](../src/maxwell_residual.rs).
 
-**Public API.** `MaxwellLearningPanel { equation, form, probe, report, message }`
-with `Default` (Gauss electric, differential, probe `[0, 0, 0]`),
-`show(ui, &MaxwellScene, Option<&BemSolution>)`, `check(&MaxwellScene,
-Option<&BemSolution>)`, `clear_report()`, `ResidualReport { residual, terms,
-absolute, inputs }`, `ReportInputs { scene, equation, probe }`,
-`TermExplanation { terms }`, `TermNote { symbol, central_difference, status }`,
-and the constants `MAXWELL_LEARNING_LIMITATION`, `MAXWELL_NORMALIZED_SCALE`,
-`MAXWELL_POINTWISE_NOTE` and `MAXWELL_REPORT_STALE`.
+**Public API.** `MaxwellLearningPanel { equation, form, probe, report, message,
+point_highlight }` with `Default` (Gauss electric, differential, probe
+`[0, 0, 0]`), `show(ui, &MaxwellScene, Option<&BemSolution>) ->
+Option<MeasurementRequest>`, `check(&MaxwellScene, Option<&BemSolution>)`,
+`clear_report()`, `measurement_request()`, `measurement_explanation(&MaxwellScene)`,
+`MeasurementRequest { equation, kind, family }`, `MeasurementKind::{Surface,
+Loop, Point}`, `ResidualReport { residual, terms, absolute, inputs }`,
+`ReportInputs { scene, equation, probe }`, `TermExplanation { terms }`,
+`TermNote { symbol, central_difference, status }`, and the constants
+`MAXWELL_LEARNING_LIMITATION`, `MAXWELL_NORMALIZED_SCALE`,
+`MAXWELL_POINTWISE_NOTE`, `MAXWELL_REPORT_STALE`,
+`MAXWELL_PARTIAL_MEASUREMENT_NOTE` and `MAXWELL_HIGHLIGHTED_POINT`.
 
 **Invariants.**
-- Field work happens only on `Check residual`: one press does exactly twelve
-  `maxwell_field_with_bem` evaluations, six offsets at `h` and six at `h/2`
-  with `h = 1e-3 * case extent`. A plain frame never samples.
+- `measurement_request` maps the selected form to the measurement that
+  actually checks it: integral Gauss to an oriented surface (E or B family),
+  integral Faraday/Ampere to an oriented loop (E or B family), and every
+  differential form to the existing pointwise residual check. The app applies
+  the request; the panel itself never mutates probes or the scene. An
+  incompatible committed case paints `measurement_explanation`, names the
+  active family and offers a compatible case and the alternative law; clicking
+  the button still reports that explanation and mutates nothing.
+- Integral forms show `MAXWELL_PARTIAL_MEASUREMENT_NOTE`, naming the sampled
+  integral and the unmeasured right-hand side. A pointwise check never claims
+  an integral estimate, and highlights the sampled point with
+  `MAXWELL_HIGHLIGHTED_POINT`.
+- Field work happens only on `Check residual` or the pointwise measurement
+  action: one press does exactly twelve `maxwell_field_with_bem` evaluations,
+  six offsets at `h` and six at `h/2` with `h = 1e-3 * case extent`. A plain
+  frame never samples.
 - Every report records the exact committed `MaxwellScene`, equation and probe it
   was computed for. Before painting, a plain frame compares those inputs with
   the committed scene and current selection; on any mismatch it clears the
@@ -5954,8 +5989,14 @@ and the constants `MAXWELL_LEARNING_LIMITATION`, `MAXWELL_NORMALIZED_SCALE`,
 `report_clears_after_a_scene_reset_or_restore`,
 `report_names_the_committed_scene_and_probe`,
 `a_rejected_draft_keeps_the_report_labelled_with_the_on_screen_scene`,
-`plain_frames_do_not_re_evaluate_after_a_check`, and
-`panel_never_claims_a_full_time_dependent_solution`.
+`plain_frames_do_not_re_evaluate_after_a_check`,
+`panel_never_claims_a_full_time_dependent_solution`, and
+[tests/maxwell_measurement_test.rs](../tests/maxwell_measurement_test.rs)
+`every_equation_and_form_maps_to_the_matching_measurement`,
+`integral_magnetic_gauss_is_a_b_flux_surface_and_differential_is_a_point`,
+`applying_an_integral_law_adds_or_reuses_the_matching_family_probe`,
+`incompatible_action_is_explained_and_mutates_nothing`, and
+`differential_action_highlights_the_point_and_names_unavailable_terms`.
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 

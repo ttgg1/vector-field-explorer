@@ -205,6 +205,29 @@ fn maxwell_stop_waits_for_a_case_change() {
 }
 
 #[test]
+fn flux_stop_anchors_to_the_integral_surface_control() {
+    let stop = TOUR
+        .iter()
+        .find(|stop| stop.id == "probes")
+        .expect("the tour keeps its Field probes stop");
+    assert_eq!(
+        stop.target,
+        TourTarget::Control(ControlId::FieldProbeSurface),
+        "the flux step points at the real integral-surface control, not scalar point placement"
+    );
+    assert_ne!(
+        stop.target,
+        TourTarget::Control(ControlId::FieldProbePlace),
+        "scalar point placement is not an integral probe control"
+    );
+    assert_eq!(ControlId::FieldProbeSurface.panel(), PanelId::Controls);
+    assert!(
+        ControlId::FieldProbeSurface.requires_live_rect(),
+        "an absent integral control yields no anchor rather than the whole panel"
+    );
+}
+
+#[test]
 fn full_tour_run_opens_each_target_panel_exactly_once() {
     let mut progress = TourProgress::new();
     let mut expected: Vec<PanelId> = Vec::new();

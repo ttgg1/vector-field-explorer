@@ -1425,8 +1425,35 @@ pub struct ProbeControls {
     pub surface_drafts: Vec<GaussianSurface>,
     pub loop_drafts: Vec<CirculationLoop>,
     pub message: String,
+    /// One-shot request to open the Field probes body on the next draw.
+    pub open_section: bool,
+    /// The `Add sphere` response rect from this frame, recorded for the tour
+    /// anchor. `None` while the body is collapsed or not painted.
+    pub add_surface_rect: Option<egui::Rect>,
+    /// The tour stop index whose Field probes body the tour already revealed,
+    /// so a user close is respected for the rest of that stop.
+    tour_revealed_stop: Option<usize>,
     synced_surfaces: Vec<GaussianSurface>,
     synced_loops: Vec<CirculationLoop>,
+}
+
+impl ProbeControls {
+    /// Reveal the Field probes body once for this tour stop. Returns `true`
+    /// only on the frame the tour enters the stop, so the app can prepare the
+    /// adapter before the body paints while still respecting a user's close.
+    pub fn reveal_for_tour(&mut self, stop_index: usize) -> bool {
+        if self.tour_revealed_stop != Some(stop_index) {
+            self.tour_revealed_stop = Some(stop_index);
+            self.open_section = true;
+            return true;
+        }
+        false
+    }
+
+    /// Forget the revealed stop when the tour leaves the probe control.
+    pub fn forget_tour_reveal(&mut self) {
+        self.tour_revealed_stop = None;
+    }
 }
 
 impl ProbeControls {
@@ -3093,9 +3120,12 @@ fn apply_plot_mode(state: &mut State, controls: &mut Controls) {
 /// refreshes reports only while open, commits edits through the model's
 /// validating setters and reads fixed document geometry for the wireframes.
 fn probe_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) {
-    egui::CollapsingHeader::new("Field probes")
+    let open_requested = std::mem::take(&mut controls.probe_controls.open_section);
+    controls.probe_controls.add_surface_rect = None;
+    let response = egui::CollapsingHeader::new("Field probes")
         .id_salt("field_probes_section")
         .default_open(false)
+        .open(open_requested.then_some(true))
         .show(ui, |ui| {
             if let Some(reason) = state.probe_mode_unsupported_reason() {
                 ui.label(reason);
@@ -3123,11 +3153,13 @@ fn probe_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) 
 
             let domain = state.scene_domain();
             for kind in [SurfaceKind::Sphere, SurfaceKind::Box, SurfaceKind::Cylinder] {
-                if ui
+                let response = ui
                     .button(format!("Add {}", surface_kind_label(kind).to_lowercase()))
-                    .on_hover_text("Add one bounded Gaussian surface at the domain centre")
-                    .clicked()
-                {
+                    .on_hover_text("Add one bounded Gaussian surface at the domain centre");
+                if kind == SurfaceKind::Sphere {
+                    controls.probe_controls.add_surface_rect = Some(response.rect);
+                }
+                if response.clicked() {
                     match state.add_probe_surface(default_probe_surface(kind, &domain)) {
                         Ok(_) => {
                             controls.probe_controls.message.clear();
@@ -3284,6 +3316,11 @@ fn probe_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Controls) 
                 ui.label(&controls.probe_controls.message);
             }
         });
+    if open_requested {
+        // The tour asks for this control; bring it into the visible scroll
+        // area without changing the section's own collapsed state rules.
+        ui.scroll_to_rect(response.header_response.rect, Some(egui::Align::Center));
+    }
 }
 
 fn surface_kind_label(kind: SurfaceKind) -> &'static str {

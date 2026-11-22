@@ -139,13 +139,139 @@ fn text_input_value(out: &egui::FullOutput, value: &str) -> Option<egui::Rect> {
         })
 }
 
+fn node_rect(out: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
+    out.platform_output
+        .accesskit_update
+        .as_ref()?
+        .nodes
+        .iter()
+        .find_map(|(_, node)| {
+            (node.label() == Some(label) || node.value() == Some(label)).then(|| {
+                let b = node.bounds().expect("widget bounds");
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            })
+        })
+}
+
 #[test]
-fn starting_the_tour_records_no_document_or_history_change() {
+fn flux_stop_anchors_to_the_real_integral_surface_control_in_wide_and_compact_layouts() {
+    use vector_field_explorer::source_scene::FieldMode;
+
+    for (width, height) in [(1200.0, 800.0), (360.0, 640.0)] {
+        let mut h = Harness::new(width, height);
+        // The app's real default is the Formula adapter, which cannot supply a
+        // probe field. The probes stop must reach a probe-capable adapter
+        // through the shipped mode switch without the test forcing Sources.
+        assert_eq!(
+            h.app.state.field_mode,
+            FieldMode::Formula,
+            "{width} pt: the test starts from the shipped default adapter"
+        );
+        h.start();
+        h.idle();
+        go_to(&mut h, "probes");
+        // The tour opens the Controls panel/sheet, switches the adapter and
+        // reveals the Field probes body; the scroll request then brings the
+        // Add sphere row into view.
+        for _ in 0..8 {
+            h.frame(Vec::new());
+        }
+        let out = h.frame(Vec::new());
+        assert_eq!(
+            h.app.state.field_mode,
+            FieldMode::Sources,
+            "{width} pt: the probes stop switches to a probe-capable adapter"
+        );
+        let add = node_rect(&out, "Add sphere")
+            .unwrap_or_else(|| panic!("{width} pt: the tour reveals the real Add sphere control"));
+        let rect = h
+            .app
+            .tour_highlight_rect_for_test()
+            .unwrap_or_else(|| panic!("{width} pt: the flux anchor resolves"));
+        assert!(
+            rect.width() > 0.0 && rect.height() > 0.0,
+            "{width} pt: the highlight is non-empty"
+        );
+        assert!(
+            (rect.center() - add.center()).length() < 2.0,
+            "{width} pt: the highlight {rect:?} covers the Add sphere control {add:?}"
+        );
+    }
+}
+
+#[test]
+fn probe_stop_explains_when_only_the_scalar_plot_view_is_available() {
+    use vector_field_explorer::plot::PlotKind;
+
+    let mut h = Harness::new(1200.0, 800.0);
+    // The scalar plot view has no vector field, and switching the field adapter
+    // alone cannot restore one. The card must name the next step instead of
+    // presenting a dead Field probes section.
+    h.app.state.set_plot_kind(PlotKind::Curve2D);
+    h.start();
+    h.idle();
+    go_to(&mut h, "probes");
+    let out = h.frame(Vec::new());
+    let text = texts(&out).join("\n");
+    assert!(
+        text.contains("Switch back to the vector view to use Field probes."),
+        "the card explains how to reach the probes: {text}"
+    );
+    assert!(
+        h.app.tour_highlight_rect_for_test().is_none(),
+        "an unavailable Field probes body produces no anchor"
+    );
+}
+
+#[test]
+fn an_absent_integral_control_does_not_fall_back_to_the_whole_panel() {
+    let mut h = Harness::new(1200.0, 800.0);
+    h.app
+        .state
+        .set_field_mode(vector_field_explorer::source_scene::FieldMode::Sources);
+    h.start();
+    h.idle();
+    go_to(&mut h, "probes");
+    for _ in 0..8 {
+        h.frame(Vec::new());
+    }
+    assert!(
+        h.app.tour_highlight_rect_for_test().is_some(),
+        "the control is visible first"
+    );
+
+    // Closing the Controls panel leaves the control absent. The tour must not
+    // fabricate a highlight from the panel rectangle or reopen the panel.
+    h.app.layout.toggle_controls();
+    for _ in 0..4 {
+        h.frame(Vec::new());
+    }
+    assert!(
+        h.app.tour_highlight_rect_for_test().is_none(),
+        "an absent integral control produces no anchor"
+    );
+    assert!(
+        !h.app.layout.controls_expanded,
+        "the user's close is respected for the rest of the stop"
+    );
+}
+
+#[test]
+fn starting_the_tour_changes_only_the_probe_adapter_and_records_one_undoable_switch() {
+    use vector_field_explorer::source_scene::FieldMode;
+
     let mut h = Harness::new(1200.0, 800.0);
     h.idle();
 
     let document = h.app.capture_document_for_test();
-    let dirty = h.app.state.dirty;
+    assert_eq!(
+        document.view.field_mode,
+        FieldMode::Formula,
+        "the default document starts in Formula"
+    );
     let history = h.app.history_len();
     let redo = h.app.history_redo_len();
 
@@ -164,21 +290,43 @@ fn starting_the_tour_records_no_document_or_history_change() {
         "advancing past the last stop finishes the session tour"
     );
 
+    let after = h.app.capture_document_for_test();
+    // The probes stop deliberately switches to a probe-capable adapter through
+    // the shipped `set_field_mode` seam. Nothing else in the view record may
+    // change: the formula, domain, probes and every durable scene stay exact.
+    let mut expected_view = document.view.clone();
+    expected_view.field_mode = FieldMode::Sources;
     assert_eq!(
-        h.app.capture_document_for_test(),
-        document,
-        "starting, advancing and finishing must not mutate the document"
+        after.view, expected_view,
+        "the only view change is the documented probes-step adapter switch"
     );
     assert_eq!(
-        h.app.state.dirty, dirty,
-        "the tour must not dirty the scene"
+        after.parameters, document.parameters,
+        "the tour must not mutate named parameters"
+    );
+    assert_eq!(
+        after.appearance, document.appearance,
+        "the tour must not mutate appearance"
+    );
+    // The adapter switch re-frames the camera for the new scene; the pose is
+    // otherwise untouched.
+    let mut expected_camera = document.camera.clone();
+    expected_camera.scale = after.camera.scale;
+    expected_camera.ortho_zoom = after.camera.ortho_zoom;
+    assert_eq!(
+        after.camera, expected_camera,
+        "the adapter switch may re-frame but must not orbit or move the camera"
     );
     assert_eq!(
         h.app.history_len(),
-        history,
-        "no undo entry may be recorded"
+        history + 1,
+        "the one deliberate adapter switch is the only undo entry"
     );
-    assert_eq!(h.app.history_redo_len(), redo);
+    assert_eq!(
+        h.app.history_redo_len(),
+        redo,
+        "walking the tour forward records no redo entry"
+    );
 }
 
 #[test]

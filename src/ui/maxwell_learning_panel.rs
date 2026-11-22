@@ -22,10 +22,78 @@ use crate::maxwell::{
 };
 use crate::maxwell_learning::{EquationForm, EquationSpec, MaxwellEquation, spec};
 use crate::maxwell_residual::{FieldTerms, Residual, TermStatus, residual};
+use crate::sources::FieldFamily;
 use crate::ui::maxwell_panel::case_label;
 
 /// The honest scope line, always visible in the section.
 pub const MAXWELL_LEARNING_LIMITATION: &str = "These teaching cases are static or quasistatic; time-derivative terms are not available, so this is a partial check, not a full Maxwell verification.";
+
+/// What one integral probe readout does and does not establish.
+pub const MAXWELL_PARTIAL_MEASUREMENT_NOTE: &str = "Partial measurement: the probe reports one sampled integral (outward flux or oriented circulation). It does not measure the source or time-derivative right-hand side, so it cannot confirm the full Maxwell law.";
+
+/// Prefix for the highlighted single-point differential check.
+pub const MAXWELL_HIGHLIGHTED_POINT: &str = "Sampled point (highlighted)";
+
+/// The kind of measurement a Maxwell statement form points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeasurementKind {
+    /// A closed oriented surface and its signed flux (integral Gauss).
+    Surface,
+    /// An oriented closed loop and its circulation (integral Faraday/Ampere).
+    Loop,
+    /// The existing pointwise differential residual check.
+    Point,
+}
+
+/// One-shot request from a Maxwell statement form to the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasurementRequest {
+    pub equation: MaxwellEquation,
+    pub kind: MeasurementKind,
+    /// The field family the integral law integrates.
+    pub family: FieldFamily,
+}
+
+impl MeasurementRequest {
+    /// Button text naming the actual measurement, not just "check".
+    pub const fn button_label(self) -> &'static str {
+        match self.kind {
+            MeasurementKind::Surface => "Open flux surface",
+            MeasurementKind::Loop => "Open circulation loop",
+            MeasurementKind::Point => "Check at probe point",
+        }
+    }
+
+    const fn family_description(self) -> &'static str {
+        match self.family {
+            FieldFamily::Electric => "electric-field",
+            FieldFamily::Magnetic => "magnetic-field",
+        }
+    }
+
+    const fn family_article(self) -> &'static str {
+        match self.family {
+            FieldFamily::Electric => "an",
+            FieldFamily::Magnetic => "a",
+        }
+    }
+
+    const fn example_case(self) -> &'static str {
+        match self.family {
+            FieldFamily::Electric => "Parallel plates",
+            FieldFamily::Magnetic => "Ideal solenoid",
+        }
+    }
+
+    const fn alternative_law(self) -> &'static str {
+        match self.equation {
+            MaxwellEquation::GaussElectric => "Gauss's law for magnetism",
+            MaxwellEquation::GaussMagnetic => "Gauss's law for electricity",
+            MaxwellEquation::Faraday => "the Ampere-Maxwell law",
+            MaxwellEquation::AmpereMaxwell => "Faraday's law of induction",
+        }
+    }
+}
 
 /// Explains that a stored report no longer describes the committed scene.
 pub const MAXWELL_REPORT_STALE: &str = "Scene, equation or probe changed since the last check; press Check residual to evaluate the current selection.";
@@ -85,6 +153,9 @@ pub struct MaxwellLearningPanel {
     pub probe: [f64; 3],
     pub report: Option<ResidualReport>,
     pub message: Option<String>,
+    /// Whether the current report came from an explicit pointwise check, so
+    /// the sampled point is highlighted in the readout.
+    pub point_highlight: bool,
 }
 
 impl Default for MaxwellLearningPanel {
@@ -95,16 +166,84 @@ impl Default for MaxwellLearningPanel {
             probe: [0.0; 3],
             report: None,
             message: None,
+            point_highlight: false,
         }
     }
 }
 
 impl MaxwellLearningPanel {
+    /// The measurement the selected equation and statement form actually
+    /// checks. Integral Gauss targets an oriented surface, integral
+    /// Faraday/Ampere a loop, and every differential form keeps the existing
+    /// pointwise residual check.
+    pub fn measurement_request(&self) -> MeasurementRequest {
+        let family = match self.equation {
+            MaxwellEquation::GaussElectric | MaxwellEquation::Faraday => FieldFamily::Electric,
+            MaxwellEquation::GaussMagnetic | MaxwellEquation::AmpereMaxwell => {
+                FieldFamily::Magnetic
+            }
+        };
+        let kind = match self.form {
+            EquationForm::Integral => match self.equation {
+                MaxwellEquation::GaussElectric | MaxwellEquation::GaussMagnetic => {
+                    MeasurementKind::Surface
+                }
+                MaxwellEquation::Faraday | MaxwellEquation::AmpereMaxwell => MeasurementKind::Loop,
+            },
+            EquationForm::Differential => MeasurementKind::Point,
+        };
+        MeasurementRequest {
+            equation: self.equation,
+            kind,
+            family,
+        }
+    }
+
+    /// Why the committed scene cannot supply the selected integral, or `None`
+    /// when it can (or the request is the pointwise differential check).
+    pub fn measurement_explanation(&self, scene: &MaxwellScene) -> Option<String> {
+        let request = self.measurement_request();
+        if request.kind == MeasurementKind::Point {
+            return None;
+        }
+        let active = maxwell_family(scene.case);
+        let expected = match request.family {
+            FieldFamily::Electric => MaxwellFamily::Electric,
+            FieldFamily::Magnetic => MaxwellFamily::Magnetic,
+        };
+        if active == expected {
+            return None;
+        }
+        let active_label = match active {
+            MaxwellFamily::Electric => "E",
+            MaxwellFamily::Magnetic => "B",
+        };
+        Some(format!(
+            "{} needs {} {} probe, but the active case {} supplies {} only. Choose a {} case (for example {}) or select {}.",
+            request.equation.title(),
+            request.family_article(),
+            request.family_description(),
+            case_label(scene.case),
+            active_label,
+            request.family_description(),
+            request.example_case(),
+            request.alternative_law()
+        ))
+    }
+
     /// Draw the section. Field work happens only when `Check residual` is
     /// pressed; a plain frame compares the stored report with the committed
     /// scene and selection and drops a stale result without evaluating the
     /// field.
-    pub fn show(&mut self, ui: &mut egui::Ui, scene: &MaxwellScene, bem: Option<&BemSolution>) {
+    ///
+    /// Returns the one-shot measurement request when the user asks to open the
+    /// integral the selected form actually checks, or to check the probe point.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        scene: &MaxwellScene,
+        bem: Option<&BemSolution>,
+    ) -> Option<MeasurementRequest> {
         ui.label("Maxwell equations (learning and diagnostics)");
         ui.label("Normalized teaching units; this is a teaching aid, not a solver.");
 
@@ -177,11 +316,37 @@ impl MaxwellLearningPanel {
             self.check(scene, bem);
         }
 
+        let request = self.measurement_request();
+        let mut measurement = None;
+        if request.kind == MeasurementKind::Point {
+            if ui
+                .button(request.button_label())
+                .on_hover_text("Run the existing pointwise differential check at the probe point")
+                .clicked()
+            {
+                measurement = Some(request);
+            }
+        } else {
+            if let Some(explanation) = self.measurement_explanation(scene) {
+                ui.colored_label(ui.visuals().warn_fg_color, explanation);
+            }
+            if ui
+                .button(request.button_label())
+                .on_hover_text(
+                    "Open the oriented probe that checks this integral and show its estimate",
+                )
+                .clicked()
+            {
+                measurement = Some(request);
+            }
+            ui.label(MAXWELL_PARTIAL_MEASUREMENT_NOTE);
+        }
+
         self.discard_stale_report(scene);
 
         if let Some(report) = self.report.as_ref() {
             ui.separator();
-            show_report(ui, report);
+            show_report(ui, report, self.point_highlight);
         } else {
             ui.label("No residual check run yet.");
         }
@@ -189,11 +354,14 @@ impl MaxwellLearningPanel {
         if let Some(message) = self.message.as_ref() {
             ui.colored_label(ui.visuals().warn_fg_color, message);
         }
+
+        measurement
     }
 
     /// Run the bounded check for the current selection. This is public so the
     /// press-only UI and tests share exactly one evaluation path.
     pub fn check(&mut self, scene: &MaxwellScene, bem: Option<&BemSolution>) {
+        self.point_highlight = true;
         if let Some(warning) = conductor_blocker(scene, bem) {
             self.report = None;
             self.message = Some(warning.to_owned());
@@ -251,13 +419,22 @@ fn show_statements(ui: &mut egui::Ui, record: &EquationSpec, form: EquationForm)
     ));
 }
 
-fn show_report(ui: &mut egui::Ui, report: &ResidualReport) {
+fn show_report(ui: &mut egui::Ui, report: &ResidualReport, highlight_point: bool) {
     let residual = &report.residual;
     ui.label(format!(
         "Committed scene: {} · probe {}",
         case_label(report.inputs.scene.case),
         probe_label(report.inputs.probe)
     ));
+    if highlight_point {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            format!(
+                "{MAXWELL_HIGHLIGHTED_POINT}: {}",
+                probe_label(report.inputs.probe)
+            ),
+        );
+    }
     ui.label(format!("Equation: {}", residual.equation.title()));
     ui.label(MAXWELL_POINTWISE_NOTE);
     match residual.normalized {
