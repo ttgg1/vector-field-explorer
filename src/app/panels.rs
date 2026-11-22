@@ -9,7 +9,7 @@ use crate::color_ramp::ScaleMode;
 use crate::colormap::Colormap;
 use crate::field::FieldExpr;
 use crate::field_probe::{CirculationLoop, GaussianSurface, LoopKind, SurfaceKind};
-use crate::plane::PlaneView;
+use crate::plane::{PlaneAxis, PlaneView};
 use crate::scalar::{ScalarContext, ScalarExpr};
 use crate::scalar_view::MAX_PROBES;
 use crate::scene_document::{SceneCamera, SceneDocument};
@@ -18,6 +18,10 @@ use crate::tour::{ControlId, TourTarget};
 use crate::ui::griffiths::{GriffithsAction, GriffithsRoute};
 use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
 use crate::ui::pins::{self, PinAction, PinSnapshot};
+use crate::ui::plane_lesson::{
+    PlaneBoundaryReading, PlaneFieldReading, PlaneImageLocationPrediction,
+    PlaneImageSignPrediction, PlaneLessonAction,
+};
 use crate::ui::presets::SceneAction;
 use crate::ui::ring_lesson::{RingLessonAction, RingPrediction, RingReading};
 use crate::ui::shell_lesson::{ShellFieldPrediction, ShellFluxPrediction, ShellLessonAction};
@@ -1273,9 +1277,9 @@ impl VfApp {
     /// Start one Griffiths route. The ring route captures the starting scene
     /// once and loads the shipped `Uniform ring` preset through its ordinary
     /// loader; the shell route loads the shipped Hollow sphere case and opens
-    /// the #225 activity over #219's measurement state; the wire route loads
-    /// the shipped Infinite wire case in a transverse 2D slice; unavailable
-    /// routes only set a safe placeholder message.
+    /// the #225 activity over #219's measurement state; the plane route loads
+    /// the shipped Image plane case in a vertical slice; the wire route loads
+    /// the shipped Infinite wire case in a transverse 2D slice.
     pub fn start_griffiths_route(&mut self, route: GriffithsRoute) {
         if !route.available() {
             self.griffiths.placeholder = Some(route);
@@ -1297,6 +1301,7 @@ impl VfApp {
         match route {
             GriffithsRoute::Ring => {
                 self.griffiths.shell.deactivate();
+                self.griffiths.plane.deactivate();
                 self.griffiths.wire.deactivate();
                 let preset = crate::source_presets::source_preset("Uniform ring")
                     .expect("the shipped Uniform ring preset exists");
@@ -1318,6 +1323,7 @@ impl VfApp {
             }
             GriffithsRoute::Shell => {
                 self.griffiths.lesson.deactivate();
+                self.griffiths.plane.deactivate();
                 self.griffiths.wire.deactivate();
                 // The shell lesson owns its own #219 measurement session; reset
                 // any guided panel session so the two surfaces cannot disagree.
@@ -1336,6 +1342,7 @@ impl VfApp {
             GriffithsRoute::Wire => {
                 self.griffiths.lesson.deactivate();
                 self.griffiths.shell.deactivate();
+                self.griffiths.plane.deactivate();
                 self.maxwell.gauss.reset();
                 let scene = crate::maxwell::MaxwellScene {
                     case: crate::maxwell::MaxwellCase::InfiniteWire,
@@ -1359,7 +1366,36 @@ impl VfApp {
                 self.griffiths.wire.activate(&self.state.maxwell);
             }
             GriffithsRoute::Plane => {
-                unreachable!("unavailable routes returned before the scene changed")
+                self.griffiths.lesson.deactivate();
+                self.griffiths.shell.deactivate();
+                self.griffiths.wire.deactivate();
+                // The plane lesson owns no Gauss measurement session; reset a
+                // guided panel session so its surface cannot disagree.
+                self.maxwell.gauss.reset();
+                let scene = crate::maxwell::MaxwellScene {
+                    case: crate::maxwell::MaxwellCase::ImagePlane,
+                    ..crate::maxwell::MaxwellScene::default()
+                };
+                self.state.set_field_mode(FieldMode::Maxwell);
+                self.state.set_maxwell_scene(scene);
+                // A y-normal slice leaves the x-z plane visible: the grounded
+                // plane runs horizontally with the source above it.
+                self.state.set_mode(false);
+                let grid = self.state.plane_grid();
+                self.state.set_plane(PlaneView {
+                    enabled: false,
+                    axis: PlaneAxis::Y,
+                    index: PlaneAxis::Y.middle_index(grid),
+                });
+                self.state.refresh_maxwell_sampling();
+                self.maxwell.sync_from(&self.state);
+                self.orbit.yaw = 0.0;
+                self.orbit.pitch = 0.0;
+                self.orbit.distance = 4.0;
+                self.orbit.target = Vec3::ZERO;
+                self.camera.position = [0.0, 0.0];
+                self.camera.scale = 1.0;
+                self.griffiths.plane.activate(&self.state.maxwell);
             }
         }
         self.help_open = false;
@@ -1382,12 +1418,13 @@ impl VfApp {
         }
         self.griffiths.lesson.deactivate();
         self.griffiths.shell.deactivate();
+        self.griffiths.plane.deactivate();
         self.griffiths.wire.deactivate();
         self.griffiths.close();
     }
 
     /// Adopt the activity scene: drop the starting snapshot and keep the
-    /// loaded ring, shell or wire scene.
+    /// loaded ring, shell, plane or wire scene.
     pub fn keep_griffiths_scene(&mut self) {
         if self.griffiths.shell.active() && self.griffiths.shell.finish(&self.state.maxwell) {
             self.griffiths.shell_completed = true;
@@ -1395,6 +1432,7 @@ impl VfApp {
         self.griffiths_start = None;
         self.griffiths.lesson.deactivate();
         self.griffiths.shell.deactivate();
+        self.griffiths.plane.deactivate();
         self.griffiths.wire.deactivate();
         self.griffiths.close();
     }
@@ -1608,11 +1646,74 @@ impl VfApp {
         self.griffiths.wire.set_orientation(orientation);
     }
 
+    /// Test seam: whether the grounded-plane activity is active.
+    #[doc(hidden)]
+    pub fn plane_lesson_active_for_test(&self) -> bool {
+        self.griffiths.plane.active()
+    }
+
+    /// Test seam: whether the plane result has been revealed.
+    #[doc(hidden)]
+    pub fn plane_lesson_revealed_for_test(&self) -> bool {
+        self.griffiths.plane.revealed()
+    }
+
+    /// Test seam: commit both plane trial predictions.
+    #[doc(hidden)]
+    pub fn predict_plane_for_test(
+        &mut self,
+        sign: PlaneImageSignPrediction,
+        location: PlaneImageLocationPrediction,
+    ) {
+        self.griffiths.plane.select_sign_prediction(sign);
+        self.griffiths.plane.select_location_prediction(location);
+    }
+
+    /// Test seam: reveal the plane result.
+    #[doc(hidden)]
+    pub fn reveal_plane_for_test(&mut self) -> bool {
+        self.griffiths.plane.reveal()
+    }
+
+    /// Test seam: move the plane lesson's lateral measurement position.
+    #[doc(hidden)]
+    pub fn set_plane_lateral_for_test(&mut self, value: f64) -> bool {
+        self.griffiths.plane.set_lateral(value)
+    }
+
+    /// Test seam: move the plane lesson's field probe height.
+    #[doc(hidden)]
+    pub fn set_plane_probe_height_for_test(&mut self, value: f64) -> bool {
+        self.griffiths.plane.set_probe_height(value)
+    }
+
+    /// Test seam: the candidate boundary readings at the fixed laterals.
+    #[doc(hidden)]
+    pub fn plane_boundary_readings_for_test(&self) -> Vec<PlaneBoundaryReading> {
+        self.griffiths.plane.boundary_readings(&self.state.maxwell)
+    }
+
+    /// Test seam: the shipped field just above the plane at the current probe.
+    #[doc(hidden)]
+    pub fn plane_field_reading_for_test(&self) -> Option<PlaneFieldReading> {
+        self.griffiths
+            .plane
+            .active()
+            .then(|| self.griffiths.plane.field_reading(&self.state.maxwell))
+    }
+
+    /// Test seam: apply the "Show potential formula in CAS" action.
+    #[doc(hidden)]
+    pub fn send_plane_formula_to_cas_for_test(&mut self) {
+        self.send_plane_formula_to_cas();
+    }
+
     /// Draw the optional Griffiths branch and apply its one-shot actions.
     fn show_griffiths_overlays(&mut self, ctx: &egui::Context) {
         match crate::ui::griffiths::show_picker(ctx, &mut self.griffiths) {
             GriffithsAction::OpenRing => self.start_griffiths_route(GriffithsRoute::Ring),
             GriffithsAction::OpenShell => self.start_griffiths_route(GriffithsRoute::Shell),
+            GriffithsAction::OpenPlane => self.start_griffiths_route(GriffithsRoute::Plane),
             GriffithsAction::OpenWire => self.start_griffiths_route(GriffithsRoute::Wire),
             GriffithsAction::Placeholder(route) => self.griffiths.placeholder = Some(route),
             GriffithsAction::Dismiss => self.griffiths.close(),
@@ -1634,6 +1735,12 @@ impl VfApp {
             ShellLessonAction::Back => self.exit_griffiths_lesson(),
             ShellLessonAction::KeepExploring => self.keep_griffiths_scene(),
             ShellLessonAction::None => {}
+        }
+        match crate::ui::plane_lesson::show(ctx, &mut self.griffiths.plane, &self.state.maxwell) {
+            PlaneLessonAction::Back => self.exit_griffiths_lesson(),
+            PlaneLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            PlaneLessonAction::SendToCas => self.send_plane_formula_to_cas(),
+            PlaneLessonAction::None => {}
         }
         match crate::ui::wire_lesson::show(
             ctx,
@@ -1662,6 +1769,22 @@ impl VfApp {
 
     #[cfg(target_arch = "wasm32")]
     fn send_ring_formula_to_cas(&mut self) {}
+
+    /// Put the normalized vertical-slice potential in the native CAS input with
+    /// `k`, `q` and `h` symbolic. The lesson reading never depends on the
+    /// backend.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn send_plane_formula_to_cas(&mut self) {
+        self.cas.input = crate::ui::plane_lesson::PLANE_CAS_EXPRESSION.to_owned();
+        self.layout.cas_expanded = true;
+        if self.layout_mode == LayoutMode::Compact {
+            self.sheet.open(SheetState::Cas);
+            self.sheet_expanded = SheetSize::Default;
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn send_plane_formula_to_cas(&mut self) {}
 
     /// Open the probe that actually checks the selected Maxwell statement form,
     /// or run the existing pointwise check for a differential form. An integral

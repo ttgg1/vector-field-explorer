@@ -2,12 +2,13 @@
 //!
 //! The branch is deliberately separate from the ordered quick tour. It offers
 //! four selectable activities from the welcome card and the Help window. The
-//! charged-ring (#224), charged-shell (#225) and surface-current wire (#227)
-//! lessons ship in this slice; the grounded-plane route stays selectable but
-//! reports a safe, clearly labelled placeholder without touching the scene.
+//! charged-ring (#224), charged-shell (#225), grounded-plane (#226) and
+//! surface-current wire (#227) lessons all ship; the picker keeps its safe
+//! placeholder path for any future unavailable route.
 
 use eframe::egui;
 
+use crate::ui::plane_lesson::PlaneLessonState;
 use crate::ui::ring_lesson::RingLessonState;
 use crate::ui::shell_lesson::ShellLessonState;
 use crate::ui::wire_lesson::WireLessonState;
@@ -20,6 +21,9 @@ pub const GRIFFITHS_RING_LABEL: &str =
 /// The shell route's control label, also used by the picker and tests.
 pub const GRIFFITHS_SHELL_LABEL: &str =
     "Griffiths 2.11 · Charged shell: field and flux across the shell";
+/// The grounded-plane route's control label, also used by the picker and tests.
+pub const GRIFFITHS_PLANE_LABEL: &str =
+    "Griffiths §3.2 · Grounded plane: what image charge makes V = 0?";
 /// The wire route's control label, also used by the picker and tests.
 pub const GRIFFITHS_WIRE_LABEL: &str =
     "Griffiths 5.14(a) · Current-carrying wire: B and circulation";
@@ -68,14 +72,14 @@ impl GriffithsRoute {
         match self {
             Self::Ring => GRIFFITHS_RING_LABEL,
             Self::Shell => GRIFFITHS_SHELL_LABEL,
-            Self::Plane => "Griffiths §3.2 · Grounded plane (not available yet)",
+            Self::Plane => GRIFFITHS_PLANE_LABEL,
             Self::Wire => GRIFFITHS_WIRE_LABEL,
         }
     }
 
     /// Whether this route has a shipped lesson in this build.
     pub const fn available(self) -> bool {
-        matches!(self, Self::Ring | Self::Shell | Self::Wire)
+        matches!(self, Self::Ring | Self::Shell | Self::Plane | Self::Wire)
     }
 }
 
@@ -94,6 +98,8 @@ pub struct GriffithsState {
     /// survives returning to the picker or Help and is cleared by the next
     /// shell start so a replay begins uncompleted.
     pub shell_completed: bool,
+    /// The grounded-plane activity's session state.
+    pub plane: PlaneLessonState,
     /// The wire activity's session state.
     pub wire: WireLessonState,
 }
@@ -125,6 +131,8 @@ pub enum GriffithsAction {
     OpenRing,
     /// Open the charged-shell lesson.
     OpenShell,
+    /// Open the grounded-plane image-charge lesson.
+    OpenPlane,
     /// Open the surface-current wire lesson.
     OpenWire,
     /// A route without a shipped lesson was selected.
@@ -162,6 +170,7 @@ pub fn show_picker(ctx: &egui::Context, state: &mut GriffithsState) -> Griffiths
                     if route.available() {
                         action = match route {
                             GriffithsRoute::Shell => GriffithsAction::OpenShell,
+                            GriffithsRoute::Plane => GriffithsAction::OpenPlane,
                             GriffithsRoute::Wire => GriffithsAction::OpenWire,
                             _ => GriffithsAction::OpenRing,
                         };

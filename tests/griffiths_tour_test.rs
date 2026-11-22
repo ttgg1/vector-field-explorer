@@ -1,10 +1,8 @@
 //! Issue #223 phase 1: the optional Griffiths branch from the quick-tour
 //! welcome card and the Help window, plus its safe four-route picker.
 //!
-//! The charged-ring (#224), charged-shell (#225) and surface-current wire
-//! (#227) routes ship in this slice. The grounded-plane route must stay
-//! reachable without changing the scene and must say plainly that its lesson
-//! is not available yet.
+//! All four routes ship in this slice: the charged ring (#224), charged shell
+//! (#225), grounded plane (#226) and surface-current wire (#227).
 
 use eframe::egui;
 
@@ -143,8 +141,12 @@ fn the_welcome_card_offers_the_optional_griffiths_branch() {
         );
     }
     assert!(
-        text.contains("not available yet"),
-        "the unimplemented routes are labelled honestly: {text}"
+        !text.contains("not available yet"),
+        "every route has a shipped lesson: {text}"
+    );
+    assert!(
+        GriffithsRoute::ALL.iter().all(|route| route.available()),
+        "the picker offers all four shipped routes"
     );
 }
 
@@ -259,34 +261,32 @@ fn the_legacy_help_window_has_no_dead_griffiths_control() {
 }
 
 #[test]
-fn unavailable_routes_are_safe_labelled_placeholders() {
+fn all_four_routes_are_available_and_the_plane_route_opens_its_lesson() {
     let mut h = Harness::new(1200.0, 800.0);
     h.idle();
-    let before = h.app.capture_document_for_test();
-    h.app.open_griffiths_branch();
-    let route = GriffithsRoute::Plane;
-    assert!(!route.available(), "{route:?} is not implemented yet");
-    h.app.start_griffiths_route(route);
     assert!(
-        h.app.griffiths_picker_open_for_test(),
-        "an unavailable route leaves the picker open instead of changing scene"
+        GriffithsRoute::ALL.iter().all(|route| route.available()),
+        "the four-route picker has no unavailable route in this build"
     );
-    h.idle();
-    let out = h.frame(Vec::new());
-    let text = texts(&out).join("\n");
+    h.app.open_griffiths_branch();
+    h.app.start_griffiths_route(GriffithsRoute::Plane);
     assert!(
-        text.contains("not available yet"),
-        "{route:?} explains its placeholder: {text}"
+        !h.app.griffiths_picker_open_for_test(),
+        "selecting the plane route closes the picker instead of showing a placeholder"
     );
     assert_eq!(
-        h.app.capture_document_for_test().view,
-        before.view,
-        "{route:?} must not change the scene"
+        h.app.state.maxwell.case,
+        vector_field_explorer::maxwell::MaxwellCase::ImagePlane,
+        "the plane route loads the shipped image-plane case"
     );
-    assert!(!h.app.ring_lesson_active_for_test());
+    h.idle();
+    let text = texts(&h.frame(Vec::new())).join("\n");
     assert!(
-        h.app.close_griffiths_placeholder(),
-        "the placeholder has a safe close action"
+        text.contains("Grounded plane"),
+        "the plane activity is visible: {text}"
     );
-    assert!(!h.app.griffiths_picker_open_for_test() || h.app.griffiths_placeholder().is_none());
+    assert!(
+        !text.contains("not available yet"),
+        "no placeholder is shown for a shipped route: {text}"
+    );
 }
