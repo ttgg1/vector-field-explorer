@@ -766,8 +766,8 @@ scoped resets without touching persistence or the renderer.
   &mut Option<FlyCamera>)`; the snapshot is `ViewRecord` + `ParameterSet` +
   `SceneCamera` + `AppearanceProfile`.
 - Doc-hidden test seams: `history_len`, `history_redo_len`,
-  `capture_document_for_test`, `apply_document_for_test`,
-  `apply_menu_action_for_test`.
+  `next_undo_label`, `next_redo_label`, `capture_document_for_test`,
+  `apply_document_for_test`, `apply_menu_action_for_test`.
 
 **Invariants.**
 - One snapshot is captured from one `State`, so the two colour copies agree.
@@ -777,14 +777,26 @@ scoped resets without touching persistence or the renderer.
   source. No file IO, preset write or profile-library mutation.
 - `drive_history` runs once after the UI: a primary-button press opens one
   transaction, every frame while any button is down is suspended, and the
-  primary release commits at most one entry. A secondary press/release is not a
-  gesture boundary and can neither commit nor split the primary gesture.
-  Outside a gesture any document change is recorded directly. Idle frames,
-  simulation ticks and save/export paths record nothing. Applying a named seed
-  layout commits the seeds once; saving, deleting or importing library entries
-  touches settings-side data only and records nothing.
+  primary release commits at most one labelled entry. A secondary press/release
+  is not a gesture boundary and can neither commit nor split the primary
+  gesture. Outside a gesture any document change is recorded directly. Idle
+  frames, simulation ticks and save/export paths record nothing. Applying a
+  named seed layout commits the seeds once; saving, deleting or importing
+  library entries touches settings-side data only and records nothing.
   `tests/edit_history_app_test.rs::library_actions_do_not_record_history_but_applying_does`
   pins that split.
+- Camera orbit/pan/zoom is navigation, not a document edit: a camera-only
+  gesture or idle change updates `last_committed` without recording, so it never
+  lengthens or renames the undo stack. Explicit camera commands still record
+  their own named entry: `EditScope::Camera` through `reset_scope`, and a CAS
+  `SetCamera` framing through `record_explicit_edit`. Simulation playback stays
+  outside the snapshot entirely.
+- Each recorded entry carries the label the next undo/redo shows. The label is
+  derived by `EditSnapshot::describe_change` from the first changed document
+  field group (`change formula`, `change density`, `add probe surface`,
+  `move probe surface`, `change probe radius`, `change parameters`, …), or the
+  honest `edit` fallback; the menu renders `Undo <label>` / `Redo <label>` in
+  both wide and compact bars, with the shortcut in the tooltip.
 - Every idle frame captures a `ViewRecord`/`ParameterSet`/`AppearanceProfile`
   and compares it with `last_committed`. That per-frame clone-and-compare cost
   is accepted for this slice; the intended cheap path is a dirty/fingerprint
@@ -792,9 +804,10 @@ scoped resets without touching persistence or the renderer.
 - Undo/redo are inert while a text field has focus, cancel any open gesture and
   refresh `last_committed` so applying a snapshot is not re-recorded as an
   edit. Fly pose, time, particles and layout are never in a snapshot.
-- `Color`, `Camera` and `All` reset one document scope and are recorded once by
-  the driver; `Simulation` resets runtime state (clock time zero, particles and
-  click bursts cleared) and is undo-free because the snapshot cannot see it.
+- `Color`, `Camera` and `All` reset one document scope and are recorded once,
+  named `reset colour` / `reset camera` / `reset document`; `Simulation` resets
+  runtime state (clock time zero, particles and click bursts cleared) and is
+  undo-free because the snapshot cannot see it.
   `State::reset_color_scope` bumps `plot.generation` once and marks dirty once;
   `State::reset_document` replaces the state with a fresh 2D session.
 
@@ -803,6 +816,9 @@ one entry and undo restores the value, idle/simulation frames record nothing,
 settings save and export queueing leave history and cursor alone, a rejected
 parameter commit records nothing, each scoped reset preserves the others, and
 `apply(capture(document))` is a no-op for a changed document.
+`tests/edit_history_named_test.rs` pins the named label through a real drag,
+undo/redo, keyboard chords, the Edit menu label/shortcut, camera navigation and
+playback staying out of history, and the named reset entries.
 
 **Limitations.** Memory-only: history never survives a restart and is absent
 from `AppSettings`. Scalar plot navigation and the four reset menus are wired;
@@ -4025,17 +4041,21 @@ editable document, with transaction semantics for continuous gestures and the
 four reset scopes. No `State`/`VfApp`, UI, input, persistence, renderer or
 simulation wiring in this slice.
 
-**Public API.** `MAX_HISTORY` (`64`); `EditScope { Color, Camera, Simulation,
-All }` with `ALL`, `label` and `records_history`; `EditSnapshot { view,
-parameters, camera, appearance }` with `new`; `EditHistory<S>` (private stacks)
-with `new`, `len`, `redo_len`, `is_empty`, `can_undo`, `can_redo`,
-`is_recording`, `begin`, `commit`, `cancel`, `record`, `undo`, `redo` and
-`clear`, plus a hand-written `Default` for every `S: Clone + PartialEq`.
+**Public API.** `MAX_HISTORY` (`64`); `GENERIC_LABEL` (`edit`);
+`EditScope { Color, Camera, Simulation, All }` with `ALL`, `label` and
+`records_history`; `EditSnapshot { view, parameters, camera, appearance }` with
+`new`, `document_changed` and `describe_change`; `EditHistory<S>` (private
+labelled entries) with `new`, `len`, `redo_len`, `is_empty`, `can_undo`,
+`can_redo`, `undo_label`, `redo_label`, `is_recording`, `begin`, `commit`,
+`commit_named`, `cancel`, `record`, `record_named`, `undo`, `redo` and `clear`,
+plus a hand-written `Default` for every `S: Clone + PartialEq`.
 
 **Contract.**
-- An entry is a document-value snapshot: `ViewRecord`, `ParameterSet`,
-  `SceneCamera` and `AppearanceProfile`. Runtime state is never stored; the
-  appearance name is a sentinel, since a snapshot carries style data only.
+- An entry is a document-value snapshot plus the human label of the edit that
+  produced it: `ViewRecord`, `ParameterSet`, `SceneCamera` and
+  `AppearanceProfile`. Runtime state is never stored; the appearance name is a
+  sentinel, since a snapshot carries style data only. `undo` / `redo` move the
+  label with the snapshot, so `redo_label` names the edit that was undone.
 - `begin` keeps the first pre-edit snapshot when called again during an open
   transaction. `commit` records at most one entry, ends the transaction and
   returns `true` only when `after != before`; a commit without `begin` records
@@ -4043,9 +4063,11 @@ with `new`, `len`, `redo_len`, `is_empty`, `can_undo`, `can_redo`,
 - A recording drops the redo tail and evicts the oldest entry once the undo
   stack reaches `MAX_HISTORY`. `cancel` discards only the pending snapshot.
   `record(before, after)` is `begin` + `commit`.
-- `undo(current)` pops the last past snapshot, pushes `current` onto redo and
-  returns the popped value; `redo(current)` is the mirror image and preserves
-  the bound. Both return `None` and change nothing when their stack is empty.
+- `undo(current)` pops the last past snapshot, pushes `current` onto redo with
+  that edit's label and returns the popped value; `redo(current)` is the mirror
+  image and preserves the bound. Both return `None` and change nothing when
+  their stack is empty. `commit`/`record` are the unnamed forms and use
+  `GENERIC_LABEL`; the frame driver uses `commit_named`/`record_named`.
 - `records_history` is `false` only for `Simulation`: runtime state is outside
   the document snapshot, so its reset is undo-free. `Color`, `Camera` and `All`
   are recorded.
@@ -4054,7 +4076,8 @@ with `new`, `len`, `redo_len`, `is_empty`, `can_undo`, `can_redo`,
 redo tail, unchanged and begin-less commits, a repeated `begin`, `cancel`, the
 70-record eviction and reverse walk, no-ops at both ends, redo staying within
 the bound, the four scope labels/`records_history` values, and `EditSnapshot`
-equality changing one field at a time.
+equality changing one field at a time. `tests/edit_history_named_test.rs` pins
+named undo/redo labels, the generic fallback, and field-derived labels.
 
 **Limitations.** The history is in-memory only and does not survive restart;
 snapshot capture/apply and all app wiring live in
@@ -4071,9 +4094,9 @@ no UI or app state; native callers pass the directory (the panel passes
 **Public API.** `SCENE_STORE_VERSION` (currently `1`), `SCENES_FILE`
 (`scenes.json`), `MAX_SCENES` (`64`), `SCENES_STORAGE_KEY`
 (`vector-field-explorer.saved-scenes`, wasm only); `SceneStore` with `new`,
-`from_documents`, `scenes`, `get`, `upsert`, `delete`, `to_json` and
-`from_json`; `export_store` and `import_store`; native `load_dir`/`save_dir`;
-wasm `load_wasm`/`save_wasm`; `storage_note`.
+`from_documents`, `scenes`, `get`, `upsert`, `delete`, `unique_copy_name` and
+`duplicate`, `to_json` and `from_json`; `export_store` and `import_store`;
+native `load_dir`/`save_dir`; wasm `load_wasm`/`save_wasm`; `storage_note`.
 
 **Contract.**
 - Order is insertion order. `from_documents`, `upsert` and `from_json` validate
@@ -4082,6 +4105,11 @@ wasm `load_wasm`/`save_wasm`; `storage_note`.
   scene or the cap. A rejected insert leaves the store unchanged.
 - `upsert` replaces the same name in place and appends otherwise. `delete`
   removes by name and reports whether anything was removed.
+- `unique_copy_name(base)` yields `Base copy`, `Base copy 2`, … while fitting
+  the scene-name byte limit and staying unique; a blank base becomes
+  `Experiment`. `duplicate(source)` clones the named document under that unique
+  name and rejects a missing source or a full store, leaving the store
+  unchanged.
 - `to_json` is compact `{"version":1,"scenes":[...]}`, with the envelope's
   `version` then `scenes` and each document's declaration order pinned; a serde
   failure is an `Err`, never an empty string.
@@ -6420,13 +6448,15 @@ category, a `Source presets` section, camera Reset/Fit buttons, saved view
 management, and the My-presets whole-scene section (issue #90 slice B2c).
 
 **Public API.** `default_preset_dir` (native); `CAMERA_BUTTONS`; `SceneAction`
-(`Save`, `Load(String)`); `PresetPanel` with `new`, `new_with_dir` (native),
-`dir`, `presets`, `active_name`, `active_field_name`, `active_source_name`,
-`pending_delete`, `take_applied`, `clear_active`, `save_current`, `load`,
-`request_delete`, `cancel_delete`, `delete`, `load_field`, `load_source_field`,
-`show`, plus `scenes`, `scene_name`, `set_scene_name`, `take_scene_action`,
-`insert_scene`, `delete_scene`, `scene_message`, `set_scene_message`,
-`scene_text`, `set_scene_text`.
+(`Save`, `Load(String)`, `DuplicateCurrent`, `Duplicate(String)`); `PresetPanel`
+with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
+`active_field_name`, `active_source_name`, `pending_delete`, `take_applied`,
+`clear_active`, `save_current`, `load`, `request_delete`, `cancel_delete`,
+`delete`, `load_field`, `load_source_field`, `show`, plus `scenes`,
+`active_scene`, `bind_active_scene`, `sync_active_scene`, `flush_scenes`,
+`scene_name`, `set_scene_name`, `take_scene_action`, `insert_scene`,
+`delete_scene`, `duplicate_scene`, `duplicate_current_experiment`,
+`scene_message`, `set_scene_message`, `scene_text`, `set_scene_text`.
 
 **Invariants.**
 - Built-in field presets return to Formula first, then load formula and
@@ -6460,7 +6490,20 @@ management, and the My-presets whole-scene section (issue #90 slice B2c).
 - `Load` posts `SceneAction::Load(name)`; the app restores the view, then commits
   the parameters, then applies the camera clamped to the live orbit limits and
   drops fly. Style, layout, preset-expansion and viewport-style records are
-  never touched.
+  never touched. A successful load binds the scene as active with the
+  post-clamp live capture as its baseline; each frame the app syncs a changed
+  capture into that saved document in memory, and `flush_scenes` persists it
+  before any scene action switches away. Merely visiting a scene writes
+  nothing, so a hand-edited camera value is not silently repaired. Switching
+  between an original and its duplicate preserves each one's independent
+  formula, parameters, probe configuration and camera.
+- `Duplicate experiment` posts `SceneAction::DuplicateCurrent`; the app captures
+  the live document and the panel stores it under a unique name (`Experiment
+  copy`, `Experiment copy 2`, …) while leaving the original untouched. Each
+  saved row also offers `Duplicate`, which copies that saved scene. The result
+  line names both source and copy and states that saved scenes are outside
+  document undo: duplication adds no hidden history entry. A full store or
+  missing source reports the reason through `scene_message`.
 - `Delete` takes the existing two-click confirmation (`Delete scene` confirms).
 - `Export text` fills `scene_text`; `Apply text` parses the whole collection
   with `import_store` and replaces the store only on success, persisting it;
@@ -6486,12 +6529,17 @@ management, and the My-presets whole-scene section (issue #90 slice B2c).
 `scene_name_rules_are_enforced_by_the_panel`,
 `saved_scenes_load_from_the_preset_directory`,
 `save_failures_surface_without_panicking`;
+`tests/edit_history_named_test.rs` pins unique copy names, the full-store
+message, and switching between an original and its duplicate with independent
+formulas and probe configurations;
 `tests/config_test.rs::test_data_dir_honors_xdg_override`.
 
 **Limitations.** Saved views are 2D camera records only; no 3D orbit presets.
 No rename; name field is free text. Saved scenes have no per-row rename and the
 camera clamps to the live orbit limits rather than reproducing out-of-range
-hand-edited values.
+hand-edited values. Duplicating and active-scene syncing are scene-store
+actions, deliberately outside the document undo stack; camera orbit/zoom is
+navigation and also outside it.
 
 #### `src/ui/sidebar.rs` — the Controls panel
 

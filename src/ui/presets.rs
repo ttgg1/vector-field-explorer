@@ -34,6 +34,10 @@ pub enum SceneAction {
     Save,
     /// Apply the named saved scene.
     Load(String),
+    /// Save an independent copy of the current experiment under a unique name.
+    DuplicateCurrent,
+    /// Save an independent copy of the named saved scene.
+    Duplicate(String),
 }
 
 /// Directory where presets.json lives by default: XDG_CONFIG_HOME if set,
@@ -159,6 +163,17 @@ pub struct PresetPanel {
     scene_message: Option<String>,
     /// Saved scene awaiting the delete confirmation.
     pending_scene_delete: Option<String>,
+    /// The saved scene the live document is currently editing, if any.
+    ///
+    /// Loading a scene binds it; edits then update that saved document in
+    /// memory and are flushed before switching away, so switching between an
+    /// original and its duplicate preserves each one's independent edits.
+    active_scene: Option<String>,
+    /// The live document as it stood when the scene was bound, so an unchanged
+    /// frame writes nothing even if loading clamped a hand-edited camera value.
+    active_baseline: Option<SceneDocument>,
+    /// Whether `scenes` holds edits not yet written to storage.
+    scenes_dirty: bool,
     /// A scene action selected this frame, drained by the app.
     scene_action: Option<SceneAction>,
     /// Portable collection text buffer.
@@ -244,6 +259,9 @@ impl PresetPanel {
             scene_name: String::new(),
             scene_message: None,
             pending_scene_delete: None,
+            active_scene: None,
+            active_baseline: None,
+            scenes_dirty: false,
             scene_action: None,
             scene_text: String::new(),
             uniform_flux: UniformFluxState::default(),
@@ -375,6 +393,68 @@ impl PresetPanel {
         &self.scenes
     }
 
+    /// The saved scene the live document is currently editing, if any.
+    pub fn active_scene(&self) -> Option<&str> {
+        self.active_scene.as_deref()
+    }
+
+    /// Bind the live document to a saved scene after a successful load.
+    ///
+    /// `baseline` is the live capture immediately after loading; later edits
+    /// update the saved scene in memory, while an unchanged frame is a no-op
+    /// even when loading clamped a hand-edited camera value.
+    pub fn bind_active_scene(&mut self, baseline: SceneDocument) {
+        self.active_scene = Some(baseline.name.clone());
+        self.active_baseline = Some(baseline);
+    }
+
+    /// Replace the active scene's saved document with the live capture.
+    ///
+    /// The store is updated in memory only; [`Self::flush_scenes`] writes it
+    /// before switching away. A no-op when nothing is active or the capture
+    /// already matches the stored document, so an idle frame writes nothing.
+    pub fn sync_active_scene(&mut self, mut document: SceneDocument) {
+        let Some(name) = self.active_scene.clone() else {
+            return;
+        };
+        let Some(existing) = self.scenes.get(&name).cloned() else {
+            // The active scene was deleted elsewhere; stop binding to it.
+            self.active_scene = None;
+            self.active_baseline = None;
+            return;
+        };
+        document.name = name;
+        if self.active_baseline.as_ref() == Some(&document) || existing == document {
+            return;
+        }
+        let mut next = self.scenes.clone();
+        let baseline = document.clone();
+        if let Err(error) = next.upsert(document) {
+            self.scene_message = Some(format!("Scene could not be updated: {error}"));
+            return;
+        }
+        self.scenes = next;
+        self.active_baseline = Some(baseline);
+        self.scenes_dirty = true;
+    }
+
+    /// Persist in-memory scene edits, if any, and clear the dirty flag.
+    ///
+    /// A failed write keeps the edits in memory and returns the reason so the
+    /// app can refuse to switch away and lose them.
+    pub fn flush_scenes(&mut self) -> Result<(), String> {
+        if !self.scenes_dirty {
+            return Ok(());
+        }
+        if let Err(error) = self.persist_scenes(&self.scenes) {
+            let message = format!("Scene could not be updated: {error}");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        self.scenes_dirty = false;
+        Ok(())
+    }
+
     /// The typed name in the "Save current scene" field.
     pub fn scene_name(&self) -> &str {
         &self.scene_name
@@ -414,6 +494,7 @@ impl PresetPanel {
             return Err(message);
         }
         self.scenes = next;
+        self.scenes_dirty = false;
         self.scene_message = Some(format!("Saved scene {name:?}."));
         Ok(())
     }
@@ -430,11 +511,79 @@ impl PresetPanel {
             return false;
         }
         self.scenes = next;
+        self.scenes_dirty = false;
+        if self.active_scene.as_deref() == Some(name) {
+            self.active_scene = None;
+            self.active_baseline = None;
+        }
         if self.pending_scene_delete.as_deref() == Some(name) {
             self.pending_scene_delete = None;
         }
         self.scene_message = Some(format!("Deleted scene {name:?}."));
         true
+    }
+
+    /// Save an independent copy of `document` under a unique name and persist
+    /// the result. The base name comes from the document itself; an empty name
+    /// falls back to `Experiment`. Returns the copy's name.
+    ///
+    /// Duplicating changes the saved-scene collection, not the live document,
+    /// so it is deliberately outside the document undo stack. The result line
+    /// states that distinction rather than inventing a hidden history.
+    pub fn duplicate_current_experiment(
+        &mut self,
+        mut document: SceneDocument,
+    ) -> Result<String, String> {
+        let typed = self.scene_name.trim();
+        if !typed.is_empty() {
+            document.name = typed.to_string();
+        } else if document.name.trim().is_empty() {
+            document.name = "Experiment".to_string();
+        }
+        self.duplicate_document(document)
+    }
+
+    /// Duplicate the saved scene named `source` under a unique name, persist
+    /// the result and return the copy's name. A missing source or full store is
+    /// reported through [`Self::scene_message`].
+    pub fn duplicate_scene(&mut self, source: &str) -> Result<String, String> {
+        let Some(document) = self.scenes.get(source).cloned() else {
+            let message = format!("Scene {source:?} is no longer available.");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        };
+        self.duplicate_document(document)
+    }
+
+    fn duplicate_document(&mut self, mut document: SceneDocument) -> Result<String, String> {
+        if self.scenes.scenes().len() >= scene_store::MAX_SCENES {
+            let message = format!(
+                "Scene could not be duplicated: scene store is full: at most {} scenes are allowed",
+                scene_store::MAX_SCENES
+            );
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        let source = document.name.clone();
+        let name = self.scenes.unique_copy_name(&source);
+        document.name = name.clone();
+        let mut next = self.scenes.clone();
+        if let Err(error) = next.upsert(document) {
+            let message = format!("Scene could not be duplicated: {error}");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        if let Err(error) = self.persist_scenes(&next) {
+            let message = format!("Scene could not be duplicated: {error}");
+            self.scene_message = Some(message.clone());
+            return Err(message);
+        }
+        self.scenes = next;
+        self.scenes_dirty = false;
+        self.scene_message = Some(format!(
+            "Duplicated experiment {source:?} as {name:?}. Saved scenes are outside document undo."
+        ));
+        Ok(name)
     }
 
     /// The last scene result or error, if any.
@@ -483,6 +632,9 @@ impl PresetPanel {
             return;
         }
         self.scenes = next;
+        self.scenes_dirty = false;
+        self.active_scene = None;
+        self.active_baseline = None;
         self.pending_scene_delete = None;
         self.scene_message = Some("Applied scene collection.".to_string());
     }
@@ -711,6 +863,15 @@ impl PresetPanel {
                     {
                         self.scene_action = Some(SceneAction::Save);
                     }
+                    if ui
+                        .button("Duplicate experiment")
+                        .on_hover_text(
+                            "Save an independent copy of the current view, parameters and camera under a new name",
+                        )
+                        .clicked()
+                    {
+                        self.scene_action = Some(SceneAction::DuplicateCurrent);
+                    }
                 });
 
                 if self.scenes.scenes().is_empty() {
@@ -733,6 +894,13 @@ impl PresetPanel {
                         {
                             self.pending_scene_delete = None;
                             self.scene_action = Some(SceneAction::Load(name.clone()));
+                        }
+                        if ui
+                            .button("Duplicate")
+                            .on_hover_text("Save an independent copy of this scene under a new name")
+                            .clicked()
+                        {
+                            self.scene_action = Some(SceneAction::Duplicate(name.clone()));
                         }
                         if ui
                             .button("Delete")

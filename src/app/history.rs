@@ -125,7 +125,15 @@ impl VfApp {
         }
         if released {
             let after = capture_document(&self.state, &self.orbit);
-            self.history.commit(&after);
+            // Camera orbit/pan/zoom is navigation, not a document edit: a
+            // camera-only gesture commits nothing and keeps its pose in the
+            // baseline so a later edit does not rewind it.
+            if self.last_committed.document_changed(&after) {
+                let label = self.last_committed.describe_change(&after);
+                self.history.commit_named(&after, label);
+            } else {
+                self.history.cancel();
+            }
             self.last_committed = after;
             return;
         }
@@ -147,7 +155,13 @@ impl VfApp {
         // document owns has changed.
         let current = capture_document(&self.state, &self.orbit);
         if current != self.last_committed {
-            self.history.record(self.last_committed.clone(), &current);
+            // Camera navigation alone updates the baseline without recording:
+            // the undo stack holds document edits, never orbits or zoom.
+            if current.document_changed(&self.last_committed) {
+                let label = self.last_committed.describe_change(&current);
+                self.history
+                    .record_named(self.last_committed.clone(), &current, label);
+            }
             self.last_committed = current;
         }
     }
@@ -199,12 +213,31 @@ impl VfApp {
         self.bar.text = self.state.active_source().to_string();
     }
 
+    /// Record the current document as one named entry when it differs from the
+    /// baseline. Used by explicit commands (such as CAS camera framing) whose
+    /// only change is the camera pose, which the idle driver deliberately
+    /// leaves out as navigation.
+    pub(crate) fn record_explicit_edit(&mut self, label: &str) {
+        let before = self.last_committed.clone();
+        let after = capture_document(&self.state, &self.orbit);
+        if after == before {
+            return;
+        }
+        self.history.cancel();
+        self.history.record_named(before, &after, label);
+        self.last_committed = after;
+    }
+
     /// The one seam behind every scoped reset menu action.
     ///
-    /// `Color`, `Camera` and `All` change the document, so the frame driver
-    /// records them as one entry. `Simulation` touches runtime state only and is
-    /// undo-free by construction: the snapshot cannot see it.
+    /// `Color`, `Camera` and `All` change the document, so they are recorded as
+    /// one named entry here. Recording directly (rather than waiting for the
+    /// idle driver) is what keeps the explicit `Camera` reset in history even
+    /// though ordinary orbit/zoom navigation is deliberately outside the undo
+    /// stack. `Simulation` touches runtime state only and is undo-free by
+    /// construction: the snapshot cannot see it.
     pub fn reset_scope(&mut self, scope: EditScope) {
+        let before = self.last_committed.clone();
         match scope {
             EditScope::Color => {
                 self.state.reset_color_scope();
@@ -220,6 +253,23 @@ impl VfApp {
             EditScope::Simulation => self.reset_simulation(),
             EditScope::All => self.reset_all_document(),
         }
+        if !scope.records_history() {
+            return;
+        }
+        let after = capture_document(&self.state, &self.orbit);
+        if after != before {
+            let label = match scope {
+                EditScope::Color => "reset colour",
+                EditScope::Camera => "reset camera",
+                EditScope::All => "reset document",
+                EditScope::Simulation => unreachable!("checked above"),
+            };
+            // A reset is its own action, never a continuation of an open
+            // pointer gesture.
+            self.history.cancel();
+            self.history.record_named(before, &after, label);
+        }
+        self.last_committed = after;
     }
 
     /// Runtime-only reset: simulation time to zero, particles cleared, click
@@ -272,6 +322,16 @@ impl VfApp {
     /// Test seam: the current redo depth.
     pub fn history_redo_len(&self) -> usize {
         self.history.redo_len()
+    }
+
+    /// Test seam: the label the next undo would name.
+    pub fn next_undo_label(&self) -> Option<&str> {
+        self.history.undo_label()
+    }
+
+    /// Test seam: the label the next redo would name.
+    pub fn next_redo_label(&self) -> Option<&str> {
+        self.history.redo_label()
     }
 
     /// Test seam: the document snapshot the app would record now.

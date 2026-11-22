@@ -103,8 +103,8 @@ impl VfApp {
                     self.state.mode_3d,
                     self.state.plot.kind,
                     animation_reason,
-                    self.history.can_undo(),
-                    self.history.can_redo(),
+                    self.history.undo_label(),
+                    self.history.redo_label(),
                     &self.interaction.bindings,
                 )
             } else {
@@ -116,8 +116,8 @@ impl VfApp {
                     self.state.mode_3d,
                     self.state.plot.kind,
                     animation_reason,
-                    self.history.can_undo(),
-                    self.history.can_redo(),
+                    self.history.undo_label(),
+                    self.history.redo_label(),
                     &self.interaction.bindings,
                 )
             };
@@ -849,6 +849,11 @@ impl VfApp {
                 self.clock.set_playing(*playing);
             }
         }
+        // Explicit camera framing is a named command; ordinary orbit and zoom
+        // stay outside the history as navigation.
+        if let CasAction::SetCamera { .. } = action {
+            self.record_explicit_edit("change camera");
+        }
         Ok(crate::cas_actions::preview(action))
     }
 
@@ -1224,10 +1229,32 @@ impl VfApp {
             // components ignored (review M-3).
             apply_camera_record(&applied, &mut self.orbit, &mut self.fly);
         }
+        // Keep the active saved scene in memory current with the live document,
+        // so switching between an experiment and its duplicate preserves each
+        // one's independent edits. The store is flushed before any scene action
+        // below; an idle frame only compares a snapshot.
+        if let Some(name) = self.presets.active_scene().map(str::to_owned) {
+            let document = SceneDocument::capture(
+                name,
+                ViewRecord::capture(&self.state),
+                self.state.parameters.clone(),
+                self.scene_camera(),
+            );
+            self.presets.sync_active_scene(document);
+        }
+
         if let Some(action) = self.presets.take_scene_action() {
+            // Persist pending edits before switching away; a failed write must
+            // not silently discard them.
+            if let Err(error) = self.presets.flush_scenes() {
+                self.presets.set_scene_message(Some(error));
+                return;
+            }
             match action {
                 SceneAction::Save => self.save_scene(),
                 SceneAction::Load(name) => self.load_scene(&name),
+                SceneAction::DuplicateCurrent => self.duplicate_current_scene(),
+                SceneAction::Duplicate(name) => self.duplicate_scene(&name),
             }
         }
     }
@@ -1262,6 +1289,24 @@ impl VfApp {
         }
     }
 
+    /// Save an independent copy of the live experiment. The panel picks the
+    /// unique name (from the typed scene name, or `Experiment`) and persists
+    /// both the original saved scene and the copy.
+    fn duplicate_current_scene(&mut self) {
+        let document = SceneDocument::capture(
+            self.presets.scene_name().to_string(),
+            ViewRecord::capture(&self.state),
+            self.state.parameters.clone(),
+            self.scene_camera(),
+        );
+        let _ = self.presets.duplicate_current_experiment(document);
+    }
+
+    /// Save an independent copy of the named saved scene.
+    fn duplicate_scene(&mut self, name: &str) {
+        let _ = self.presets.duplicate_scene(name);
+    }
+
     /// Load the named scene: view first, then parameters, then the camera.
     /// Every step stops on its own error, and no UI preference record is
     /// touched.
@@ -1284,6 +1329,15 @@ impl VfApp {
             return;
         }
         self.apply_scene_camera(&document.camera);
+        // Bind the live document to the loaded scene, using the post-clamp live
+        // capture as the unchanged baseline so merely visiting a scene writes
+        // nothing back.
+        self.presets.bind_active_scene(SceneDocument::capture(
+            name,
+            ViewRecord::capture(&self.state),
+            self.state.parameters.clone(),
+            self.scene_camera(),
+        ));
         self.presets
             .set_scene_message(Some(format!("Loaded scene {name:?}.")));
     }

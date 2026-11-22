@@ -310,26 +310,44 @@ fn add_menu_item(
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
-    can_undo: bool,
-    can_redo: bool,
+    undo_label: Option<&str>,
+    redo_label: Option<&str>,
 ) -> bool {
     style_panel::restore_menu_button_padding(ui);
     // Ticket 65: no menu item is a toggle any more; the fly control lives in
     // the sidebar Camera section.
-    let mut button = egui::Button::new(item.label);
-    if let Some(label) = menu::item_shortcut_label(item, bindings) {
-        button = button.shortcut_text(label);
+    let named = match item.action {
+        MenuAction::Undo => undo_label.map(|label| format!("Undo {label}")),
+        MenuAction::Redo => redo_label.map(|label| format!("Redo {label}")),
+        _ => None,
+    };
+    let text = named.as_deref().unwrap_or(item.label);
+    let shortcut = menu::item_shortcut_label(item, bindings);
+    let mut button = egui::Button::new(text);
+    if let Some(label) = &shortcut {
+        button = button.shortcut_text(label.clone());
     }
     let reason = match item.action {
         MenuAction::ExportScreenshotSvg => svg_disabled_reason(kind, mode_3d),
         MenuAction::ExportAnimation => animation_reason,
-        MenuAction::Undo if !can_undo => Some("Nothing to undo"),
-        MenuAction::Redo if !can_redo => Some("Nothing to redo"),
+        MenuAction::Undo if undo_label.is_none() => Some("Nothing to undo"),
+        MenuAction::Redo if redo_label.is_none() => Some("Nothing to redo"),
         _ => None,
     };
     let response = match reason {
         Some(reason) => ui.add_enabled(false, button).on_disabled_hover_text(reason),
-        None => ui.add(button),
+        None => {
+            let response = ui.add(button);
+            // The menu row already carries the name; the tooltip repeats it
+            // with the keyboard path so the label is readable before clicking.
+            match (named.as_deref(), shortcut) {
+                (Some(label), Some(shortcut)) => {
+                    response.on_hover_text(format!("{label} ({shortcut})"))
+                }
+                (Some(label), None) => response.on_hover_text(label),
+                _ => response,
+            }
+        }
     };
     let clicked = response.clicked();
     if clicked {
@@ -496,8 +514,8 @@ pub fn show_with_plot_kind(
         mode_3d,
         kind,
         animation_reason,
-        true,
-        true,
+        None,
+        None,
     )
 }
 
@@ -521,8 +539,8 @@ pub fn show_with_plot_kind_bindings(
         mode_3d,
         kind,
         animation_reason,
-        true,
-        true,
+        None,
+        None,
         bindings,
     )
 }
@@ -539,8 +557,8 @@ pub fn show_with_plot_kind_history(
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
-    can_undo: bool,
-    can_redo: bool,
+    undo_label: Option<&str>,
+    redo_label: Option<&str>,
 ) -> (Option<MenuAction>, bool) {
     show_with_plot_kind_history_bindings(
         ui,
@@ -550,8 +568,8 @@ pub fn show_with_plot_kind_history(
         mode_3d,
         kind,
         animation_reason,
-        can_undo,
-        can_redo,
+        undo_label,
+        redo_label,
         &crate::interaction::Bindings::default_bindings(),
     )
 }
@@ -566,8 +584,8 @@ pub fn show_with_plot_kind_history_bindings(
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
-    can_undo: bool,
-    can_redo: bool,
+    undo_label: Option<&str>,
+    redo_label: Option<&str>,
     bindings: &crate::interaction::Bindings,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
@@ -586,8 +604,8 @@ pub fn show_with_plot_kind_history_bindings(
                         mode_3d,
                         kind,
                         animation_reason,
-                        can_undo,
-                        can_redo,
+                        undo_label,
+                        redo_label,
                     ) {
                         action = Some(item.action);
                     }
@@ -664,15 +682,7 @@ pub fn show_compact_with_plot_kind(
     kind: PlotKind,
     animation_reason: Option<&'static str>,
 ) -> (Option<MenuAction>, bool) {
-    show_compact_with_plot_kind_history(
-        ui,
-        screenshot,
-        mode_3d,
-        kind,
-        animation_reason,
-        true,
-        true,
-    )
+    show_compact_with_plot_kind_history(ui, screenshot, mode_3d, kind, animation_reason, None, None)
 }
 
 /// [`show_compact_with_plot_kind`] with the active interaction bindings.
@@ -690,8 +700,8 @@ pub fn show_compact_with_plot_kind_bindings(
         mode_3d,
         kind,
         animation_reason,
-        true,
-        true,
+        None,
+        None,
         bindings,
     )
 }
@@ -705,8 +715,8 @@ pub fn show_compact_with_plot_kind_history(
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
-    can_undo: bool,
-    can_redo: bool,
+    undo_label: Option<&str>,
+    redo_label: Option<&str>,
 ) -> (Option<MenuAction>, bool) {
     show_compact_with_plot_kind_history_bindings(
         ui,
@@ -714,8 +724,8 @@ pub fn show_compact_with_plot_kind_history(
         mode_3d,
         kind,
         animation_reason,
-        can_undo,
-        can_redo,
+        undo_label,
+        redo_label,
         &crate::interaction::Bindings::default_bindings(),
     )
 }
@@ -728,8 +738,8 @@ pub fn show_compact_with_plot_kind_history_bindings(
     mode_3d: bool,
     kind: PlotKind,
     animation_reason: Option<&'static str>,
-    can_undo: bool,
-    can_redo: bool,
+    undo_label: Option<&str>,
+    redo_label: Option<&str>,
     bindings: &crate::interaction::Bindings,
 ) -> (Option<MenuAction>, bool) {
     let mut action = None;
@@ -760,8 +770,8 @@ pub fn show_compact_with_plot_kind_history_bindings(
                         mode_3d,
                         kind,
                         animation_reason,
-                        can_undo,
-                        can_redo,
+                        undo_label,
+                        redo_label,
                     ) {
                         action = Some(item.action);
                     }

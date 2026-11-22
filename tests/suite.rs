@@ -66,6 +66,7 @@ mod domain_test;
 mod dot_billboard_test;
 mod download_link_test;
 mod edit_history_app_test;
+mod edit_history_named_test;
 mod edit_history_test;
 mod export_test;
 mod field_bake_test;
