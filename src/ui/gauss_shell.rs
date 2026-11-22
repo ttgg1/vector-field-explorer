@@ -7,6 +7,8 @@
 //! the shipped [`crate::field_probe::flux`] full/half-resolution quadrature.
 //! All values are normalized teaching quantities, not SI measurements.
 
+use std::ops::RangeInclusive;
+
 use eframe::egui;
 use glam::Vec3;
 
@@ -14,7 +16,8 @@ use crate::field_probe::{
     FluxReport, GaussianSurface, IntegralStatus, ProbeField, SurfaceKind, flux,
 };
 use crate::maxwell::{
-    MaxwellCase, MaxwellError, MaxwellScene, hollow_sphere_interface_tolerance, maxwell_field,
+    MAXWELL_INTERFACE_TOLERANCE_FACTOR, MaxwellCase, MaxwellError, MaxwellScene,
+    hollow_sphere_interface_tolerance, maxwell_field,
 };
 use crate::sources::FieldFamily;
 
@@ -39,7 +42,9 @@ pub const GAUSS_SHELL_SEGMENTS: u32 = 16;
 
 /// Smallest radius either object accepts from the exact-entry control.
 pub const GAUSS_SHELL_MIN_RADIUS: f64 = 0.01;
-/// Largest radius either object accepts from the exact-entry control.
+/// Largest radius the exact-entry controls use as their absolute cap. The
+/// shell control additionally stops below the scene's `outer_radius`; see
+/// [`shell_radius_range`].
 pub const GAUSS_SHELL_MAX_RADIUS: f64 = 100.0;
 /// How many activity-local radius changes the session keeps for undo.
 pub const MAX_GAUSS_RADIUS_UNDO: usize = 16;
@@ -49,6 +54,22 @@ pub const GAUSS_SHELL_LOCAL_UNDO_NOTE: &str = "This activity-local undo restores
 pub const UNDO_MEASURING_RADIUS: &str = "Undo change measuring radius";
 /// The explicit undo label when the shell radius was the last change.
 pub const UNDO_SHELL_RADIUS: &str = "Undo change shell radius";
+
+/// The exact-entry range advertised for the shell radius `R`.
+///
+/// The committed scene rejects `R >= outer_radius`, so the maximum stops one
+/// finite interface tolerance below the current outer radius rather than
+/// advertising a radius the ordinary Maxwell setter must refuse. `None` means
+/// the scene has no valid shell radius above [`GAUSS_SHELL_MIN_RADIUS`]; the
+/// panel then states the limit instead of offering an invalid control.
+pub fn shell_radius_range(scene: &MaxwellScene) -> Option<RangeInclusive<f64>> {
+    if !scene.outer_radius.is_finite() || scene.outer_radius <= GAUSS_SHELL_MIN_RADIUS {
+        return None;
+    }
+    let margin = scene.outer_radius.max(1.0) * MAXWELL_INTERFACE_TOLERANCE_FACTOR;
+    let max = (scene.outer_radius - margin).min(GAUSS_SHELL_MAX_RADIUS);
+    (max >= GAUSS_SHELL_MIN_RADIUS).then_some(GAUSS_SHELL_MIN_RADIUS..=max)
+}
 
 /// The two physical objects the investigation lets the learner select.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -619,22 +640,29 @@ pub fn show(
             let mut value = state.pending_shell_radius().unwrap_or(before);
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.label("Shell radius R");
-                let response = ui
-                    .add(
-                        egui::DragValue::new(&mut value)
-                            .speed(0.05)
-                            .range(GAUSS_SHELL_MIN_RADIUS..=GAUSS_SHELL_MAX_RADIUS),
-                    )
-                    .on_hover_text("Drag handle, or type the charged shell's exact radius R");
-                if response.drag_started() || response.changed() {
-                    state.begin_edit(GaussObject::Shell, before);
+                if let Some(range) = shell_radius_range(scene) {
+                    let response = ui
+                        .add(egui::DragValue::new(&mut value).speed(0.05).range(range))
+                        .on_hover_text("Drag handle, or type the charged shell's exact radius R");
+                    if response.drag_started() || response.changed() {
+                        state.begin_edit(GaussObject::Shell, before);
+                    }
+                    if response.changed() {
+                        state.preview_shell_radius(value);
+                    }
+                    if response.drag_stopped() || response.lost_focus() {
+                        state.end_edit(GaussObject::Shell);
+                    }
+                } else {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        "No shell radius above 0.01 fits below this scene's outer radius.",
+                    );
                 }
-                if response.changed() {
-                    state.preview_shell_radius(value);
-                }
-                if response.drag_stopped() || response.lost_focus() {
-                    state.end_edit(GaussObject::Shell);
-                }
+                ui.small(format!(
+                    "Shell R must stay below the outer radius {:.3}.",
+                    scene.outer_radius
+                ));
                 if let Some(error) = state.shell_edit_error() {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }

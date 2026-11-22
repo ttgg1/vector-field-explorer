@@ -6108,9 +6108,12 @@ with `Default` inactive, `activate(&MaxwellScene)`, `deactivate`, `reset`,
 `invalidate_report`, `report_for(&MaxwellScene, FieldFamily, f64)`,
 `pin`, `pinned`, `clear_pinned`; `GaussObject::{Shell, MeasuringSurface}` with
 `select`, `objects_overlap`, `edit_target`, `set_probe_radius`,
-`double_probe_radius`, `request_shell_radius`, `take_pending_shell_radius`,
-`begin_edit`/`end_edit`, `undo_label`, `undo_last` for the bounded
-activity-local radius undo; `GaussShellReading { radius, kind }` with
+`double_probe_radius`, `request_shell_radius`, `preview_shell_radius`,
+`take_pending_shell_radius`, `pending_shell_radius`, `note_shell_edit_error`,
+`shell_edit_error`, `begin_edit`/`end_edit`, `undo_label`, `undo_last` for the
+bounded activity-local radius undo; `shell_radius_range(&MaxwellScene)` for the
+shell-entry maximum derived from the scene's `outer_radius`;
+`GaussShellReading { radius, kind }` with
 `field`, `area`, `flux`, `flux_estimate`; `GaussShellReadingKind::{Exterior,
 Interior, Excluded}`; `GaussShellReport { radius, at_radius, at_double }`;
 `GaussShellAction::{Investigate, FreeExplore}`;
@@ -6144,8 +6147,9 @@ uncertainty, interior zero, excluded interface, pin snapshot/clear, inactive
 default/no side effects, wide/compact rendering and the normal Maxwell-panel
 `Investigate` entry; `tests/gauss_shell_selection_test.rs`: shared list and
 viewport selection, empty-space inertness, overlap routing, exact numeric
-entry, doubling `r` with `R` fixed, activity-local undo, and the still-excluded
-interface reading.
+entry, doubling `r` with `R` fixed, activity-local undo, the still-excluded
+interface reading, the panel drag that commits only through the app handler,
+and the outer-radius limit with its explicit rejection message.
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 

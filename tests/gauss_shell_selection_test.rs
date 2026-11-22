@@ -10,16 +10,18 @@ use eframe::egui;
 use crate::support;
 
 use vector_field_explorer::VfApp;
-use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene};
+use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene, validate_maxwell};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::sources::FieldFamily;
 use vector_field_explorer::ui::gauss_shell::{
-    GAUSS_SHELL_LOCAL_UNDO_NOTE, GaussObject, GaussShellReadingKind, GaussShellState,
+    GAUSS_SHELL_LOCAL_UNDO_NOTE, GAUSS_SHELL_MIN_RADIUS, GaussObject, GaussShellReadingKind,
+    GaussShellState, shell_radius_range,
 };
 use vector_field_explorer::ui::maxwell_panel::{self, MaxwellPanelState};
 use vector_field_explorer::viewmodel::State;
 
 struct WidgetNode {
+    role: egui::Role,
     label: String,
     rect: egui::Rect,
 }
@@ -39,6 +41,7 @@ fn nodes(output: &egui::FullOutput) -> Vec<WidgetNode> {
                 .unwrap_or_default()
                 .to_owned();
             Some(WidgetNode {
+                role: node.role(),
                 label,
                 rect: egui::Rect::from_min_max(
                     egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
@@ -55,6 +58,18 @@ fn find<'a>(nodes: &'a [WidgetNode], label: &str) -> Option<&'a WidgetNode> {
 
 fn has(nodes: &[WidgetNode], label: &str) -> bool {
     find(nodes, label).is_some()
+}
+
+/// The SpinButton (DragValue) painted just below `label`.
+fn spin_button_after(nodes: &[WidgetNode], label: &str) -> Option<egui::Rect> {
+    let label = find(nodes, label)?.rect;
+    nodes
+        .iter()
+        .filter(|node| node.role == egui::Role::SpinButton)
+        .filter(|node| node.rect.top() >= label.bottom() - 2.0)
+        .filter(|node| node.rect.top() <= label.bottom() + 48.0)
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .map(|node| node.rect)
 }
 
 fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
@@ -495,6 +510,189 @@ fn overlap_selector_is_offered_when_the_objects_coincide() {
     assert!(
         texts.contains("coincide"),
         "the selector explains why it is shown: {texts}"
+    );
+}
+
+#[test]
+fn shell_entry_advertises_the_scene_outer_radius_limit() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Maxwell);
+    assert!(state.set_maxwell_scene(hollow(1.0)));
+    let mut panel = MaxwellPanelState::default();
+    panel.sync_from(&state);
+    panel.gauss.activate(&state.maxwell);
+    panel.gauss.select(GaussObject::Shell);
+
+    let out = panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut state,
+        &mut panel,
+        false,
+        Vec::new(),
+    );
+    let texts = painted_texts(&out).join("\n");
+    assert!(
+        texts.contains("outer radius"),
+        "the shell control must name the scene's outer-radius limit: {texts}"
+    );
+}
+
+#[test]
+fn shell_entry_range_stops_below_the_scene_outer_radius() {
+    let scene = hollow(1.0);
+    let range = shell_radius_range(&scene).expect("the default outer radius leaves room");
+    assert_eq!(*range.start(), GAUSS_SHELL_MIN_RADIUS);
+    assert!(
+        *range.end() < scene.outer_radius,
+        "the advertised max must stay below the rejected outer-radius boundary"
+    );
+    let mut candidate = scene.clone();
+    candidate.radius = *range.end();
+    assert!(
+        validate_maxwell(&candidate).is_ok(),
+        "the advertised max is a valid committed scene"
+    );
+
+    // The app handler accepts and commits the advertised maximum.
+    let mut app = VfApp::new();
+    assert!(app.state.set_field_mode(FieldMode::Maxwell));
+    assert!(app.state.set_maxwell_scene(scene));
+    app.maxwell.gauss.activate(&app.state.maxwell);
+    app.maxwell.gauss.select(GaussObject::Shell);
+    assert!(app.maxwell.gauss.request_shell_radius(*range.end()));
+    app.test_apply_gauss_shell_pending();
+    assert_eq!(app.state.maxwell.radius.to_bits(), range.end().to_bits());
+    assert_eq!(app.maxwell.gauss.shell_edit_error(), None);
+}
+
+#[test]
+fn shell_radius_at_or_above_the_outer_radius_is_rejected_with_feedback() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    assert!(app.state.set_field_mode(FieldMode::Maxwell));
+    assert!(app.state.set_maxwell_scene(hollow(1.0)));
+    app.maxwell.gauss.activate(&app.state.maxwell);
+    app.maxwell.gauss.select(GaussObject::Shell);
+    let original = app.state.maxwell.clone();
+    let rejected = original.outer_radius + 0.5;
+
+    assert!(app.maxwell.gauss.request_shell_radius(rejected));
+    app.test_apply_gauss_shell_pending();
+    assert_eq!(
+        app.state.maxwell, original,
+        "a rejected shell edit leaves the committed scene untouched"
+    );
+    let error = app
+        .maxwell
+        .gauss
+        .shell_edit_error()
+        .expect("the rejection is surfaced to the learner")
+        .to_owned();
+    assert!(
+        error.contains("outer radius must be greater than the inner radius"),
+        "the scene's own rejection is shown verbatim: {error}"
+    );
+
+    let out = panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut app.state,
+        &mut app.maxwell,
+        false,
+        Vec::new(),
+    );
+    let texts = painted_texts(&out).join("\n");
+    assert!(
+        texts.contains("outer radius must be greater than the inner radius"),
+        "the panel keeps the rejected edit visible: {texts}"
+    );
+}
+
+#[test]
+fn shell_drag_commits_through_the_app_handler_and_readings_follow_r() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    assert!(app.state.set_field_mode(FieldMode::Maxwell));
+    assert!(app.state.set_maxwell_scene(hollow(1.0)));
+    app.maxwell.gauss.activate(&app.state.maxwell);
+    app.maxwell.gauss.probe_radius = 1.5;
+    app.maxwell.gauss.select(GaussObject::Shell);
+
+    let scene_before = app.state.maxwell.clone();
+    let before = app
+        .maxwell
+        .gauss
+        .report_for(&app.state.maxwell, FieldFamily::Electric, 0.0)
+        .clone();
+    assert_eq!(before.at_radius.radius, 1.5);
+
+    let out = panel_frame(
+        &ctx,
+        1200.0,
+        1800.0,
+        &mut app.state,
+        &mut app.maxwell,
+        false,
+        Vec::new(),
+    );
+    let start = spin_button_after(&nodes(&out), "Shell radius R")
+        .expect("the selected shell offers a drag handle")
+        .center();
+    let mid = start + egui::vec2(20.0, 0.0);
+    let end = start + egui::vec2(40.0, 0.0);
+
+    for events in [
+        pointer(start, true),
+        vec![egui::Event::PointerMoved(mid)],
+        vec![egui::Event::PointerMoved(end)],
+        pointer(end, false),
+    ] {
+        panel_frame(
+            &ctx,
+            1200.0,
+            1800.0,
+            &mut app.state,
+            &mut app.maxwell,
+            false,
+            events,
+        );
+    }
+    assert!(
+        app.maxwell.gauss.pending_shell_radius().is_some(),
+        "the drag stages a shell edit for the app handler"
+    );
+    assert_eq!(
+        app.state.maxwell, scene_before,
+        "the panel never writes the committed scene itself"
+    );
+
+    app.test_apply_gauss_shell_pending();
+    assert_ne!(
+        app.state.maxwell.radius, scene_before.radius,
+        "the ordinary app handler commits the dragged radius"
+    );
+    assert!(
+        app.state.maxwell.radius < app.state.maxwell.outer_radius,
+        "the committed shell radius stays valid"
+    );
+    assert_eq!(
+        app.maxwell.gauss.probe_radius, 1.5,
+        "editing R leaves the measuring radius r fixed"
+    );
+    let after = app
+        .maxwell
+        .gauss
+        .report_for(&app.state.maxwell, FieldFamily::Electric, 0.0)
+        .clone();
+    assert_eq!(after.at_radius.radius, 1.5, "the reading stays at r");
+    assert_ne!(
+        after.at_radius.field(),
+        before.at_radius.field(),
+        "the dependent reading follows the new shell radius"
     );
 }
 

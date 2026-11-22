@@ -2372,6 +2372,12 @@ impl VfApp {
 
 #[doc(hidden)]
 impl VfApp {
+    /// Test seam: run the #229 shell-edit handler once, exactly as the frame
+    /// does after the Maxwell panel draws.
+    pub fn test_apply_gauss_shell_pending(&mut self) {
+        self.apply_gauss_shell_pending();
+    }
+
     /// Test seam: install an already-built animation job through the same
     /// pause/capture path the dialog uses.
     pub fn test_begin_animation_job(&mut self, job: AnimationJob) {
