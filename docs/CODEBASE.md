@@ -2929,13 +2929,16 @@ no UI; later panel work consumes the stable IDs and metadata.
 PhysicallyValidRegularized }` with `label`; `PresetFilters { dimension, animated }`;
 `ScalarPresetSpec { expr, kind, show_heatmap, contour_levels }`;
 `PresetEntry { id, name, summary, group, filters, assumptions, parameters,
-exploration_prompt, validity, scalar }`; `PresetLibrary::builtin`, `from_entries`,
+exploration_prompt, validity, scalar }`; `ExplorationActivity { UniformFlux }` and
+`exploration_activity(name)`; `PresetLibrary::builtin`, `from_entries`,
 `entries`, `len`, `is_empty`, `search`, `filtered`, `search_filtered`, `get`;
 `PresetLibraryError`.
 
 **Invariants.**
 - IDs match `[a-z0-9][a-z0-9_.-]*`, ASCII, 1..=64 bytes; malformed candidates
   return a descriptive error and never panic.
+- Only `Uniform field` carries a promoted `ExplorationActivity`; every other
+  prompt stays informational text. The prompt strings themselves are unchanged.
 - Formula IDs are `formula.<slug>` (lowercased name with each non-`[a-z0-9]`
   run replaced by `_`) unless ticket 91 metadata fixes an explicit ID;
   `Quadrupole (unequal charges)` uses
@@ -6054,6 +6057,43 @@ Loop, Point}`, `ResidualReport { residual, terms, absolute, inputs }`,
 `incompatible_action_is_explained_and_mutates_nothing`, and
 `differential_action_highlights_the_point_and_names_unavailable_terms`.
 
+#### `src/ui/uniform_flux.rs` — promoted uniform-field flux activity (#218)
+
+**Purpose.** The session-only closed-box flux activity reached from the
+`Uniform field` catalogue prompt. It reads the formula already loaded in the
+scene and never adds a probe surface, saves a document, or changes the
+Formula-mode probe refusal. Everything is normalized teaching units.
+
+**Public API.** `UniformFluxFace`, `UniformBoxFlux` with `incoming`, `outgoing`
+and `cancels`; `UniformFluxExtension { field, extension_formula }`;
+`UniformFluxReading { ThreeComponent, TwoComponent, NotUniform }`;
+`analyze(&FieldExpr)`; `extension_formula([f64; 2])`;
+`UniformFluxState` with `open`, `is_open`, `close`, `is_previewing`,
+`preview_extension`, `cancel_preview`, `restore_point`, `restore_available`,
+`apply_extension` and `restore_original`; `show(ui, &mut State,
+&mut UniformFluxState)`; the `UNIFORM_FLUX_*` notes and the stated
+`UNIFORM_FLUX_TOLERANCE = 1e-9`.
+
+**Invariants.**
+- A genuinely constant field is detected by sampling all three axes and a
+  second clock value; a varying or time-dependent formula reports `NotUniform`
+  rather than a fabricated table.
+- The three-component table is exact for the uniform case: six faces of the
+  unit box, unit outward normals, area 4 each, signed flux `F · n` times area,
+  and a total that cancels within the stated tolerance.
+- A constant two-component field offers only the explicit `F=(Fx,Fy,0)`
+  extension: the preview names that formula, the switch runs through
+  `State::set_formula`/`set_mode` only on confirmation, and the original
+  formula and projection stay available for `restore_original`. Cancelling or
+  closing never rewrites the formula.
+- The generic field is labelled `F`; no electric or magnetic role is assumed.
+
+**Pinned by.** `tests/uniform_flux_test.rs`: the only promoted prompt, the face
+table and cancellation, the `F` label, the two-component preview/switch/restore,
+non-constant refusals, the unchanged Formula probe refusal and empty probe
+surfaces, and the wide/narrow Presets entry with no dead action for other
+prompts.
+
 #### `src/ui/gauss_shell.rs` — guided Gauss-law investigation (#219)
 
 **Purpose.** A self-contained, session-only teaching activity for the shipped
@@ -6403,6 +6443,9 @@ management, and the My-presets whole-scene section (issue #90 slice B2c).
   localStorage) and clears the highlight/request.
 - `take_applied` returns a loaded camera exactly once; the app applies it to
   the orbit camera and leaves fly.
+- The loaded row's catalogue prompt and assumptions render beside the scene;
+  only `Uniform field` gets the session-only `Open flux investigation` action
+  (#218). Other prompts stay informational text with no dead button.
 - A missing preset name changes nothing and returns false.
 - Native `new` logs a load failure and starts empty; wasm storage failure shows
   one note but keeps the in-memory list usable.
