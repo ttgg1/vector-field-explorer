@@ -362,6 +362,8 @@ struct ProbeReportsCache {
 /// sampler never adds them or routes either through the #83 colour mapping.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WaveArrowSets {
+    /// Accepted grid samples before projection and degenerate-arrow culling.
+    pub sampled_points: usize,
     pub electric: Vec<ArrowData>,
     pub magnetic: Vec<ArrowData>,
 }
@@ -2278,7 +2280,10 @@ impl State {
                 plane.as_ref(),
                 f64::from(self.time),
             );
-            let mut arrows = WaveArrowSets::default();
+            let mut arrows = WaveArrowSets {
+                sampled_points: samples.len(),
+                ..Default::default()
+            };
             for (position, sample) in samples {
                 let (electric, magnetic) = match plane.as_ref() {
                     Some(frame) => (frame.project(sample.e), frame.project(sample.b)),
@@ -3623,7 +3628,8 @@ impl State {
     /// A collapsed section performs no sampling and keeps its last reports. A
     /// visible refresh reuses each probe whose geometry and shared field
     /// identity (mode, case or formula, parameters, family, domain and the
-    /// 100 ms-quantised clock) are unchanged. Unsupported or refused checks
+    /// clock) are unchanged. Waves use the exact displayed time; other fields
+    /// retain the 100 ms clock bucket. Unsupported or refused checks
     /// store honest status text instead of a number. Reports never dirty the
     /// scene: only the document geometry and family do.
     pub fn refresh_probe_reports(self: &mut State, visible: bool) {
@@ -3708,7 +3714,9 @@ impl State {
 
     /// Build the shared identity for the current probe report cache.
     fn probe_field_identity(self: &State) -> ProbeFieldIdentity {
-        let clock = if self.time.is_finite() {
+        let clock = if self.field_mode == FieldMode::Maxwell && self.maxwell_wave.is_some() {
+            i64::from(self.time.to_bits())
+        } else if self.time.is_finite() {
             (f64::from(self.time) / REPORT_REFRESH_SECONDS).floor() as i64
         } else {
             0

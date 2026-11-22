@@ -515,6 +515,26 @@ fn wave_provenance_names_the_wave_display_and_reports_sampling_status() {
 }
 
 #[test]
+fn wave_export_distinguishes_rejection_from_a_sampled_zero_field() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Maxwell);
+    let mut wave = wave_spec();
+    wave.amplitude = 0.0;
+    assert!(app.state.set_maxwell_wave(Some(wave)));
+    for (time, expected) in [(0.0, "sampled"), (f32::NAN, "unavailable")] {
+        app.state.time = time;
+        app.state.refresh_maxwell_sampling();
+        assert!(app.state.maxwell_wave_sampling.as_ref().unwrap().is_empty());
+        app.test_harness().request_png_export();
+        let provenance = app.test_harness().export_png_provenance().unwrap();
+        assert_eq!(
+            metadata_value(&provenance, "vfe.maxwell_sampling"),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn app_requests_wave_provenance_while_the_wave_is_the_displayed_field() {
     let mut app = VfApp::new();
     app.state.set_field_mode(FieldMode::Maxwell);

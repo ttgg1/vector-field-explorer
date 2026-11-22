@@ -486,6 +486,28 @@ fn wave_display_routes_surface_and_loop_probes_to_the_wave_field() {
     );
     assert_eq!(actual_loop.samples, expected_loop.samples);
 
+    // Two displayed phases in one ordinary probe-cache bucket, then a wave
+    // edit at fixed time. Neither geometry nor selected family changes.
+    state.time = 0.39;
+    let mut previous = actual_loop.status;
+    for phase in [valid_wave().phase, 1.25] {
+        let spec = WaveSpec {
+            phase,
+            ..valid_wave()
+        };
+        state.set_maxwell_wave(Some(spec));
+        state.refresh_probe_reports(true);
+        let field = WaveProbeField {
+            spec,
+            family: FieldFamily::Electric,
+        };
+        let expected = circulation(&field, &loop_, field.family, f64::from(state.time)).status;
+        assert_ne!(expected, previous);
+        assert_eq!(state.probe_loop_report(0).unwrap().status, expected);
+        previous = expected;
+    }
+    state.set_maxwell_wave(Some(valid_wave()));
+    state.time = time as f32;
     // The magnetic family is displayed too and uses the same wave evaluator.
     state.set_probe_family(FieldFamily::Magnetic);
     state.refresh_probe_reports(true);

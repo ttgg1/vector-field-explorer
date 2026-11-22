@@ -182,7 +182,10 @@ impl VfApp {
                     crate::export_provenance::maxwell_wave_export_provenance(
                         self.state.field_mode,
                         &wave,
-                        self.state.maxwell_wave_sampling.is_some(),
+                        self.state
+                            .maxwell_wave_sampling
+                            .as_ref()
+                            .is_some_and(|pass| pass.sampled_points > 0),
                     )
                 } else {
                     crate::export_provenance::maxwell_export_provenance(
