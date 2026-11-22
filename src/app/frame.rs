@@ -45,10 +45,19 @@ impl eframe::App for VfApp {
         // vector geometry or leave a captured pointer behind.
         self.reconcile_plot_transition();
         self.sync_fly_capture(&ctx);
+        // Installed linked CAS overlays are scene layers: resolve them against
+        // the frame's current committed inputs even when the CAS and Scalar
+        // analysis panels are closed.
+        self.state.sync_linked_overlay_layers();
+        self.state.refresh_linked_overlay_layers();
         self.frame_simulation(&ctx);
         self.frame_status_bar(ui);
         self.frame_viewport(ui, frame);
         self.frame_overlays(ui);
+        // Sync the live document to its bound saved scene after every layout's
+        // chrome has run, not only when the Presets panel/sheet happened to
+        // draw. A compact closed sheet must not lose an edit on exit.
+        self.sync_active_scene_from_state();
         // The guided tour is painted last so its card is never hidden by the
         // help overlay or an open dialog.
         self.frame_tour_overlay(&ctx);
@@ -69,8 +78,11 @@ impl eframe::App for VfApp {
         }
         // eframe calls this on shutdown and on its autosave cadence, so it is
         // the reliable place to write pending saved-scene edits that no scene
-        // action flushed. A failure is logged: the shutdown path has no panel
-        // to show a message in, and the edits stay in memory until exit.
+        // action flushed. Sync first: compact layout can close its sheet, so
+        // the panel render path may not have captured the last live edit. A
+        // failure is logged: the shutdown path has no panel to show a message
+        // in, and the edits stay in memory until exit.
+        self.sync_active_scene_from_state();
         if let Err(error) = self.presets.flush_scenes() {
             log::warn!("saved scenes could not be flushed on save: {error}");
         }

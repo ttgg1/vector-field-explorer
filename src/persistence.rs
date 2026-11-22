@@ -50,6 +50,7 @@ use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::profile_library::MAX_USER_PROFILES;
 use crate::scalar_analysis::{ComparisonSet, GradientSpec};
+use crate::scalar_overlay::ScalarOverlaySet;
 use crate::scalar_view::ProbeSet;
 use crate::seed_layout::SeedLayout;
 use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, MAX_USER_LAYOUTS, SeedLayoutProfile};
@@ -826,6 +827,12 @@ pub struct ViewRecord {
     /// on older records, which restore as no gradient.
     #[serde(default)]
     pub gradient: Option<GradientSpec>,
+    /// Durable bounded CAS overlays (issue #233). Missing on older records,
+    /// which restore as an empty set. Kept in the workspace view record as well
+    /// as the scene document so an overlay edit enters document history and
+    /// survives an ordinary restart without a named scene.
+    #[serde(default, skip_serializing_if = "ScalarOverlaySet::is_empty")]
+    pub overlays: ScalarOverlaySet,
     /// Durable custom densities (issue #96 slice B1), at most
     /// [`MAX_DENSITIES`]. Missing on older records/scenes, which restore as an
     /// empty list. Unknown family/support-kind tokens and invalid entries drop
@@ -1079,6 +1086,7 @@ impl ViewRecord {
             show_scalar_heatmap: state.show_scalar_heatmap(),
             comparison_series: state.comparison_series.clone(),
             gradient: state.gradient.clone(),
+            overlays: state.overlays().clone(),
             densities: state
                 .densities()
                 .iter()
@@ -1303,6 +1311,13 @@ impl ViewRecord {
             },
             None => None,
         };
+        // CAS overlays follow the same direct startup assignment: a valid set
+        // restores without dirtying the first scene, and an invalid hand-edited
+        // set is dropped with one warning rather than failing the envelope.
+        match self.overlays.validate() {
+            Ok(()) => state.restore_overlays(self.overlays.clone()),
+            Err(error) => log::warn!("ignoring invalid persisted CAS overlays: {error}"),
+        }
         // Custom densities are document state (issue #96 slice B1). Assign
         // directly so the startup seam does not dirty per entry; entries that
         // fail validation against the already restored parameters drop in

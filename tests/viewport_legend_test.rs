@@ -589,3 +589,65 @@ fn locked_mapping_is_invariant_to_probe_radius_and_resampling() {
         "auto-fit is what rescales, so the lock is doing the work"
     );
 }
+
+fn induction_state(state: &mut State, display: SourceDisplay) {
+    state.set_field_mode(FieldMode::Induction);
+    let mut scene = state.induction.clone();
+    scene.display = display;
+    state.set_induction_scene(scene);
+}
+
+#[test]
+fn induction_legend_reports_the_displayed_family_or_family_colours() {
+    let mut state = State::new(false);
+    induction_state(&mut state, SourceDisplay::Electric);
+    assert_eq!(LegendSnapshot::new(&state, &STATS).quantity, "E");
+
+    induction_state(&mut state, SourceDisplay::Magnetic);
+    let magnetic = LegendSnapshot::new(&state, &STATS);
+    assert_eq!(
+        magnetic.quantity, "B",
+        "an induction view painting B is not labelled E"
+    );
+    assert!(magnetic.quantity_detail.contains("Magnetic"));
+
+    induction_state(&mut state, SourceDisplay::Both);
+    let both = LegendSnapshot::new(&state, &STATS);
+    assert_eq!(both.quantity, "E + B");
+    assert!(
+        !both.numeric_ramp,
+        "fixed family colours do not advertise one magnitude ramp"
+    );
+    assert!(!both.lockable, "family colours cannot lock a numeric range");
+    let scales = both.family_scales.expect("Both names its family scales");
+    assert_eq!(scales[0], ("E", FamilyColors::default().electric));
+    assert_eq!(scales[1], ("B", FamilyColors::default().magnetic));
+}
+
+#[test]
+fn sources_single_family_legend_stats_come_from_the_painted_source_arrows() {
+    let mut state = State::new(false);
+    // The formula field is deliberately zero: using its samples for the legend
+    // would make the auto-fit range disagree with the source arrows.
+    state.set_formula("(0, 0)".into());
+    state.set_field_mode(FieldMode::Sources);
+    let preset = vector_field_explorer::source_presets::source_preset("Coulomb point")
+        .expect("the shipped preset exists");
+    assert!(vector_field_explorer::source_presets::load_source_preset(
+        preset, &mut state
+    ));
+    state.refresh_source_sampling();
+    let arrows = &state
+        .source_sampling()
+        .expect("the source scene samples")
+        .arrows;
+    let expected = vector_field_explorer::sampling::magnitude_range(arrows);
+    assert!(expected.1 > 0.0, "the source arrows carry magnitudes");
+
+    let (range, stats, _) = vector_field_explorer::app::scene_color_facts_for_tests(&state);
+    assert_eq!(
+        range, expected,
+        "the legend range matches the arrows actually painted"
+    );
+    assert_eq!(stats.max_magnitude, expected.1);
+}

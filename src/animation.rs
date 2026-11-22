@@ -209,26 +209,58 @@ fn temporary_path(path: &Path) -> Result<PathBuf, AnimationError> {
 /// Move `temporary` over `destination`, replacing an existing destination.
 ///
 /// On Unix `rename` replaces atomically. On Windows, where rename-over-existing
-/// fails, the destination is removed first; every failure leaves no claim of a
-/// completed output.
+/// fails, the previous destination is first moved to a sibling backup and
+/// restored if the replacement rename fails. A failure therefore leaves the
+/// previous completed output in place instead of deleting it first.
 pub fn atomic_replace(temporary: &Path, destination: &Path) -> Result<(), AnimationError> {
     #[cfg(windows)]
-    if destination.exists()
-        && let Err(error) = fs::remove_file(destination)
-        && error.kind() != io::ErrorKind::NotFound
     {
-        return Err(AnimationError::Io(format!(
-            "could not remove {} before rename: {error}",
-            destination.display()
-        )));
+        let backup = destination.with_file_name(format!(
+            ".{}.bak",
+            destination
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "output".to_owned())
+        ));
+        let had_previous = destination.exists();
+        if had_previous {
+            let _ = fs::remove_file(&backup);
+            fs::rename(destination, &backup).map_err(|error| {
+                AnimationError::Io(format!(
+                    "could not stage {} before rename: {error}",
+                    destination.display()
+                ))
+            })?;
+        }
+        match fs::rename(temporary, destination) {
+            Ok(()) => {
+                if had_previous {
+                    let _ = fs::remove_file(&backup);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                if had_previous {
+                    let _ = fs::rename(&backup, destination);
+                }
+                Err(AnimationError::Io(format!(
+                    "could not replace {} with {}: {error}",
+                    destination.display(),
+                    temporary.display()
+                )))
+            }
+        }
     }
-    fs::rename(temporary, destination).map_err(|error| {
-        AnimationError::Io(format!(
-            "could not replace {} with {}: {error}",
-            destination.display(),
-            temporary.display()
-        ))
-    })
+    #[cfg(not(windows))]
+    {
+        fs::rename(temporary, destination).map_err(|error| {
+            AnimationError::Io(format!(
+                "could not replace {} with {}: {error}",
+                destination.display(),
+                temporary.display()
+            ))
+        })
+    }
 }
 
 fn validate_frame(rgba: &[u8], width: u32, height: u32) -> Result<(), AnimationError> {

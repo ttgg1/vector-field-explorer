@@ -101,6 +101,10 @@ struct GriffithsStart {
     camera_scale: f32,
     history: EditHistory<EditSnapshot>,
     last_committed: EditSnapshot,
+    /// The saved scene the live document was editing when the lesson began, so
+    /// exit can resume the explicit binding. Lessons are temporary scenes: the
+    /// binding is suspended on entry and never attributed lesson state.
+    scene: Option<String>,
 }
 
 /// The session-only scene and lesson snapshot saved when the learner chooses
@@ -1400,6 +1404,12 @@ pub(crate) fn scene_color_facts(state: &State) -> SceneColorFacts {
         ),
         FieldMode::Maxwell => {
             family_color_samples(state.maxwell_sampling.as_ref().map(|s| s.arrows.as_slice()))
+        }
+        // Sources paints the sampled source arrows, not the Formula field. A
+        // single-family display still owns one numeric magnitude ramp, so its
+        // legend stats must come from exactly those arrows.
+        FieldMode::Sources => {
+            family_color_samples(state.source_sampling.as_ref().map(|s| s.arrows.as_slice()))
         }
         _ => {
             let sampled = state.sample();
