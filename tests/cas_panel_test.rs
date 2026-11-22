@@ -638,7 +638,7 @@ fn actual_section_copies_scalar_has_no_apply_and_shows_inline_failure() {
     panel.operation = Operation::Curl;
     let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
     assert!(has_text(&output.platform_output, "Result — Scalar"));
-    assert!(button_bounds(&output.platform_output, "Apply vector").is_none());
+    assert!(button_bounds(&output.platform_output, "Replace field").is_none());
     let copy = button_bounds(&output.platform_output, "Copy").expect("actual Copy button");
     let output = click_panel(&ctx, 460.0, copy.center(), &mut state, &mut panel);
     assert!(
@@ -655,7 +655,7 @@ fn actual_section_copies_scalar_has_no_apply_and_shows_inline_failure() {
     panel.operation = Operation::Gradient;
     let output = panel_frame(&ctx, 460.0, vec![], &mut state, &mut panel);
     assert!(has_text(&output.platform_output, "Error:"));
-    assert!(button_bounds(&output.platform_output, "Apply vector").is_none());
+    assert!(button_bounds(&output.platform_output, "Replace field").is_none());
     assert!(button_bounds(&output.platform_output, "Copy").is_none());
     assert_eq!(evidence(&state), before);
     let reset = button_bounds(&output.platform_output, "Reset").unwrap();
@@ -709,7 +709,7 @@ fn real_app_sidebar_applies_only_on_click_and_formula_bar_follows() {
         has_text(&output, "Result — Vector"),
         "the real app must draw the CAS section"
     );
-    let apply = button_bounds(&output, "Apply vector").expect("sidebar Apply widget");
+    let apply = button_bounds(&output, "Replace field").expect("sidebar Apply widget");
     assert!(apply.center().y < 6000.0, "Apply must be on-screen");
     let pos = apply.center();
     app_frame(
@@ -866,7 +866,7 @@ fn source_mode_disables_apply_and_explains_the_formula_scope() {
     state.set_field_mode(FieldMode::Sources);
     let output = open_panel(&ctx, 460.0, &mut state, &mut panel);
     assert!(
-        button_is_disabled(&output.platform_output, "Apply vector"),
+        button_is_disabled(&output.platform_output, "Replace field"),
         "Sources mode must disable CAS Apply"
     );
     assert!(

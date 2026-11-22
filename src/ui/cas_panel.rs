@@ -3,7 +3,12 @@ use eframe::egui;
 
 use crate::cas_actions::{self, CasAction, CasActionError};
 use crate::scalar_analysis::{
-    ANALYTIC_DIPOLE_ROUTE_NOTE, NATIVE_SYMBOLIC_NOTE, potential_field_spec,
+    ANALYTIC_DIPOLE_ROUTE_NOTE, GradientSpec, NATIVE_SYMBOLIC_NOTE, SeriesRole,
+    potential_field_spec,
+};
+use crate::scalar_overlay::{
+    FROZEN_RENDER_NOTE, MAX_OVERLAYS, OVERLAY_ASSUMPTIONS, OverlayDependency, OverlayLayer,
+    OverlayLive, ScalarOverlay, bindings_summary,
 };
 use crate::scalar_view::{sampled_layer_label, scalar_view_expr, slice_label, slice_valid_region};
 use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage};
@@ -25,7 +30,7 @@ impl SceneTarget {
     pub fn label(self) -> &'static str {
         match self {
             Self::Contours => "Plot contours",
-            Self::PotentialField => "Overlay E = -∇V",
+            Self::PotentialField => "Add linked overlay",
         }
     }
 
@@ -33,7 +38,15 @@ impl SceneTarget {
     pub fn edit_label(self) -> &'static str {
         match self {
             Self::Contours => "plot CAS contours",
-            Self::PotentialField => "overlay E = -∇V",
+            Self::PotentialField => "add linked CAS overlay",
+        }
+    }
+
+    /// The overlay layer this scene target records.
+    fn overlay_layer(self) -> OverlayLayer {
+        match self {
+            Self::Contours => OverlayLayer::Contours,
+            Self::PotentialField => OverlayLayer::PotentialField,
         }
     }
 }
@@ -337,10 +350,16 @@ impl CasPanelState {
         }
         let formula = preview.formula.clone();
         scalar_view_expr(&formula, &state.parameters).map_err(|error| error.to_string())?;
+        if state.overlays().len() >= MAX_OVERLAYS {
+            return Err(format!(
+                "at most {MAX_OVERLAYS} CAS overlays are allowed; remove one before adding another"
+            ));
+        }
         let frame = state.scalar_view_frame();
         let slice = slice_label(&frame);
         let time = f64::from(state.time);
         let region = slice_valid_region(&frame);
+        let bindings = bindings_summary(&state.parameters);
         match target {
             SceneTarget::Contours => {
                 state.set_scalar_source(ScalarContext::Surface, formula.clone());
@@ -353,7 +372,9 @@ impl CasPanelState {
                 self.scene_message = Some(format!(
                     "Plotting analytic contours of {formula} on the {slice}; values are \
                      sampled with the committed parameters at t = {time:.3}. {region} \
-                     The CAS input and the physics model source are unchanged."
+                     The CAS input and the physics model source are unchanged. \
+                     Linked overlay follows the live parameters ({bindings}). \
+                     {OVERLAY_ASSUMPTIONS}"
                 ));
             }
             SceneTarget::PotentialField => {
@@ -373,11 +394,118 @@ impl CasPanelState {
                     "Overlaying E = -∇V from analytic V = {formula} on the {slice}. \
                      Arrows point downhill: the minus sign is applied, so E points from \
                      higher to lower V. Values are sampled with the committed parameters \
-                     at t = {time:.3}; the scalar source is unchanged. {region}"
+                     at t = {time:.3}; the scalar source is unchanged. {region} \
+                     Linked overlay follows the live parameters ({bindings}). \
+                     {OVERLAY_ASSUMPTIONS}"
                 ));
             }
         }
+        state
+            .add_linked_overlay(formula, target.overlay_layer())
+            .map_err(|error| error.to_string())?;
         self.scene_edit = Some(target.edit_label());
+        Ok(self.scene_message.clone().unwrap_or_default())
+    }
+
+    /// Store a frozen copy of the current scalar result without changing the
+    /// scene. The copy captures the expression, committed parameters, frame and
+    /// time, and remains independently labelled because only one gradient can
+    /// be drawn at a time.
+    pub fn add_frozen_overlay(
+        &mut self,
+        state: &mut State,
+        dimension: usize,
+    ) -> Result<String, String> {
+        self.scene_error = None;
+        let current_dimension = cas_dimension(state);
+        if dimension != current_dimension {
+            return Err(format!(
+                "the CAS result targets {dimension}D but the app is in {current_dimension}D"
+            ));
+        }
+        let Some(preview) = self.preview.as_ref() else {
+            return Err("there is no current CAS result to copy".to_owned());
+        };
+        if preview.kind != ResultKind::Scalar || preview.request != self.request(current_dimension)
+        {
+            return Err("only the current scalar result can be copied".to_owned());
+        }
+        if state.field_mode != FieldMode::Formula || !state.is_vector_mode() {
+            return Err(
+                "switch to the Formula vector view to copy a CAS result into the scene".to_owned(),
+            );
+        }
+        if state.overlays().len() >= MAX_OVERLAYS {
+            return Err(format!(
+                "at most {MAX_OVERLAYS} CAS overlays are allowed; remove one before adding another"
+            ));
+        }
+        let formula = preview.formula.clone();
+        scalar_view_expr(&formula, &state.parameters).map_err(|error| error.to_string())?;
+        let frame = state.scalar_view_frame();
+        let time = f64::from(state.time);
+        let slice = slice_label(&frame);
+        let bindings = bindings_summary(&state.parameters);
+        let id = state
+            .add_frozen_overlay(formula.clone(), OverlayLayer::PotentialField)
+            .map_err(|error| error.to_string())?;
+        let captured = state
+            .overlays()
+            .get(id)
+            .and_then(|overlay| overlay.captured_summary())
+            .unwrap_or_else(|| format!("Captured values: {bindings}; {slice} at t = {time:.3}."));
+        self.scene_message = Some(format!(
+            "Added frozen copy {id} of V = {formula}. {captured} The scene and the drawn \
+             gradient are unchanged; this copy keeps the captured values. {FROZEN_RENDER_NOTE}"
+        ));
+        self.scene_edit = Some("add frozen CAS overlay");
+        Ok(self.scene_message.clone().unwrap_or_default())
+    }
+
+    /// Replace the plotted vector field with a valid CAS vector result.
+    ///
+    /// This is the explicit whole-field replacement: a scalar result is
+    /// refused, and the ordinary document history makes the change one undo
+    /// that restores the previous field.
+    pub fn replace_field(&mut self, state: &mut State, dimension: usize) -> Result<String, String> {
+        self.scene_error = None;
+        if state.field_mode != FieldMode::Formula {
+            return Err("CAS edits the formula field; switch to Formula.".to_owned());
+        }
+        if !state.is_vector_mode() {
+            return Err("CAS replacement is vector-only; return to Vector field mode.".to_owned());
+        }
+        let current_dimension = cas_dimension(state);
+        if dimension != current_dimension {
+            return Err(format!(
+                "the CAS result targets {dimension}D but the app is in {current_dimension}D"
+            ));
+        }
+        let Some(preview) = self.preview.as_ref() else {
+            return Err("there is no current CAS result to replace the field with".to_owned());
+        };
+        if preview.kind != ResultKind::Vector {
+            return Err("a scalar result is not a whole-field model; only a vector result can replace the field".to_owned());
+        }
+        if preview.request != self.request(current_dimension) {
+            return Err("only the current vector result can replace the field".to_owned());
+        }
+        let field = FieldExpr::parse_with_parameters(&preview.formula, &state.parameters)
+            .map_err(|error| error.to_string())?;
+        if field.dimension != dimension {
+            return Err(format!(
+                "the CAS result has {} components but the app is in {dimension}D",
+                field.dimension
+            ));
+        }
+        let formula = preview.formula.clone();
+        let previous = state.formula.clone();
+        state.set_formula(formula.clone());
+        self.scene_message = Some(format!(
+            "Replaced the plotted field with {formula}. One undo restores {previous}. \
+             The CAS input and the scalar surface source are unchanged."
+        ));
+        self.scene_edit = Some("replace field from CAS");
         Ok(self.scene_message.clone().unwrap_or_default())
     }
 
@@ -588,6 +716,116 @@ pub fn show_scalar_preview(
     }
 }
 
+/// Show the bounded overlay collection with its dependency labels, captured
+/// values, any identifiable unavailable reason, and a per-overlay removal
+/// control.
+fn show_overlays(ui: &mut egui::Ui, state: &mut State) {
+    if state.overlays().is_empty() {
+        return;
+    }
+    ui.separator();
+    ui.label(format!(
+        "CAS overlays ({}/{MAX_OVERLAYS})",
+        state.overlays().len()
+    ));
+    let drawn = state
+        .overlays()
+        .iter()
+        .find(|overlay| {
+            state
+                .gradient
+                .as_ref()
+                .is_some_and(|spec| overlay_is_drawn(overlay, spec))
+        })
+        .map(|overlay| overlay.id);
+    let mut remove = None;
+    for overlay in state.overlays().iter() {
+        let live = OverlayLive {
+            parameters: &state.parameters,
+            frame: state.scalar_view_frame(),
+            time: f64::from(state.time),
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "{} — {}",
+                overlay.dependency.label(),
+                overlay.label
+            ));
+            if Some(overlay.id) == drawn {
+                ui.small("Drawn now");
+            }
+            ui.small(format!("({})", overlay.layer.label()));
+            if ui
+                .button(format!("Remove {}", overlay.id))
+                .on_hover_text("Remove this CAS overlay from the scene")
+                .clicked()
+            {
+                remove = Some(overlay.id);
+            }
+        });
+        ui.small(format!("Expression: {}", overlay.formula));
+        if let Some(captured) = overlay.captured_summary() {
+            ui.small(captured);
+        }
+        match overlay.resolve(live) {
+            Ok(_) => {
+                ui.small(match overlay.dependency {
+                    OverlayDependency::Linked => "Available with the live parameters.",
+                    OverlayDependency::Frozen => "Available with the captured values.",
+                });
+            }
+            Err(error) => {
+                ui.colored_label(ui.visuals().error_fg_color, format!("Unavailable: {error}"));
+            }
+        }
+    }
+    if let Some(id) = remove {
+        remove_overlay(state, id);
+    }
+    if state
+        .overlays()
+        .iter()
+        .any(|overlay| overlay.dependency == OverlayDependency::Frozen)
+    {
+        ui.small(FROZEN_RENDER_NOTE);
+    }
+}
+
+/// Whether `overlay` is the linked potential-field request behind `spec`.
+fn overlay_is_drawn(overlay: &ScalarOverlay, spec: &GradientSpec) -> bool {
+    overlay.dependency == OverlayDependency::Linked
+        && overlay.layer == OverlayLayer::PotentialField
+        && spec.role == SeriesRole::ElectricPotential
+        && spec.expr == overlay.formula
+}
+
+/// Remove one overlay and drop the drawn gradient when no remaining linked
+/// potential overlay still owns it, so the list and the scene stay consistent.
+fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
+    let Some(removed) = state.remove_overlay(id) else {
+        return;
+    };
+    let was_drawn = state
+        .gradient
+        .as_ref()
+        .is_some_and(|spec| overlay_is_drawn(&removed, spec));
+    if !was_drawn {
+        return;
+    }
+    let still_drawn = {
+        let Some(spec) = state.gradient.as_ref() else {
+            return;
+        };
+        state
+            .overlays()
+            .iter()
+            .any(|overlay| overlay_is_drawn(overlay, spec))
+    };
+    if !still_drawn && state.set_gradient(None).is_ok() {
+        state.refresh_scalar_analysis(true);
+    }
+}
+
 pub fn show(ui: &mut egui::Ui, state: &mut State, panel: &mut CasPanelState) -> Option<CasAction> {
     let disabled_mode = matches!(
         state.field_mode,
@@ -664,6 +902,7 @@ fn show_enabled(
     ui.small(ANALYTIC_DIPOLE_ROUTE_NOTE);
     let mut apply_action = None;
     let mut scene_target = None;
+    let mut add_frozen = false;
     if let Some(error) = &panel.action_error {
         ui.colored_label(ui.visuals().error_fg_color, format!("Error: {error}"));
     }
@@ -700,6 +939,9 @@ fn show_enabled(
         .on_hover_text("Result kind is determined by the operation, not component count");
         ui.small(panel.preview_provenance());
         ui.small(panel.preview_valid_region(state));
+        ui.small(format!("Expression: {}", p.formula));
+        ui.small(format!("Bindings: {}", bindings_summary(&state.parameters)));
+        ui.small(OVERLAY_ASSUMPTIONS);
         if let Some(error) = &panel.scene_error {
             ui.colored_label(ui.visuals().error_fg_color, format!("Scene: {error}"));
         }
@@ -725,7 +967,7 @@ fn show_enabled(
             if p.kind == ResultKind::Vector {
                 let enabled = !sources_mode && vector_mode && panel.can_apply(dimension);
                 let response = ui
-                    .add_enabled(enabled, egui::Button::new("Apply vector"))
+                    .add_enabled(enabled, egui::Button::new("Replace field"))
                     .on_hover_text("Replace the plotted field with this valid vector formula");
                 let response = if sources_mode {
                     response
@@ -738,7 +980,10 @@ fn show_enabled(
                     response
                 };
                 if response.clicked() {
-                    panel.apply(state, dimension);
+                    match panel.replace_field(state, dimension) {
+                        Ok(_) => panel.scene_error = None,
+                        Err(error) => panel.scene_error = Some(error),
+                    }
                 }
             }
         });
@@ -784,6 +1029,22 @@ fn show_enabled(
                 if overlay.clicked() {
                     scene_target = Some(SceneTarget::PotentialField);
                 }
+                let frozen = ui
+                    .add_enabled(scene_ready, egui::Button::new("Add frozen copy"))
+                    .on_hover_text(
+                        "Copy this analytic result with the current parameters, slice and time; \
+                         later parameter changes leave the frozen copy unchanged",
+                    );
+                let frozen = if scene_ready {
+                    frozen
+                } else {
+                    frozen.on_disabled_hover_text(
+                        "switch to the Formula vector view to copy the result",
+                    )
+                };
+                if frozen.clicked() {
+                    add_frozen = true;
+                }
             });
         }
     }
@@ -793,6 +1054,13 @@ fn show_enabled(
             Err(error) => panel.scene_error = Some(error),
         }
     }
+    if add_frozen {
+        match panel.add_frozen_overlay(state, dimension) {
+            Ok(_) => panel.scene_error = None,
+            Err(error) => panel.scene_error = Some(error),
+        }
+    }
+    show_overlays(ui, state);
     // Vector results and structured errors keep the text-only output; drop any
     // texture left by a previous scalar preview.
     if !panel
