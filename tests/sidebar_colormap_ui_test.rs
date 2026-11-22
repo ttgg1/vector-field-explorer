@@ -17,9 +17,11 @@ use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::palette_io::{PaletteDocument, export_ramp, import_ramp};
 use vector_field_explorer::persistence::{AppSettings, ViewRecord};
 use vector_field_explorer::source_scene::{FieldMode, SourceDisplay};
+use vector_field_explorer::ui::help_overlay::sources_help_rows;
 use vector_field_explorer::ui::layout::LayoutState;
-use vector_field_explorer::ui::sidebar::{self, Controls};
+use vector_field_explorer::ui::sidebar::{self, BOTH_COLORING_NOTE, Controls};
 use vector_field_explorer::ui::style_panel::AppStyle;
+use vector_field_explorer::ui::viewport_legend::BOTH_NOTE;
 use vector_field_explorer::viewmodel::State;
 
 /// One node from the frame's accesskit tree, in screen points.
@@ -410,12 +412,7 @@ fn both_source_display_hides_colormap_and_range_with_a_reason() {
     );
     assert!(
         rows.iter().any(|node| {
-            node.role == egui::Role::Label
-                && node.value.as_deref()
-                    == Some(
-                        "Both uses fixed family colours (E amber, B cyan); choose Electric or \
-                         Magnetic to use a colormap.",
-                    )
+            node.role == egui::Role::Label && node.value.as_deref() == Some(BOTH_COLORING_NOTE)
         }),
         "the Coloring section explains why its controls are absent"
     );
@@ -440,11 +437,9 @@ fn both_source_display_hides_colormap_and_range_with_a_reason() {
         "Electric restores the manual range row"
     );
     assert!(
-        !rows.iter().any(|node| node.value.as_deref()
-            == Some(
-                "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic \
-                 to use a colormap.",
-            )),
+        !rows
+            .iter()
+            .any(|node| node.value.as_deref() == Some(BOTH_COLORING_NOTE)),
         "the Both explanation disappears outside Both"
     );
 }
@@ -780,7 +775,7 @@ fn legend_shows_effective_range_ticks_and_clip_counts() {
 }
 
 #[test]
-fn both_display_keeps_the_fixed_family_note_without_advanced_controls() {
+fn both_display_keeps_the_live_family_note_without_advanced_controls() {
     let mut s = Sidebar::new();
     s.state.set_field_mode(FieldMode::Sources);
     let mut scene = s.state.sources.clone();
@@ -790,12 +785,8 @@ fn both_display_keeps_the_fixed_family_note_without_advanced_controls() {
     let rows = nodes(&out);
 
     assert!(
-        has_label(
-            &rows,
-            "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic to \
-             use a colormap.",
-        ),
-        "the fixed-family explanation stays"
+        has_label(&rows, BOTH_COLORING_NOTE),
+        "the family-colour explanation stays"
     );
     for label in ["Quantity", "Linear", "Signed log", "Freeze current range"] {
         assert!(
@@ -814,6 +805,25 @@ fn both_display_keeps_the_fixed_family_note_without_advanced_controls() {
                 .is_some_and(|value| value.starts_with("Range:"))
         }),
         "Both must not render the legend"
+    );
+}
+
+#[test]
+fn both_colour_help_never_promises_fixed_amber_or_cyan() {
+    let help = sources_help_rows()
+        .iter()
+        .find(|row| row.input == "E / B / Both")
+        .expect("the E/B/Both help row");
+    for text in [BOTH_COLORING_NOTE, BOTH_NOTE, help.action] {
+        let lower = text.to_lowercase();
+        assert!(
+            !lower.contains("amber") && !lower.contains("cyan"),
+            "user-facing Both help still names a fixed colour: {text}"
+        );
+    }
+    assert!(
+        !BOTH_COLORING_NOTE.contains("E amber") && !BOTH_COLORING_NOTE.contains("B cyan"),
+        "the Coloring note must not promise universal family colours"
     );
 }
 

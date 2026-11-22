@@ -368,7 +368,7 @@ pub static SOURCES_HELP_ROWS: &[HelpRow] = &[
     },
     HelpRow {
         input: "E / B / Both",
-        action: "E amber, B cyan in Both; families are never summed or share one magnitude scale",
+        action: "Both gives E and B their own family colour; they are never summed or share one magnitude scale",
     },
     HelpRow {
         input: "Softening",

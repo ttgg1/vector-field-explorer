@@ -21,8 +21,8 @@ pub const LEGEND_TITLE: &str = "Colour legend";
 /// never SI.
 pub const PANEL_UNITS_NOTE: &str = "Normalized teaching units (not SI)";
 
-pub const BOTH_NOTE: &str =
-    "Both: fixed family colours. No single magnitude ramp; E and B are distinct labelled scales";
+pub const BOTH_NOTE: &str = "Both: one live colour per physics family, set in Appearance. No single magnitude ramp; \
+     E and B are distinct labelled scales";
 
 /// A pure, testable description of what the legend shows this frame.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,7 +47,7 @@ pub struct LegendSnapshot {
     pub arrow_mode: &'static str,
     /// One-line meaning of the arrow-length mode.
     pub arrow_meaning: &'static str,
-    /// Fixed family colours for the Sources `Both` display.
+    /// Effective family colours for the Sources `Both` display.
     pub family_scales: Option<[(&'static str, [u8; 3]); 2]>,
     /// Whether one numeric ramp describes the colours.
     pub numeric_ramp: bool,
@@ -63,7 +63,8 @@ impl LegendSnapshot {
         let both =
             state.field_mode == FieldMode::Sources && state.sources.display == SourceDisplay::Both;
         let directional = state.color_quantity == ColorQuantity::Direction2d;
-        let family_scales = both.then(crate::ui::sources_panel::both_legend);
+        let family_scales =
+            both.then(|| crate::ui::sources_panel::both_legend(state.source_family_colors()));
         let (quantity, quantity_detail) = quantity_labels(state);
         let range = if directional {
             format!("{:.0}\u{b0} - {:.0}\u{b0}", legend.min, legend.max)
@@ -79,7 +80,7 @@ impl LegendSnapshot {
             max: legend.max,
             locked: !state.auto_fit,
             state_label: if both {
-                "Fixed colours"
+                "Family colours"
             } else if state.auto_fit {
                 "Auto"
             } else {
@@ -108,7 +109,7 @@ fn quantity_labels(state: &State) -> (&'static str, String) {
             SourceDisplay::Magnetic => ("B", "Magnetic field"),
             SourceDisplay::Both => (
                 "E + B",
-                "Electric and magnetic fields (fixed family colours)",
+                "Electric and magnetic fields (one live colour per family)",
             ),
         },
         FieldMode::Materials => match material_family(state.material.case) {

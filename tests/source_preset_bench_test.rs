@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use glam::UVec3;
 use vector_field_explorer::source_presets::{load_source_preset, source_preset};
-use vector_field_explorer::source_scene::sample_source_scene;
+use vector_field_explorer::source_scene::{FamilyColors, sample_source_scene};
 use vector_field_explorer::viewmodel::State;
 
 #[test]
@@ -31,6 +31,7 @@ fn source_gallery_sampling_benchmark() {
             grid,
             None,
             &state.view_options(),
+            FamilyColors::default(),
         );
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         println!(

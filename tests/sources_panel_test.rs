@@ -2,15 +2,19 @@
 
 use eframe::egui;
 use eframe::egui::{Pos2, Rect, vec2};
+use vector_field_explorer::color_ramp::Rgb;
 use vector_field_explorer::custom_density::{
     ContinuityReport, ContinuityStatus, DensityFamily, DensitySpec, DensitySupport,
     DiagnosticsStatus, SupportKind, TimeLaw,
 };
+use vector_field_explorer::layer_style::PhysicsFamily;
 use vector_field_explorer::object_scene::ObjectStyle;
 use vector_field_explorer::source_scene::{
-    FieldMode, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag, SourceSampling,
+    FamilyColors, FieldMode, SourceDisplay, SourceEntry, SourceFamilyStatus, SourceKindTag,
+    SourceSampling,
 };
 use vector_field_explorer::sources::SourceKind;
+use vector_field_explorer::ui::appearance_panel::{AppearanceEdit, apply_edit};
 use vector_field_explorer::ui::formula_bar::{self, FormulaBarState};
 use vector_field_explorer::ui::layout::{LayoutState, SheetState};
 use vector_field_explorer::ui::sources_panel::{self, SourcesPanelState};
@@ -62,6 +66,33 @@ fn find<'a>(nodes: &'a [WidgetNode], label: &str) -> Option<&'a WidgetNode> {
 
 fn has(nodes: &[WidgetNode], label: &str) -> bool {
     find(nodes, label).is_some()
+}
+
+fn coloured_texts(output: &egui::FullOutput) -> Vec<(String, egui::Color32)> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => {
+                let color = text
+                    .galley
+                    .job
+                    .sections
+                    .iter()
+                    .find_map(|section| {
+                        (section.format.color != egui::Color32::PLACEHOLDER)
+                            .then_some(section.format.color)
+                    })
+                    .unwrap_or(text.fallback_color);
+                Some((text.galley.text().to_owned(), color))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn rgb(color: [u8; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(color[0], color[1], color[2])
 }
 
 fn show_sources_frame(
@@ -657,7 +688,7 @@ fn add_is_disabled_at_the_source_limit() {
 fn both_source_display_paints_the_viewport_family_legend() {
     // Drive the real app frame so the legend comes from `frame_overlays`, not
     // from a replica. The Sources panel is collapsed by default, so the panel's
-    // own "E amber"/"B cyan" row cannot satisfy these assertions.
+    // own E/B swatch row cannot satisfy these assertions.
     let ctx = context();
     let mut app = vector_field_explorer::VfApp::new();
     assert!(!app.layout.sources_expanded, "the panel starts collapsed");
@@ -680,21 +711,150 @@ fn both_source_display_paints_the_viewport_family_legend() {
         out = Some(frame);
     }
     let out = out.unwrap();
-    let labels: Vec<&str> = out
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) => Some(text.galley.text()),
-            _ => None,
-        })
-        .collect();
+    let texts = coloured_texts(&out);
+    let defaults = FamilyColors::default();
     assert!(
-        labels.contains(&"E amber"),
-        "the viewport legend names the electric family: {labels:?}"
+        texts
+            .iter()
+            .any(|(text, color)| text == "E" && *color == rgb(defaults.electric)),
+        "the viewport legend paints the electric family in its shipped colour"
     );
     assert!(
-        labels.contains(&"B cyan"),
-        "the viewport legend names the magnetic family: {labels:?}"
+        texts
+            .iter()
+            .any(|(text, color)| text == "B" && *color == rgb(defaults.magnetic)),
+        "the viewport legend paints the magnetic family in its shipped colour"
+    );
+    assert!(
+        !texts
+            .iter()
+            .any(|(text, _)| text.contains("amber") || text.contains("cyan")),
+        "the legend never names a fixable colour"
+    );
+
+    // A live Appearance override must repaint the real overlay while the other
+    // family keeps its shipped fallback.
+    let electric = Rgb([12, 34, 56]);
+    apply_edit(
+        &mut app.state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+    let mut repainted = None;
+    for _ in 0..2 {
+        let mut frame = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut app, ui, &mut eframe_frame),
+        );
+        frame.textures_delta.clear();
+        repainted = Some(frame);
+    }
+    let repainted = coloured_texts(&repainted.unwrap());
+    assert!(
+        repainted
+            .iter()
+            .any(|(text, color)| text == "E" && *color == rgb(electric.0)),
+        "the viewport legend follows the live electric override"
+    );
+    assert!(
+        repainted
+            .iter()
+            .any(|(text, color)| text == "B" && *color == rgb(defaults.magnetic)),
+        "the magnetic legend keeps its shipped fallback while electric is overridden"
+    );
+}
+
+#[test]
+fn both_source_panel_swatches_follow_appearance_overrides_in_wide_and_compact() {
+    let ctx = context();
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Sources);
+    let mut scene = state.sources.clone();
+    scene.set_display(SourceDisplay::Both);
+    state.set_source_scene(scene);
+    let mut panel = SourcesPanelState::default();
+
+    let mut out = None;
+    for _ in 0..3 {
+        out = Some(show_sources_frame(
+            &ctx, 1200.0, &mut state, &mut panel, false,
+        ));
+    }
+    let texts = coloured_texts(out.as_ref().unwrap());
+    let defaults = FamilyColors::default();
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| text == "E" && *color == rgb(defaults.electric)),
+        "the panel's Both row paints the shipped electric swatch"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| text == "B" && *color == rgb(defaults.magnetic)),
+        "the panel's Both row paints the shipped magnetic swatch"
+    );
+
+    let electric = Rgb([12, 34, 56]);
+    let magnetic = Rgb([200, 150, 100]);
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+    apply_edit(
+        &mut state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Magnetic, Some(magnetic)),
+    )
+    .unwrap();
+    let out = show_sources_frame(&ctx, 1200.0, &mut state, &mut panel, false);
+    let texts = coloured_texts(&out);
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| text == "E" && *color == rgb(electric.0)),
+        "the electric swatch follows the live Appearance override"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| text == "B" && *color == rgb(magnetic.0)),
+        "the magnetic swatch follows the live Appearance override"
+    );
+    assert!(
+        !texts
+            .iter()
+            .any(|(text, _)| text.contains("amber") || text.contains("cyan")),
+        "an overridden colour is never labelled amber or cyan"
+    );
+
+    // The compact sheet keeps the same live Both row usable.
+    let mut compact_panel = SourcesPanelState::default();
+    let mut out = None;
+    for _ in 0..3 {
+        out = Some(show_sources_frame(
+            &ctx,
+            360.0,
+            &mut state,
+            &mut compact_panel,
+            true,
+        ));
+    }
+    let texts = coloured_texts(out.as_ref().unwrap());
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| text == "E" && *color == rgb(electric.0)),
+        "the compact Sources row keeps the electric swatch"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| text == "B" && *color == rgb(magnetic.0)),
+        "the compact Sources row keeps the magnetic swatch"
     );
 }
 

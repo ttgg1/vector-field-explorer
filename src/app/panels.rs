@@ -2769,9 +2769,10 @@ impl VfApp {
             );
         }
 
-        // The `Both` source display paints fixed family colours, so the
-        // viewport names those colours under the status line. The status text
-        // above is untouched; this is a second, short line.
+        // The `Both` source display paints each family in its effective
+        // Appearance colour, so the viewport names those colours under the
+        // status line. The status text above is untouched; this is a second,
+        // short line.
         if self.state.field_mode == FieldMode::Sources
             && self.state.sources.display == crate::source_scene::SourceDisplay::Both
             && let Some(rect) = self.last_viewport_rect
@@ -2779,6 +2780,7 @@ impl VfApp {
             crate::ui::sources_panel::paint_both_legend(
                 ui.painter(),
                 egui::pos2(rect.left() + 12.0, rect.top() + 34.0),
+                self.state.source_family_colors(),
             );
         }
 
