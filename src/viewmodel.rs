@@ -9,7 +9,7 @@
 use super::camera::OrbitCamera;
 use super::colormap::Colormap;
 use super::domain::Domain;
-use super::field::FieldExpr;
+use super::field::{FieldExpr, normalize_formula_input};
 use super::field_bake::{BakeAccuracy, BakeAxis, BakeError, BakeSettings, BakeSpec, BakedField};
 use super::field_cache::{FieldSampleCache, FieldSampleKey};
 use super::field_probe::{
@@ -1637,6 +1637,7 @@ impl State {
     /// reported in [`parse_error`] and leaves [`field`] at the last one that
     /// parsed, so the viewport keeps showing the previous field.
     pub fn set_formula(self: &mut State, formula: String) -> bool {
+        let formula = normalize_formula_input(&formula);
         if self.formula == formula {
             return false;
         }
