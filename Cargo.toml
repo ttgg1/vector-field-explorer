@@ -30,6 +30,11 @@ image = "0.25"
 gif = "0.14"
 log = "0.4"
 png = "0.18"
+# Issue #171 / formula-font-fallback: the typeset adapter and its KaTeX faces
+# are registered at startup on both native and WebAssembly, so both crates are
+# target-independent.
+katex-rs = "0.3.0"
+katex-native = "0.1.1"
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -61,8 +66,6 @@ rfd = "0.15"
 exmex = { version = "0.21.0", features = ["partial"] }
 clap = { version = "4", features = ["derive"] }
 pollster = "0.4"
-katex-rs = "0.3.0"
-katex-native = "0.1.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

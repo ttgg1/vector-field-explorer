@@ -116,6 +116,28 @@ fn paint_helper_falls_back_to_linear_on_layout_failure() {
     );
 }
 
+/// The shared app-startup seam must register the KaTeX typeset families, not
+/// only the text faces. Both the native and WebAssembly creators call it, so
+/// this guards the wasm startup path that previously omitted the math faces.
+#[test]
+fn startup_font_helper_registers_katex_families() {
+    let ctx = egui::Context::default();
+    vector_field_explorer::fonts::install_startup_fonts(&ctx);
+    crate::support::run_empty_pass(&ctx);
+    let families = ctx.fonts(|fonts| fonts.families());
+    assert!(
+        families.iter().any(|family| matches!(
+            family,
+            egui::FontFamily::Name(name) if name.starts_with("KaTeX_")
+        )),
+        "startup must register the KaTeX families before the first frame: {families:?}"
+    );
+    assert!(
+        ctx.fonts_mut(|fonts| fonts.has_glyph(&egui::FontId::proportional(14.0), 'A')),
+        "startup must also install the shipped text faces",
+    );
+}
+
 #[test]
 fn install_math_fonts_registers_families_without_an_intervening_pass() {
     let ctx = crate::support::context();

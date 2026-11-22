@@ -38,7 +38,7 @@ fn main() -> eframe::Result {
             WINDOW_TITLE,
             window_options_present(),
             Box::new(move |cc| {
-                vector_field_explorer::fonts::install(&cc.egui_ctx);
+                vector_field_explorer::fonts::install_startup_fonts(&cc.egui_ctx);
                 // In-memory only: pass no app storage, so settings and history
                 // are never loaded or written. Panels may still read presets
                 // and saved scenes read-only, but the measurement never
@@ -52,11 +52,8 @@ fn main() -> eframe::Result {
         WINDOW_TITLE,
         options,
         Box::new(|cc| {
-            vector_field_explorer::fonts::install(&cc.egui_ctx);
-            Ok(Box::new(VfApp::new_with_storage_and_context(
-                cc.storage,
-                &cc.egui_ctx,
-            )))
+            vector_field_explorer::fonts::install_startup_fonts(&cc.egui_ctx);
+            Ok(Box::new(VfApp::new_with_storage(cc.storage)))
         }),
     )
 }
@@ -143,7 +140,7 @@ async fn start_app() -> Result<(), JsValue> {
             canvas,
             eframe::WebOptions::default(),
             Box::new(|cc| {
-                vector_field_explorer::fonts::install(&cc.egui_ctx);
+                vector_field_explorer::fonts::install_startup_fonts(&cc.egui_ctx);
                 Ok(Box::new(vector_field_explorer::VfApp::new_with_storage(
                     cc.storage,
                 )))

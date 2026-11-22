@@ -17,6 +17,15 @@ use crate::support;
 /// them. A source scan for non-ASCII literals is deferred.
 const UI_GLYPHS: &str = "×…·–²³›‹❚▶↺⚙—";
 
+/// Styled Mathematical Alphanumeric Symbols that the Formula bar can show.
+/// DejaVu lacks the whole block; STIX Two Math supplies it in both families.
+const MATH_GLYPHS: [(char, u32); 4] = [
+    ('\u{1D703}', 0x1D703), // MATHEMATICAL ITALIC SMALL THETA
+    ('\u{1D45F}', 0x1D45F), // MATHEMATICAL ITALIC SMALL R
+    ('\u{1D438}', 0x1D438), // MATHEMATICAL ITALIC CAPITAL E
+    ('\u{1D435}', 0x1D435), // MATHEMATICAL ITALIC CAPITAL B
+];
+
 #[test]
 fn epaint_bundles_no_builtin_faces() {
     assert!(
@@ -38,14 +47,19 @@ fn the_shared_context_has_real_text_faces() {
 }
 
 #[test]
-fn installs_exactly_the_three_vendored_faces() {
+fn installs_exactly_the_four_vendored_faces() {
     let definitions = vector_field_explorer::fonts::font_definitions();
     let mut names: Vec<&str> = definitions.font_data.keys().map(String::as_str).collect();
     names.sort_unstable();
     assert_eq!(
         names,
-        ["DejaVu Sans", "DejaVu Sans Mono", "egui-icons"],
-        "the installed face set must be exactly the vendored three",
+        [
+            "DejaVu Sans",
+            "DejaVu Sans Mono",
+            "STIX Two Math",
+            "egui-icons",
+        ],
+        "the installed face set must be exactly the vendored four",
     );
     for forbidden in ["Ubuntu-Light", "Hack"] {
         assert!(
@@ -63,18 +77,20 @@ fn families_are_in_the_ruled_order() {
         definitions.families.get(&FontFamily::Proportional),
         Some(&vec![
             "DejaVu Sans".to_owned(),
+            "STIX Two Math".to_owned(),
             "egui-icons".to_owned(),
         ]),
-        "Proportional is DejaVu Sans with the MIT icon fallback",
+        "Proportional is DejaVu Sans, then the STIX math fallback, then icons",
     );
     assert_eq!(
         definitions.families.get(&FontFamily::Monospace),
         Some(&vec![
             "DejaVu Sans Mono".to_owned(),
             "DejaVu Sans".to_owned(),
+            "STIX Two Math".to_owned(),
             "egui-icons".to_owned(),
         ]),
-        "Monospace keeps the Sans symbol fallback, then the icon face",
+        "Monospace keeps the Sans and STIX symbol fallbacks before the icon face",
     );
 }
 
@@ -95,9 +111,29 @@ fn every_shipped_ui_glyph_has_a_face_in_both_families() {
 }
 
 #[test]
+fn every_formula_math_glyph_has_a_face_in_both_families() {
+    let ctx = support::context();
+    support::run_empty_pass(&ctx);
+
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        for (ch, code) in MATH_GLYPHS {
+            assert!(
+                ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::new(14.0, family.clone()), ch)),
+                "{family:?} has no face for {ch:?} (U+{code:04X})",
+            );
+        }
+    }
+}
+
+#[test]
 fn vendored_bytes_are_real_truetype_fonts() {
     let definitions = vector_field_explorer::fonts::font_definitions();
-    for name in ["DejaVu Sans", "DejaVu Sans Mono", "egui-icons"] {
+    for name in [
+        "DejaVu Sans",
+        "DejaVu Sans Mono",
+        "STIX Two Math",
+        "egui-icons",
+    ] {
         let bytes = definitions
             .font_data
             .get(name)
@@ -111,7 +147,10 @@ fn vendored_bytes_are_real_truetype_fonts() {
             )
         });
         assert!(
-            matches!(signature, [0x00, 0x01, 0x00, 0x00] | b"OTTO" | b"true" | b"ttcf"),
+            matches!(
+                signature,
+                [0x00, 0x01, 0x00, 0x00] | b"OTTO" | b"true" | b"ttcf"
+            ),
             "`{name}` does not start with a TrueType/OpenType signature: {signature:02x?}",
         );
     }
