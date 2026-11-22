@@ -20,6 +20,7 @@ pub mod menu;
 pub mod ode_panel;
 pub mod panel_rails;
 pub mod pins;
+pub mod plane_lesson;
 pub mod plot_panel;
 pub mod presets;
 pub mod prompt_model;
