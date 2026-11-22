@@ -13,7 +13,7 @@
 use eframe::egui;
 
 use crate::tour::{
-    AdvanceRule, PanelId, Region, TOUR, TourAnchor, TourProgress, TourTarget, resolve,
+    AdvanceRule, ControlId, PanelId, Region, TOUR, TourAnchor, TourProgress, TourTarget, resolve,
 };
 
 /// The card width used for placement and painting, before compact clamping.
@@ -54,6 +54,7 @@ pub const fn control_panel(target: TourTarget) -> Option<PanelId> {
 #[derive(Debug, Clone, Default)]
 pub struct TourFrameRects {
     panels: Vec<(PanelId, egui::Rect)>,
+    controls: Vec<(ControlId, egui::Rect)>,
     viewport: Option<egui::Rect>,
 }
 
@@ -64,6 +65,7 @@ impl TourFrameRects {
 
     pub fn clear(&mut self) {
         self.panels.clear();
+        self.controls.clear();
         self.viewport = None;
     }
 
@@ -77,6 +79,20 @@ impl TourFrameRects {
         }
     }
 
+    /// Record the response rect of one live control. Controls that are not
+    /// painted this frame stay absent, never guessed.
+    pub fn record_control(&mut self, control: ControlId, rect: egui::Rect) {
+        if let Some(entry) = self
+            .controls
+            .iter_mut()
+            .find(|(known, _)| *known == control)
+        {
+            entry.1 = rect;
+        } else {
+            self.controls.push((control, rect));
+        }
+    }
+
     pub fn record_viewport(&mut self, rect: egui::Rect) {
         self.viewport = Some(rect);
     }
@@ -87,10 +103,28 @@ impl TourFrameRects {
             .find_map(|(known, rect)| (*known == panel).then_some(*rect))
     }
 
-    /// Resolve a stop target to the real rectangle recorded this frame.
+    pub fn control_rect(&self, control: ControlId) -> Option<egui::Rect> {
+        self.controls
+            .iter()
+            .find_map(|(known, rect)| (*known == control).then_some(*rect))
+    }
+
+    /// Resolve a stop target to the real rectangle recorded this frame. A
+    /// control with its own live rect uses it; controls without one keep the
+    /// historical panel fallback. [`ControlId::requires_live_rect`] controls
+    /// yield no anchor when absent rather than highlighting the whole panel.
     pub fn anchor_rect(&self, target: TourTarget) -> Option<egui::Rect> {
         match resolve(target) {
-            TourAnchor::Control { panel, .. } | TourAnchor::Panel(panel) => self.panel_rect(panel),
+            TourAnchor::Control { panel, control } => {
+                if let Some(rect) = self.control_rect(control) {
+                    Some(rect)
+                } else if control.requires_live_rect() {
+                    None
+                } else {
+                    self.panel_rect(panel)
+                }
+            }
+            TourAnchor::Panel(panel) => self.panel_rect(panel),
             TourAnchor::Viewport(region) => {
                 let viewport = self.viewport?;
                 Some(region_rect(viewport, region))

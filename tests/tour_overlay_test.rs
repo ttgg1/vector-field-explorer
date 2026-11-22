@@ -139,6 +139,89 @@ fn text_input_value(out: &egui::FullOutput, value: &str) -> Option<egui::Rect> {
         })
 }
 
+fn node_rect(out: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
+    out.platform_output
+        .accesskit_update
+        .as_ref()?
+        .nodes
+        .iter()
+        .find_map(|(_, node)| {
+            (node.label() == Some(label) || node.value() == Some(label)).then(|| {
+                let b = node.bounds().expect("widget bounds");
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            })
+        })
+}
+
+#[test]
+fn flux_stop_anchors_to_the_real_integral_surface_control_in_wide_and_compact_layouts() {
+    for (width, height) in [(1200.0, 800.0), (360.0, 640.0)] {
+        let mut h = Harness::new(width, height);
+        h.app
+            .state
+            .set_field_mode(vector_field_explorer::source_scene::FieldMode::Sources);
+        h.start();
+        h.idle();
+        go_to(&mut h, "probes");
+        // The tour opens the Controls panel/sheet and the Field probes body;
+        // the scroll request then brings the Add sphere row into view.
+        for _ in 0..8 {
+            h.frame(Vec::new());
+        }
+        let out = h.frame(Vec::new());
+        let add = node_rect(&out, "Add sphere")
+            .unwrap_or_else(|| panic!("{width} pt: the tour reveals the real Add sphere control"));
+        let rect = h
+            .app
+            .tour_highlight_rect_for_test()
+            .unwrap_or_else(|| panic!("{width} pt: the flux anchor resolves"));
+        assert!(
+            rect.width() > 0.0 && rect.height() > 0.0,
+            "{width} pt: the highlight is non-empty"
+        );
+        assert!(
+            (rect.center() - add.center()).length() < 2.0,
+            "{width} pt: the highlight {rect:?} covers the Add sphere control {add:?}"
+        );
+    }
+}
+
+#[test]
+fn an_absent_integral_control_does_not_fall_back_to_the_whole_panel() {
+    let mut h = Harness::new(1200.0, 800.0);
+    h.app
+        .state
+        .set_field_mode(vector_field_explorer::source_scene::FieldMode::Sources);
+    h.start();
+    h.idle();
+    go_to(&mut h, "probes");
+    for _ in 0..8 {
+        h.frame(Vec::new());
+    }
+    assert!(
+        h.app.tour_highlight_rect_for_test().is_some(),
+        "the control is visible first"
+    );
+
+    // Closing the Controls panel leaves the control absent. The tour must not
+    // fabricate a highlight from the panel rectangle or reopen the panel.
+    h.app.layout.toggle_controls();
+    for _ in 0..4 {
+        h.frame(Vec::new());
+    }
+    assert!(
+        h.app.tour_highlight_rect_for_test().is_none(),
+        "an absent integral control produces no anchor"
+    );
+    assert!(
+        !h.app.layout.controls_expanded,
+        "the user's close is respected for the rest of the stop"
+    );
+}
+
 #[test]
 fn starting_the_tour_records_no_document_or_history_change() {
     let mut h = Harness::new(1200.0, 800.0);

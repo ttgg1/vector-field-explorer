@@ -8,9 +8,13 @@ use crate::color_mapping::ColorQuantity;
 use crate::color_ramp::ScaleMode;
 use crate::colormap::Colormap;
 use crate::field::FieldExpr;
+use crate::field_probe::{CirculationLoop, GaussianSurface, LoopKind, SurfaceKind};
 use crate::scalar::{ScalarContext, ScalarExpr};
 use crate::scalar_view::MAX_PROBES;
 use crate::scene_document::{SceneCamera, SceneDocument};
+use crate::sources::FieldFamily;
+use crate::tour::{ControlId, TourTarget};
+use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
 use crate::ui::presets::SceneAction;
 use crate::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, MIN_DENSITY};
 
@@ -28,6 +32,10 @@ impl VfApp {
         self.apply_pending_panel_request();
         self.sync_materials_draft_on_entry();
         self.sync_maxwell_draft_on_entry();
+        self.reveal_tour_probe_section();
+        // A control rect is meaningful only for the frame that painted it; the
+        // Field probes body sets this again below when it is actually drawn.
+        self.controls.probe_controls.add_surface_rect = None;
 
         // Free flight is 3D-only: the formula bar's 2D/3D toggle (or a formula
         // that loses its third component) drops the fly camera before any
@@ -354,6 +362,7 @@ impl VfApp {
                             );
                         });
                 });
+            self.record_tour_probe_control();
             self.record_tour_panel(PanelId::Controls, response.response.rect);
             if let Some(width) = resize_panel(ui, &response.response, layout::RailSide::Left) {
                 self.layout.controls_width = width;
@@ -984,6 +993,109 @@ impl VfApp {
                 self.scene_frame = SceneFrameKey::of(&self.state);
                 self.state.refresh_maxwell_sampling();
             }
+            crate::ui::maxwell_panel::MaxwellPanelAction::Measurement(request) => {
+                self.apply_maxwell_measurement(request);
+            }
+        }
+    }
+
+    /// Open the probe that actually checks the selected Maxwell statement form,
+    /// or run the existing pointwise check for a differential form. An integral
+    /// action never overwrites an existing user probe; it reuses the first one
+    /// and only adds the matching kind when none exists.
+    fn apply_maxwell_measurement(&mut self, request: MeasurementRequest) {
+        if request.kind == MeasurementKind::Point {
+            self.maxwell.learning.point_highlight = true;
+            let scene = self.state.maxwell.clone();
+            let bem = self.state.maxwell_bem_solution();
+            self.maxwell.learning.check(&scene, bem);
+            return;
+        }
+
+        if let Some(reason) = self.state.probe_mode_unsupported_reason() {
+            self.maxwell.learning.message = Some(reason);
+            return;
+        }
+
+        let active = match crate::maxwell::maxwell_family(self.state.maxwell.case) {
+            crate::maxwell::MaxwellFamily::Electric => FieldFamily::Electric,
+            crate::maxwell::MaxwellFamily::Magnetic => FieldFamily::Magnetic,
+        };
+        if active != request.family {
+            let explanation = self
+                .maxwell
+                .learning
+                .measurement_explanation(&self.state.maxwell)
+                .unwrap_or_else(|| {
+                    "This Maxwell case cannot supply the selected integral.".to_owned()
+                });
+            self.maxwell.learning.message = Some(explanation);
+            return;
+        }
+
+        self.state.set_probe_family(request.family);
+        let domain = self.state.scene_domain();
+        let result = match request.kind {
+            MeasurementKind::Surface if self.state.probe_surfaces().is_empty() => self
+                .state
+                .add_probe_surface(GaussianSurface {
+                    kind: SurfaceKind::Sphere,
+                    center: domain.center(),
+                    axis: Vec3::Z,
+                    size: Vec3::splat(1.0),
+                    segments: 16,
+                })
+                .map(|_| ()),
+            MeasurementKind::Loop if self.state.probe_loops().is_empty() => self
+                .state
+                .add_probe_loop(CirculationLoop {
+                    kind: LoopKind::Circle,
+                    center: domain.center(),
+                    axis: Vec3::Z,
+                    size: Vec3::splat(1.0),
+                    segments: 16,
+                })
+                .map(|_| ()),
+            MeasurementKind::Surface | MeasurementKind::Loop => Ok(()),
+            MeasurementKind::Point => Ok(()),
+        };
+        if let Err(error) = result {
+            self.maxwell.learning.message = Some(error);
+            return;
+        }
+
+        self.maxwell.learning.message = None;
+        self.controls.probe_controls.open_section = true;
+        if self.layout_mode == LayoutMode::Compact {
+            self.sheet.open(SheetState::Controls);
+            self.sheet_expanded = SheetSize::Default;
+        } else if !self.layout.controls_expanded {
+            self.layout.toggle_controls();
+        }
+    }
+
+    /// Reveal the Field probes body once when the tour reaches the integral
+    /// surface control, and forget it on every other stop. The reveal lives in
+    /// `ProbeControls`, so a user close is not undone on later frames.
+    fn reveal_tour_probe_section(&mut self) {
+        let index = self.tour.as_ref().and_then(|progress| {
+            let stop = progress.current()?;
+            match stop.target {
+                TourTarget::Control(ControlId::FieldProbeSurface) => Some(progress.index()),
+                _ => None,
+            }
+        });
+        match index {
+            Some(index) => self.controls.probe_controls.reveal_for_tour(index),
+            None => self.controls.probe_controls.forget_tour_reveal(),
+        }
+    }
+
+    /// Record the real `Add sphere` control rect for this frame's tour anchor.
+    fn record_tour_probe_control(&mut self) {
+        if let Some(rect) = self.controls.probe_controls.add_surface_rect {
+            self.tour_rects
+                .record_control(ControlId::FieldProbeSurface, rect);
         }
     }
 
@@ -1607,6 +1719,7 @@ impl VfApp {
                     SheetState::None => {}
                 });
             });
+        self.record_tour_probe_control();
 
         let sheet_panel = match sheet {
             SheetState::Controls => Some(PanelId::Controls),

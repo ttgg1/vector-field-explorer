@@ -21,7 +21,7 @@ use crate::maxwell_learning::MaxwellEquation;
 use crate::maxwell_residual::{TermStatus, residual};
 use crate::maxwell_wave::{MAX_AMPLITUDE, MIN_WAVELENGTH, WaveSpec, equation_terms};
 use crate::ui::help_overlay::HelpRow;
-use crate::ui::maxwell_learning_panel::MaxwellLearningPanel;
+use crate::ui::maxwell_learning_panel::{MaxwellLearningPanel, MeasurementRequest};
 use crate::viewmodel::State;
 
 /// The exact arrows-only note shared by the panel and the Features section.
@@ -57,6 +57,8 @@ pub enum MaxwellPanelAction {
     Reset,
     /// Switch the projection to 2D without changing mode or case.
     SwitchTo2d,
+    /// Open (or reuse) the probe measurement the selected law form checks.
+    Measurement(MeasurementRequest),
 }
 
 /// Panel-local state: the draft scene, the last rejected edit and the Advanced
@@ -326,10 +328,11 @@ pub fn show(
     let learning = &mut panel.learning;
     let committed = &state.maxwell;
     let bem = state.maxwell_bem_solution();
+    let mut measurement = None;
     egui::CollapsingHeader::new("Maxwell equations")
         .default_open(false)
         .show(ui, |ui| {
-            learning.show(ui, committed, bem);
+            measurement = learning.show(ui, committed, bem);
         });
 
     ui.label("View: Field");
@@ -384,6 +387,9 @@ pub fn show(
     }
     panel.advanced = advanced;
 
+    if let Some(request) = measurement {
+        action = Some(MaxwellPanelAction::Measurement(request));
+    }
     if commit_now && action.is_none() {
         panel.commit(state);
     }
