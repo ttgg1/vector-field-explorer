@@ -2592,8 +2592,12 @@ sampled, never a symbolic identity claim.
 `skip_is_an_explicit_way_past_the_prediction_gate`,
 `a_parse_error_keeps_the_previous_candidate_and_names_the_failure`,
 `applying_an_invalid_candidate_never_touches_the_model_or_scene`,
-`the_comparison_body_renders_the_gate_before_the_numbers`, and
-`the_comparison_body_fits_a_compact_sidebar_and_names_the_second_point`.
+`the_comparison_body_renders_the_gate_before_the_numbers`,
+`the_comparison_body_fits_a_compact_sidebar_and_names_the_second_point`,
+`a_reversed_model_sign_also_reads_as_against`,
+`a_direction_disagreement_between_points_is_named`,
+`a_named_parameter_binds_in_the_candidate_and_a_change_marks_it_stale`, and
+`a_prediction_grade_names_the_point_it_was_made_at`.
 
 **Limitations.** Two points expose scale and sign errors but do not prove a
 power law, and no symbolic identity check exists. Values come through the f32
