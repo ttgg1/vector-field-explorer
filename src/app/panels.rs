@@ -15,7 +15,7 @@ use crate::scalar_view::MAX_PROBES;
 use crate::scene_document::{SceneCamera, SceneDocument};
 use crate::sources::FieldFamily;
 use crate::tour::{ControlId, TourTarget};
-use crate::ui::griffiths::{GriffithsAction, GriffithsRoute};
+use crate::ui::griffiths::{GriffithsAction, GriffithsExplorationAction, GriffithsRoute};
 use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
 use crate::ui::pins::{self, PinAction, PinSnapshot};
 use crate::ui::plane_lesson::{
@@ -1288,15 +1288,9 @@ impl VfApp {
         }
         self.griffiths.picker_open = false;
         self.griffiths.placeholder = None;
+        self.clear_griffiths_exploration();
         if self.griffiths_start.is_none() {
-            self.griffiths_start = Some(GriffithsStart {
-                state: self.state.clone(),
-                orbit: self.orbit,
-                camera_position: self.camera.position,
-                camera_scale: self.camera.scale,
-                history: self.history.clone(),
-                last_committed: self.last_committed.clone(),
-            });
+            self.griffiths_start = Some(self.griffiths_start_snapshot());
         }
         match route {
             GriffithsRoute::Ring => {
@@ -1408,6 +1402,7 @@ impl VfApp {
         if self.griffiths.shell.active() && self.griffiths.shell.finish(&self.state.maxwell) {
             self.griffiths.shell_completed = true;
         }
+        self.clear_griffiths_exploration();
         if let Some(start) = self.griffiths_start.take() {
             self.state = start.state;
             self.orbit = start.orbit;
@@ -1430,6 +1425,7 @@ impl VfApp {
             self.griffiths.shell_completed = true;
         }
         self.griffiths_start = None;
+        self.clear_griffiths_exploration();
         self.griffiths.lesson.deactivate();
         self.griffiths.shell.deactivate();
         self.griffiths.plane.deactivate();
@@ -1437,10 +1433,91 @@ impl VfApp {
         self.griffiths.close();
     }
 
+    fn griffiths_start_snapshot(&self) -> GriffithsStart {
+        GriffithsStart {
+            state: self.state.clone(),
+            orbit: self.orbit,
+            camera_position: self.camera.position,
+            camera_scale: self.camera.scale,
+            history: self.history.clone(),
+            last_committed: self.last_committed.clone(),
+        }
+    }
+
+    fn clear_griffiths_exploration(&mut self) {
+        self.griffiths_exploration = None;
+        self.griffiths_return_prompt = false;
+    }
+
+    /// Temporarily leave the activity at its current checkpoint. The lesson
+    /// stays active but its window is hidden so ordinary exploration can
+    /// proceed; the starting-workspace snapshot is untouched.
+    pub fn explore_from_griffiths(&mut self) {
+        let Some((route, checkpoint)) = crate::ui::griffiths::active_checkpoint(&self.griffiths)
+        else {
+            return;
+        };
+        self.griffiths_exploration = Some(GriffithsExploration {
+            route,
+            checkpoint,
+            scene: self.griffiths_start_snapshot(),
+            lesson_state: self.griffiths.clone(),
+        });
+        self.griffiths_return_prompt = false;
+    }
+
+    /// The learner asked to return; offer resume or keep variation.
+    pub fn return_to_griffiths_activity(&mut self) {
+        if self.griffiths_exploration.is_some() {
+            self.griffiths_return_prompt = true;
+        }
+    }
+
+    /// Restore the scene, camera and lesson state saved at the checkpoint.
+    pub fn resume_griffiths_checkpoint(&mut self) {
+        if let Some(exploration) = self.griffiths_exploration.take() {
+            let scene = exploration.scene;
+            self.state = scene.state;
+            self.orbit = scene.orbit;
+            self.camera.position = scene.camera_position;
+            self.camera.scale = scene.camera_scale;
+            self.history = scene.history;
+            self.last_committed = scene.last_committed;
+            self.griffiths = exploration.lesson_state;
+        }
+        self.griffiths_return_prompt = false;
+    }
+
+    /// Keep the learner's current scene and lesson edits; only the saved
+    /// checkpoint is discarded.
+    pub fn keep_griffiths_variation(&mut self) {
+        self.clear_griffiths_exploration();
+    }
+
     /// Test seam: whether the four-route picker is up.
     #[doc(hidden)]
     pub fn griffiths_picker_open_for_test(&self) -> bool {
         self.griffiths.picker_open
+    }
+
+    /// Test seam: the active route's current checkpoint.
+    #[doc(hidden)]
+    pub fn griffiths_checkpoint_for_test(
+        &self,
+    ) -> Option<crate::ui::griffiths::GriffithsCheckpoint> {
+        crate::ui::griffiths::active_checkpoint(&self.griffiths).map(|(_, checkpoint)| checkpoint)
+    }
+
+    /// Test seam: whether a temporary exploration snapshot is active.
+    #[doc(hidden)]
+    pub fn griffiths_exploration_active_for_test(&self) -> bool {
+        self.griffiths_exploration.is_some()
+    }
+
+    /// Test seam: whether the resume/keep-variation prompt is up.
+    #[doc(hidden)]
+    pub fn griffiths_return_prompt_for_test(&self) -> bool {
+        self.griffiths_return_prompt
     }
 
     /// Test seam: the unavailable route whose placeholder is showing.
@@ -1459,6 +1536,12 @@ impl VfApp {
     #[doc(hidden)]
     pub fn ring_lesson_active_for_test(&self) -> bool {
         self.griffiths.lesson.active()
+    }
+
+    /// Test seam: whether the ring result has been revealed.
+    #[doc(hidden)]
+    pub fn ring_lesson_revealed_for_test(&self) -> bool {
+        self.griffiths.lesson.revealed()
     }
 
     /// Test seam: whether the pre-lesson snapshot has been dropped.
@@ -1710,6 +1793,18 @@ impl VfApp {
 
     /// Draw the optional Griffiths branch and apply its one-shot actions.
     fn show_griffiths_overlays(&mut self, ctx: &egui::Context) {
+        if let Some(exploration) = self.griffiths_exploration.as_ref() {
+            let route = exploration.route;
+            let checkpoint = exploration.checkpoint;
+            let prompt = self.griffiths_return_prompt;
+            match crate::ui::griffiths::show_exploration(ctx, route, checkpoint, prompt) {
+                GriffithsExplorationAction::Return => self.return_to_griffiths_activity(),
+                GriffithsExplorationAction::Resume => self.resume_griffiths_checkpoint(),
+                GriffithsExplorationAction::KeepVariation => self.keep_griffiths_variation(),
+                GriffithsExplorationAction::None => {}
+            }
+            return;
+        }
         match crate::ui::griffiths::show_picker(ctx, &mut self.griffiths) {
             GriffithsAction::OpenRing => self.start_griffiths_route(GriffithsRoute::Ring),
             GriffithsAction::OpenShell => self.start_griffiths_route(GriffithsRoute::Shell),
@@ -1722,6 +1817,7 @@ impl VfApp {
         match crate::ui::ring_lesson::show(ctx, &mut self.griffiths.lesson) {
             RingLessonAction::Back => self.exit_griffiths_lesson(),
             RingLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            RingLessonAction::ExploreFromHere => self.explore_from_griffiths(),
             RingLessonAction::SendToCas => self.send_ring_formula_to_cas(),
             RingLessonAction::None => {}
         }
@@ -1734,11 +1830,13 @@ impl VfApp {
         ) {
             ShellLessonAction::Back => self.exit_griffiths_lesson(),
             ShellLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            ShellLessonAction::ExploreFromHere => self.explore_from_griffiths(),
             ShellLessonAction::None => {}
         }
         match crate::ui::plane_lesson::show(ctx, &mut self.griffiths.plane, &self.state.maxwell) {
             PlaneLessonAction::Back => self.exit_griffiths_lesson(),
             PlaneLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            PlaneLessonAction::ExploreFromHere => self.explore_from_griffiths(),
             PlaneLessonAction::SendToCas => self.send_plane_formula_to_cas(),
             PlaneLessonAction::None => {}
         }
@@ -1751,6 +1849,7 @@ impl VfApp {
         ) {
             WireLessonAction::Back => self.exit_griffiths_lesson(),
             WireLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            WireLessonAction::ExploreFromHere => self.explore_from_griffiths(),
             WireLessonAction::None => {}
         }
     }

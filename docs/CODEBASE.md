@@ -433,6 +433,19 @@ picker draws into `GriffithsState` (`picker_open`, `placeholder`, `lesson`,
 OpenPlane, OpenWire, Placeholder(route), Dismiss}`. The placeholder path remains
 safe for a future unavailable route; no shipped route currently uses it.
 
+Issue #235 adds the explicit per-step controls shared by all four activities.
+`GriffithsCheckpoint` reports `Predict`, `Reveal` or `Result` from the lesson's
+own prediction/reveal gate; every activity paints the current checkpoint as
+text. **Skip this step** is offered only at `Predict` and advances exactly one
+step without revealing the result. **Show hint** reveals the lesson's existing
+contextual hint on request. **Explore from here** records a session-only
+snapshot (scene, camera, history and all lesson state) and hides the activity
+window so ordinary exploration can proceed. Returning offers **Resume at
+checkpoint** (restore the snapshot) or **Keep my variation** (keep the current
+scene and lesson edits); this exploration snapshot is separate from the
+starting-workspace snapshot used by Back/Exit and Keep exploring. Nothing in
+this model is persisted or written to a scene document.
+
 **Pinned by.** [tests/griffiths_tour_test.rs](../tests/griffiths_tour_test.rs):
 `the_welcome_card_offers_the_optional_griffiths_branch`,
 `help_offers_the_branch_and_can_replay_it_after_a_lesson`,
@@ -441,7 +454,11 @@ safe for a future unavailable route; no shipped route currently uses it.
 `the_legacy_help_window_has_no_dead_griffiths_control`. The last test renders
 `help_window_with_bindings`, which cannot act on a branch request, and proves it
 draws no inert Griffiths button; only the app's `help_window_with_branch` path
-adds the live entry.
+adds the live entry. [tests/griffiths_checkpoint_test.rs](../tests/griffiths_checkpoint_test.rs)
+pins the #235 step controls: checkpoint advancement without a reveal, voluntary
+pre-reveal hints, explore → resume restoration, explore → keep-variation
+retention, Back/Exit and Keep exploring on wide and compact layouts, and the
+unchanged quick tour/Help replay entry points.
 
 #### `src/ui/ring_lesson.rs` — charged-ring axial-field activity (#224)
 
@@ -453,8 +470,8 @@ preset's normalized `Q = 1`, `R = 1` and softening `0.1`.
 
 **Invariants.** The question and prediction prompt precede the result block;
 `can_reveal` requires a prediction or an explicit skip, and predictions remain
-revisable until the reveal. The first hint distinguishes the fixed ring radius
-`R` from the probe coordinate `z`. The side view maps `z = 0` to the ring axis
+revisable until the reveal. The first hint, shown only on request with **Show
+hint**, distinguishes the fixed ring radius `R` from the probe coordinate `z`. The side view maps `z = 0` to the ring axis
 at the canvas centre and the full `-2..=2` range to the drawable width inset by
 14 pt, so the `+z` marker stays on-canvas. Moving the probe invalidates the
 cached reading and updates the signed component, the side-view vector and the
@@ -490,10 +507,12 @@ quadrature uncertainty.
 
 **Invariants.** The question and the separate field/flux prompts precede every
 result; `can_reveal` requires both predictions or an explicit skip, and
-predictions remain revisable until the reveal. The first hint distinguishes the
-fixed shell radius `R` (`MaxwellScene::radius`) from the movable measuring
+predictions remain revisable until the reveal. The first hint, shown only on
+request with **Show hint**, distinguishes the fixed shell radius `R`
+(`MaxwellScene::radius`) from the movable measuring
 radius `r` (`GaussShellState::probe_radius`). Before the reveal only the
-question, prompt, hint and radius control are drawn; E, A and Phi stay hidden.
+question, prompt, checkpoint/controls and radius control are drawn; E, A and Phi
+stay hidden.
 The reveal adds enclosed charge by region, outward normals, the `r` and `2r`
 readings, the quarter-field/fourfold-area/equal-flux ratios within the reported
 uncertainty, the interior-zero and ideal-boundary exclusion notes, and pin
@@ -572,7 +591,8 @@ the shipped fields unchanged.
 
 **Invariants.** The question and the separate trial sign/location prompts precede
 the construction and result; `can_reveal` requires both predictions or an
-explicit skip, and predictions remain revisable until the reveal. Before the
+explicit skip, and predictions remain revisable until the reveal. The
+contextual hint stays hidden until **Show hint** is used. Before the
 reveal the learner can move the lateral boundary test across several positions;
 the candidate table is labelled as a trial construction, not the physical
 scene. The correct image gives `V = 0` at `z = 0` at every tested lateral
@@ -613,7 +633,8 @@ wire axis.
 **Invariants.** The question and the separate compass-direction/inside-loop
 prompts precede every result; `can_reveal` requires both predictions or an
 explicit skip, and predictions remain revisable until the reveal. The direction
-hint anchors the shipped `+z` current and the right-hand rule; the orientation
+hint (revealed only on request with **Show hint**) anchors the shipped `+z`
+current and the right-hand rule; the orientation
 hint anchors the loop's positive normal and the signed circulation, and the
 selected normal/contour stays visible above the controls. The shell radius
 `a` is the fixed `MaxwellScene::radius`; the loop radius `r` is the movable
