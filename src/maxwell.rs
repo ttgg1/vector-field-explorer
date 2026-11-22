@@ -872,6 +872,13 @@ fn case_tolerance(scale: f64) -> f64 {
     MAXWELL_INTERFACE_TOLERANCE_FACTOR * scale.max(1.0)
 }
 
+/// The radial half-width around the hollow-sphere interface where the shipped
+/// analytic field is undefined. It uses the same tolerance as the sampler, so a
+/// caller can flag an excluded interface sample without duplicating the value.
+pub fn hollow_sphere_interface_tolerance(radius: f64) -> f64 {
+    case_tolerance(radius)
+}
+
 fn plates_field(scene: &MaxwellScene, point: Vec3) -> Result<DVec3, MaxwellError> {
     let p = point.as_dvec3();
     let half = 0.5 * scene.separation;
