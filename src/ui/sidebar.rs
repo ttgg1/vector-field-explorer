@@ -1416,12 +1416,16 @@ pub struct ProbeControls {
 }
 
 impl ProbeControls {
-    /// Reveal the Field probes body once for this tour stop.
-    pub fn reveal_for_tour(&mut self, stop_index: usize) {
+    /// Reveal the Field probes body once for this tour stop. Returns `true`
+    /// only on the frame the tour enters the stop, so the app can prepare the
+    /// adapter before the body paints while still respecting a user's close.
+    pub fn reveal_for_tour(&mut self, stop_index: usize) -> bool {
         if self.tour_revealed_stop != Some(stop_index) {
             self.tour_revealed_stop = Some(stop_index);
             self.open_section = true;
+            return true;
         }
+        false
     }
 
     /// Forget the revealed stop when the tour leaves the probe control.

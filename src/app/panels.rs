@@ -1077,6 +1077,14 @@ impl VfApp {
     /// Reveal the Field probes body once when the tour reaches the integral
     /// surface control, and forget it on every other stop. The reveal lives in
     /// `ProbeControls`, so a user close is not undone on later frames.
+    ///
+    /// This probe stop has one deliberate tour side effect: entering it once
+    /// switches a Formula/Ode adapter to Sources, because only an adapter that
+    /// supplies a field can paint the real `Add sphere` control the stop
+    /// anchors to. The switch goes through the shipped `set_field_mode` seam
+    /// and preserves every durable scene. When even that cannot make probes
+    /// available (the scalar Plot view has no vector field), the card carries
+    /// an actionable note instead of a dead section.
     fn reveal_tour_probe_section(&mut self) {
         let index = self.tour.as_ref().and_then(|progress| {
             let stop = progress.current()?;
@@ -1086,9 +1094,39 @@ impl VfApp {
             }
         });
         match index {
-            Some(index) => self.controls.probe_controls.reveal_for_tour(index),
+            Some(index) => {
+                if self.controls.probe_controls.reveal_for_tour(index) {
+                    self.prepare_tour_probe_mode();
+                }
+                self.report_tour_probe_mode();
+            }
             None => self.controls.probe_controls.forget_tour_reveal(),
         }
+    }
+
+    /// Reach a probe-capable adapter on tour entry when the current one cannot
+    /// supply a field. Sources is the shipped adapter with a ready field model,
+    /// so no probe-only numerical path is introduced here.
+    fn prepare_tour_probe_mode(&mut self) {
+        if self.state.probe_mode_unsupported_reason().is_some() && self.state.is_vector_mode() {
+            // The adapter switch is a real, undoable document edit through the
+            // shipped mode seam, so it reaches the normal history baseline. The
+            // stop body names the switch rather than hiding it.
+            self.state.set_field_mode(FieldMode::Sources);
+        }
+    }
+
+    /// Tell the tour card why probes are still unavailable, if they are. This
+    /// runs every frame so a manual adapter change during the stop is reflected.
+    fn report_tour_probe_mode(&mut self) {
+        let note = self.state.probe_mode_unsupported_reason().map(|reason| {
+            if self.state.is_vector_mode() {
+                format!("{reason} Switch the adapter to Sources to use Field probes.")
+            } else {
+                format!("{reason} Switch back to the vector view to use Field probes.")
+            }
+        });
+        self.tour_rects.set_note(note);
     }
 
     /// Record the real `Add sphere` control rect for this frame's tour anchor.

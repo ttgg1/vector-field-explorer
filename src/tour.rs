@@ -418,7 +418,9 @@ pub const TOUR: &[TourStop] = &[
         title: "Field probes",
         body: "The Field probes section adds bounded Gaussian surfaces and \
                circulation loops. It reports flux and circulation estimates with \
-               an explicit resolved, unresolved or singular status.",
+               an explicit resolved, unresolved or singular status. This step \
+               switches to the Sources adapter if the current adapter cannot \
+               supply a probe field.",
         target: TourTarget::Control(ControlId::FieldProbeSurface),
         advance: AdvanceRule::Next,
     },

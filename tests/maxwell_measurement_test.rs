@@ -91,10 +91,20 @@ struct Harness {
     ctx: egui::Context,
     app: VfApp,
     frame: eframe::Frame,
+    width: f32,
+    height: f32,
 }
 
 impl Harness {
     fn new(scene: MaxwellScene) -> Self {
+        Self::with_size(scene, 1200.0, 2000.0)
+    }
+
+    fn compact(scene: MaxwellScene) -> Self {
+        Self::with_size(scene, 360.0, 640.0)
+    }
+
+    fn with_size(scene: MaxwellScene, width: f32, height: f32) -> Self {
         let ctx = context();
         let mut app = VfApp::new();
         app.layout.help_visible = false;
@@ -109,6 +119,8 @@ impl Harness {
             ctx,
             app,
             frame: eframe::Frame::_new_kittest(),
+            width,
+            height,
         }
     }
 
@@ -117,7 +129,7 @@ impl Harness {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1200.0, 2000.0),
+                    egui::vec2(self.width, self.height),
                 )),
                 events,
                 ..Default::default()
@@ -143,6 +155,36 @@ impl Harness {
         self.frame(pointer(rect.center(), true));
         self.frame(pointer(rect.center(), false));
         self.idle();
+    }
+
+    /// Scroll the open compact sheet until `label` is fully inside the window,
+    /// then press it. The Maxwell sheet is taller than a phone screen, so a
+    /// real user scrolls to reach the measurement row.
+    fn scroll_click(&mut self, label: &str) {
+        for _ in 0..40 {
+            let out = self.idle();
+            let node = find(&nodes(&out), label)
+                .unwrap_or_else(|| panic!("missing scrollable {label}"))
+                .rect;
+            // Keep the row above the sheet's bottom tab bar, whose overlay
+            // would otherwise receive the click.
+            if node.min.y >= 0.0 && node.max.y <= self.height * 0.7 {
+                self.click(label);
+                return;
+            }
+            let pos = egui::pos2(self.width / 2.0, self.height * 0.6);
+            self.frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -120.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        panic!("{label} never scrolled into the compact sheet");
     }
 }
 
@@ -306,6 +348,55 @@ fn applying_an_integral_law_adds_or_reuses_the_matching_family_probe() {
         h.app.state.probe_surfaces().len(),
         1,
         "a second action reuses the existing surface"
+    );
+}
+
+#[test]
+fn compact_maxwell_measurement_opens_the_controls_sheet_and_shows_the_readout() {
+    use vector_field_explorer::ui::layout::{SheetSize, SheetState};
+
+    let mut h = Harness::compact(scene(MaxwellCase::Solenoid));
+    h.app.maxwell.learning.equation = MaxwellEquation::GaussMagnetic;
+    h.app.maxwell.learning.form = EquationForm::Integral;
+    // The compact layout shows one panel at a time. Open the Maxwell sheet and
+    // expand it so the measurement button is on screen, exactly as a user
+    // would before pressing it.
+    h.app.sheet.open(SheetState::Maxwell);
+    h.app.sheet_expanded = SheetSize::Expanded;
+    h.idle();
+    assert_eq!(
+        h.app.sheet,
+        SheetState::Maxwell,
+        "the Maxwell sheet is the live compact surface"
+    );
+
+    h.scroll_click("Maxwell equations");
+    h.scroll_click("Open flux surface");
+
+    assert_eq!(
+        h.app.sheet,
+        SheetState::Controls,
+        "the measurement opens the Controls sheet"
+    );
+    assert_eq!(
+        h.app.state.probe_surfaces().len(),
+        1,
+        "the action reaches one oriented surface on the compact path"
+    );
+    let out = h.frame(Vec::new());
+    let labels = nodes(&out);
+    assert!(
+        find(&labels, "Field probes").is_some(),
+        "the Controls sheet reveals the Field probes body"
+    );
+    assert!(
+        labels.iter().any(|node| node.label.contains("samples)")),
+        "the flux readout is visible in the Controls sheet: {:?}",
+        labels.iter().map(|node| &node.label).collect::<Vec<_>>()
+    );
+    assert!(
+        h.app.state.probe_surface_report(0).is_some(),
+        "the readout is the existing IntegralStatus report"
     );
 }
 

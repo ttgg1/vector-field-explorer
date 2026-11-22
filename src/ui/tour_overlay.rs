@@ -56,6 +56,7 @@ pub struct TourFrameRects {
     panels: Vec<(PanelId, egui::Rect)>,
     controls: Vec<(ControlId, egui::Rect)>,
     viewport: Option<egui::Rect>,
+    note: Option<String>,
 }
 
 impl TourFrameRects {
@@ -67,6 +68,17 @@ impl TourFrameRects {
         self.panels.clear();
         self.controls.clear();
         self.viewport = None;
+        self.note = None;
+    }
+
+    /// Record an actionable note for the current stop's card. The frame phase
+    /// clears it, so the note only describes this frame's real state.
+    pub fn set_note(&mut self, note: Option<String>) {
+        self.note = note;
+    }
+
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
     }
 
     /// Record the response rect of a panel surface. A later record in the same
@@ -304,6 +316,10 @@ pub fn show(
                             ui.label(egui::RichText::new(stop.title).strong().size(16.0));
                             ui.add_space(4.0);
                             ui.label(stop.body);
+                            if let Some(note) = rects.note() {
+                                ui.add_space(4.0);
+                                ui.colored_label(ui.visuals().warn_fg_color, note);
+                            }
                             ui.add_space(6.0);
                             ui.weak(format!("Step {} of {}", progress.index() + 1, TOUR.len()));
                             ui.horizontal_wrapped(|ui| {

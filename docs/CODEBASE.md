@@ -366,17 +366,20 @@ anchored card plus non-colour-only highlight, and evaluate `AdvanceRule`.
 **Public API.** `advance_ready(rule, captured, current)` is the pure `Changed`
 comparison; `control_panel(target)` names the panel that owns a control;
 `TourFrameRects::{record_panel, record_control, record_viewport, anchor_rect}`
-hold one frame of painted rectangles; `place_card(target, screen, size)` places
-a card near but not over the target inside the screen; `show(ctx, rects,
-progress, ready)` paints the card and returns `TourOutcome { action, card_rect,
-target_rect }`.
+hold one frame of painted rectangles and `set_note`/`note` carry one actionable
+card note; `place_card(target, screen, size)` places a card near but not over
+the target inside the screen; `show(ctx, rects, progress, ready)` paints the
+card and returns `TourOutcome { action, card_rect, target_rect }`.
 
 **Invariants / notes.** `ControlId` anchors prefer a live control rectangle
 when the app recorded one and otherwise fall back to the owning panel.
 `ControlId::FieldProbeSurface` (the Field probes `Add sphere` button) requires
 its own live rectangle: when the Field probes body is closed the flux stop has
 no highlight rather than pointing at the whole Controls panel. The tour reveals
-that body once per stop; a user close is respected. An `AdvanceRule::Changed`
+that body once per stop; a user close is respected. On entry it also switches a
+Formula/Ode adapter to Sources through `State::set_field_mode`, so the stop
+reaches a real probe field; when the scalar Plot view has no vector field the
+card carries an actionable note instead of a dead section. An `AdvanceRule::Changed`
 compares this frame's value with the snapshot captured
 when that stop became current; an unavailable value never satisfies it. The
 card has a title and body and uses a `UiKind::Modal` stack kind for an
