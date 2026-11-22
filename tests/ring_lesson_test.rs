@@ -14,9 +14,13 @@ use vector_field_explorer::sources::SourceKind;
 use vector_field_explorer::ui::griffiths::GriffithsRoute;
 use vector_field_explorer::ui::ring_lesson::{
     RING_CAS_EXPRESSION, RING_HINT, RING_IDEAL_FORMULA, RING_PAIRING_NOTE, RING_PROMPT,
-    RING_QUESTION, RING_SOFTENED_NOTE, RING_STRONGEST_Z, RingLessonState, RingPrediction,
-    ideal_axial_field, softened_axial_field,
+    RING_QUESTION, RING_SOFTENED_NOTE, RING_STRONGEST_Z, RING_UNITS_NOTE, RingLessonState,
+    RingPrediction, graph_visibility, ideal_axial_field, probe_x_for_z, softened_axial_field,
 };
+
+/// The graph legend only names the ideal and softened curves; it must not be
+/// visible before the reveal.
+const CURVE_LEGEND: &str = "ideal — · softened ----";
 struct Harness {
     ctx: egui::Context,
     app: VfApp,
@@ -128,6 +132,55 @@ fn a_fresh_lesson_shows_the_prompt_before_any_result() {
 }
 
 #[test]
+fn the_side_view_maps_the_probe_about_the_ring_axis() {
+    let rect = egui::Rect::from_min_size(egui::Pos2::new(10.0, 20.0), egui::vec2(400.0, 154.0));
+    let centre = rect.center().x;
+    assert!(
+        (probe_x_for_z(rect, 0.0) - centre).abs() < 1e-4,
+        "z = 0 sits on the ring axis at the centre"
+    );
+    assert!(
+        (probe_x_for_z(rect, -2.0) - (rect.left() + 14.0)).abs() < 1e-4,
+        "z = -2 is the left end of the probe range"
+    );
+    let right = probe_x_for_z(rect, 2.0);
+    assert!(
+        (right - (rect.right() - 14.0)).abs() < 1e-4,
+        "z = +2 is the right end of the probe range"
+    );
+    assert!(
+        right < rect.right(),
+        "the +z probe marker stays on-canvas at {right} inside {rect:?}"
+    );
+    assert!(
+        probe_x_for_z(rect, -0.5) < centre && probe_x_for_z(rect, 0.5) > centre,
+        "the signed probe is left of centre for negative z and right for positive z"
+    );
+}
+
+#[test]
+fn the_curves_and_legend_are_revealed_only_with_the_result() {
+    let before = graph_visibility(false);
+    assert!(
+        !before.curves && !before.legend,
+        "the ideal/softened curves and their legend stay hidden before the reveal"
+    );
+    let after = graph_visibility(true);
+    assert!(
+        after.curves && after.legend,
+        "the reveal draws the curves with their legend"
+    );
+}
+
+#[test]
+fn the_axial_graph_states_k_is_one_in_normalized_units() {
+    assert!(
+        RING_UNITS_NOTE.contains("k = 1") && RING_UNITS_NOTE.contains("normalized teaching units"),
+        "the one-line note explains the missing k: {RING_UNITS_NOTE}"
+    );
+}
+
+#[test]
 fn the_probe_updates_the_signed_component_and_marker_value() {
     let mut lesson = RingLessonState::default();
     lesson.activate();
@@ -197,6 +250,10 @@ fn the_ring_route_loads_the_shipped_preset_and_restores_the_starting_scene() {
         !text.contains("Axial field result"),
         "no result block before the prediction: {text}"
     );
+    assert!(
+        !text.contains(CURVE_LEGEND),
+        "the curve legend stays hidden before the reveal: {text}"
+    );
 
     h.app.set_ring_probe_for_test(1.0);
     h.app.predict_ring_for_test(RingPrediction::PartwayOut);
@@ -211,6 +268,14 @@ fn the_ring_route_loads_the_shipped_preset_and_restores_the_starting_scene() {
     assert!(text.contains(RING_IDEAL_FORMULA));
     assert!(text.contains(RING_PAIRING_NOTE));
     assert!(text.contains(RING_SOFTENED_NOTE));
+    assert!(
+        text.contains(CURVE_LEGEND),
+        "the reveal draws the curve legend: {text}"
+    );
+    assert!(
+        text.contains(RING_UNITS_NOTE),
+        "the reveal states the normalized-unit convention for k: {text}"
+    );
 
     h.app.exit_griffiths_lesson();
     assert!(!h.app.ring_lesson_active_for_test());

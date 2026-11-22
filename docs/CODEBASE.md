@@ -422,8 +422,12 @@ available yet" placeholder that the learner can close.
 **Pinned by.** [tests/griffiths_tour_test.rs](../tests/griffiths_tour_test.rs):
 `the_welcome_card_offers_the_optional_griffiths_branch`,
 `help_offers_the_branch_and_can_replay_it_after_a_lesson`,
-`the_branch_and_ring_route_work_in_wide_and_compact_layouts`, and
-`unavailable_routes_are_safe_labelled_placeholders`.
+`the_branch_and_ring_route_work_in_wide_and_compact_layouts`,
+`unavailable_routes_are_safe_labelled_placeholders`, and
+`the_legacy_help_window_has_no_dead_griffiths_control`. The last test renders
+`help_window_with_bindings`, which cannot act on a branch request, and proves it
+draws no inert Griffiths button; only the app's `help_window_with_branch` path
+adds the live entry.
 
 #### `src/ui/ring_lesson.rs` — charged-ring axial-field activity (#224)
 
@@ -436,19 +440,26 @@ preset's normalized `Q = 1`, `R = 1` and softening `0.1`.
 **Invariants.** The question and prediction prompt precede the result block;
 `can_reveal` requires a prediction or an explicit skip, and predictions remain
 revisable until the reveal. The first hint distinguishes the fixed ring radius
-`R` from the probe coordinate `z`. Moving the probe invalidates the cached
-reading and updates the signed component, the side-view vector and the graph
-marker. The ideal and softened curves are drawn separately and the softened
-peak is never graded against the ideal `|z| = R/√2` peak. On native, the
-revealed formula can be sent to the CAS input with `Q` and `R` symbolic; the
-reading itself never requires the CAS backend. Session state only;
-the app snapshots the scene and camera before the lesson, Back/Exit restores
-that snapshot, and Keep exploring drops it and adopts the ring scene.
+`R` from the probe coordinate `z`. The side view maps `z = 0` to the ring axis
+at the canvas centre and the full `-2..=2` range to the drawable width inset by
+14 pt, so the `+z` marker stays on-canvas. Moving the probe invalidates the
+cached reading and updates the signed component, the side-view vector and the
+graph marker. Before the reveal the graph draws only its axes; the ideal and
+softened curves and their legend arrive with the result, and the softened peak
+is never graded against the ideal `|z| = R/√2` peak. A one-line note reads
+`k = 1 in normalized teaching units`. On native, the revealed formula can be
+sent to the CAS input with `Q` and `R` symbolic; the reading itself never
+requires the CAS backend. Session state only; the app snapshots the scene and
+camera before the lesson, Back/Exit restores that snapshot, and Keep exploring
+drops it and adopts the ring scene.
 
 **Pinned by.** [tests/ring_lesson_test.rs](../tests/ring_lesson_test.rs):
 `the_ideal_curve_is_zero_odd_and_peaks_at_r_over_root_two`,
 `the_softened_evaluator_is_a_distinct_curve_and_zero_at_the_centre`,
 `a_fresh_lesson_shows_the_prompt_before_any_result`,
+`the_side_view_maps_the_probe_about_the_ring_axis`,
+`the_curves_and_legend_are_revealed_only_with_the_result`,
+`the_axial_graph_states_k_is_one_in_normalized_units`,
 `the_probe_updates_the_signed_component_and_marker_value`,
 `predicting_or_skipping_unlocks_the_reveal_and_revision_is_allowed`,
 `the_ring_route_loads_the_shipped_preset_and_restores_the_starting_scene`, and

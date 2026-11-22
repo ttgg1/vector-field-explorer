@@ -9,10 +9,12 @@ use eframe::egui;
 
 use crate::support;
 use vector_field_explorer::VfApp;
+use vector_field_explorer::interaction::Bindings;
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::griffiths::{
     GRIFFITHS_PICKER_TITLE, GRIFFITHS_RING_LABEL, GriffithsRoute,
 };
+use vector_field_explorer::ui::help_overlay::help_window_with_bindings;
 use vector_field_explorer::ui::menu::MenuAction;
 
 struct Harness {
@@ -209,6 +211,50 @@ fn the_branch_and_ring_route_work_in_wide_and_compact_layouts() {
             "{width} pt: the ring scene is loaded through the Sources adapter"
         );
     }
+}
+
+#[test]
+fn the_legacy_help_window_has_no_dead_griffiths_control() {
+    // `help_window_with_bindings` cannot route the branch action, so it must
+    // not draw the picker button at all. The app uses `help_window_with_branch`.
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut open = true;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 4000.0),
+            )),
+            ..Default::default()
+        },
+        |ui| help_window_with_bindings(ui.ctx(), &mut open, &Bindings::default_bindings()),
+    );
+    output.textures_delta.clear();
+    for _ in 0..3 {
+        let mut next = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 4000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| help_window_with_bindings(ui.ctx(), &mut open, &Bindings::default_bindings()),
+        );
+        next.textures_delta.clear();
+        output = next;
+    }
+    let text = texts(&output).join("\n");
+    assert!(
+        text.contains("3D view"),
+        "the legacy help window still renders its table: {text}"
+    );
+    assert!(
+        !text.contains("Try a Griffiths problem"),
+        "the legacy help window has no inert Griffiths control: {text}"
+    );
 }
 
 #[test]

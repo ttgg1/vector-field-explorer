@@ -34,6 +34,8 @@ pub const RING_IDEAL_FORMULA: &str =
     "Continuous CAS form: Ez = k*Q*z / (R^2 + z^2)^(3/2), with Q and R retained.";
 /// The same axis field as a CAS input line with `Q` and `R` kept symbolic.
 pub const RING_CAS_EXPRESSION: &str = "k*Q*z/(R^2+z^2)^(3/2)";
+/// One-line reminder that the plotted curve uses the preset's normalized units.
+pub const RING_UNITS_NOTE: &str = "k = 1 in normalized teaching units";
 /// Pairing explanation for the transverse components.
 pub const RING_PAIRING_NOTE: &str = "Pair opposite ring elements: their transverse components are equal and opposite, so only their axial components add.";
 /// Why the displayed softened evaluator is a different curve.
@@ -324,6 +326,7 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
             let reading = state.reading().clone();
             draw_side_view(ui, &reading, state.revealed());
             draw_graph(ui, &reading, state.revealed());
+            ui.small(RING_UNITS_NOTE);
 
             if state.revealed() {
                 ui.separator();
@@ -380,6 +383,48 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
             });
         });
     action
+}
+
+/// Which axial-graph layers are painted. The ideal/softened curves and their
+/// legend wait for the result so the prediction is not pre-answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphVisibility {
+    /// Whether the ideal and softened curves are drawn.
+    pub curves: bool,
+    /// Whether the two-curve legend is drawn.
+    pub legend: bool,
+}
+
+/// The graph layers allowed at the current gate state.
+#[doc(hidden)]
+pub fn graph_visibility(revealed: bool) -> GraphVisibility {
+    GraphVisibility {
+        curves: revealed,
+        legend: revealed,
+    }
+}
+
+/// Map a signed probe reading to the side view's x coordinate.
+///
+/// The axis origin (`z = 0`) sits at the ring's centre; the full drawn range
+/// `RING_Z_MIN..=RING_Z_MAX` spans the usable width with a 14 pt inset at each
+/// end. The result is clamped so the probe marker can never leave the canvas.
+#[doc(hidden)]
+pub fn probe_x_for_z(rect: egui::Rect, z: f64) -> f32 {
+    let z_span = RING_Z_MAX - RING_Z_MIN;
+    let usable = (rect.width() - 28.0).max(0.0);
+    let offset = if z_span > 0.0 {
+        (z / z_span) as f32 * usable
+    } else {
+        0.0
+    };
+    let left_limit = rect.left() + 14.0;
+    let right_limit = rect.right() - 14.0;
+    if left_limit <= right_limit {
+        (rect.center().x + offset).clamp(left_limit, right_limit)
+    } else {
+        rect.center().x
+    }
 }
 
 fn draw_side_view(ui: &mut egui::Ui, reading: &RingReading, revealed: bool) {
@@ -443,9 +488,7 @@ fn draw_side_view(ui: &mut egui::Ui, reading: &RingReading, revealed: bool) {
         pair_color,
     );
 
-    let z_span = RING_Z_MAX - RING_Z_MIN;
-    let probe_x = centre_x + (((reading.z - RING_Z_MIN) / z_span) as f32) * (rect.width() - 28.0);
-    let probe = egui::pos2(probe_x, axis_y);
+    let probe = egui::pos2(probe_x_for_z(rect, reading.z), axis_y);
     painter.circle_filled(probe, 4.5, egui::Color32::from_rgb(255, 90, 90));
     painter.text(
         egui::pos2(probe.x, axis_y + 10.0),
@@ -512,25 +555,28 @@ fn draw_graph(ui: &mut egui::Ui, reading: &RingReading, revealed: bool) {
         let y = zero_y - (e / e_max) as f32 * (plot.height() * 0.5);
         egui::pos2(x, y)
     };
-    let ideal: Vec<egui::Pos2> = (0..=160)
-        .map(|step| {
-            let z = RING_Z_MIN + (RING_Z_MAX - RING_Z_MIN) * step as f64 / 160.0;
-            to_point(z, ideal_axial_field(z))
-        })
-        .collect();
-    painter.add(egui::Shape::line(
-        ideal,
-        egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 210, 255)),
-    ));
-    let softened: Vec<Option<egui::Pos2>> = softened_curve()
-        .iter()
-        .enumerate()
-        .map(|(step, value)| {
-            let z = RING_Z_MIN + (RING_Z_MAX - RING_Z_MIN) * step as f64 / 160.0;
-            value.map(|e| to_point(z, e))
-        })
-        .collect();
-    draw_dashed(&painter, &softened, egui::Color32::from_rgb(255, 190, 80));
+    let visibility = graph_visibility(revealed);
+    if visibility.curves {
+        let ideal: Vec<egui::Pos2> = (0..=160)
+            .map(|step| {
+                let z = RING_Z_MIN + (RING_Z_MAX - RING_Z_MIN) * step as f64 / 160.0;
+                to_point(z, ideal_axial_field(z))
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            ideal,
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 210, 255)),
+        ));
+        let softened: Vec<Option<egui::Pos2>> = softened_curve()
+            .iter()
+            .enumerate()
+            .map(|(step, value)| {
+                let z = RING_Z_MIN + (RING_Z_MAX - RING_Z_MIN) * step as f64 / 160.0;
+                value.map(|e| to_point(z, e))
+            })
+            .collect();
+        draw_dashed(&painter, &softened, egui::Color32::from_rgb(255, 190, 80));
+    }
     painter.text(
         egui::pos2(plot.left(), rect.top() + 2.0),
         egui::Align2::LEFT_TOP,
@@ -552,13 +598,15 @@ fn draw_graph(ui: &mut egui::Ui, reading: &RingReading, revealed: bool) {
         egui::FontId::proportional(10.0),
         ui.visuals().weak_text_color(),
     );
-    painter.text(
-        egui::pos2(plot.right(), rect.top() + 2.0),
-        egui::Align2::RIGHT_TOP,
-        "ideal — · softened ----",
-        egui::FontId::proportional(10.0),
-        ui.visuals().text_color(),
-    );
+    if visibility.legend {
+        painter.text(
+            egui::pos2(plot.right(), rect.top() + 2.0),
+            egui::Align2::RIGHT_TOP,
+            "ideal — · softened ----",
+            egui::FontId::proportional(10.0),
+            ui.visuals().text_color(),
+        );
+    }
     if revealed {
         let marker = to_point(reading.z, reading.ideal_ez);
         painter.line_segment(
