@@ -125,6 +125,7 @@ mod menu_test;
 // `scripts/generate-notices.sh` do not run on the Windows runner.
 #[cfg(unix)]
 mod nightly_version_test;
+mod notebook_test;
 #[cfg(unix)]
 mod notices_test;
 mod object_gpu_test;

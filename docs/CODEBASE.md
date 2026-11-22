@@ -4718,7 +4718,7 @@ migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-seed_layouts, preset_ui, object_style, up_axis, bake, pin_ui }`,
+seed_layouts, preset_ui, object_style, up_axis, bake, pin_ui, notebook }`,
 `BakeSettings { enabled, resolution_3d, resolution_2d }`,
 `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
@@ -4742,6 +4742,7 @@ seed_layouts, preset_ui, object_style, up_axis, bake, pin_ui }`,
 | `up_axis: UpAxis` | display-only `Z` (default), `X` or `Y`, stored lowercase as `z`, `x`, `y` | `#[serde(default)]`; an absent key loads `Z`; an unknown token is repaired to `Z` with one warning by the enum decoder, and a non-string stored value is repaired to `Z` by the field wrapper. The default is genuinely Z-up (physics convention); the token `y` selects the old historical Y-up view. It is assigned at the startup seam without dirtying and never appears in `ViewRecord`, scenes, appearance profiles or edit history |
 | `bake: BakeSettings` | `enabled` (default false), `resolution_3d` (default 48), `resolution_2d` (default 128) | `#[serde(default)]`; an absent key loads the disabled record; out-of-range resolutions clamp into `16..=64` / `32..=256` with one warning. Only the settings are stored; the lattice is runtime-only and never enters `ViewRecord`, scenes, profiles or history. An enabled startup build is bounded and non-dirtying; a refusal records the reason instead of failing startup |
 | `pin_ui: PinUiRecord` | `active: PinSet { items: [] }` (empty by default; for example `[gauss_radius, gauss_flux, induction_frequency]` when the learner pins them) and `saved: [PinArrangement { name, items }]` | `#[serde(default)]`; an absent key starts with no pins. Unknown item tokens, duplicates, empty/overlong names, duplicate arrangement names and entries beyond 8 items / 12 arrangements are dropped by `PinUiRecord::sanitized` through lenient decoders, so invalid entries cannot fail the envelope. The record holds no model, probe or sampled value |
+| `notebook: Notebook` | `version` and at most `MAX_NOTEBOOK_ENTRIES = 32` entries, each with `id`, `prediction`, `note`, an immutable `MeasurementSnapshot` (family, shell/probe geometry, time, cloned parameters, method, estimate/unavailable value, units) and a captured `SceneDocument` | `#[serde(default)]`; an absent key starts empty and restoring never applies a scene or measurement. `Notebook::sanitized` normalizes the version, drops duplicate ids and drops corrupt/invalid snapshots or scenes, so a damaged entry cannot fail the envelope. Older notebook payloads without note/method/units/time load through serde defaults |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -6627,11 +6628,11 @@ Materials body mapping) and `tests/layout_test.rs` for
 plus case names, the formula-bar summary and the help rows.
 
 **Public API.** `MaxwellPanelState { draft, error, advanced, wave, wave_error,
-wave_open, learning, gauss }`, `MaxwellPanelState::default`,
+wave_open, learning, gauss, notebook, notebook_ui }`, `MaxwellPanelState::default`,
 `commit(&mut State) -> bool`, `commit_wave(&mut State) -> bool`,
 `sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
 Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d,
-Measurement, InvestigateGaussShell, FreeExploreGaussShell}`,
+Measurement, InvestigateGaussShell, FreeExploreGaussShell, Notebook}`,
 `case_label`, `summary`, `MAXWELL_HELP_ROWS`, `maxwell_help_rows`,
 `MAXWELL_ONLY_NOTE`, `MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`,
 `WAVE_SCOPE_NOTE`, `WAVE_NORMALIZED_NOTE`, `WAVE_AMPERE_NOTE`, `WAVE_SVG_NOTE`.
@@ -6690,6 +6691,14 @@ Measurement, InvestigateGaussShell, FreeExploreGaussShell}`,
   Field probes area and never fabricates a durable probe surface. Exact
   cancellation input changes (scene, probe radius, family, clock) invalidate the
   cached reading.
+- Issue #222 embeds
+  [`ui::notebook`](../src/ui/notebook.rs) directly below the Gauss reading. It
+  owns the persisted [`Notebook`](../src/notebook.rs), the prediction/note
+  draft, compare selection and bounded export/import text. `Pin current
+  reading` and `Load scene` are one-shot
+  `MaxwellPanelAction::Notebook(NotebookAction::{Capture, Load})` requests the
+  app applies through the shipped Gauss report and the ordinary scene-load
+  path.
 
 **Pinned by.** `tests/maxwell_panel_test.rs` (wide/compact reflow, case-specific
 controls, rejection, current-only warning, accuracy opt-in, Switch to 2D
@@ -6698,8 +6707,9 @@ requests), `tests/maxwell_learning_panel_test.rs` (the embedded section's
 equation/form, residual and limitation contracts), `tests/maxwell_wave_ui_test.rs`
 (the plane-wave controls, verbatim validation, equation statuses and export
 notes), `tests/teaching_solid_test.rs` (the shared style selector, Maxwell body
-mapping and outline-only reasons) and `tests/layout_test.rs` for
-`maxwell_expanded`/`maxwell_width`.
+mapping and outline-only reasons), `tests/notebook_test.rs` (the embedded
+notebook's wide/compact capture/compare/load controls) and
+`tests/layout_test.rs` for `maxwell_expanded`/`maxwell_width`.
 
 #### `src/ui/maxwell_learning_panel.rs` — Maxwell learning and residual section
 
@@ -6885,6 +6895,70 @@ viewport selection, empty-space inertness, overlap routing, exact numeric
 entry, doubling `r` with `R` fixed, activity-local undo, the still-excluded
 interface reading, the panel drag that commits only through the app handler,
 and the outer-radius limit with its explicit rejection message.
+
+#### `src/notebook.rs` — persisted experiment notebook (#222)
+
+**Purpose.** A bounded, versioned record pairing a learner's prediction/note
+with an immutable measurement snapshot and the captured scene. V1 captures only
+the shipped Gauss-shell reading; the typed geometry and value enums leave room
+for another measurement without changing the persisted envelope. This module is
+pure: it reuses `GaussShellReading`/`flux_estimate` and `SceneDocument`, and it
+never computes a second field, quadrature or serializer.
+
+**Public API.** `NOTEBOOK_VERSION` (`1`), `MAX_NOTEBOOK_ENTRIES` (`32`),
+`SHELL_METHOD`, `SHELL_UNITS`; `NotebookFamily::{Electric, Magnetic}`;
+`NotebookGeometry::Shell { shell_radius, probe_radius }`;
+`NotebookValue::{Estimate { value, uncertainty }, Unavailable { reason }}` with
+`estimate`/`text`; `MeasurementSnapshot { family, geometry, time, parameters,
+method, value, units }` with `shell(...)` and `is_valid()`;
+`NotebookEntry { id, prediction, note, snapshot, scene }`;
+`Notebook { version, entries }` with `new`, `get`, `pin`, `remove`, `next_id`,
+`append`, `replace`, `sanitized`, `to_json`, `from_json`; `ChangedSetting
+{ label, first, second }`, `FluxComparison`, `NotebookComparison`, and
+`compare(first, second)`.
+
+**Invariants.** `pin` assigns a stable `entry-N` id, refuses an invalid snapshot
+or scene and stops at the bound. `sanitized` normalizes the version, bounds the
+list, drops duplicate ids and drops corrupt snapshots/scenes instead of
+repairing them. `to_json`/`from_json` use serde defaults so an older payload
+without note/method/units/time still loads; malformed JSON is rejected whole.
+Snapshots own copies of every live input, so a scene, parameter or clock edit
+can never rewrite a pinned reading. `compare` lists family, shell radius, probe
+radius, time, each differing parameter, method, status and units, and reports
+the flux difference against the combined quadrature uncertainty. An `Excluded`
+reading is stored as `Unavailable` with its reason, never as zero.
+
+**Pinned by.** [tests/notebook_test.rs](../tests/notebook_test.rs): two exterior
+radii keep equal flux within combined uncertainty, captured entries stay
+byte-identical under live edits, an excluded interface is unavailable rather
+than zero, JSON round-trips and older/defaulted payloads load, sanitize
+bounds/duplicates/corrupt entries, export/import append/replace behavior, scene
+and radius restore through the app, and the real panel's wide/compact
+capture/compare/load controls.
+
+#### `src/ui/notebook.rs` — Experiment notebook section (#222)
+
+**Purpose.** The Maxwell panel's notebook body: editable prediction/note,
+`Pin current reading`, pinned-entry cards, two-entry comparison, and a bounded
+export/import area. It never writes the committed scene or a measurement; those
+one-shot requests go back to the app.
+
+**Public API.** `NotebookUiState { prediction, note, compare_first,
+compare_second, export_text, import_text, import_replace, message, error,
+tools_open }`, `NotebookAction::{Capture, Load(String)}`, `show(ui, &mut
+Notebook, &mut NotebookUiState, gauss_active, compact) -> Option<NotebookAction>`,
+`NOTEBOOK_TITLE`, `NOTEBOOK_CAPTURE_LABEL`, `NOTEBOOK_EMPTY`, `NOTEBOOK_HELP`,
+`MAX_NOTEBOOK_TEXT_BYTES`.
+
+**Invariants.** Capture is enabled only while the Gauss activity is active; the
+app makes the final capture decision against the live report. The entry list
+keeps stable order and offers `Compare A`, `Compare B`, `Load scene` and
+`Remove`. The comparison shows every changed setting and the equal-flux line.
+Export/import is bounded and explicit: append skips duplicate ids, replace
+sanitizes the imported notebook. Compact uses a vertical button stack and the
+text areas stay bounded; all controls are ordinary focusable widgets.
+
+**Pinned by.** [tests/notebook_test.rs](../tests/notebook_test.rs).
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 

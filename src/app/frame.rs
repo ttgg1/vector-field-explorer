@@ -109,6 +109,7 @@ impl eframe::App for VfApp {
                 expanded: self.presets.expanded_state(),
             },
             pin_ui: self.pins.record.clone(),
+            notebook: self.maxwell.notebook.clone(),
         };
         persistence::save(storage, &settings);
     }

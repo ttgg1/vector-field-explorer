@@ -542,6 +542,9 @@ impl VfApp {
         if state.field_mode == FieldMode::Maxwell {
             maxwell.sync_from(&state);
         }
+        // Issue #222: restore the persisted notebook without applying a scene
+        // or measurement. `load` already sanitized the bounded entries.
+        maxwell.notebook = settings.notebook.clone();
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
