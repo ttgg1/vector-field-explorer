@@ -11,10 +11,18 @@ use glam::Vec3;
 use crate::support;
 
 use vector_field_explorer::VfApp;
+use vector_field_explorer::custom_density::{
+    DensityFamily, DensitySpec, DensitySupport, SupportKind, TimeLaw,
+};
 use vector_field_explorer::edit_history::EditHistory;
 use vector_field_explorer::field_probe::{GaussianSurface, SurfaceKind};
+use vector_field_explorer::ode::OdeSource;
+use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::plot::PlotKind;
 use vector_field_explorer::scene_document::SceneCamera;
 use vector_field_explorer::scene_store::MAX_SCENES;
+use vector_field_explorer::ui::griffiths::GriffithsRoute;
+use vector_field_explorer::ui::layout::SheetState;
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::presets::PresetPanel;
 
@@ -37,6 +45,23 @@ fn frame(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) -> egui
 
 fn idle(ctx: &egui::Context, app: &mut VfApp) {
     let _ = frame(ctx, app, Vec::new());
+}
+
+/// Run one compact-width pass. The width is at or below the layout threshold,
+/// so the Presets panel is not drawn and the bottom sheet owns it instead.
+fn compact_idle(ctx: &egui::Context, app: &mut VfApp) {
+    let mut native = eframe::Frame::_new_kittest();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                vec2(640.0, 700.0),
+            )),
+            ..Default::default()
+        },
+        |ui| eframe::App::ui(app, ui, &mut native),
+    );
+    output.textures_delta.clear();
 }
 
 fn settle(ctx: &egui::Context, app: &mut VfApp) -> egui::FullOutput {
@@ -895,4 +920,245 @@ fn long_scene(name: &str) -> vector_field_explorer::scene_document::SceneDocumen
         Default::default(),
         SceneCamera::default(),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Release-audit slice: temporary scenes, load ordering and restored cameras
+// ---------------------------------------------------------------------------
+
+fn save_app(app: &mut VfApp) {
+    let mut storage = crate::support::storage::MemoryStorage::default();
+    eframe::App::save(app, &mut storage);
+}
+
+#[test]
+fn starting_a_lesson_never_overwrites_the_bound_scene() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.state.set_formula("x + y".to_string());
+    app.presets.set_scene_name("A");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    click_app_label(&ctx, &mut app, "Load");
+    assert_eq!(app.presets.active_scene(), Some("A"));
+
+    app.start_griffiths_route(GriffithsRoute::Ring);
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "a lesson is a temporary scene, not an edit to the bound experiment"
+    );
+
+    // The lesson changes the live scene; an autosave must not attribute that
+    // temporary content to the named experiment.
+    app.state.set_formula("y - x".to_string());
+    idle(&ctx, &mut app);
+    save_app(&mut app);
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted.get("A").expect("A survives").view.formula,
+        "x + y",
+        "the lesson state is not written under the saved scene's name"
+    );
+
+    // Exit restores the starting document and resumes the explicit binding, so
+    // an ordinary edit after the lesson still updates the same experiment.
+    app.exit_griffiths_lesson();
+    idle(&ctx, &mut app);
+    assert_eq!(app.state.formula, "x + y", "exit restores the start scene");
+    assert_eq!(app.presets.active_scene(), Some("A"));
+    app.state.set_formula("z + 1".to_string());
+    idle(&ctx, &mut app);
+    save_app(&mut app);
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted.get("A").expect("A survives").view.formula,
+        "z + 1",
+        "an ordinary post-exit edit reaches the bound scene"
+    );
+}
+
+#[test]
+fn keeping_a_lesson_leaves_the_bound_scene_untouched() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.state.set_formula("x + y".to_string());
+    app.presets.set_scene_name("A");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    click_app_label(&ctx, &mut app, "Load");
+    assert_eq!(app.presets.active_scene(), Some("A"));
+
+    app.start_griffiths_route(GriffithsRoute::Ring);
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "the lesson suspends the experiment binding"
+    );
+
+    // Keep adopts the temporary lesson document. It is a new untitled scene,
+    // not an edit to the experiment that was bound before the lesson started.
+    app.state.set_formula("y - x".to_string());
+    app.keep_griffiths_scene();
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "Keep leaves the adopted lesson untitled"
+    );
+    idle(&ctx, &mut app);
+    save_app(&mut app);
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted.get("A").expect("A survives").view.formula,
+        "x + y",
+        "the kept lesson is not written under the saved experiment's name"
+    );
+}
+
+#[test]
+fn compact_closed_sheet_syncs_the_bound_edit_before_save() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.state.set_formula("x + y".to_string());
+    app.presets.set_scene_name("A");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    click_app_label(&ctx, &mut app, "Load");
+    assert_eq!(app.presets.active_scene(), Some("A"));
+
+    // Compact layout with no sheet open: the Presets panel never draws this
+    // frame, so sync cannot depend on panel rendering.
+    app.sheet = SheetState::None;
+    app.state.set_formula("y - x".to_string());
+    compact_idle(&ctx, &mut app);
+    compact_idle(&ctx, &mut app);
+    save_app(&mut app);
+
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted.get("A").expect("A survives").view.formula,
+        "y - x",
+        "closing the compact sheet does not lose the edit to the bound scene"
+    );
+}
+
+fn q_parameters() -> ParameterSet {
+    ParameterSet {
+        version: 1,
+        entries: vec![Parameter {
+            name: "q".to_owned(),
+            value: 2.0,
+            min: None,
+            max: None,
+            step: 0.1,
+        }],
+    }
+}
+
+fn q_density() -> DensitySpec {
+    DensitySpec {
+        name: "q charge".to_owned(),
+        family: DensityFamily::VolumeCharge,
+        support: DensitySupport {
+            kind: SupportKind::Box,
+            center: Vec3::ZERO,
+            axis: Vec3::Z,
+            size: Vec3::splat(2.0),
+        },
+        formula: "q*x".to_owned(),
+        samples: 8,
+        softening: 0.0,
+        time_law: TimeLaw::Steady,
+        charge_formula: None,
+    }
+}
+
+#[test]
+fn loading_a_scene_installs_parameters_before_dependent_records() {
+    // Build a valid document whose density and Current Field ODE both read the
+    // shared parameter `q` and require the saved 3D formula.
+    let mut source = vector_field_explorer::viewmodel::State::new(true);
+    source
+        .commit_parameters(q_parameters())
+        .expect("q parameters are valid");
+    source.set_formula("(q, 0, 0)".to_string());
+    source
+        .commit_densities(vec![q_density()])
+        .expect("the q-dependent density is valid against q = 2");
+    source.ode.source = OdeSource::CurrentField;
+    source.ode.dimension = 3;
+    source.ode.duration = 0.5;
+    let document = vector_field_explorer::scene_document::SceneDocument::capture(
+        "q scene",
+        vector_field_explorer::persistence::ViewRecord::capture(&source),
+        source.parameters.clone(),
+        SceneCamera::default(),
+    );
+
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.presets
+        .insert_scene(document)
+        .expect("the scene stores");
+
+    // The live state starts without `q`; loading must not validate the scene
+    // records against that previous parameter set.
+    click_app_label(&ctx, &mut app, "Load");
+
+    assert_eq!(app.state.parameters.value("q"), Some(2.0));
+    assert_eq!(
+        app.state.densities().len(),
+        1,
+        "the q-dependent density survives the load"
+    );
+    assert_eq!(app.state.densities()[0].formula, "q*x");
+    assert_eq!(
+        app.state.ode.source,
+        OdeSource::CurrentField,
+        "the Current Field ODE restores against the installed parameters"
+    );
+}
+
+#[test]
+fn loading_a_scene_from_a_scalar_plot_keeps_the_saved_camera() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+
+    // Enter the scalar plot first so the transition path has a saved vector
+    // orbit it would normally restore on the way back.
+    app.state.set_plot_kind(PlotKind::Surface3D);
+    idle(&ctx, &mut app);
+    assert!(!app.state.is_vector_mode());
+
+    let camera = SceneCamera {
+        yaw: 0.7,
+        distance: 8.0,
+        ortho_zoom: 2.5,
+        ..SceneCamera::default()
+    };
+    let document = vector_field_explorer::scene_document::SceneDocument::capture(
+        "pose",
+        vector_field_explorer::persistence::ViewRecord::default(),
+        ParameterSet::default(),
+        camera,
+    );
+    app.presets
+        .insert_scene(document)
+        .expect("the scene stores");
+    click_app_label(&ctx, &mut app, "Load");
+    idle(&ctx, &mut app);
+
+    assert!(app.state.is_vector_mode(), "the scene restores vector mode");
+    assert!(
+        (app.orbit.yaw - 0.7).abs() < 1e-4,
+        "the explicit saved yaw wins over the pre-plot orbit: {}",
+        app.orbit.yaw
+    );
+    assert!(
+        (app.orbit.distance - 8.0).abs() < 1e-3,
+        "the explicit saved distance wins: {}",
+        app.orbit.distance
+    );
 }
