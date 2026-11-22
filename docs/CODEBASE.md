@@ -515,10 +515,21 @@ The app loads the route through the ordinary `set_field_mode(Maxwell)` and
 #### `src/pin_layout.rs` and `src/ui/pins.rs` — pinned controls and readings (#232)
 
 **Purpose.** A bounded reference list over existing controls and readouts:
-`PinItem::{GaussRadius, GaussFlux, InductionFrequency}`, the ordered
+`PinItem::{GaussRadius, GaussFlux, GaussShellRadius, GaussScaleLock,
+InductionFrequency, InductionTime, InductionOrientation}`, the ordered
 `PinSet`, named `PinArrangement`s and the durable `PinUiRecord`
-(`active` plus `saved`). `ui/pins.rs` draws the tray and returns one
-`PinAction::SetGaussRadius` when the learner edits the pinned radius.
+(`active` plus `saved`). `GaussRadius` is the only editable control for now;
+every other item is a read-only readout. `ui/pins.rs` draws the tray and
+returns one `PinAction::SetGaussRadius` when the learner edits the pinned
+radius.
+
+**Scope.** The catalogue covers the items named by the issue through the
+ordinary app state. `GaussShellRadius` reports the committed
+`MaxwellScene::radius` (`R = …`), `GaussScaleLock` reports `State::auto_fit` as
+`Auto`/`Locked` and is available in every model, and `InductionTime` /
+`InductionOrientation` report the shared `SimClock` time and the committed
+`InductionScene::axis` while induction is active. No new control is invented
+for the readouts, and no value is fabricated when its model is inactive.
 
 **Invariants.** Pin identities are stable tokens; unknown or duplicate items,
 empty/overlong/duplicate names and excess entries are repaired by
@@ -526,10 +537,10 @@ empty/overlong/duplicate names and excess entries are repaired by
 whole settings load. The record stores no model, probe, report or sampled
 value: pinned radius edits go through `GaussShellState::set_probe_radius`, the
 same setter as the original control, and pinned readings are formatted from the
-ordinary `report_for`/`State::induction` values each frame. A pinned item that
-the active model cannot supply is listed with an explicit reason instead of a
-stale value. The app draws the tray in the wide Controls panel and at the top of
-every compact sheet; the radius and flux rows stay single-line so the flux
+ordinary `report_for`/`State::induction`/clock values each frame. A pinned item
+that the active model cannot supply is listed with an explicit reason instead of
+a stale value. The app draws the tray in the wide Controls panel and at the top
+of every compact sheet; the radius and flux rows stay single-line so the flux
 remains visible beside its radius in a default-height compact sheet.
 
 **Pinned by.** [tests/pins_test.rs](../tests/pins_test.rs):
@@ -538,7 +549,11 @@ remains visible beside its radius in a default-height compact sheet.
 `invalid_and_missing_pin_entries_decode_without_corrupting_the_envelope`,
 `named_preference_round_trips_and_restores_the_same_model`,
 `layout_switch_and_sheet_restore_preserve_the_model`,
-`compact_radius_edit_keeps_the_pinned_flux_visible_and_shared`,
+`pinned_radius_widget_action_applies_through_the_shared_setter`,
+`catalogue_has_stable_ids_and_one_editable_control`,
+`readout_values_follow_shared_state_and_the_scale_lock_is_always_available`,
+`gauss_shell_radius_readout_follows_the_committed_scene`,
+`pinned_readouts_show_the_active_model_and_hide_inactive_ones`,
 `pinned_items_explain_unavailability_and_never_show_stale_values`, and
 `tray_pointer_and_keyboard_paths_pin_the_same_items`.
 
@@ -4441,7 +4456,7 @@ seed_layouts, preset_ui, object_style, up_axis, bake, pin_ui }`,
 | `object_style: ObjectStyle` | `Solid` or `Wireframe` | `#[serde(default)]`; an absent key loads `Solid`; an unknown token is repaired to `Solid` with one warning by the enum decoder, and a non-string stored value is repaired to `Solid` by the field wrapper, leaving every other field intact |
 | `up_axis: UpAxis` | display-only `Z` (default), `X` or `Y`, stored lowercase as `z`, `x`, `y` | `#[serde(default)]`; an absent key loads `Z`; an unknown token is repaired to `Z` with one warning by the enum decoder, and a non-string stored value is repaired to `Z` by the field wrapper. The default is genuinely Z-up (physics convention); the token `y` selects the old historical Y-up view. It is assigned at the startup seam without dirtying and never appears in `ViewRecord`, scenes, appearance profiles or edit history |
 | `bake: BakeSettings` | `enabled` (default false), `resolution_3d` (default 48), `resolution_2d` (default 128) | `#[serde(default)]`; an absent key loads the disabled record; out-of-range resolutions clamp into `16..=64` / `32..=256` with one warning. Only the settings are stored; the lattice is runtime-only and never enters `ViewRecord`, scenes, profiles or history. An enabled startup build is bounded and non-dirtying; a refusal records the reason instead of failing startup |
-| `pin_ui: PinUiRecord` | `active: PinSet { items: [gauss_radius, gauss_flux, induction_frequency] }` and `saved: [PinArrangement { name, items }]` | `#[serde(default)]`; an absent key starts with no pins. Unknown item tokens, duplicates, empty/overlong names, duplicate arrangement names and entries beyond 8 items / 12 arrangements are dropped by `PinUiRecord::sanitized` through lenient decoders, so invalid entries cannot fail the envelope. The record holds no model, probe or sampled value |
+| `pin_ui: PinUiRecord` | `active: PinSet { items: [] }` (empty by default; for example `[gauss_radius, gauss_flux, induction_frequency]` when the learner pins them) and `saved: [PinArrangement { name, items }]` | `#[serde(default)]`; an absent key starts with no pins. Unknown item tokens, duplicates, empty/overlong names, duplicate arrangement names and entries beyond 8 items / 12 arrangements are dropped by `PinUiRecord::sanitized` through lenient decoders, so invalid entries cannot fail the envelope. The record holds no model, probe or sampled value |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.

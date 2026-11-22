@@ -257,15 +257,23 @@ impl VfApp {
                 f64::from(self.state.time),
             );
             snapshot.gauss_radius = Some(report.radius);
+            snapshot.gauss_shell_radius = Some(self.state.maxwell.radius);
             snapshot.gauss_flux = Some(pins::flux_text(&report.at_radius));
         } else {
             snapshot.gauss_unavailable = Some(gauss_unavailable_reason(&self.state));
         }
+        // The scale lock is ordinary view state and never depends on the model.
+        snapshot.scale_auto_fit = self.state.auto_fit;
         if self.state.field_mode == FieldMode::Induction {
             snapshot.induction_frequency = Some(self.state.induction.frequency);
+            snapshot.induction_time = Some(f64::from(self.clock.time));
+            snapshot.induction_orientation = Some(pins::induction_axis_text(
+                self.state.induction.axis.to_array(),
+            ));
         } else {
             snapshot.induction_unavailable = Some(
-                "The induction frequency exists only while the induction model is active."
+                "The induction frequency, time and axis exist only while the induction model \
+                 is active."
                     .to_owned(),
             );
         }
@@ -273,7 +281,7 @@ impl VfApp {
     }
 
     /// Apply a pinned control's edit through the same setter as the original.
-    fn apply_pin_action(&mut self, action: PinAction) {
+    pub fn apply_pin_action(&mut self, action: PinAction) {
         match action {
             PinAction::SetGaussRadius(radius) => {
                 self.maxwell.gauss.set_probe_radius(radius);

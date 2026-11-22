@@ -14,8 +14,8 @@ use vector_field_explorer::pin_layout::{
     MAX_PIN_ARRANGEMENTS, MAX_PIN_NAME_BYTES, PinItem, PinSet, PinUiRecord, sanitize_name,
 };
 use vector_field_explorer::source_scene::FieldMode;
-use vector_field_explorer::ui::layout::SheetState;
-use vector_field_explorer::ui::pins::{self, PinSnapshot, PinsState};
+use vector_field_explorer::ui::layout::{SheetSize, SheetState};
+use vector_field_explorer::ui::pins::{self, PinAction, PinSnapshot, PinsState};
 use vector_field_explorer::viewmodel::State;
 
 fn painted_texts(output: &egui::FullOutput) -> Vec<String> {
@@ -73,6 +73,39 @@ fn button<'a>(nodes: &'a [WidgetNode], label: &str) -> Option<&'a WidgetNode> {
     nodes
         .iter()
         .find(|node| node.role == egui::Role::Button && node.label == label)
+}
+
+fn spin_button(nodes: &[WidgetNode]) -> Option<&WidgetNode> {
+    nodes
+        .iter()
+        .find(|node| node.role == egui::Role::SpinButton)
+}
+
+/// Draw only the pin tray, returning its output and the action it emitted.
+fn tray_frame(
+    ctx: &egui::Context,
+    state: &mut PinsState,
+    snapshot: &PinSnapshot,
+    events: Vec<egui::Event>,
+) -> (egui::FullOutput, Option<PinAction>) {
+    let mut action = None;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                action = pins::show(ui, state, snapshot, true);
+            });
+        },
+    );
+    output.textures_delta.clear();
+    (output, action)
 }
 
 fn frame(
@@ -315,33 +348,99 @@ fn layout_switch_and_sheet_restore_preserve_the_model() {
 }
 
 #[test]
-fn compact_radius_edit_keeps_the_pinned_flux_visible_and_shared() {
+fn pinned_radius_widget_action_applies_through_the_shared_setter() {
     let ctx = context();
     let mut app = compact_app();
+    let before = app.maxwell.gauss.probe_radius;
     let out = frame(&ctx, &mut app, 600.0, Vec::new());
     let texts = painted_texts(&out);
     assert!(
         texts.iter().any(|text| text.contains("Gauss flux")),
         "the pinned flux is visible in compact layout: {texts:?}"
     );
-    assert!(
-        texts.iter().any(|text| text.contains("Phi =")),
-        "the pinned flux shows a live report: {texts:?}"
-    );
-    let before = app.maxwell.gauss.probe_radius;
     let flux_before = texts
         .iter()
         .find(|text| text.contains("Phi ="))
         .cloned()
-        .unwrap();
+        .expect("the pinned flux shows a live report");
 
-    // The pinned control uses the same setter as the original control.
-    assert!(app.maxwell.gauss.set_probe_radius(before + 0.4));
+    // Drive the pinned radius widget itself, not the setter directly.
+    let mut state = PinsState::new(PinUiRecord::default());
+    state.record.pin(PinItem::GaussRadius);
+    state.record.pin(PinItem::GaussFlux);
+    let snapshot = PinSnapshot {
+        gauss_radius: Some(before),
+        gauss_flux: Some(flux_before.clone()),
+        ..PinSnapshot::default()
+    };
+    let (out, _) = tray_frame(&ctx, &mut state, &snapshot, Vec::new());
+    let rect = spin_button(&nodes(&out))
+        .expect("the pinned radius is an editable spin button")
+        .rect;
+    let center = rect.center();
+    let _ = tray_frame(
+        &ctx,
+        &mut state,
+        &snapshot,
+        vec![egui::Event::PointerMoved(center)],
+    );
+    let _ = tray_frame(
+        &ctx,
+        &mut state,
+        &snapshot,
+        vec![egui::Event::PointerButton {
+            pos: center,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    let mut action = None;
+    for dx in [24.0, 48.0, 72.0, 96.0] {
+        let (_, candidate) = tray_frame(
+            &ctx,
+            &mut state,
+            &snapshot,
+            vec![egui::Event::PointerMoved(center + egui::vec2(dx, 0.0))],
+        );
+        if candidate.is_some() {
+            action = candidate;
+            break;
+        }
+    }
+    let (_, released) = tray_frame(
+        &ctx,
+        &mut state,
+        &snapshot,
+        vec![egui::Event::PointerButton {
+            pos: center + egui::vec2(96.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    let action = action
+        .or(released)
+        .expect("dragging the pinned radius emits a PinAction");
+    let PinAction::SetGaussRadius(target) = action;
+    assert!(
+        target > before,
+        "the drag increases the pinned radius: {before} -> {target}"
+    );
+
+    // Apply it through the ordinary app/model seam the tray uses.
+    app.apply_pin_action(action);
+    assert_eq!(
+        app.maxwell.gauss.probe_radius, target,
+        "the action reaches the shared Gauss state"
+    );
+
+    // The next frame formats the ordinary report from the changed state.
     let out = frame(&ctx, &mut app, 600.0, Vec::new());
     let texts = painted_texts(&out);
     assert!(
         texts.iter().any(|text| text.contains("Gauss flux")),
-        "the pinned flux stays visible after the radius edit"
+        "the pinned flux stays visible after the widget edit"
     );
     let flux_after = texts
         .iter()
@@ -350,7 +449,171 @@ fn compact_radius_edit_keeps_the_pinned_flux_visible_and_shared() {
         .expect("the flux readout is still painted");
     assert_ne!(
         flux_before, flux_after,
-        "the pinned readout follows the shared radius state"
+        "the pinned readout follows the radius action applied through the app"
+    );
+}
+
+#[test]
+fn catalogue_has_stable_ids_and_one_editable_control() {
+    let ids = PinItem::ALL.map(|item| item.id());
+    assert_eq!(PinItem::ALL.len(), 7);
+    for (index, item) in PinItem::ALL.into_iter().enumerate() {
+        assert_eq!(PinItem::from_token(item.id()), Some(item));
+        assert!(
+            !ids[..index].contains(&item.id()),
+            "every stored token is unique: {:?}",
+            item.id()
+        );
+        assert!(!item.label().is_empty());
+        assert!(!item.short_label().is_empty());
+        assert_eq!(
+            item.is_control(),
+            item == PinItem::GaussRadius,
+            "only the measuring radius is editable for now"
+        );
+    }
+    assert_eq!(PinItem::from_token("not_a_pin"), None);
+}
+
+#[test]
+fn readout_values_follow_shared_state_and_the_scale_lock_is_always_available() {
+    let snapshot = PinSnapshot {
+        gauss_radius: Some(1.6),
+        gauss_shell_radius: Some(1.0),
+        gauss_flux: Some("Phi = 1.0".to_owned()),
+        scale_auto_fit: true,
+        induction_frequency: Some(0.25),
+        induction_time: Some(1.25),
+        induction_orientation: Some(pins::induction_axis_text([0.0, 0.0, 1.0])),
+        ..PinSnapshot::default()
+    };
+    assert_eq!(
+        snapshot.value_text(PinItem::GaussShellRadius),
+        Some("R = 1.000000".to_owned())
+    );
+    assert_eq!(
+        snapshot.value_text(PinItem::GaussScaleLock),
+        Some("Auto".to_owned())
+    );
+    assert_eq!(
+        snapshot.value_text(PinItem::InductionTime),
+        Some("t = 1.250 s".to_owned())
+    );
+    assert_eq!(
+        snapshot.value_text(PinItem::InductionOrientation),
+        Some("axis = (0.000, 0.000, 1.000)".to_owned())
+    );
+    assert!(snapshot.is_available(PinItem::GaussScaleLock));
+    assert!(snapshot.is_available(PinItem::InductionTime));
+
+    let locked = PinSnapshot {
+        scale_auto_fit: false,
+        ..snapshot
+    };
+    assert_eq!(
+        locked.value_text(PinItem::GaussScaleLock),
+        Some("Locked".to_owned())
+    );
+    assert!(
+        locked.is_available(PinItem::GaussScaleLock),
+        "the scale lock is available in every model"
+    );
+}
+
+#[test]
+fn gauss_shell_radius_readout_follows_the_committed_scene() {
+    let ctx = context();
+    let mut app = compact_app();
+    app.pins.record.unpin(PinItem::GaussFlux);
+    assert!(app.pins.record.pin(PinItem::GaussShellRadius));
+    let out = frame(&ctx, &mut app, 600.0, Vec::new());
+    let texts = painted_texts(&out);
+    assert!(
+        texts.iter().any(|text| text.contains("R = 1.000000")),
+        "the shell readout shows the committed radius: {texts:?}"
+    );
+
+    let mut scene = app.state.maxwell.clone();
+    scene.radius = 1.2;
+    assert!(app.state.set_maxwell_scene(scene));
+    let out = frame(&ctx, &mut app, 600.0, Vec::new());
+    let texts = painted_texts(&out);
+    assert!(
+        texts.iter().any(|text| text.contains("R = 1.200000")),
+        "editing the ordinary scene updates the pinned shell readout: {texts:?}"
+    );
+}
+
+#[test]
+fn pinned_readouts_show_the_active_model_and_hide_inactive_ones() {
+    // Induction active: shared clock time and the committed axis are visible.
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Induction);
+    app.clock.time = 1.25;
+    app.clock.set_playing(false);
+    app.state.set_time(1.25);
+    app.state.auto_fit = false;
+    for item in [
+        PinItem::GaussScaleLock,
+        PinItem::InductionFrequency,
+        PinItem::InductionTime,
+        PinItem::InductionOrientation,
+    ] {
+        assert!(app.pins.record.pin(item));
+    }
+    app.sheet = SheetState::Controls;
+    app.sheet_expanded = SheetSize::Expanded;
+    let out = frame(&ctx, &mut app, 600.0, Vec::new());
+    let texts = painted_texts(&out);
+    assert!(
+        texts.iter().any(|text| text.contains("Locked")),
+        "the scale readout follows State::auto_fit: {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("f = 0.250000 Hz (normalized)")),
+        "the induction frequency follows the committed scene: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("t = 1.250 s")),
+        "the induction time follows the shared clock: {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("axis = (0.000, 0.000, 1.000)")),
+        "the induction axis follows the committed scene: {texts:?}"
+    );
+
+    // Gauss model inactive: its readouts explain the limit instead of a stale value.
+    let mut state = PinsState::new(PinUiRecord::default());
+    for item in [PinItem::GaussShellRadius, PinItem::GaussFlux] {
+        state.record.pin(item);
+    }
+    let snapshot = PinSnapshot {
+        gauss_shell_radius: Some(9.9),
+        gauss_flux: Some("Phi = 9.900000 stale".to_owned()),
+        gauss_unavailable: Some(
+            "The Gauss-shell radius and flux are available only in the Maxwell \
+             hollow-sphere model."
+                .to_owned(),
+        ),
+        ..PinSnapshot::default()
+    };
+    let (output, _) = tray_frame(&ctx, &mut state, &snapshot, Vec::new());
+    let texts = painted_texts(&output);
+    assert!(
+        texts.iter().any(|text| text.contains("Gauss shell radius"))
+            && texts
+                .iter()
+                .any(|text| text.contains("available only in the Maxwell")),
+        "the shell readout explains its inactive model: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("9.900000")),
+        "inactive readouts never show a stale value: {texts:?}"
     );
 }
 

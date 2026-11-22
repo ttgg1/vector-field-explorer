@@ -27,16 +27,28 @@ pub enum PinItem {
     GaussRadius,
     /// The finite flux reading at the measuring radius.
     GaussFlux,
+    /// The Maxwell hollow-sphere shell radius `R`.
+    GaussShellRadius,
+    /// Whether the colour scale auto-fits (`Auto`) or is held (`Locked`).
+    GaussScaleLock,
     /// The active induction scene's frequency readout.
     InductionFrequency,
+    /// The shared clock time while induction is active.
+    InductionTime,
+    /// The committed induction axis while induction is active.
+    InductionOrientation,
 }
 
 impl PinItem {
     /// The complete initial catalogue, in tray order.
-    pub const ALL: [PinItem; 3] = [
+    pub const ALL: [PinItem; 7] = [
         PinItem::GaussRadius,
         PinItem::GaussFlux,
+        PinItem::GaussShellRadius,
+        PinItem::GaussScaleLock,
         PinItem::InductionFrequency,
+        PinItem::InductionTime,
+        PinItem::InductionOrientation,
     ];
 
     /// The stable stored token.
@@ -44,7 +56,11 @@ impl PinItem {
         match self {
             PinItem::GaussRadius => "gauss_radius",
             PinItem::GaussFlux => "gauss_flux",
+            PinItem::GaussShellRadius => "gauss_shell_radius",
+            PinItem::GaussScaleLock => "gauss_scale_lock",
             PinItem::InductionFrequency => "induction_frequency",
+            PinItem::InductionTime => "induction_time",
+            PinItem::InductionOrientation => "induction_orientation",
         }
     }
 
@@ -53,7 +69,11 @@ impl PinItem {
         match self {
             PinItem::GaussRadius => "Gauss measuring radius",
             PinItem::GaussFlux => "Gauss flux",
+            PinItem::GaussShellRadius => "Gauss shell radius",
+            PinItem::GaussScaleLock => "Colour scale lock",
             PinItem::InductionFrequency => "Induction frequency",
+            PinItem::InductionTime => "Induction time",
+            PinItem::InductionOrientation => "Induction axis",
         }
     }
 
@@ -62,7 +82,11 @@ impl PinItem {
         match self {
             PinItem::GaussRadius => "radius",
             PinItem::GaussFlux => "flux",
+            PinItem::GaussShellRadius => "shell R",
+            PinItem::GaussScaleLock => "scale",
             PinItem::InductionFrequency => "frequency",
+            PinItem::InductionTime => "time",
+            PinItem::InductionOrientation => "axis",
         }
     }
 

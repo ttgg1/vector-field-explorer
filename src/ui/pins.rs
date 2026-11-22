@@ -38,13 +38,21 @@ impl PinsState {
 pub struct PinSnapshot {
     /// Live measuring radius when the Gauss investigation is active.
     pub gauss_radius: Option<f64>,
-    /// Formatted flux at that radius.
+    /// The committed hollow-sphere shell radius `R`.
+    pub gauss_shell_radius: Option<f64>,
+    /// Formatted flux at the measuring radius.
     pub gauss_flux: Option<String>,
+    /// Whether the colour scale auto-fits; the lock readout is always available.
+    pub scale_auto_fit: bool,
     /// Why the Gauss items cannot be shown in the current model.
     pub gauss_unavailable: Option<String>,
     /// The committed induction frequency.
     pub induction_frequency: Option<f64>,
-    /// Why the induction frequency cannot be shown in the current model.
+    /// The shared clock time while induction is active.
+    pub induction_time: Option<f64>,
+    /// The formatted committed induction axis while induction is active.
+    pub induction_orientation: Option<String>,
+    /// Why the induction items cannot be shown in the current model.
     pub induction_unavailable: Option<String>,
 }
 
@@ -52,8 +60,15 @@ impl PinSnapshot {
     /// The visible reason a pinned item is unavailable, if any.
     pub fn unavailable(&self, item: PinItem) -> Option<&str> {
         match item {
-            PinItem::GaussRadius | PinItem::GaussFlux => self.gauss_unavailable.as_deref(),
-            PinItem::InductionFrequency => self.induction_unavailable.as_deref(),
+            PinItem::GaussRadius | PinItem::GaussFlux | PinItem::GaussShellRadius => {
+                self.gauss_unavailable.as_deref()
+            }
+            // The scale lock is derived from ordinary view state that always
+            // exists, so it is available in every model.
+            PinItem::GaussScaleLock => None,
+            PinItem::InductionFrequency
+            | PinItem::InductionTime
+            | PinItem::InductionOrientation => self.induction_unavailable.as_deref(),
         }
     }
 
@@ -68,11 +83,26 @@ impl PinSnapshot {
         match item {
             PinItem::GaussRadius => self.gauss_radius.map(|radius| format!("r = {radius:.6}")),
             PinItem::GaussFlux => self.gauss_flux.clone(),
+            PinItem::GaussShellRadius => self
+                .gauss_shell_radius
+                .map(|radius| format!("R = {radius:.6}")),
+            PinItem::GaussScaleLock => Some(if self.scale_auto_fit {
+                "Auto".to_owned()
+            } else {
+                "Locked".to_owned()
+            }),
             PinItem::InductionFrequency => self
                 .induction_frequency
                 .map(|frequency| format!("f = {frequency:.6} Hz (normalized)")),
+            PinItem::InductionTime => self.induction_time.map(|time| format!("t = {time:.3} s")),
+            PinItem::InductionOrientation => self.induction_orientation.clone(),
         }
     }
+}
+
+/// Format the committed induction axis for the pinned orientation readout.
+pub fn induction_axis_text(axis: [f64; 3]) -> String {
+    format!("axis = ({:.3}, {:.3}, {:.3})", axis[0], axis[1], axis[2])
 }
 
 /// One edit the app must apply through the ordinary model setter.
@@ -95,6 +125,21 @@ pub fn flux_text(reading: &GaussShellReading) -> String {
             format!("Phi = {value:.6} ± {error:.2e}")
         }
         None => "Phi unavailable: the sample is excluded at this radius.".to_owned(),
+    }
+}
+
+/// Draw one catalogue toggle per pinnable item.
+fn draw_catalogue(ui: &mut egui::Ui, state: &PinsState, toggle: &mut Option<PinItem>) {
+    for item in PinItem::ALL {
+        let pinned = state.record.active.contains(item);
+        let label = if pinned {
+            format!("Unpin {}", item.short_label())
+        } else {
+            format!("Pin {}", item.short_label())
+        };
+        if ui.button(label).on_hover_text(item.label()).clicked() {
+            *toggle = Some(item);
+        }
     }
 }
 
@@ -126,19 +171,18 @@ pub fn show(
              original share one model state; a pinned reading shows the ordinary report.",
         );
     });
-    ui.horizontal_wrapped(|ui| {
-        for item in PinItem::ALL {
-            let pinned = state.record.active.contains(item);
-            let label = if pinned {
-                format!("Unpin {}", item.short_label())
-            } else {
-                format!("Pin {}", item.short_label())
-            };
-            if ui.button(label).on_hover_text(item.label()).clicked() {
-                toggle = Some(item);
-            }
-        }
-    });
+    // In compact layout the catalogue stays one scrolling row so the pinned
+    // rows below keep their place in a default-height sheet. Wide layout keeps
+    // the wrapped row.
+    if compact {
+        egui::ScrollArea::horizontal()
+            .id_salt("pin_catalogue")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| draw_catalogue(ui, state, &mut toggle));
+            });
+    } else {
+        ui.horizontal_wrapped(|ui| draw_catalogue(ui, state, &mut toggle));
+    }
 
     if !state.record.active.is_empty() {
         ui.separator();
@@ -171,7 +215,12 @@ pub fn show(
                                 }
                             }
                         }
-                        PinItem::GaussFlux | PinItem::InductionFrequency => {
+                        PinItem::GaussFlux
+                        | PinItem::GaussShellRadius
+                        | PinItem::GaussScaleLock
+                        | PinItem::InductionFrequency
+                        | PinItem::InductionTime
+                        | PinItem::InductionOrientation => {
                             if let Some(text) = snapshot.value_text(item) {
                                 ui.label(text);
                             }
