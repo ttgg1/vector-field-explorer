@@ -28,8 +28,9 @@ pub fn shared_context() -> &'static KatexContext {
 
 /// Register every KaTeX face as a named egui family. Idempotent: egui dedups
 /// `add_font` by font name, so startup and per-item registration can coexist.
-/// Callers should invoke this once on the native app context before the first
-/// frame; the per-item call then only covers a face the startup set missed.
+/// Callers invoke this once on the app context before the first frame (through
+/// `fonts::install_startup_fonts`); the per-item call then only covers a face
+/// the startup set missed.
 pub fn install_math_fonts(ctx: &egui::Context) {
     for face in FONTS {
         install_face(ctx, face);

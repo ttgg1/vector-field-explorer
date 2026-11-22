@@ -6092,7 +6092,8 @@ non-finite display-list coordinates, missing font fallback, and unsupported
 display items all return `None`, so the caller keeps the linear result.
 `KatexContext::default()` is built once in a `OnceLock`, never per frame. KaTeX
 faces are registered as named egui families through `Context::add_font`, once
-at native app startup (before the first frame) and idempotently per item. Only
+at app startup (before the first frame, on native and WebAssembly through
+`fonts::install_startup_fonts`) and idempotently per item. Only
 text, rectangles, line segments, and convex paths wholly inside their clip are
 emitted; radicals and other non-convex or clipped paths fall back to linear. A
 layout wider or taller than the available space falls back to linear instead of
@@ -6100,14 +6101,13 @@ painting a clipped fragment. Dimensions use the body text size and the layout's
 baseline/depth. `Layout.tag` and `equation_numbers` are ignored because the
 settings never enable numbering and the printer never emits `\tag`.
 
-**wasm evidence.** Both KaTeX crates live in
-`[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`; `cas_tex` and
-`math_view` are native-only. On 2026-11-21,
-`cargo tree --target wasm32-unknown-unknown -e normal -i katex-rs` and
-`... -i katex-native` both printed `warning: nothing to print.` (exit 0), and
-the full wasm tree contained zero `katex` lines (`grep -ci katex` exited 1).
-`cargo check --target wasm32-unknown-unknown --lib` exited 0. Trunk is not
-installed on this host, so no wasm artifact size is claimed.
+**wasm evidence.** `katex-rs` and `katex-native` are target-independent
+dependencies, and `math_view` compiles for `wasm32-unknown-unknown` so the
+startup seam can register the KaTeX faces there. `cas_panel` and `cas_tex`
+remain native-only because the CAS backend is native. On 2026-11-22,
+`cargo check --target wasm32-unknown-unknown --lib --bin
+vector-field-explorer` exited 0. Trunk is not installed on this host, so no
+wasm artifact size is claimed.
 
 **Pinned by.** `tests/math_view_test.rs` and the CAS panel typeset tests.
 
@@ -7317,22 +7317,30 @@ geometry), `#[doc(hidden)]`/`pub(crate)` `icon_data`.
 **Purpose.** Install the app's own fonts because eframe is built without
 `default_fonts`.
 
-**Public API.** `#[doc(hidden)] font_definitions()` (test seam); `install`.
+**Public API.** `#[doc(hidden)] font_definitions()` (test seam); `install`;
+`install_startup_fonts` (text faces then KaTeX typeset faces).
 
 **Invariants.**
 - Uses `FontDefinitions::empty` (not `default`) so re-enabling eframe's bundled
   fonts cannot silently reintroduce the UFL face.
-- Proportional: DejaVu Sans, then egui-icons for `special_emojis`.
-- Monospace: DejaVu Sans Mono, DejaVu Sans for missing symbols, egui-icons.
-- The three vendored files and their licences live under `assets/fonts/`.
+- Proportional: DejaVu Sans, STIX Two Math for mathematical alphanumerics,
+  egui-icons for `special_emojis`.
+- Monospace: DejaVu Sans Mono, DejaVu Sans for missing symbols, STIX Two Math
+  for math symbols, egui-icons.
+- The four vendored files and their licences live under `assets/fonts/`.
+- `install_startup_fonts` is the single native/WebAssembly creator seam; it
+  calls `fonts::install` then `ui::math_view::install_math_fonts` before the
+  first frame.
 
-**Pinned by.** `tests/fonts_test.rs` (6):
-`epaint_bundles_no_builtin_faces`, `installs_exactly_the_three_vendored_faces`,
+**Pinned by.** `tests/fonts_test.rs` (7):
+`epaint_bundles_no_builtin_faces`, `installs_exactly_the_four_vendored_faces`,
 `families_are_in_the_ruled_order`, `every_shipped_ui_glyph_has_a_face_in_both_families`,
+`every_formula_math_glyph_has_a_face_in_both_families`,
 `vendored_bytes_are_real_truetype_fonts`, `the_shared_context_has_real_text_faces`.
 
-**Limitation.** DejaVu's glyph coverage is broad but not complete (no CJK); the
-app does not load system fallback faces.
+**Limitation.** DejaVu's glyph coverage is broad but not complete (no CJK); STIX
+Two Math supplies the Mathematical Alphanumeric Symbols but no CJK or emoji
+faces, and native still relies on the OS for other uncovered glyphs.
 
 ---
 
@@ -7699,7 +7707,7 @@ lines: 715 are executed on this platform (714 in the suite plus the isolated
 | Field | `field_test.rs` | 7 |
 | Line alpha/trails | `line_alpha_test.rs` | 7 |
 | Reference lines | `reference_lines_test.rs` | 10 |
-| Fonts | `fonts_test.rs` | 6 |
+| Fonts | `fonts_test.rs` | 7 |
 | Pointer lock | `pointer_lock_test.rs` | 6 |
 | Window | `window_test.rs` | 6 |
 | Domain | `domain_test.rs` | 5 |
