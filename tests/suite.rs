@@ -41,6 +41,8 @@ mod cas_preview_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_rails_test;
 #[cfg(not(target_arch = "wasm32"))]
+mod cas_scene_test;
+#[cfg(not(target_arch = "wasm32"))]
 mod cas_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_tex_test;

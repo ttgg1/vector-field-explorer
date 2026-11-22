@@ -2561,7 +2561,10 @@ never interpolated. Contour levels are finite, strictly increasing and at most
 formulas return `UNSUPPORTED_Z_REASON` ("scalar views support x/y formulas").
 A hidden cache samples nothing; a changed key causes exactly one rebuild.
 Probes keep world positions and optional `SeedAnchor`s as document state while
-sampled values/points remain runtime-only and unpersisted.
+sampled values/points remain runtime-only and unpersisted. Issue #214 adds
+display helpers `slice_label`, `slice_valid_region` and `sampled_layer_label`;
+they only format the frame's axis, constant coordinate and half extents for the
+CAS and plot provenance text, and they never sample or mutate.
 
 **Pinned by.** [tests/scalar_view_test.rs](../tests/scalar_view_test.rs):
 `constant_field_grid_is_uniform_and_finite` through
@@ -2659,9 +2662,26 @@ series and no gradient. `State::set_comparison_series`/`set_gradient` validate
 and dirty once on a real change; they never touch arrows, colour mapping or
 probes.
 
+**Issue #214 analytic route.** `AnalyticDipole { expr, valid_region, role }`,
+`analytic_dipole_potential(dipole_axis, separation_name, frame)`,
+`potential_field_spec(expr, frame)`, `DEFAULT_GRADIENT_STEP = 1e-3`,
+`DEFAULT_GRADIENT_MAX_ERROR = 5e-2`, `ANALYTIC_DIPOLE_ROUTE_NOTE` and
+`NATIVE_SYMBOLIC_NOTE` add the platform-neutral closed-form dipole potential on
+one slice. The potential is ordinary surface text in `x`, `y` and a committed
+separation parameter (normally `d`), so editing that parameter re-evaluates
+both contour and gradient layers from the same expression. The dipoles are
+ideal normalized unit charges at `±separation/2` around the slice origin's
+projection; the valid-region text names the slice and both poles, and a dipole
+normal to the slice is reported as degenerate rather than hidden.
+`potential_field_spec` builds the existing `E = -∇V` request with the shipped
+bounds; no second solver or tolerance is introduced. `NATIVE_SYMBOLIC_NOTE`
+lists the symbolic operations as native-only without claiming the
+finite-difference overlay, which is platform-neutral, is symbolic.
+
 **Pinned by.** `tests/scalar_analysis_test.rs` (the fourteen contract tests),
 series/gradient envelope and corrupt-record pins in `tests/persistence_test.rs`,
-and the scene JSON round-trip/legacy pins in `tests/scene_document_test.rs`.
+the scene JSON round-trip/legacy pins in `tests/scene_document_test.rs`, and
+`tests/cas_scene_test.rs` for the analytic route and parameter-driven layers.
 
 **Slice B UI/render seam.** The Scalar view's collapsed "Scalar analysis"
 subsection owns session-only `Controls` drafts (`ScalarAnalysisControls`,
@@ -5969,26 +5989,37 @@ The GPU plot and export paths stay untouched.
 **Public API.** `PREVIEW_MAX_EDGE`, `PREVIEW_SPAN`, `PreviewPlane`
 (`Xy`/`Xz`/`Yz`), `PreviewImage { width, height, rgba }`,
 `scalar_heatmap(expr, plane, range, palette)`, `preview_key(expr, range,
-palette)`, and `PreviewCache` with `sync(ctx, image, key)` and `texture()`.
+palette)`, the issue #214 live-slice pair `scalar_slice_heatmap(expr, frame,
+time, range, palette)` / `slice_preview_key(expr, parameters, frame, time,
+range, palette)`, and `PreviewCache` with `sync(ctx, image, key)` and
+`texture()`.
 
 **Invariants.** Both axes are capped at `PREVIEW_MAX_EDGE` (160) texels. The
 expression is parsed through the existing `meval` scalar environment and binds
 `x`, `y`, `z`, `t`; a non-finite sample is fully transparent and never a NaN
 colour. Finite values map through `Colormap::from_unit` after clamping to the
-caller-supplied range. `preview_key` hashes only expression, range, and palette.
-`PreviewCache` uploads one `egui::TextureHandle` and ignores an unchanged key,
-so the panel neither resamples nor allocates a texture per frame.
+caller-supplied range. `preview_key` hashes only expression, range, and palette;
+`slice_preview_key` also hashes the committed parameter names/values, the frame
+basis and half extents, and the sampled time, so editing a parameter, moving the
+slice or advancing the clock invalidates the image. The slice painter samples
+the frame's real half extents through `ScalarExpr::eval_at` after the panel
+substitutes committed parameters. `PreviewCache` uploads one
+`egui::TextureHandle` and ignores an unchanged key, so the panel neither
+resamples nor allocates a texture per frame.
 
 **Pinned by.** `tests/cas_preview_test.rs`:
 `test_preview_heatmap_is_bounded_and_finite`,
 `test_preview_matches_palette_endpoints`,
 `test_preview_key_changes_with_expression_range_and_palette`,
 `test_non_finite_samples_are_transparent`,
-`test_cache_does_not_rebuild_for_an_unchanged_key`.
+`test_cache_does_not_rebuild_for_an_unchanged_key`;
+`tests/cas_scene_test.rs::the_thumbnail_samples_the_active_slice_time_and_parameters`
+and `tests/cas_scene_test.rs::a_parameter_only_edit_rebuilds_the_scalar_thumbnail`
+for a parameter-only edit rebuilding the painted thumbnail.
 
-**Limitations.** Normalized teaching thumbnail only, not an SI-scaled plot; one
-fixed XY plane and a fixed `[-1, 1]` palette window in the panel; no vector or
-error preview, no export, persistence, or GPU resource.
+**Limitations.** Normalized teaching thumbnail only, not an SI-scaled plot; the
+shipped `scalar_heatmap` helper still uses a fixed `[-1, 1]` teaching window; no
+vector or error preview, no export, persistence, or GPU resource.
 
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
@@ -6024,6 +6055,25 @@ fails to lay the document out, or a display item cannot be painted exactly,
 the panel falls back to the linear editor and the weak note
 `Showing linear result`. Copy still copies the canonical linear formula, and
 structured errors are shown verbatim, never typeset.
+
+Issue #214 connects a scalar result to the active scene. `SceneTarget`
+(`Contours`, `PotentialField`) and `CasPanelState::apply_scene` reuse only the
+shipped layers: contours replace the scalar-view source (creating eight levels
+when the user hid them) and the potential target installs an
+`E = -∇V` `GradientSpec` on the live slice frame while leaving the scalar
+source untouched. Both bind the committed parameters and current time, report
+the slice and its valid region, and label the result as an analytic expression
+whose drawn values are sampled. The scalar thumbnail now samples the active
+slice and time with parameters substituted. `take_scene_edit` reports one named
+history edit (`plot CAS contours`, `overlay E = -∇V`) which
+`app/panels.rs::show_cas_body` records through `record_explicit_edit`. Each
+click is one action and therefore exactly one undo entry: undoing the overlay
+leaves the contours it did not change, and a second undo restores the contour
+source. The panel states that symbolic operations are native-only, separates
+them from the platform-neutral finite-difference overlay, and names the
+platform-neutral analytic dipole route. Pinned by `tests/cas_scene_test.rs`
+(contour/overlay application, per-action undo,
+parameter-driven layer update, provenance/region wording).
 
 #### `src/ui/math_view.rs` — native typeset display-list adapter
 
@@ -6105,8 +6155,16 @@ plot-section reset.
 - Fit is disabled with a visible explanation when no finite geometry exists.
 - The section reset restores plot settings/draft and preserves the vector
   formula; no new shortcut or global settings page is added.
+- Issue #214 adds the collapsed `Analytic dipole potential` route in Surface
+  mode. It builds the closed-form potential through
+  `scalar_analysis::analytic_dipole_potential`, commits the editable separation
+  as parameter `d`, and loads the expression through the ordinary source setter.
+  The route and its note are compiled for web and native; the native symbolic
+  CAS boundary is labelled, not reimplemented. Its draft lives in egui temp data
+  and never enters the document.
 
-**Pinned by.** `tests/plot_ui_test.rs`.
+**Pinned by.** `tests/plot_ui_test.rs` and
+`tests/cas_scene_test.rs::the_plot_panel_offers_the_analytic_dipole_route`.
 
 #### `src/ui/sources_panel.rs` — editable source scene
 

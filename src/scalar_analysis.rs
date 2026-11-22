@@ -22,7 +22,7 @@ use crate::{
     parameters::ParameterSet,
     plane::{PlaneAxis, PlaneFrame},
     scalar::ScalarExpr,
-    scalar_view::{scalar_view_expr, MAX_GRID_SIDE, SCALAR_RESAMPLE_INTERVAL},
+    scalar_view::{MAX_GRID_SIDE, SCALAR_RESAMPLE_INTERVAL, scalar_view_expr},
 };
 
 /// Most comparison series one scene may hold.
@@ -62,6 +62,106 @@ impl SeriesRole {
             Self::ElectricPotential => "E = -∇V",
         }
     }
+}
+
+/// User-facing note that the analytic dipole potential is a platform-neutral
+/// route: it is plain expression text and needs no symbolic backend.
+pub const ANALYTIC_DIPOLE_ROUTE_NOTE: &str = "Analytic dipole route: the closed-form potential is built from plain expression text, \
+     so it is available on web and native.";
+/// User-facing note naming the capability boundary: symbolic CAS operations
+/// rely on the native engine, while the finite-difference `E = -∇V` overlay is
+/// a separate platform-neutral path.
+pub const NATIVE_SYMBOLIC_NOTE: &str = "Symbolic CAS operations (differentiate, symbolic gradient, divergence, curl) are native-only; \
+     the analytic dipole potential and the finite-difference E = -∇V overlay stay available on web.";
+/// The default finite-difference step for the scene gradient overlay.
+pub const DEFAULT_GRADIENT_STEP: f32 = 1e-3;
+/// The default usable-sample budget for the scene gradient overlay.
+pub const DEFAULT_GRADIENT_MAX_ERROR: f32 = 5e-2;
+
+/// The analytic ideal dipole potential on one slice, in surface-context
+/// expression text.
+///
+/// The two equal and opposite unit charges sit at `±(separation / 2)` along
+/// `dipole_axis` around the frame origin's projection. `separation_name` is a
+/// committed parameter name such as `d`, so editing that parameter re-evaluates
+/// both the contour and gradient layers from one expression. The region note
+/// names the slice and the exact pole locations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalyticDipole {
+    /// Surface-context potential `V(x, y)` on the slice.
+    pub expr: String,
+    /// The honest valid region: the slice and the two poles.
+    pub valid_region: String,
+    /// The layer role; always [`SeriesRole::ElectricPotential`].
+    pub role: SeriesRole,
+}
+
+/// Build the analytic ideal dipole potential on `frame`.
+///
+/// The result is the ideal `1/r` form with normalized unit charges. It uses
+/// the existing surface parser's `x`, `y` and committed-parameter names; it
+/// never adds a second grammar or solver. A dipole normal to the slice projects
+/// both charges onto the same point; the expression is then identically zero
+/// there and the region note says so instead of hiding the degeneracy.
+pub fn analytic_dipole_potential(
+    dipole_axis: PlaneAxis,
+    separation_name: &str,
+    frame: &PlaneFrame,
+) -> Result<AnalyticDipole, String> {
+    if separation_name.trim().is_empty() {
+        return Err("the dipole separation needs a parameter name".to_owned());
+    }
+    validate_frame(frame)?;
+    let axis = match dipole_axis {
+        PlaneAxis::X => Vec3::X,
+        PlaneAxis::Y => Vec3::Y,
+        PlaneAxis::Z => Vec3::Z,
+    };
+    let origin_u = f64::from(frame.origin.dot(frame.right));
+    let origin_v = f64::from(frame.origin.dot(frame.up));
+    let tau_u = f64::from(axis.dot(frame.right)) * 0.5;
+    let tau_v = f64::from(axis.dot(frame.up)) * 0.5;
+    let u_positive = format!("({tau_u}*{separation_name} + ({origin_u}))");
+    let v_positive = format!("({tau_v}*{separation_name} + ({origin_v}))");
+    let u_negative = format!("(-{tau_u}*{separation_name} + ({origin_u}))");
+    let v_negative = format!("(-{tau_v}*{separation_name} + ({origin_v}))");
+    let expr = format!(
+        "1/sqrt((x-{u_positive})^2+(y-{v_positive})^2) \
+         - 1/sqrt((x-{u_negative})^2+(y-{v_negative})^2)"
+    );
+    let projected_apart = tau_u.abs() > f64::EPSILON || tau_v.abs() > f64::EPSILON;
+    let poles = if projected_apart {
+        format!(
+            "the two charge positions project to ({u_positive}, {v_positive}) and \
+             ({u_negative}, {v_negative}) on this slice; V is undefined exactly at those points"
+        )
+    } else {
+        "this dipole is normal to the slice, so both charges project to the same point; \
+         V is zero everywhere else on the slice and undefined at that point"
+            .to_owned()
+    };
+    let valid_region = format!(
+        "Analytic on the {} for the committed {separation_name}: {poles}.",
+        crate::scalar_view::slice_label(frame)
+    );
+    Ok(AnalyticDipole {
+        expr,
+        valid_region,
+        role: SeriesRole::ElectricPotential,
+    })
+}
+
+/// A validated `E = -∇V` request for an analytic potential on `frame`.
+pub fn potential_field_spec(expr: String, frame: PlaneFrame) -> Result<GradientSpec, String> {
+    let spec = GradientSpec {
+        role: SeriesRole::ElectricPotential,
+        expr,
+        frame,
+        step: DEFAULT_GRADIENT_STEP,
+        max_error: DEFAULT_GRADIENT_MAX_ERROR,
+    };
+    spec.validate()?;
+    Ok(spec)
 }
 
 /// A stable per-record comparison-series identifier.
