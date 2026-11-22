@@ -38,6 +38,7 @@ use crate::maxwell::{
     maxwell_family, validate_maxwell,
 };
 use crate::maxwell_wave::WaveSpec;
+use crate::notebook::Notebook;
 use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeScene, OdeSeed, OdeSource};
 use crate::parameters::ParameterSet;
@@ -154,6 +155,12 @@ pub struct AppSettings {
     /// repaired by [`AppSettings::sanitized`].
     #[serde(default)]
     pub pin_ui: PinUiRecord,
+    /// The persisted experiment notebook (issue #222). Missing on older
+    /// envelopes, which start empty. Each entry owns an immutable measurement
+    /// snapshot and a captured scene; restoring cannot mutate the live model.
+    /// Invalid or excess entries are dropped by [`AppSettings::sanitized`].
+    #[serde(default)]
+    pub notebook: Notebook,
 }
 
 /// Persisted Presets-panel state. Only the per-group expansion is durable; the
@@ -368,6 +375,13 @@ impl AppSettings {
         if repaired_pins != self.pin_ui {
             log::warn!("persisted pin preference is invalid; repairing it");
             self.pin_ui = repaired_pins;
+        }
+        // Issue #222: the notebook is a bounded record. Drop corrupt, duplicate
+        // or excess entries and normalize the version; never mutate a snapshot.
+        let repaired_notebook = self.notebook.clone().sanitized();
+        if repaired_notebook != self.notebook {
+            log::warn!("persisted experiment notebook is invalid; repairing it");
+            self.notebook = repaired_notebook;
         }
         // `preset_ui` is four bools, so every persisted value is valid; the
         // lenient decoder has already replaced a corrupt record.

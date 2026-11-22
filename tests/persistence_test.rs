@@ -545,6 +545,7 @@ fn sample_settings() -> AppSettings {
         up_axis: Default::default(),
         bake: BakeSettings::default(),
         pin_ui: Default::default(),
+        notebook: Default::default(),
     }
 }
 
