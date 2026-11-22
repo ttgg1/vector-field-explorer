@@ -32,6 +32,7 @@ pub mod sidebar;
 pub mod sources_panel;
 pub mod status_bar;
 pub mod style_panel;
+pub mod sweep;
 pub mod top_bar;
 pub mod tour_overlay;
 pub mod transport;

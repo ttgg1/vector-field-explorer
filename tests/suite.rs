@@ -211,6 +211,7 @@ mod status_bar_test;
 mod streamline_count_test;
 mod streamlines_test;
 mod svg_export_test;
+mod sweep_test;
 mod teaching_solid_test;
 mod test_layout_test;
 mod top_bar_test;

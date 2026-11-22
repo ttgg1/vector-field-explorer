@@ -19,10 +19,12 @@ use glam::DVec3;
 use crate::source_presets::{SourcePreset, source_preset};
 use crate::source_scene::SourceScene;
 use crate::sources::{EvalOptions, Evaluator, FamilyResult, SourceSet, WorkLimits};
+use crate::sweep::{SweepKind, SweepSession};
 use crate::ui::griffiths::{
     GRIFFITHS_EXPLORE_FROM_HERE, GRIFFITHS_HIDE_HINT, GRIFFITHS_SHOW_HINT, GRIFFITHS_SKIP_STEP,
     GriffithsCheckpoint,
 };
+use crate::ui::sweep::{self, SweepUiAction};
 
 /// Window title for the activity.
 pub const RING_LESSON_TITLE: &str = "Griffiths 2.5 · Charged ring";
@@ -149,6 +151,7 @@ pub struct RingLessonState {
     revealed: bool,
     hint_visible: bool,
     cache: Option<RingReading>,
+    sweep: SweepSession,
 }
 
 impl RingLessonState {
@@ -161,6 +164,10 @@ impl RingLessonState {
         self.revealed = false;
         self.hint_visible = false;
         self.cache = None;
+        self.sweep = SweepSession::new(
+            SweepKind::RingAxialField,
+            &crate::maxwell::MaxwellScene::default(),
+        );
     }
 
     /// Leave the activity; the caller decides whether to restore or adopt the scene.
@@ -271,6 +278,16 @@ impl RingLessonState {
             });
         }
         self.cache.as_ref().expect("reading was just built")
+    }
+
+    /// The session-only sweep controls owned by this lesson.
+    pub fn sweep(&self) -> &SweepSession {
+        &self.sweep
+    }
+
+    /// The session-only sweep controls owned by this lesson.
+    pub fn sweep_mut(&mut self) -> &mut SweepSession {
+        &mut self.sweep
     }
 }
 
@@ -395,6 +412,8 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
                     action = RingLessonAction::SendToCas;
                 }
                 ui.label(RING_SOFTENED_NOTE);
+                ui.separator();
+                draw_sweep(ui.ctx(), state);
             }
 
             ui.separator();
@@ -416,6 +435,29 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
             });
         });
     action
+}
+
+fn draw_sweep(ctx: &egui::Context, state: &mut RingLessonState) {
+    let current = state.probe_z();
+    let action = sweep::show(
+        ctx,
+        &mut state.sweep,
+        &crate::maxwell::MaxwellScene::default(),
+        true,
+        current,
+    );
+    match action {
+        SweepUiAction::None => {}
+        SweepUiAction::Preview(x) => {
+            state.set_probe_z(x);
+            let actual = state.probe_z();
+            state.sweep.update_preview_target(actual);
+        }
+        SweepUiAction::ExitPreview(start) => {
+            state.set_probe_z(start);
+        }
+        SweepUiAction::Adopt => {}
+    }
 }
 
 fn draw_step_controls(

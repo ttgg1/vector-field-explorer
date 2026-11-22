@@ -480,9 +480,11 @@ softened curves and their legend arrive with the result, and the softened peak
 is never graded against the ideal `|z| = R/√2` peak. A one-line note reads
 `k = 1 in normalized teaching units`. On native, the revealed formula can be
 sent to the CAS input with `Q` and `R` symbolic; the reading itself never
-requires the CAS backend. Session state only; the app snapshots the scene and
-camera before the lesson, Back/Exit restores that snapshot, and Keep exploring
-drops it and adopts the ring scene.
+requires the CAS backend. After the reveal, the #234 bounded sweep adds a
+read-only-fixed-parameter `E_z(z)` curve over the same ideal field; it is hidden
+before the reveal and previews a clicked sample through `set_probe_z`. Session
+state only; the app snapshots the scene and camera before the lesson, Back/Exit
+restores that snapshot, and Keep exploring drops it and adopts the ring scene.
 
 **Pinned by.** [tests/ring_lesson_test.rs](../tests/ring_lesson_test.rs):
 `the_ideal_curve_is_zero_odd_and_peaks_at_r_over_root_two`,
@@ -520,6 +522,9 @@ controls. Completion requires pinning both an interior and an exterior reading
 and then returning through Back/Exit or Keep exploring; re-entering the route
 (including from Help) starts a fresh prediction and completion state. Back/Exit
 restores the scene and camera snapshot; Keep exploring adopts the shell scene.
+After the reveal, the #234 bounded sweep adds a `Phi(r)` curve over the same
+`compute_reading`/`flux_estimate()` seam, shows interior and interface gaps, and
+previews a clicked sample through the existing bounded `set_probe_radius`.
 The app loads the route through the ordinary `set_field_mode(Maxwell)` and
 `set_maxwell_scene` seams, so no persistence, history or probe surface changes.
 
@@ -531,6 +536,53 @@ The app loads the route through the ordinary `set_field_mode(Maxwell)` and
 `pinning_inside_and_outside_then_returning_completes_and_help_replay_resets`,
 `back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_shell`, and
 `the_shell_lesson_stays_usable_in_wide_and_compact_layouts`.
+
+#### `src/sweep.rs` and `src/ui/sweep.rs` — bounded parameter sweep (#234)
+
+**Purpose.** Turn one revealed lesson reading into a bounded curve without a
+solver, quadrature rule or second physics model. `SweepKind::RingAxialField`
+walks the shipped `ideal_axial_field` over signed probe position `z`;
+`SweepKind::ShellFlux` walks #219's `compute_reading(scene, r, Electric, 0)`
+and `flux_estimate()` over measuring-surface radius `r`. The ring default range
+is the lesson's `-2..2`; the shell default spans `0.5R..2.5R`, so interior and
+interface samples are drawn as gaps. Each config is validated (`min < max`,
+finite endpoints, 3–129 samples, default 33), and fixed model parameters (`R`,
+`Q`/charge) are shown read-only and never swept. The sweep window is session
+state owned by the lesson and is created only after `revealed()`.
+
+**Invariants.** A run advances at most one sample per frame; Cancel stops pending
+work and keeps the partial curve labelled `cancelled`, never `complete`. Invalid
+samples are `SweepSample` gaps with their reason (ideal non-finite field,
+interior no-enclosed-charge, excluded ideal shell interface, unavailable flux);
+they are never zero and they break the painted line. The ring report computes
+`|E(z)+E(-z)|` over paired samples of a symmetric range and states the tolerance
+`1e-12 * max|E_z|`; the shell report states the exterior flux spread against the
+largest pairwise quadrature budget (twice the largest sample uncertainty). A
+clicked sample records the starting probe once and asks the owning lesson to
+apply its ordinary bounded setter (`set_probe_z` or `set_probe_radius`); **Exit
+preview** restores that starting probe and **Adopt sample** keeps the applied
+one. No value is persisted or written to a scene document.
+
+**Pinned by.** [tests/sweep_test.rs](../tests/sweep_test.rs):
+`config_rejects_unordered_non_finite_and_out_of_bounds_inputs`,
+`ring_samples_follow_the_ideal_field_and_report_odd_symmetry`,
+`a_non_finite_ring_sample_is_a_gap_not_zero`,
+`ring_fixed_parameters_and_units_are_labelled`,
+`shell_sweep_reports_interior_and_interface_gaps`,
+`shell_exterior_flux_is_constant_within_quadrature_uncertainty`,
+`a_varying_flux_is_not_reported_constant`,
+`a_cancelled_run_is_never_complete_and_keeps_its_partial_samples`,
+`runs_compute_one_sample_per_step_and_stop_at_the_bound`,
+`invalid_config_does_not_start_a_run`, `fixed_shell_parameters_show_r_and_charge`,
+`preview_keeps_the_starting_probe_until_it_is_explicitly_ended`,
+`the_sweep_stays_hidden_until_the_ring_lesson_is_revealed`,
+`running_the_ring_sweep_is_bounded_and_completes`,
+`clicking_a_ring_sample_previews_the_probe_and_exit_restores_it`,
+`adopting_a_ring_sample_keeps_the_previewed_probe`,
+`cancelling_the_ring_sweep_keeps_a_labelled_partial_curve`,
+`a_shell_sample_preview_uses_the_existing_radius_setter_and_restores`,
+`gap_tooltips_and_markers_report_invalid_samples_without_zeroing_them`, and
+`the_ring_and_shell_lessons_stay_usable_in_wide_and_compact_layouts`.
 
 #### `src/pin_layout.rs` and `src/ui/pins.rs` — pinned controls and readings (#232)
 

@@ -14,6 +14,7 @@ use eframe::egui;
 
 use crate::maxwell::MaxwellScene;
 use crate::sources::FieldFamily;
+use crate::sweep::{SweepKind, SweepSession};
 use crate::ui::gauss_shell::{
     GAUSS_SHELL_INSIDE_NOTE, GAUSS_SHELL_INTERFACE_NOTE, GAUSS_SHELL_MAX_RADIUS,
     GAUSS_SHELL_MIN_RADIUS, GaussShellReading, GaussShellReadingKind, GaussShellReport,
@@ -23,6 +24,7 @@ use crate::ui::griffiths::{
     GRIFFITHS_EXPLORE_FROM_HERE, GRIFFITHS_HIDE_HINT, GRIFFITHS_SHOW_HINT, GRIFFITHS_SKIP_STEP,
     GriffithsCheckpoint,
 };
+use crate::ui::sweep::{self, SweepUiAction};
 
 /// Window title for the activity.
 pub const SHELL_LESSON_TITLE: &str = "Griffiths 2.11 · Charged shell";
@@ -114,6 +116,7 @@ pub struct ShellLessonState {
     completed: bool,
     hint_visible: bool,
     gauss: GaussShellState,
+    sweep: SweepSession,
 }
 
 impl ShellLessonState {
@@ -127,6 +130,7 @@ impl ShellLessonState {
         self.completed = false;
         self.hint_visible = false;
         self.gauss.activate(scene);
+        self.sweep = SweepSession::new(SweepKind::ShellFlux, scene);
     }
 
     /// Leave the activity. Completion is kept for the branch's session summary;
@@ -134,6 +138,7 @@ impl ShellLessonState {
     pub fn deactivate(&mut self) {
         self.active = false;
         self.gauss.deactivate();
+        self.sweep = SweepSession::default();
     }
 
     /// Whether the lesson window should be shown.
@@ -237,6 +242,16 @@ impl ShellLessonState {
     /// bounded radius control.
     pub fn set_probe_radius(&mut self, value: f64) -> bool {
         self.gauss.set_probe_radius(value)
+    }
+
+    /// The session-only sweep controls owned by this lesson.
+    pub fn sweep(&self) -> &SweepSession {
+        &self.sweep
+    }
+
+    /// The session-only sweep controls owned by this lesson.
+    pub fn sweep_mut(&mut self) -> &mut SweepSession {
+        &mut self.sweep
     }
 
     /// Set `r = 2r`, leaving the shell radius `R` untouched.
@@ -345,6 +360,8 @@ pub fn show(
             } else {
                 ui.separator();
                 draw_result(ui, state, scene, family, time);
+                ui.separator();
+                draw_sweep(ui.ctx(), state, scene);
             }
 
             ui.separator();
@@ -366,6 +383,23 @@ pub fn show(
             });
         });
     action
+}
+
+fn draw_sweep(ctx: &egui::Context, state: &mut ShellLessonState, scene: &MaxwellScene) {
+    let current = state.probe_radius();
+    let action = sweep::show(ctx, &mut state.sweep, scene, true, current);
+    match action {
+        SweepUiAction::None => {}
+        SweepUiAction::Preview(radius) => {
+            state.set_probe_radius(radius);
+            let actual = state.probe_radius();
+            state.sweep.update_preview_target(actual);
+        }
+        SweepUiAction::ExitPreview(start) => {
+            state.set_probe_radius(start);
+        }
+        SweepUiAction::Adopt => {}
+    }
 }
 
 fn draw_step_controls(
