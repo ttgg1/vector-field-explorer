@@ -27,4 +27,5 @@ pub mod style_panel;
 pub mod top_bar;
 pub mod tour_overlay;
 pub mod transport;
+pub mod viewport_legend;
 pub mod viewport_tool;

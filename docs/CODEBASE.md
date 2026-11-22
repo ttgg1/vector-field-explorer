@@ -1011,7 +1011,9 @@ compact tab bar and bottom sheet, status-bar phase, and the overlays.
   it.
 - Overlays paint last. The help overlay is suppressed in Compact below 520 pt of
   viewport width; the full Help window remains reachable from the menu. In
-  Sources mode a small viewport line shows `sources_panel::status_text`.
+  Sources mode a small viewport line shows `sources_panel::status_text`. The
+  #230 colour legend sits at the viewport's top-right, defaults collapsed in
+  Compact and covers only a narrow column.
 - The Features section is hidden in Sources mode; the exact formula-field note
   is the one-line replacement, and the Sources panel repeats it.
 
@@ -5475,7 +5477,8 @@ and `math_view`, `formula_bar`, `gauss_shell`, `help_overlay`, `induction_panel`
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
-`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_tool`.
+`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
+`viewport_tool`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
 
@@ -5494,6 +5497,22 @@ placement. The strip only surfaces existing S/P bindings; it never assigns or
 repurposes a chord. `tests/viewport_tool_test.rs` covers the derivation table,
 one-shot/sticky placement, enable-and-place, Escape, keyboard selection and both
 layout widths.
+
+#### `src/ui/viewport_legend.rs` — viewport colour legend overlay (#230)
+
+**Purpose.** A collapsible top-right overlay repeats the sidebar's colour
+mapping next to the picture: honest quantity label (`F`, `E`, `B`), normalized
+teaching units, effective numeric range, Auto/Locked state, and the active arrow
+length mode with its meaning. It reuses `State::color_mapping()`/`ColorStats`
+and the existing `freeze_color_range`, `set_color_range` and `set_auto_fit`
+setters; it adds no colour math. Lock, min/max `DragValue` edits and Unlock sync
+the `Controls` mirrors in the same frame, so the sidebar and overlay agree
+without a reload. The `Sources`/`Both` display shows the distinct fixed E/B
+family colours instead of claiming one numeric ramp. The header is a normal
+collapsing widget and compact defaults it shut with a width that leaves most of
+the viewport visible. `tests/viewport_legend_test.rs` covers the snapshot,
+lock/edit/unlock round trips in both directions, Both, collapse/compact, and the
+#219 locked-range invariance under a changed probe radius.
 
 #### `src/ui/appearance_panel.rs` — the Appearance panel
 
