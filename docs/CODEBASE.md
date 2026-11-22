@@ -4227,12 +4227,17 @@ sanitize controls and invalidate relevant caches; `plot_scene` lazily samples
 accepted expressions and delegates scene construction to `plot_scene`.
 Surface drafts parse through `scalar_view_expr`, so committed parameters are
 substituted by the same parser the scalar overlay uses (curve drafts keep the
-curve-only `x` binding). `apply_parameterized_surface` validates a candidate
-parameter set and its surface source through that parser before committing
-either; on failure the parameter set, source, accepted expression, samples and
-generation are untouched, and on success the samples are invalidated once.
-`tests/plot_state_test.rs` covers editing, transitions, settings, caching and
-the atomic parameter-aware install.
+curve-only `x` binding). A parameter commit that changes named values reparses
+the active surface draft and invalidates the viewport scene; entering Surface
+also reparses the saved draft. Editing the dipole `d` therefore rebuilds its
+mesh with the new value. A committed set that no longer binds the active
+source keeps its last mesh under a parse error. `apply_parameterized_surface`
+validates a candidate parameter set and its surface source through that parser
+before committing either; on failure the parameter set, source, accepted
+expression, samples and generation are untouched, and on success the samples
+are invalidated once. `tests/plot_state_test.rs` covers editing, transitions,
+settings, caching, the atomic parameter-aware install and live parameter
+tracking.
 
 #### `src/parameters.rs` — shared named-parameter records
 

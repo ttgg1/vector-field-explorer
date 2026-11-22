@@ -1006,10 +1006,19 @@ impl State {
     /// field is kept and [`parse_error`] records the reason; the new set stays
     /// committed because its own values are valid.
     pub fn commit_parameters(self: &mut State, next: ParameterSet) -> Result<(), String> {
+        self.commit_parameters_inner(next, true)
+    }
+
+    fn commit_parameters_inner(
+        &mut self,
+        next: ParameterSet,
+        refresh_surface: bool,
+    ) -> Result<(), String> {
         next.validate()?;
         if next == self.parameters {
             return Ok(());
         }
+        let rebind_surface = refresh_surface && self.surface_bindings_changed(&next);
         self.clear_field_bake();
         self.clear_field_sample_cache();
         self.parameters = next;
@@ -1029,6 +1038,9 @@ impl State {
                 log::debug!("field parse failed after parameter commit: {error}");
                 self.parse_error = error.to_string();
             }
+        }
+        if rebind_surface {
+            self.rebind_surface_parameters();
         }
         self.mark_dirty();
         Ok(())

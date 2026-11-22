@@ -88,6 +88,52 @@ fn parameterized_surface_install_accepts_d_and_rebuilds_the_mesh() {
 }
 
 #[test]
+fn parameter_edits_reparse_and_invalidate_the_installed_surface() {
+    let mut s = State::new(false);
+    s.set_plot_kind(PlotKind::Surface3D);
+    s.apply_parameterized_surface(separation_parameter(1.5), "d*x".into())
+        .expect("install the parameter-aware surface");
+    assert!(s.plot_scene().bounds.is_some());
+    assert_eq!(
+        s.plot
+            .surface
+            .accepted
+            .as_ref()
+            .expect("accepted expression")
+            .eval_at(1.0, 0.0, 0.0),
+        Some(1.5)
+    );
+    let before_samples = s.plot.surface.samples.clone().expect("sampled mesh");
+
+    let mut next = s.parameters.clone();
+    next.entries[0].value = 3.0;
+    s.commit_parameters(next)
+        .expect("the ordinary Variables commit path");
+
+    assert_eq!(s.parameters.value("d"), Some(3.0));
+    assert_eq!(s.plot.surface.source, "d*x", "the source stays editable");
+    let scene = s.plot_scene();
+    assert!(scene.bounds.is_some(), "the mesh rebuilds for the new d");
+    assert_eq!(
+        s.plot
+            .surface
+            .accepted
+            .as_ref()
+            .expect("reparsed expression")
+            .eval_at(1.0, 0.0, 0.0),
+        Some(3.0),
+        "the accepted expression follows the committed parameter"
+    );
+    assert!(
+        !Arc::ptr_eq(
+            &before_samples,
+            s.plot.surface.samples.as_ref().expect("fresh mesh")
+        ),
+        "the old parameter value's mesh is invalidated"
+    );
+}
+
+#[test]
 fn active_invalid_edit_keeps_last_valid_but_destination_clears() {
     let mut s = State::new(true);
     s.set_plot_kind(PlotKind::Curve2D);

@@ -128,6 +128,21 @@ impl State {
         self.plot_changed()
     }
 
+    /// Only the active surface needs a refresh: entering Surface reparses the
+    /// saved draft, and curve expressions do not bind named parameters.
+    pub(super) fn surface_bindings_changed(&self, next: &ParameterSet) -> bool {
+        self.plot.kind == PlotKind::Surface3D
+            && (self.parameters.entries.len() != next.entries.len()
+                || self.parameters.entries.iter().any(|entry| {
+                    next.value(&entry.name).map(f64::to_bits) != Some(entry.value.to_bits())
+                }))
+    }
+
+    pub(super) fn rebind_surface_parameters(&mut self) {
+        let source = self.plot.surface.source.clone();
+        self.update_scalar_source(ScalarContext::Surface, source, true);
+    }
+
     /// Validate and atomically install a named-parameter set together with the
     /// surface expression that consumes it.
     ///
@@ -146,7 +161,9 @@ impl State {
         let expr = parse_scalar_source(&source, ScalarContext::Surface, &parameters)?;
         // Both inputs already validated, so the parameter commit cannot reject
         // them; only after it succeeds is the draft replaced.
-        self.commit_parameters(parameters)?;
+        // The old draft need not be rebound; the validated replacement below
+        // invalidates the scene exactly once.
+        self.commit_parameters_inner(parameters, false)?;
         let draft = &mut self.plot.surface;
         draft.source = source;
         draft.accepted = Some(expr);
