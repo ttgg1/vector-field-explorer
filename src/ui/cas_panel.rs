@@ -3,11 +3,12 @@ use eframe::egui;
 
 use crate::cas_actions::{self, CasAction, CasActionError};
 use crate::scalar_analysis::{
-    ANALYTIC_DIPOLE_ROUTE_NOTE, NATIVE_SYMBOLIC_NOTE, potential_field_spec,
+    ANALYTIC_DIPOLE_ROUTE_NOTE, GradientSpec, NATIVE_SYMBOLIC_NOTE, SeriesRole,
+    potential_field_spec,
 };
 use crate::scalar_overlay::{
     FROZEN_RENDER_NOTE, MAX_OVERLAYS, OVERLAY_ASSUMPTIONS, OverlayDependency, OverlayLayer,
-    OverlayLive, bindings_summary,
+    OverlayLive, ScalarOverlay, bindings_summary,
 };
 use crate::scalar_view::{sampled_layer_label, scalar_view_expr, slice_label, slice_valid_region};
 use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage};
@@ -716,8 +717,9 @@ pub fn show_scalar_preview(
 }
 
 /// Show the bounded overlay collection with its dependency labels, captured
-/// values and any identifiable unavailable reason.
-fn show_overlays(ui: &mut egui::Ui, state: &State) {
+/// values, any identifiable unavailable reason, and a per-overlay removal
+/// control.
+fn show_overlays(ui: &mut egui::Ui, state: &mut State) {
     if state.overlays().is_empty() {
         return;
     }
@@ -726,19 +728,40 @@ fn show_overlays(ui: &mut egui::Ui, state: &State) {
         "CAS overlays ({}/{MAX_OVERLAYS})",
         state.overlays().len()
     ));
-    let live = OverlayLive {
-        parameters: &state.parameters,
-        frame: state.scalar_view_frame(),
-        time: f64::from(state.time),
-    };
+    let drawn = state
+        .overlays()
+        .iter()
+        .find(|overlay| {
+            state
+                .gradient
+                .as_ref()
+                .is_some_and(|spec| overlay_is_drawn(overlay, spec))
+        })
+        .map(|overlay| overlay.id);
+    let mut remove = None;
     for overlay in state.overlays().iter() {
+        let live = OverlayLive {
+            parameters: &state.parameters,
+            frame: state.scalar_view_frame(),
+            time: f64::from(state.time),
+        };
         ui.horizontal_wrapped(|ui| {
             ui.label(format!(
                 "{} — {}",
                 overlay.dependency.label(),
                 overlay.label
             ));
+            if Some(overlay.id) == drawn {
+                ui.small("Drawn now");
+            }
             ui.small(format!("({})", overlay.layer.label()));
+            if ui
+                .button(format!("Remove {}", overlay.id))
+                .on_hover_text("Remove this CAS overlay from the scene")
+                .clicked()
+            {
+                remove = Some(overlay.id);
+            }
         });
         ui.small(format!("Expression: {}", overlay.formula));
         if let Some(captured) = overlay.captured_summary() {
@@ -756,12 +779,50 @@ fn show_overlays(ui: &mut egui::Ui, state: &State) {
             }
         }
     }
+    if let Some(id) = remove {
+        remove_overlay(state, id);
+    }
     if state
         .overlays()
         .iter()
         .any(|overlay| overlay.dependency == OverlayDependency::Frozen)
     {
         ui.small(FROZEN_RENDER_NOTE);
+    }
+}
+
+/// Whether `overlay` is the linked potential-field request behind `spec`.
+fn overlay_is_drawn(overlay: &ScalarOverlay, spec: &GradientSpec) -> bool {
+    overlay.dependency == OverlayDependency::Linked
+        && overlay.layer == OverlayLayer::PotentialField
+        && spec.role == SeriesRole::ElectricPotential
+        && spec.expr == overlay.formula
+}
+
+/// Remove one overlay and drop the drawn gradient when no remaining linked
+/// potential overlay still owns it, so the list and the scene stay consistent.
+fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
+    let Some(removed) = state.remove_overlay(id) else {
+        return;
+    };
+    let was_drawn = state
+        .gradient
+        .as_ref()
+        .is_some_and(|spec| overlay_is_drawn(&removed, spec));
+    if !was_drawn {
+        return;
+    }
+    let still_drawn = {
+        let Some(spec) = state.gradient.as_ref() else {
+            return;
+        };
+        state
+            .overlays()
+            .iter()
+            .any(|overlay| overlay_is_drawn(overlay, spec))
+    };
+    if !still_drawn && state.set_gradient(None).is_ok() {
+        state.refresh_scalar_analysis(true);
     }
 }
 
@@ -906,7 +967,7 @@ fn show_enabled(
             if p.kind == ResultKind::Vector {
                 let enabled = !sources_mode && vector_mode && panel.can_apply(dimension);
                 let response = ui
-                    .add_enabled(enabled, egui::Button::new("Apply vector"))
+                    .add_enabled(enabled, egui::Button::new("Replace field"))
                     .on_hover_text("Replace the plotted field with this valid vector formula");
                 let response = if sources_mode {
                     response

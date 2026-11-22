@@ -11,7 +11,9 @@
 //!
 //! This is a pure binding/collection/validation model. It reuses the shipped
 //! [`scalar_view_expr`] parser and [`PlaneFrame`]; it adds no second grammar,
-//! solver, quadrature or physical model, and it never samples here.
+//! solver, quadrature or physical model, and it never samples here. Invalid
+//! domain coverage is the shipped frame/slice check, not a second
+//! expression-level solver.
 
 use std::collections::HashSet;
 
@@ -294,8 +296,9 @@ impl ScalarOverlaySet {
         Self::default()
     }
 
-    /// Build a set without validating or repairing it. Import/restore uses
-    /// this so corrupt stored data can be sanitized in one place.
+    /// Build a set without validating or repairing it. This is a test-only
+    /// constructor: production restore validates a `SceneDocument` overlay set
+    /// instead of sanitizing arbitrary stored data here.
     pub fn from_overlays(overlays: Vec<ScalarOverlay>) -> Self {
         Self { overlays }
     }
@@ -424,10 +427,12 @@ impl ScalarOverlaySet {
             .resolve(live)
     }
 
-    /// Total repair for stored data: drop empty expressions, duplicate ids and
+    /// Test-only repair helper: drop empty expressions, duplicate ids and
     /// frozen entries without a valid capture, truncate over-long labels on a
     /// character boundary, give empty labels a stable fallback, and enforce the
     /// cap while preserving order. Valid values are never overridden.
+    /// Production import and restore do not call this; `SceneDocument::validate`
+    /// rejects an invalid overlay set rather than repairing it.
     pub fn sanitized(mut self) -> Self {
         let mut seen = HashSet::with_capacity(self.overlays.len());
         let mut repaired = Vec::with_capacity(self.overlays.len().min(MAX_OVERLAYS));
@@ -498,8 +503,10 @@ pub fn bindings_summary(parameters: &ParameterSet) -> String {
 
 /// The model assumptions shown beside the overlay choices.
 pub const OVERLAY_ASSUMPTIONS: &str = "Assumes the analytic expression is valid at every sampled point on the captured slice; \
-     values are sampled with the bound committed parameters, never re-derived. Missing parameters, undefined \
-     points or a non-finite frame make the overlay unavailable instead of an empty layer.";
+     values are sampled with the bound committed parameters, never re-derived. Missing parameters or a non-finite frame \
+     make the overlay unavailable instead of an empty layer. Invalid-domain coverage is the shipped frame/slice check: \
+     this layer adds no second expression-level domain solver, so an undefined point inside a valid slice is a \
+     sampling/render concern.";
 
 /// The honest limitation when a frozen copy is stored beside a drawn overlay.
 pub const FROZEN_RENDER_NOTE: &str = "One gradient overlay can be drawn at a time. A frozen copy keeps its captured \

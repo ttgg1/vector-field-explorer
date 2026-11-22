@@ -2875,14 +2875,23 @@ and `OverlayUnavailable` the identifiable reason. `bindings_summary`,
 dipole separation updates it. A frozen copy resolves against its own capture and
 therefore keeps the expression, parameters, frame and time shown at creation.
 `resolve` reuses `scalar_view_expr` and `scalar_analysis::validate_plane_frame`;
-it adds no grammar, solver, quadrature or physical model. A removed parameter, a
-`z` slice reference or a non-finite captured frame is an `OverlayUnavailable`
-reason rather than a silent empty layer. `push` refuses past the cap and rejects
-duplicate ids or a dependency/capture mismatch; `sanitized` drops empty
-expressions, duplicate ids and frozen entries without a valid capture, truncates
-labels on a character boundary, applies fallback labels and enforces the cap.
-Only one gradient can be drawn, so a frozen copy is an independently stored and
-labelled prediction; `FROZEN_RENDER_NOTE` states that limitation honestly.
+it adds no grammar, solver, quadrature or physical model. Invalid-domain coverage
+is the shipped frame/slice check, not a second expression-level solver: a
+missing parameter or non-finite frame is an `OverlayUnavailable` reason, while an
+undefined point inside a valid slice stays a sampling/render concern. A removed
+parameter, a `z` slice reference or a non-finite captured frame is an
+`OverlayUnavailable` reason rather than a silent empty layer. `push` refuses
+past the cap and rejects duplicate ids or a dependency/capture mismatch;
+`sanitized` is a test-only repair helper (production import validates the
+document instead) that drops empty expressions, duplicate ids and frozen
+entries without a valid capture, truncates labels on a character boundary,
+applies fallback labels and enforces the cap. Only one gradient can be drawn, so
+the panel marks the linked potential overlay it currently draws as `Drawn now`
+and a frozen copy is an independently stored and labelled prediction;
+`FROZEN_RENDER_NOTE` states that limitation honestly. Each overlay row carries
+its own `Remove #<id>` control; removing the drawn linked overlay clears the
+gradient once no other linked potential overlay still owns it, so the list and
+the scene never disagree.
 
 **Pinned by.** `tests/cas_overlay_test.rs`: linked-versus-frozen resolution and
 captured values, a separation edit following only the linked overlay, missing
@@ -6319,8 +6328,11 @@ overlay`, `Add frozen copy` and the shipped `Plot contours` action. A linked
 overlay resolves against the live parameters/frame/time; a frozen copy captures
 them and shows its captured values. `add_frozen_overlay` never changes the
 drawn scene, and `FROZEN_RENDER_NOTE` explains the one-gradient limitation.
-`replace_field` accepts only a current vector result and replaces the plotted
-field as one history edit, so one undo restores the original. Missing
+Each overlay row has a `Remove #<id>` control wired to
+`State::remove_overlay`; the row currently drawn is marked `Drawn now`, and
+removing it drops the gradient when no remaining linked overlay owns it.
+`Replace field` is the whole-field replacement action (formerly `Apply
+vector`), preserving its one-undo behavior. Missing
 parameters and invalid frames are listed as `Unavailable: <reason>` rather than
 an empty layer. `take_scene_edit` reports one named history edit
 (`plot CAS contours`, `add linked CAS overlay`, `add frozen CAS overlay`,

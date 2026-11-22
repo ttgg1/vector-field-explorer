@@ -461,7 +461,7 @@ fn replace_field_is_validated_and_one_undo_restores_the_original() {
     }
     let base = app.history_len();
 
-    click_app_button(&ctx, &mut app, "Apply vector");
+    click_app_button(&ctx, &mut app, "Replace field");
     assert_ne!(app.state.formula, original, "the field is replaced");
     assert_eq!(
         app.history_len(),
@@ -652,6 +652,123 @@ fn cas_panel_offers_dependency_controls_and_shows_bindings_assumptions_and_captu
         button_bounds(&output, "Add frozen copy").is_some(),
         "the frozen control survives a narrow panel"
     );
+}
+
+#[test]
+fn removing_the_drawn_linked_overlay_through_the_panel_clears_the_gradient() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    state
+        .commit_parameters(parameters_d(1.0))
+        .expect("commit d = 1");
+    state.set_formula("(0, 0)".into());
+    let mut panel = scalar_panel("x*y");
+
+    let mut output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    for _ in 0..3 {
+        output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    }
+    let add = button_bounds(&output, "Add linked overlay")
+        .expect("the linked overlay control is offered");
+    click(&ctx, 460.0, &mut state, &mut panel, add.center());
+    assert_eq!(state.overlays().len(), 1);
+    assert!(state.gradient.is_some(), "the linked overlay is drawn");
+    let id = state.overlays().as_slice()[0].id;
+
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    assert!(
+        has_text(&output, "Drawn now"),
+        "the list marks the linked overlay that is actually drawn"
+    );
+    let remove = button_bounds(&output, &format!("Remove {id}"))
+        .expect("the drawn overlay has a real Remove control");
+    click(&ctx, 460.0, &mut state, &mut panel, remove.center());
+
+    assert!(state.overlays().is_empty(), "the overlay disappears");
+    assert!(
+        state.gradient.is_none(),
+        "removing the drawn overlay clears the gradient it owned"
+    );
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    assert!(
+        !has_text(&output, "Drawn now"),
+        "the list is honest after the drawn overlay is gone"
+    );
+
+    // The remove control also survives the compact-width panel.
+    let output = render_panel(&ctx, 390.0, &mut state, &mut panel, Vec::new());
+    let add = button_bounds(&output, "Add linked overlay")
+        .expect("the linked overlay control survives a narrow panel");
+    click(&ctx, 390.0, &mut state, &mut panel, add.center());
+    let id = state.overlays().as_slice()[0].id;
+    let output = render_panel(&ctx, 390.0, &mut state, &mut panel, Vec::new());
+    assert!(
+        button_bounds(&output, &format!("Remove {id}")).is_some(),
+        "the per-overlay Remove control survives a narrow panel"
+    );
+}
+
+#[test]
+fn removing_a_frozen_copy_keeps_the_linked_gradient_and_removal_reaches_the_cap_case() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    state
+        .commit_parameters(parameters_d(1.0))
+        .expect("commit d = 1");
+    state.set_formula("(0, 0)".into());
+    let mut panel = scalar_panel("x*y");
+
+    let mut output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    let add_linked = button_bounds(&output, "Add linked overlay")
+        .expect("the linked overlay control is offered");
+    click(&ctx, 460.0, &mut state, &mut panel, add_linked.center());
+    output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    let add_frozen =
+        button_bounds(&output, "Add frozen copy").expect("the frozen copy control is offered");
+    click(&ctx, 460.0, &mut state, &mut panel, add_frozen.center());
+    assert_eq!(state.overlays().len(), 2);
+    assert!(state.gradient.is_some());
+
+    let frozen_id = state.overlays().as_slice()[1].id;
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    let remove_frozen = button_bounds(&output, &format!("Remove {frozen_id}"))
+        .expect("a frozen copy also has a real Remove control");
+    click(&ctx, 460.0, &mut state, &mut panel, remove_frozen.center());
+    assert_eq!(state.overlays().len(), 1);
+    assert!(
+        state.gradient.is_some(),
+        "removing a frozen copy leaves the drawn linked gradient untouched"
+    );
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    assert!(has_text(&output, "Drawn now"));
+
+    // Fill to the cap, then remove from the panel even after the cap message
+    // told the user to do exactly that.
+    for _ in 0..MAX_OVERLAYS - 1 {
+        let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+        let add = button_bounds(&output, "Add linked overlay")
+            .expect("the linked control remains offered below the cap");
+        click(&ctx, 460.0, &mut state, &mut panel, add.center());
+    }
+    assert_eq!(state.overlays().len(), MAX_OVERLAYS);
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    let add = button_bounds(&output, "Add linked overlay")
+        .expect("the add control is still visible at the cap");
+    click(&ctx, 460.0, &mut state, &mut panel, add.center());
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    assert!(
+        has_text(&output, "remove one before adding another"),
+        "the cap message instructs the user to remove an overlay"
+    );
+    let last_id = state.overlays().as_slice().last().unwrap().id;
+    let remove = button_bounds(&output, &format!("Remove {last_id}"))
+        .expect("the cap case still exposes the removal control");
+    click(&ctx, 460.0, &mut state, &mut panel, remove.center());
+    assert_eq!(state.overlays().len(), MAX_OVERLAYS - 1);
 }
 
 #[test]
