@@ -167,7 +167,8 @@ body.webgpu-unsupported #loading {
 }
 
 #webgpu-unsupported a:focus-visible,
-#webgpu-retry:focus-visible {
+#webgpu-unsupported button:focus-visible,
+#webgpu-unsupported summary:focus-visible {
   outline: 3px solid #ffd166;
   outline-offset: 2px;
 }
@@ -187,7 +188,19 @@ body.webgpu-unsupported #loading {
   background: #262b35;
 }
 
-#webgpu-retry {
+/* Recovery actions: Retry and the desktop download stay together next to the
+   detected problem, and repeat inside the static preview. */
+.webgpu-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+}
+
+#webgpu-unsupported button,
+#webgpu-unsupported a.webgpu-action {
+  box-sizing: border-box;
   min-width: 7rem;
   min-height: 2.75rem;
   padding: 0.55rem 1.1rem;
@@ -196,15 +209,89 @@ body.webgpu-unsupported #loading {
   background: #34405a;
   color: #ffffff;
   font: inherit;
+  text-align: center;
+  text-decoration: none;
   cursor: pointer;
 }
 
-#webgpu-retry:hover {
+#webgpu-unsupported button:hover,
+#webgpu-unsupported a.webgpu-action:hover {
   background: #405072;
 }
 
-#webgpu-retry:active {
+#webgpu-unsupported button:active,
+#webgpu-unsupported a.webgpu-action:active {
   background: #2b354a;
+}
+
+/* The generic recovery view and the preview are mutually exclusive. Every
+   preview block starts hidden; web/webgpu.js only reveals one after the panel
+   itself has been shown by the gate. */
+#webgpu-generic[hidden],
+#webgpu-preview[hidden],
+.webgpu-exercise[hidden] {
+  display: none;
+}
+
+.webgpu-preview-note {
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid #7bd88f;
+  background: #1d2b31;
+}
+
+#webgpu-preview h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1.05rem;
+  color: #ffffff;
+}
+
+.webgpu-figure {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem;
+  border: 1px solid #22313f;
+  border-radius: 0.5rem;
+  background: #182534;
+}
+
+.webgpu-figure svg {
+  display: block;
+  width: 100%;
+  max-width: 22rem;
+  height: auto;
+  margin: 0 auto;
+}
+
+.webgpu-figure figcaption {
+  margin-top: 0.5rem;
+  color: #a9b7c6;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.webgpu-question {
+  padding-left: 0.75rem;
+  border-left: 3px solid #4cc9f0;
+}
+
+.webgpu-preview-back {
+  margin-top: 1rem;
+}
+
+#webgpu-diagnostics {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #22313f;
+}
+
+#webgpu-diagnostics summary {
+  padding: 0.35rem 0;
+  color: #9cc4ff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#webgpu-diagnostics h2 {
+  margin-top: 1rem;
 }
 
 /* No-JavaScript fallback: the hidden panel cannot be revealed, so show a
@@ -224,7 +311,20 @@ body.webgpu-unsupported #loading {
 
 .webgpu-noscript p {
   max-width: 32rem;
-  margin: 0;
+  margin: 0 0 0.6rem;
+}
+
+.webgpu-noscript p:last-child {
+  margin-bottom: 0;
+}
+
+.webgpu-noscript a {
+  color: #9cc4ff;
+}
+
+.webgpu-noscript a:focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 2px;
 }
 
 /* Ticket 71 follow-up: match egui's 700 pt Compact breakpoint and reclaim the

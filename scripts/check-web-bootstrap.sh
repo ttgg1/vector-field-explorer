@@ -55,12 +55,15 @@ require_text 'https://caniuse.com/webgpu' "$index" "the caniuse link is missing"
 require_text 'href="download.html"' "$index" "the native download link is missing"
 grep -qF 'target="_blank"' "$index" || fail "help links must open in a new tab"
 
-# The helper is copied by Trunk and loaded; it must parse.
+# The helper is copied by Trunk and loaded; it must parse. The preview check
+# also exercises the ordered recovery actions, the expandable diagnostics, the
+# hidden defaults, and the recognized-exercise query parsing in a fake DOM, so
+# Node is required rather than silently skipping the JS gate.
 require_text 'href="web/webgpu.js"' "$index" "the Trunk copy-file for webgpu.js is missing"
 require_text 'src="webgpu.js"' "$index" "the webgpu.js script tag is missing"
-if command -v node >/dev/null 2>&1; then
-  node --check "$helper" || fail "web/webgpu.js does not parse"
-fi
+command -v node >/dev/null 2>&1 || fail "node is required for the web JavaScript checks"
+node --check "$helper" || fail "web/webgpu.js does not parse"
+node "$root/scripts/check-webgpu-preview.mjs" || fail "web/webgpu.js preview contract failed"
 
 # The stylesheet must hide the canvas and loading overlay while the panel shows.
 require_text '#webgpu-unsupported' "$style" "the panel style is missing"
