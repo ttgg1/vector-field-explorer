@@ -12,13 +12,30 @@ use glam::Vec3;
 use crate::support;
 
 use vector_field_explorer::color_mapping::{ColorSample, ColorStats};
+use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene};
 use vector_field_explorer::source_scene::{FieldMode, SourceDisplay};
+use vector_field_explorer::sources::FieldFamily;
 use vector_field_explorer::ui::gauss_shell::GaussShellState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::viewport_legend::{
-    self, LEGEND_TITLE, LegendFrame, LegendSnapshot, PANEL_UNITS_NOTE,
+    self, BOTH_NOTE, LEGEND_TITLE, LegendFrame, LegendSnapshot, PANEL_UNITS_NOTE,
 };
 use vector_field_explorer::viewmodel::{ArrowLengthMode, State};
+
+/// The stats a radius reading produces for the shell this frame. The harmonic
+/// field is radial along +x at the probe point, so the largest component is the
+/// magnitude itself.
+fn shell_stats(shell: &mut GaussShellState, scene: &MaxwellScene) -> ColorStats {
+    let report = shell.report_for(scene, FieldFamily::Electric, 0.0);
+    let at = report.at_radius.field().expect("an exterior reading at r") as f32;
+    let at_double = report.at_double.field().expect("an exterior reading at 2r") as f32;
+    assert!(at > 0.0 && at_double > 0.0, "exterior readings are finite");
+    ColorStats {
+        min_magnitude: at.min(at_double),
+        max_magnitude: at.max(at_double),
+        max_abs_component: at.max(at_double),
+    }
+}
 
 const STATS: ColorStats = ColorStats {
     min_magnitude: 0.5,
@@ -292,8 +309,12 @@ fn both_display_overlay_names_family_colours_without_a_numeric_ramp() {
     assert!(has_value(&rows, "E amber"));
     assert!(has_value(&rows, "B cyan"));
     assert!(
-        has_value_containing(&rows, "No single magnitude ramp"),
+        has_value(&rows, BOTH_NOTE),
         "Both must explain that the families are fixed colours"
+    );
+    assert!(
+        !has_value(&rows, &format!("Units: {PANEL_UNITS_NOTE}")),
+        "fixed family colours carry no numeric magnitude, so no units line"
     );
     assert!(!has_value(&rows, "Lock range"));
     assert!(
@@ -467,29 +488,32 @@ fn locked_mapping_is_invariant_to_probe_radius_and_resampling() {
     let mut state = State::new(false);
     state.set_color_range(1.0, 4.0);
     state.set_auto_fit(false);
+    let scene = MaxwellScene {
+        case: MaxwellCase::HollowSphere,
+        ..Default::default()
+    };
     let sample = ColorSample {
         magnitude: 2.0,
         dir: Vec3::X,
     };
-    let before_stats = ColorStats {
-        min_magnitude: 0.5,
-        max_magnitude: 4.0,
-        max_abs_component: 4.0,
-    };
-    let before = state.color_mapping().sample(&sample, &before_stats);
-    assert_eq!(before.clipped, None);
 
-    // #219: doubling the Gauss-shell probe radius changes the reading, not the
-    // locked colour mapping.
+    // #219: the shell's readings at `r` and `2r` change when the probe radius
+    // doubles, so the stats auto-fit would consume change too.
     let mut shell = GaussShellState::default();
     shell.probe_radius = 1.5;
+    let before_stats = shell_stats(&mut shell, &scene);
+    let before = state.color_mapping().sample(&sample, &before_stats);
+    assert_eq!(before.clipped, None, "2.0 sits inside the 1.0..4.0 lock");
+
+    // Doubling the Gauss-shell probe radius changes the reading, not the locked
+    // colour mapping.
     shell.probe_radius *= 2.0;
     assert_eq!(shell.probe_radius, 3.0, "the #219 probe radius doubled");
-    let after_stats = ColorStats {
-        min_magnitude: 0.1,
-        max_magnitude: 100.0,
-        max_abs_component: 100.0,
-    };
+    let after_stats = shell_stats(&mut shell, &scene);
+    assert_ne!(
+        before_stats, after_stats,
+        "doubling the probe radius changes the sampled readings"
+    );
     let after = state.color_mapping().sample(&sample, &after_stats);
     assert_eq!(
         before.rgb, after.rgb,
@@ -497,8 +521,8 @@ fn locked_mapping_is_invariant_to_probe_radius_and_resampling() {
     );
     assert_eq!(before.clipped, after.clipped);
 
-    // Non-vacuous: the same magnitude does move colour when auto-fit follows
-    // the resampled stats.
+    // Non-vacuous: the same magnitude and resampled stats do move colour when
+    // auto-fit follows those stats, so the lock is doing the work.
     state.set_auto_fit(true);
     let auto = state.color_mapping().sample(&sample, &after_stats);
     assert_ne!(

@@ -200,7 +200,9 @@ fn legend_body(
         ui.strong(snapshot.quantity);
         ui.label(&snapshot.quantity_detail);
     });
-    ui.label(format!("Units: {}", snapshot.units));
+    if snapshot.family_scales.is_none() {
+        ui.label(format!("Units: {}", snapshot.units));
+    }
 
     if let Some(scales) = snapshot.family_scales {
         ui.label(BOTH_NOTE);
