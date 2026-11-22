@@ -1302,9 +1302,9 @@ pub fn object_scene_for_state(state: &State) -> MeshScene {
             });
             MeshScene::from_sources(&scene, &domain, frame.as_ref())
         }
-        FieldMode::Formula | FieldMode::Materials | FieldMode::Ode | FieldMode::Maxwell => {
-            MeshScene::empty()
-        }
+        FieldMode::Materials => MeshScene::from_material(&state.material, &domain, frame.as_ref()),
+        FieldMode::Maxwell => MeshScene::from_maxwell(&state.maxwell, &domain, frame.as_ref()),
+        FieldMode::Formula | FieldMode::Ode => MeshScene::empty(),
     }
 }
 

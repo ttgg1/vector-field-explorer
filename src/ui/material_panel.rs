@@ -152,6 +152,8 @@ pub fn show(
         }
     });
 
+    crate::ui::object_style_control::show(ui, state);
+
     ui.label("Geometry");
     match panel.draft.case {
         MaterialCase::DielectricSphere | MaterialCase::PermeableSphere => {

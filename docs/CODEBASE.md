@@ -75,8 +75,10 @@ and straight-alpha sRGB/linear background values for both export backends;
 `objects: Option<Arc<MeshScene>>` and committed `object_style`. The
 `app::object_scene_for_state` mapping feeds the live viewport, the animation
 snapshot (the CLI animation reaches it through `AnimationSnapshot::from_parts`)
-and the CLI still scene, so a Sources/Induction state has one object count
-everywhere. `prepare_scene_inner` stores `None` when the mapped scene has no
+and the CLI still scene, so a Sources/Induction/Materials/Maxwell state has one
+object count everywhere. Materials and Maxwell now map their bounded case
+geometry to the same `MeshScene` instance type (issue #274); Formula and Ode stay
+empty. `prepare_scene_inner` stores `None` when the mapped scene has no
 objects, so a Formula-mode PNG keeps the existing no-objects capture
 byte-identical; a non-empty scene composites through
 `render_offscreen_with_objects` with the committed Solid/Wireframe style. The
@@ -5124,8 +5126,12 @@ position: [f32; 3], normal: [f32; 3], barycentric: [f32; 3] }` (`repr(C)`);
 `primitive_mesh(MeshPrimitive) -> &'static PrimitiveMesh`; the budget
 constants `STATIC_TRIANGLES = 2_832`, `STATIC_VERTICES = 8_496`,
 `VERTEX_BYTES = 36`, `MAX_OBJECTS = 64` and `MAX_DRAWN_TRIANGLES = 150_000`;
+`maxwell_style_note(&MaxwellScene, Option<&PlaneFrame>) ->
+Option<&'static str>` explains every Maxwell case left outline-only;
 `MeshObject { primitive, transform: [[f32; 4]; 4], color: [f32; 3], opacity,
 sign: i8 }`; `MeshScene` with `empty()`, `from_sources(&SourceScene, &Domain,
+Option<&PlaneFrame>)`, `from_material(&MaterialScene, &Domain,
+Option<&PlaneFrame>)`, `from_maxwell(&MaxwellScene, &Domain,
 Option<&PlaneFrame>)`, `objects()`, `drawn_triangles()`, `generation()` and
 `clip()`; `SliceClip { normal: [f32; 3], offset: f32 }`; `object_transform(
 center: Vec3, axis: Vec3, scale: Vec3) -> [[f32; 4]; 4]`; and
@@ -5159,6 +5165,23 @@ and length, 12 visible turns). Family colour comes from
 a finite negative charge/current (a NaN strength compares false and maps to
 `+1`). `SourceDisplay` filters families; disabled entries emit nothing; entry
 order is preserved, and either truncation drops the tail without reordering.
+
+**Materials and Maxwell mapping (issue #274).** `from_material` fills a sphere
+case with a `Sphere` at the material radius and marks a planar-boundary case
+with one zero-thickness `Disc` on the interface axis/offset (never a filled
+half-space). `from_maxwell` maps parallel plates to two thin `Disc`s at
+`±separation/2`, coaxial cases to the inner `Cylinder` only (the outer conductor
+is a thin shell kept as outline), `InfiniteWire` to a `Z`-axis `Cylinder`,
+`Solenoid` to the helical `Tube`, `ImageSphere` to a filled conductor `Sphere`,
+and `ImagePlane` to the real charge `Sphere` plus a thin grounded `Disc`.
+`HollowSphere` is outline-only because no filled primitive is a thin spherical
+shell; a `Conductor2D` circle maps to a short `Cylinder` on its 2D slice, while
+the square stays outline-only because no box primitive exists. Both constructors
+reuse `object_transform`, `SliceClip`, the instance/triangle caps and the same
+FNV-1a generation, so 2D and 3D share one generation and the cache still compares
+generation plus clip. Colour follows the case family, opacity is `1.0`, and the
+shared persisted `State::object_style` selects the renderer's filled or
+barycentric-edge path without changing the mesh.
 
 Torus geometry: the primitive has major `0.75` and minor `0.25`, and
 `object_mapping` sets `scale = (radius / 0.75, 0.02 * extent / 0.25, radius /
@@ -5222,6 +5245,8 @@ at 64 instances; the current largest is 1,152, so 64 × 1,152 = 73,728 <
 `cache_matches_compares_the_slice_clip_as_well_as_the_generation` (a 2D clip,
 no clip and another plane all fail to match despite equal generations), and
 `empty_scene_has_no_objects_or_triangles_and_a_distinct_generation`.
+The Materials/Maxwell constructors and their outline-only reasons are pinned by
+`tests/teaching_solid_test.rs`.
 
 **Limitations.** Fixed tessellation, no LOD, no picking metadata and no
 per-triangle colour. Solenoid turns are capped at 12 for honesty; the source's
@@ -5817,13 +5842,22 @@ and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
 `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
-`ode_panel`, `panel_rails`, `plot_panel`, `presets`, `prompt_model`,
+`object_style_control`, `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `prompt_model`,
 `ring_lesson`, `shell_lesson`, `sidebar`,
 `sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
 `viewport_tool`, `wire_lesson`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
+
+#### `src/ui/object_style_control.rs` — shared Solid/Wireframe selector
+
+**Purpose / API.** One `show(ui, &mut State) -> bool` widget used by the
+Materials and Maxwell panels (issue #274). It reads and writes the single
+persisted `State::object_style`; `OBJECT_STYLE_HELP` is the shared explanation.
+The Sources panel keeps its own copy of the same control until #275's legend
+work settles, so there is still exactly one durable value and no panel-local
+style field.
 
 #### `src/ui/viewport_tool.rs` — the viewport-edge click tool strip
 
@@ -6281,11 +6315,16 @@ plus the shared case/view names, viewport summary and help rows.
   the app's shared Reset seam; `Fit` uses the existing view-command seam.
 - Materials is arrows-only, with the exact note
   `Arrows only: streamlines, particles and click seeding stay off in Materials.`
+- The shared `Object style` selector ([`object_style_control`](../src/ui/object_style_control.rs))
+  reads/writes `State::object_style`, so Materials, Maxwell and Sources always
+  show the one committed Solid/Wireframe choice (issue #274).
 
 **Pinned by.** `tests/material_panel_test.rs` (wide/compact controls, commit
 and rejection, view/Reset, exact units, disabled Features/CAS, help rows,
-viewport label, current-only warning, rail/sheet requests) and
-`tests/layout_test.rs` for `materials_expanded`/`materials_width`.
+viewport label, current-only warning, rail/sheet requests),
+`tests/teaching_solid_test.rs` (the shared object-style selector and the
+Materials body mapping) and `tests/layout_test.rs` for
+`materials_expanded`/`materials_width`.
 
 #### `src/ui/maxwell_panel.rs` — the responsive Maxwell panel
 
@@ -6342,6 +6381,11 @@ Measurement, InvestigateGaussShell, FreeExploreGaussShell}`,
   `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
   Coloring is hidden and CAS is disabled with
   `CAS edits the formula field; switch to Formula.`
+- The same shared `Object style` selector reads/writes `State::object_style`.
+  With Solid selected, `maxwell_style_note` explains every case left
+  outline-only: the hollow sphere's thin shell, the coaxial outer shell, the
+  image constructions, the square conductor's missing box primitive, and a
+  Conductor2D circle before switching to 2D.
 - The case controls also embed the session-only
   [`gauss_shell`](../src/ui/gauss_shell.rs) investigation. `Investigate` and
   `Free explore` return their own one-shot actions; the app loads
@@ -6356,7 +6400,9 @@ camera/mode preservation, disabled Features/CAS, help rows, rail/sheet
 requests), `tests/maxwell_learning_panel_test.rs` (the embedded section's
 equation/form, residual and limitation contracts), `tests/maxwell_wave_ui_test.rs`
 (the plane-wave controls, verbatim validation, equation statuses and export
-notes) and `tests/layout_test.rs` for `maxwell_expanded`/`maxwell_width`.
+notes), `tests/teaching_solid_test.rs` (the shared style selector, Maxwell body
+mapping and outline-only reasons) and `tests/layout_test.rs` for
+`maxwell_expanded`/`maxwell_width`.
 
 #### `src/ui/maxwell_learning_panel.rs` — Maxwell learning and residual section
 
