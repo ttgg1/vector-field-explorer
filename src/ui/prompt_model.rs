@@ -8,6 +8,16 @@
 use eframe::egui;
 
 use crate::prompt_model::{self, Axis, DipoleEnd, Preview, PromptModel, Question};
+use crate::ui::prompt_help;
+
+/// The egui temporary-store key for the section's session state.
+///
+/// The app and tests share this one key so opening the help cannot create a
+/// second copy of the typed prompt or the parsed model.
+#[doc(hidden)]
+pub fn state_id() -> egui::Id {
+    egui::Id::unique("prompt_model_state")
+}
 
 /// The panel's session-only state.
 #[derive(Clone, Debug, Default)]
@@ -20,6 +30,8 @@ pub struct PromptModelState {
     pub error: Option<String>,
     /// The last successful apply/cancel message.
     pub message: Option<String>,
+    /// Whether the in-context glossary is open. Session-only, never persisted.
+    pub help_open: bool,
 }
 
 impl PromptModelState {
@@ -94,7 +106,26 @@ pub enum PromptModelAction {
 /// Draw the prompt-model section and return any requested action.
 pub fn show(ui: &mut egui::Ui, state: &mut PromptModelState) -> Option<PromptModelAction> {
     ui.separator();
-    ui.heading("Interpret a prompt");
+    ui.horizontal_wrapped(|ui| {
+        ui.heading("Interpret a prompt");
+        if ui
+            .add(egui::Button::new(prompt_help::TOGGLE_LABEL).selected(state.help_open))
+            .clicked()
+        {
+            state.help_open = !state.help_open;
+        }
+    });
+
+    if state.help_open {
+        // Escape is reserved for this open help rather than also reaching a
+        // focused text field or another dialog below.
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            || prompt_help::show(ui)
+        {
+            state.help_open = false;
+        }
+    }
+
     ui.small(
         "Offline grammar: a point charge at the origin, or two equal/opposite point charges \
          (a dipole). Nothing applies until you confirm the preview.",
