@@ -11,6 +11,11 @@ name: Package
 #     .app.zip on macOS, .zip on Windows) and uploads one artifact per target
 #     under the target triple's name.
 #
+# A workflow_dispatch run is a packaging dry run: it builds and uploads the
+# same four target artifacts but never publishes a release, bumps a version,
+# or creates/moves a tag. The caller or release owner still owns verification
+# and publishing.
+#
 # Linux AppImage (ticket 43):
 #   * linuxdeploy 1-alpha-20251107-1 builds the AppDir; appimagetool 1.9.1
 #     turns it into the image using the pinned type2 runtime 20251108. All
@@ -35,6 +40,22 @@ name: Package
 
 on:
   workflow_call:
+    inputs:
+      version:
+        description: 'Version used in asset names and Info.plist'
+        required: true
+        type: string
+      ref:
+        description: 'Tag or commit SHA to build'
+        required: true
+        type: string
+      build-version:
+        description: 'Compile-time VFE_BUILD_VERSION (empty = Cargo.toml version)'
+        required: false
+        default: ''
+        type: string
+  # Manual packaging dry run; this trigger only builds and uploads artifacts.
+  workflow_dispatch:
     inputs:
       version:
         description: 'Version used in asset names and Info.plist'
