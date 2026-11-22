@@ -1549,7 +1549,8 @@ persistence dependency.
 `PartialEq`, `Default`, serde), `MaxwellError`, `MaxwellSampling`,
 `MaxwellLine`, `BemConvergence`, `BemSolution`, `MaxwellStop`, `maxwell_family`,
 `maxwell_assumptions`, `maxwell_warning`, `validate_maxwell`, `maxwell_field`,
-`maxwell_field_with_bem`, `maxwell_outline`, `solve_bem`, `sample_maxwell`, and
+`maxwell_field_with_bem`, `hollow_sphere_interface_tolerance`, `maxwell_outline`,
+`solve_bem`, `sample_maxwell`, and
 `sample_maxwell_with_bem`. `BemSolution` exposes `field_at`, `check_net_charge`,
 `convergence`, `matches_scene` and the doc-hidden net-charge test seam. Constants
 are `MAXWELL_MAX_DENSITY_3D`, `MAXWELL_MAX_DENSITY_2D`,
@@ -5441,7 +5442,7 @@ thread.
 
 Declares `appearance_panel`, `branding`, `cas_preview` (compiled on both
 targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`
-and `math_view`, `formula_bar`, `help_overlay`, `induction_panel`,
+and `math_view`, `formula_bar`, `gauss_shell`, `help_overlay`, `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
@@ -5849,11 +5850,11 @@ viewport label, current-only warning, rail/sheet requests) and
 plus case names, the formula-bar summary and the help rows.
 
 **Public API.** `MaxwellPanelState { draft, error, advanced, wave, wave_error,
-wave_open, learning }`, `MaxwellPanelState::default`,
+wave_open, learning, gauss }`, `MaxwellPanelState::default`,
 `commit(&mut State) -> bool`, `commit_wave(&mut State) -> bool`,
 `sync_from(&State)`, `show(ui, &mut panel, &mut State, compact) ->
 Option<MaxwellPanelAction>`, `MaxwellPanelAction::{Fit, Reset, SwitchTo2d,
-Measurement}`,
+Measurement, InvestigateGaussShell, FreeExploreGaussShell}`,
 `case_label`, `summary`, `MAXWELL_HELP_ROWS`, `maxwell_help_rows`,
 `MAXWELL_ONLY_NOTE`, `MAXWELL_CONDUCTOR_NOTE`, `MAXWELL_ACCURACY_OPT_IN`,
 `WAVE_SCOPE_NOTE`, `WAVE_NORMALIZED_NOTE`, `WAVE_AMPERE_NOTE`, `WAVE_SVG_NOTE`.
@@ -5898,6 +5899,13 @@ Measurement}`,
   `Arrows only: streamlines, particles and click seeding stay off in Maxwell.`
   Coloring is hidden and CAS is disabled with
   `CAS edits the formula field; switch to Formula.`
+- The case controls also embed the session-only
+  [`gauss_shell`](../src/ui/gauss_shell.rs) investigation. `Investigate` and
+  `Free explore` return their own one-shot actions; the app loads
+  `MaxwellCase::HollowSphere`, keeps `FieldMode::Maxwell`, reveals the existing
+  Field probes area and never fabricates a durable probe surface. Exact
+  cancellation input changes (scene, probe radius, family, clock) invalidate the
+  cached reading.
 
 **Pinned by.** `tests/maxwell_panel_test.rs` (wide/compact reflow, case-specific
 controls, rejection, current-only warning, accuracy opt-in, Switch to 2D
@@ -5997,6 +6005,45 @@ Loop, Point}`, `ResidualReport { residual, terms, absolute, inputs }`,
 `applying_an_integral_law_adds_or_reuses_the_matching_family_probe`,
 `incompatible_action_is_explained_and_mutates_nothing`, and
 `differential_action_highlights_the_point_and_names_unavailable_terms`.
+
+#### `src/ui/gauss_shell.rs` — guided Gauss-law investigation (#219)
+
+**Purpose.** A self-contained, session-only teaching activity for the shipped
+`MaxwellCase::HollowSphere`: one physics question, a concentric Gaussian sphere
+at probe radius `r` distinct from the shell radius `R`, live `r` and `2r`
+readings (radial field, area, sampled flux), pin cards and the normalized
+cancellation algebra. No new physical case, quadrature rule or tolerance is
+added.
+
+**Public API.** `GaussShellState { active, probe_radius, pinned, ... }` with
+`Default` inactive, `activate(&MaxwellScene)`, `deactivate`, `reset`,
+`invalidate_report`, `report_for(&MaxwellScene, FieldFamily, f64)`,
+`pin`, `pinned`, `clear_pinned`; `GaussShellReading { radius, kind }` with
+`field`, `area`, `flux`, `flux_estimate`; `GaussShellReadingKind::{Exterior,
+Interior, Excluded}`; `GaussShellReport { radius, at_radius, at_double }`;
+`GaussShellAction::{Investigate, FreeExplore}`;
+`compute_reading(scene, radius, family, time) -> GaussShellReading`; and
+`show(ui, &mut state, &MaxwellScene, FieldFamily, f64) -> Option<GaussShellAction>`.
+
+**Invariants.**
+- The Gaussian surface is a sphere centred on the origin with `size.x = 2r`, so
+  `GaussianSurface::area` reports `4*pi*r^2`. Flux goes through the shipped
+  `field_probe::flux` full/half-resolution passes via a local `ProbeField`
+  adapter; the investigation never touches `State::probe_surfaces`.
+- `r < R` reports zero radial field and zero flux with the inside explanation;
+  `|r - R|` inside `hollow_sphere_interface_tolerance(R)` reports `Excluded`
+  with no finite field or flux; `r > R` reports the sampled field, area and
+  flux together, plus the quarter-field/fourfold-area/equal-flux ratios.
+- Pin snapshots are values, so later radius or scene edits never rewrite them.
+  At most two are kept; `Clear pinned readings` removes both.
+- Everything is normalized teaching units and labelled as such. The algebra
+  line states that equality holds only within the reported quadrature
+  uncertainty.
+
+**Pinned by.** `tests/gauss_shell_test.rs`: the exterior ratios and flux
+uncertainty, interior zero, excluded interface, pin snapshot/clear, inactive
+default/no side effects, wide/compact rendering and the normal Maxwell-panel
+`Investigate` entry.
 
 #### `src/ui/ode_panel.rs` — the responsive ODE workbench
 

@@ -996,6 +996,48 @@ impl VfApp {
             crate::ui::maxwell_panel::MaxwellPanelAction::Measurement(request) => {
                 self.apply_maxwell_measurement(request);
             }
+            crate::ui::maxwell_panel::MaxwellPanelAction::InvestigateGaussShell => {
+                self.open_gauss_shell(true);
+            }
+            crate::ui::maxwell_panel::MaxwellPanelAction::FreeExploreGaussShell => {
+                self.open_gauss_shell(false);
+            }
+        }
+    }
+
+    /// Load the shipped Hollow sphere case for the guided Gauss-law
+    /// investigation (or its `Free explore` entry). The investigation is
+    /// session-only: no durable probe surface is fabricated, and the current
+    /// view/camera or field mode is not switched.
+    fn open_gauss_shell(&mut self, investigate: bool) {
+        let mut scene = self.state.maxwell.clone();
+        if scene.case != crate::maxwell::MaxwellCase::HollowSphere {
+            scene = crate::maxwell::MaxwellScene {
+                case: crate::maxwell::MaxwellCase::HollowSphere,
+                ..crate::maxwell::MaxwellScene::default()
+            };
+        } else if !scene.radius.is_finite() || scene.radius <= 0.0 {
+            scene.radius = 1.0;
+        }
+        self.state.set_maxwell_scene(scene);
+        self.maxwell.sync_from(&self.state);
+        if investigate {
+            self.maxwell.gauss.activate(&self.state.maxwell);
+        } else {
+            self.maxwell.gauss.reset();
+        }
+        self.state.refresh_maxwell_sampling();
+
+        // Reveal the existing Field probes measurement area without adding a
+        // probe. In compact mode keep the guided Maxwell sheet; the section
+        // opens the next time Controls is shown.
+        self.controls.probe_controls.open_section = true;
+        self.layout.maxwell_expanded = true;
+        if self.layout_mode == LayoutMode::Compact {
+            self.sheet.open(SheetState::Maxwell);
+            self.sheet_expanded = SheetSize::Default;
+        } else if !self.layout.controls_expanded {
+            self.layout.toggle_controls();
         }
     }
 

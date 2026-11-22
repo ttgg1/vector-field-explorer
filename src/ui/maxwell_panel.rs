@@ -20,6 +20,8 @@ use crate::maxwell::{
 use crate::maxwell_learning::MaxwellEquation;
 use crate::maxwell_residual::{TermStatus, residual};
 use crate::maxwell_wave::{MAX_AMPLITUDE, MIN_WAVELENGTH, WaveSpec, equation_terms};
+use crate::sources::FieldFamily;
+use crate::ui::gauss_shell::{GaussShellAction, GaussShellState};
 use crate::ui::help_overlay::HelpRow;
 use crate::ui::maxwell_learning_panel::{MaxwellLearningPanel, MeasurementRequest};
 use crate::viewmodel::State;
@@ -59,6 +61,10 @@ pub enum MaxwellPanelAction {
     SwitchTo2d,
     /// Open (or reuse) the probe measurement the selected law form checks.
     Measurement(MeasurementRequest),
+    /// Load the hollow sphere and activate the guided Gauss-law investigation.
+    InvestigateGaussShell,
+    /// Load the hollow sphere without forcing the guided investigation.
+    FreeExploreGaussShell,
 }
 
 /// Panel-local state: the draft scene, the last rejected edit and the Advanced
@@ -80,6 +86,9 @@ pub struct MaxwellPanelState {
     pub wave_open: bool,
     /// Session-only learning/residual section; it never enters persistence.
     pub learning: MaxwellLearningPanel,
+    /// Session-only guided Gauss-law investigation; it never enters
+    /// persistence and never adds a durable probe surface.
+    pub gauss: GaussShellState,
 }
 
 impl MaxwellPanelState {
@@ -145,6 +154,7 @@ impl MaxwellPanelState {
         // report from the previous scene must not survive. The equation and
         // probe selections are session preferences and stay.
         self.learning.clear_report();
+        self.gauss.invalidate_report();
     }
 }
 
@@ -220,6 +230,18 @@ pub fn show(
 
     let family = maxwell_family(panel.draft.case);
     ui.label(format!("Family: {} (display)", family_label(family)));
+
+    let gauss_family = match maxwell_family(state.maxwell.case) {
+        MaxwellFamily::Electric => FieldFamily::Electric,
+        MaxwellFamily::Magnetic => FieldFamily::Magnetic,
+    };
+    let gauss_action = crate::ui::gauss_shell::show(
+        ui,
+        &mut panel.gauss,
+        &state.maxwell,
+        gauss_family,
+        f64::from(state.time),
+    );
 
     ui.label("Geometry");
     match panel.draft.case {
@@ -355,6 +377,7 @@ pub fn show(
             panel.wave = None;
             panel.last_wave = None;
             panel.wave_error = None;
+            panel.gauss.reset();
             action = Some(MaxwellPanelAction::Reset);
         }
     });
@@ -389,6 +412,12 @@ pub fn show(
 
     if let Some(request) = measurement {
         action = Some(MaxwellPanelAction::Measurement(request));
+    }
+    if let Some(gauss) = gauss_action {
+        action = Some(match gauss {
+            GaussShellAction::Investigate => MaxwellPanelAction::InvestigateGaussShell,
+            GaussShellAction::FreeExplore => MaxwellPanelAction::FreeExploreGaussShell,
+        });
     }
     if commit_now && action.is_none() {
         panel.commit(state);
