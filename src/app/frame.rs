@@ -67,6 +67,13 @@ impl eframe::App for VfApp {
             // A measurement run must never touch user settings.
             return;
         }
+        // eframe calls this on shutdown and on its autosave cadence, so it is
+        // the reliable place to write pending saved-scene edits that no scene
+        // action flushed. A failure is logged: the shutdown path has no panel
+        // to show a message in, and the edits stay in memory until exit.
+        if let Err(error) = self.presets.flush_scenes() {
+            log::warn!("saved scenes could not be flushed on save: {error}");
+        }
         let settings = AppSettings {
             style: self.style.clone(),
             layout: self.layout.clone(),

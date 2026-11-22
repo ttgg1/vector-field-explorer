@@ -548,6 +548,146 @@ fn switching_between_original_and_copy_preserves_independent_state() {
 }
 
 #[test]
+fn undoing_after_switching_scenes_never_rewrites_the_bound_scene() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+
+    // Scene A: one formula and its own probe surface.
+    app.state.set_formula("x + y".to_string());
+    app.state
+        .add_probe_surface(sphere(Vec3::ZERO, 1.0))
+        .expect("the A surface is valid");
+    app.presets.set_scene_name("A");
+    click_app_label(&ctx, &mut app, "Save current scene");
+
+    // Scene B: a different formula and a different probe surface.
+    app.state.set_formula("y - x".to_string());
+    assert!(app.state.remove_probe_surface(0));
+    app.state
+        .add_probe_surface(sphere(Vec3::new(1.0, 0.0, 0.0), 0.5))
+        .expect("the B surface is valid");
+    app.presets.set_scene_name("B");
+    click_app_label(&ctx, &mut app, "Save current scene");
+
+    // Visit A, then B; each load is a document change the driver records.
+    click_app_label_nth(&ctx, &mut app, "Load", 0);
+    idle(&ctx, &mut app);
+    assert_eq!(app.state.formula, "x + y");
+    click_app_label_nth(&ctx, &mut app, "Load", 1);
+    idle(&ctx, &mut app);
+    assert_eq!(app.state.formula, "y - x");
+    assert_eq!(app.presets.active_scene(), Some("B"));
+
+    // Undo restores A's document. It must also drop B's binding, otherwise the
+    // next sync writes A's formula and probe under B's name.
+    assert!(app.undo_document(&ctx));
+    assert_eq!(app.state.formula, "x + y", "undo restores A's document");
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "a restored document is not attributed to the previously bound scene"
+    );
+
+    // Any scene action flushes pending in-memory scene edits.
+    click_app_label(&ctx, &mut app, "Duplicate");
+
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    let a = persisted.get("A").expect("A survives");
+    assert_eq!(a.view.formula, "x + y", "A keeps its own formula");
+    assert_eq!(a.view.probe_surfaces.len(), 1);
+    assert_eq!(a.view.probe_surfaces[0].center, [0.0, 0.0, 0.0]);
+
+    let b = persisted.get("B").expect("B survives");
+    assert_eq!(b.view.formula, "y - x", "B keeps its own formula");
+    assert_eq!(b.view.probe_surfaces.len(), 1);
+    assert_eq!(
+        b.view.probe_surfaces[0].center,
+        [1.0, 0.0, 0.0],
+        "B keeps its own probe surface"
+    );
+}
+
+#[test]
+fn a_failed_scene_flush_keeps_the_edits_bound_to_the_same_scene() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut panel = panel_in(dir.path());
+    let original = vector_field_explorer::scene_document::SceneDocument::capture(
+        "A",
+        Default::default(),
+        Default::default(),
+        SceneCamera::default(),
+    );
+    panel
+        .insert_scene(original.clone())
+        .expect("the scene saves");
+    panel.bind_active_scene(original.clone());
+
+    let mut edited = original;
+    edited.camera.scale = 2.0;
+    panel.sync_active_scene(edited);
+
+    // Make the store write fail by replacing the file with a directory.
+    let path = dir.path().join("scenes.json");
+    std::fs::remove_file(&path).expect("the saved file exists");
+    std::fs::create_dir(&path).expect("the file is replaced by a directory");
+    panel
+        .flush_scenes()
+        .expect_err("the write is refused while the path is a directory");
+
+    // The dirty flag must survive the failure, so a retry still has work.
+    panel
+        .flush_scenes()
+        .expect_err("a failed flush does not clear the dirty state");
+    assert_eq!(
+        panel.scenes().get("A").map(|scene| scene.camera.scale),
+        Some(2.0),
+        "the in-memory edit stays on the scene it was made against"
+    );
+
+    std::fs::remove_dir(&path).expect("the blocking directory is removed");
+    panel
+        .flush_scenes()
+        .expect("the retry writes the pending edit");
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted.get("A").map(|scene| scene.camera.scale),
+        Some(2.0),
+        "the retry persists the edit to the same scene"
+    );
+}
+
+#[test]
+fn saving_the_app_flushes_pending_active_scene_edits() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.state.set_formula("x + y".to_string());
+    app.presets.set_scene_name("Experiment");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    click_app_label(&ctx, &mut app, "Load");
+
+    app.state.set_formula("y - x".to_string());
+    idle(&ctx, &mut app);
+
+    // No scene action runs before exit: eframe's save hook is the reliable
+    // flush point for the pending active-scene edit.
+    let mut storage = crate::support::storage::MemoryStorage::default();
+    eframe::App::save(&mut app, &mut storage);
+
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted
+            .get("Experiment")
+            .expect("the bound scene persists")
+            .view
+            .formula,
+        "y - x",
+        "the pending edit is written on save, not lost on exit"
+    );
+}
+
+#[test]
 fn visiting_a_scene_does_not_rewrite_its_stored_document() {
     let ctx = render_context();
     let dir = tempfile::tempdir().unwrap();

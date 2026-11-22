@@ -201,6 +201,12 @@ impl VfApp {
     }
 
     fn apply_snapshot(&mut self, snapshot: &EditSnapshot) {
+        // A snapshot replaces the whole document, possibly with content from a
+        // different saved scene than the one currently bound. Unbind first so
+        // the next idle sync cannot write the restored document under the old
+        // scene's name and overwrite it. Re-binding needs an explicit load or
+        // save; an ordinary edit is never attributed to a scene across undo.
+        self.presets.clear_active_scene();
         apply_document(
             snapshot,
             &mut self.state,

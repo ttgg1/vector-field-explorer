@@ -235,6 +235,71 @@ fn delete_reports_whether_a_scene_was_removed() {
     assert_eq!(names(&store), vec!["second"]);
 }
 
+#[test]
+fn duplicate_clones_a_scene_under_a_unique_independent_name() {
+    let mut store =
+        SceneStore::from_documents(vec![scene_with_scale("first", 2.5), scene_named("second")])
+            .expect("valid, unique scenes fit in an empty store");
+
+    let copy = store.duplicate("first").expect("the named scene is copied");
+    assert_eq!(copy, "first copy");
+    assert_eq!(
+        names(&store),
+        vec!["first", "second", "first copy"],
+        "the copy appends under its new name"
+    );
+    assert_eq!(
+        store.get("first copy").map(|scene| scene.camera.scale),
+        Some(2.5),
+        "the copy starts equal to its source"
+    );
+
+    // The copy is independent of later source edits.
+    store
+        .upsert(scene_with_scale("first", 8.0))
+        .expect("the source can be replaced");
+    assert_eq!(
+        store.get("first copy").map(|scene| scene.camera.scale),
+        Some(2.5),
+        "editing the source does not change the copy"
+    );
+
+    assert_eq!(
+        store.duplicate("first").expect("a second copy stores"),
+        "first copy 2",
+        "every copy name is unique"
+    );
+
+    let before = store.clone();
+    let error = store
+        .duplicate("missing")
+        .expect_err("a missing source is rejected");
+    assert!(
+        error.contains("missing"),
+        "the error names the missing scene: {error}"
+    );
+    assert_eq!(
+        store, before,
+        "a failed duplicate leaves the store unchanged"
+    );
+
+    // A full store rejects the copy and keeps every scene.
+    let mut full = SceneStore::from_documents(
+        (0..MAX_SCENES)
+            .map(|index| scene_named(&format!("scene {index}")))
+            .collect(),
+    )
+    .expect("fill the store");
+    let error = full
+        .duplicate("scene 0")
+        .expect_err("a full store rejects the copy");
+    assert!(
+        error.contains(&MAX_SCENES.to_string()),
+        "the error names the cap: {error}"
+    );
+    assert_eq!(full.scenes().len(), MAX_SCENES);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn native_missing_file_is_an_empty_store() {

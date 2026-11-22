@@ -803,7 +803,11 @@ scoped resets without touching persistence or the renderer.
   gate, not a heuristic.
 - Undo/redo are inert while a text field has focus, cancel any open gesture and
   refresh `last_committed` so applying a snapshot is not re-recorded as an
-  edit. Fly pose, time, particles and layout are never in a snapshot.
+  edit. Applying a snapshot also unbinds the active saved scene
+  (`clear_active_scene`): the restored document may belong to another
+  experiment, and an automatic sync would otherwise overwrite the previously
+  bound scene with it. Re-binding needs an explicit load or save.
+  Fly pose, time, particles and layout are never in a snapshot.
 - `Color`, `Camera` and `All` reset one document scope and are recorded once,
   named `reset colour` / `reset camera` / `reset document`; `Simulation` resets
   runtime state (clock time zero, particles and click bursts cleared) and is
@@ -4129,7 +4133,8 @@ native `load_dir`/`save_dir`; wasm `load_wasm`/`save_wasm`; `storage_note`.
 **Pinned by.** `tests/scene_store_test.rs`: JSON round trip and order,
 duplicate-name and 64-scene cap rejection, future envelope and scene versions,
 atomic whole-payload rejection with an untouched target, in-place replacement,
-delete reporting, native missing/round-trip/corrupt-file behaviour, export and
+delete reporting, `duplicate` naming/independence/missing-source/full-store
+behavior, native missing/round-trip/corrupt-file behaviour, export and
 import composition with a failure, pinned compact field order, and rejected
 upserts leaving the store unchanged.
 
@@ -6453,10 +6458,11 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
 `active_field_name`, `active_source_name`, `pending_delete`, `take_applied`,
 `clear_active`, `save_current`, `load`, `request_delete`, `cancel_delete`,
 `delete`, `load_field`, `load_source_field`, `show`, plus `scenes`,
-`active_scene`, `bind_active_scene`, `sync_active_scene`, `flush_scenes`,
-`scene_name`, `set_scene_name`, `take_scene_action`, `insert_scene`,
-`delete_scene`, `duplicate_scene`, `duplicate_current_experiment`,
-`scene_message`, `set_scene_message`, `scene_text`, `set_scene_text`.
+`active_scene`, `bind_active_scene`, `clear_active_scene`,
+`sync_active_scene`, `flush_scenes`, `scene_name`, `set_scene_name`,
+`take_scene_action`, `insert_scene`, `delete_scene`, `duplicate_scene`,
+`duplicate_current_experiment`, `scene_message`, `set_scene_message`,
+`scene_text`, `set_scene_text`.
 
 **Invariants.**
 - Built-in field presets return to Formula first, then load formula and
@@ -6497,6 +6503,21 @@ with `new`, `new_with_dir` (native), `dir`, `presets`, `active_name`,
   nothing, so a hand-edited camera value is not silently repaired. Switching
   between an original and its duplicate preserves each one's independent
   formula, parameters, probe configuration and camera.
+- Undo/redo applies a whole-document snapshot, so it calls
+  `clear_active_scene` before restoring. The restored content can belong to a
+  different experiment; keeping the old binding would let the next sync write
+  that content under the previous scene's name and overwrite it. After undo the
+  live document is untitled until an explicit `Load` or `Save current scene`
+  re-binds it. `tests/edit_history_named_test.rs::undoing_after_switching_scenes_never_rewrites_the_bound_scene`
+  pins the two-scene case.
+- `flush_scenes` clears `scenes_dirty` only after a successful write. A failed
+  flush keeps the in-memory edits, their binding and the dirty flag, returns the
+  reason, and leaves the pending scene action unapplied; a later retry writes
+  the edits to the scene they were made against
+  (`a_failed_scene_flush_keeps_the_edits_bound_to_the_same_scene`).
+  `eframe::App::save` also calls `flush_scenes`, so pending edits are not lost
+  when the app exits between scene actions
+  (`saving_the_app_flushes_pending_active_scene_edits`).
 - `Duplicate experiment` posts `SceneAction::DuplicateCurrent`; the app captures
   the live document and the panel stores it under a unique name (`Experiment
   copy`, `Experiment copy 2`, …) while leaving the original untouched. Each
