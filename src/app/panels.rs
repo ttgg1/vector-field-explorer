@@ -17,6 +17,7 @@ use crate::sources::FieldFamily;
 use crate::tour::{ControlId, TourTarget};
 use crate::ui::griffiths::{GriffithsAction, GriffithsRoute};
 use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
+use crate::ui::pins::{self, PinAction, PinSnapshot};
 use crate::ui::presets::SceneAction;
 use crate::ui::ring_lesson::{RingLessonAction, RingPrediction, RingReading};
 use crate::ui::shell_lesson::{ShellFieldPrediction, ShellFluxPrediction, ShellLessonAction};
@@ -238,10 +239,53 @@ impl VfApp {
         }
     }
 
+    /// Build the pin tray's live values and honest unavailable reasons from the
+    /// ordinary reports. Never serializes or mutates the model.
+    fn pin_snapshot(&mut self) -> PinSnapshot {
+        let mut snapshot = PinSnapshot::default();
+        let gauss_ready = self.state.field_mode == FieldMode::Maxwell
+            && self.state.maxwell.case == crate::maxwell::MaxwellCase::HollowSphere
+            && self.maxwell.gauss.active;
+        if gauss_ready {
+            let family = match crate::maxwell::maxwell_family(self.state.maxwell.case) {
+                crate::maxwell::MaxwellFamily::Electric => FieldFamily::Electric,
+                crate::maxwell::MaxwellFamily::Magnetic => FieldFamily::Magnetic,
+            };
+            let report = self.maxwell.gauss.report_for(
+                &self.state.maxwell,
+                family,
+                f64::from(self.state.time),
+            );
+            snapshot.gauss_radius = Some(report.radius);
+            snapshot.gauss_flux = Some(pins::flux_text(&report.at_radius));
+        } else {
+            snapshot.gauss_unavailable = Some(gauss_unavailable_reason(&self.state));
+        }
+        if self.state.field_mode == FieldMode::Induction {
+            snapshot.induction_frequency = Some(self.state.induction.frequency);
+        } else {
+            snapshot.induction_unavailable = Some(
+                "The induction frequency exists only while the induction model is active."
+                    .to_owned(),
+            );
+        }
+        snapshot
+    }
+
+    /// Apply a pinned control's edit through the same setter as the original.
+    fn apply_pin_action(&mut self, action: PinAction) {
+        match action {
+            PinAction::SetGaussRadius(radius) => {
+                self.maxwell.gauss.set_probe_radius(radius);
+            }
+        }
+    }
+
     fn show_left_panels(&mut self, ui: &mut egui::Ui) {
         use crate::ui::panel_rails::{RailEntry, fit_panel_widths, show_rail_strip};
         self.sync_materials_draft_on_entry();
         self.sync_maxwell_draft_on_entry();
+        let pin_snapshot = self.pin_snapshot();
         let controls_shortcut =
             menu::shortcut_label(MenuAction::ToggleControls, &self.interaction.bindings)
                 .unwrap_or_default();
@@ -372,6 +416,12 @@ impl VfApp {
                                 &mut self.seed_layouts,
                                 false,
                             );
+                            ui.separator();
+                            if let Some(action) =
+                                pins::show(ui, &mut self.pins, &pin_snapshot, false)
+                            {
+                                self.apply_pin_action(action);
+                            }
                         });
                 });
             self.record_tour_probe_control();
@@ -2266,6 +2316,8 @@ impl VfApp {
         let mut ode_action = None;
         let mut material_action = None;
         let mut maxwell_action = None;
+        let mut pin_action = None;
+        let pin_snapshot = self.pin_snapshot();
         let controls_shown = sheet == SheetState::Controls;
         let sheet_response = egui::Panel::bottom("compact_sheet")
             .exact_size(height)
@@ -2325,89 +2377,106 @@ impl VfApp {
                     close = true;
                 }
 
-                egui::ScrollArea::vertical().show(ui, |ui| match sheet {
-                    SheetState::Controls => {
-                        // Copy the facts into `Controls` before rendering: the
-                        // legend reads this mirror, so skipping it silently
-                        // shows empty stats and clips.
-                        self.controls.color_stats = self.color_facts.stats;
-                        self.controls.color_clips = self.color_facts.clips;
-                        plot_action = crate::ui::sidebar::show_compact_with_plot_action(
-                            ui,
-                            &mut self.state,
-                            &mut self.controls,
-                            &mut self.seed_layouts,
-                            true,
-                        );
-                        ui.separator();
-                        ui.label(egui::RichText::new("Appearance").strong());
-                        let controls = crate::ui::style_panel::show_controls(ui, &mut self.style);
-                        if controls.changed {
-                            crate::ui::style_panel::apply(ui.ctx(), &self.style);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if let Some(action) = pins::show(ui, &mut self.pins, &pin_snapshot, true) {
+                        pin_action = Some(action);
+                    }
+                    ui.separator();
+                    match sheet {
+                        SheetState::Controls => {
+                            // Copy the facts into `Controls` before rendering: the
+                            // legend reads this mirror, so skipping it silently
+                            // shows empty stats and clips.
+                            self.controls.color_stats = self.color_facts.stats;
+                            self.controls.color_clips = self.color_facts.clips;
+                            plot_action = crate::ui::sidebar::show_compact_with_plot_action(
+                                ui,
+                                &mut self.state,
+                                &mut self.controls,
+                                &mut self.seed_layouts,
+                                true,
+                            );
+                            ui.separator();
+                            ui.label(egui::RichText::new("Appearance").strong());
+                            let controls =
+                                crate::ui::style_panel::show_controls(ui, &mut self.style);
+                            if controls.changed {
+                                crate::ui::style_panel::apply(ui.ctx(), &self.style);
+                            }
                         }
-                    }
-                    SheetState::Presets => {
-                        camera_request =
-                            self.presets
-                                .show_compact(ui, &mut self.camera, &mut self.state, true);
-                    }
-                    SheetState::Appearance => {
-                        self.appearance
-                            .show(ui, &mut self.state, &mut self.profiles, true);
-                    }
-                    SheetState::Interaction => {
-                        self.interaction_panel.show(
-                            ui,
-                            &mut self.interaction,
-                            &mut self.interaction_profiles,
-                            true,
-                        );
-                    }
-                    SheetState::Sources => {
-                        crate::ui::sources_panel::show(
-                            ui,
-                            &mut self.state,
-                            &mut self.sources,
-                            true,
-                        );
-                    }
-                    SheetState::Induction => {
-                        induction_action = crate::ui::induction_panel::show(
-                            ui,
-                            &mut self.induction,
-                            &mut self.state,
-                            true,
-                        );
-                    }
-                    SheetState::Ode => {
-                        if self.last_field_mode != FieldMode::Ode {
-                            self.ode.sync_from(&self.state);
+                        SheetState::Presets => {
+                            camera_request = self.presets.show_compact(
+                                ui,
+                                &mut self.camera,
+                                &mut self.state,
+                                true,
+                            );
                         }
-                        ode_action =
-                            crate::ui::ode_panel::show(ui, &mut self.ode, &mut self.state, true);
+                        SheetState::Appearance => {
+                            self.appearance
+                                .show(ui, &mut self.state, &mut self.profiles, true);
+                        }
+                        SheetState::Interaction => {
+                            self.interaction_panel.show(
+                                ui,
+                                &mut self.interaction,
+                                &mut self.interaction_profiles,
+                                true,
+                            );
+                        }
+                        SheetState::Sources => {
+                            crate::ui::sources_panel::show(
+                                ui,
+                                &mut self.state,
+                                &mut self.sources,
+                                true,
+                            );
+                        }
+                        SheetState::Induction => {
+                            induction_action = crate::ui::induction_panel::show(
+                                ui,
+                                &mut self.induction,
+                                &mut self.state,
+                                true,
+                            );
+                        }
+                        SheetState::Ode => {
+                            if self.last_field_mode != FieldMode::Ode {
+                                self.ode.sync_from(&self.state);
+                            }
+                            ode_action = crate::ui::ode_panel::show(
+                                ui,
+                                &mut self.ode,
+                                &mut self.state,
+                                true,
+                            );
+                        }
+                        SheetState::Materials => {
+                            material_action = crate::ui::material_panel::show(
+                                ui,
+                                &mut self.material,
+                                &mut self.state,
+                                true,
+                            );
+                        }
+                        SheetState::Maxwell => {
+                            maxwell_action = crate::ui::maxwell_panel::show(
+                                ui,
+                                &mut self.maxwell,
+                                &mut self.state,
+                                true,
+                            );
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        SheetState::Cas => self.show_cas_body(ui),
+                        SheetState::None => {}
                     }
-                    SheetState::Materials => {
-                        material_action = crate::ui::material_panel::show(
-                            ui,
-                            &mut self.material,
-                            &mut self.state,
-                            true,
-                        );
-                    }
-                    SheetState::Maxwell => {
-                        maxwell_action = crate::ui::maxwell_panel::show(
-                            ui,
-                            &mut self.maxwell,
-                            &mut self.state,
-                            true,
-                        );
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    SheetState::Cas => self.show_cas_body(ui),
-                    SheetState::None => {}
                 });
             });
         self.record_tour_probe_control();
+        if let Some(action) = pin_action {
+            self.apply_pin_action(action);
+        }
 
         let sheet_panel = match sheet {
             SheetState::Controls => Some(PanelId::Controls),
@@ -2977,4 +3046,21 @@ fn domain_contains(domain: &Domain, position: Vec3) -> bool {
         && position.y <= domain.max.y
         && position.z >= domain.min.z
         && position.z <= domain.max.z
+}
+
+/// Why a pinned Gauss item cannot show a live value in the active model.
+fn gauss_unavailable_reason(state: &State) -> String {
+    match state.field_mode {
+        FieldMode::Maxwell if state.maxwell.case == crate::maxwell::MaxwellCase::HollowSphere => {
+            "Activate the guided Gauss-shell investigation in the Maxwell panel.".to_owned()
+        }
+        FieldMode::Maxwell => {
+            "The active Maxwell case is not the hollow sphere; the Gauss-shell radius and \
+             flux belong to that case."
+                .to_owned()
+        }
+        _ => "The Gauss-shell radius and flux are available only in the Maxwell hollow-sphere \
+              model."
+            .to_owned(),
+    }
 }

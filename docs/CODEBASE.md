@@ -512,6 +512,36 @@ The app loads the route through the ordinary `set_field_mode(Maxwell)` and
 `back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_shell`, and
 `the_shell_lesson_stays_usable_in_wide_and_compact_layouts`.
 
+#### `src/pin_layout.rs` and `src/ui/pins.rs` — pinned controls and readings (#232)
+
+**Purpose.** A bounded reference list over existing controls and readouts:
+`PinItem::{GaussRadius, GaussFlux, InductionFrequency}`, the ordered
+`PinSet`, named `PinArrangement`s and the durable `PinUiRecord`
+(`active` plus `saved`). `ui/pins.rs` draws the tray and returns one
+`PinAction::SetGaussRadius` when the learner edits the pinned radius.
+
+**Invariants.** Pin identities are stable tokens; unknown or duplicate items,
+empty/overlong/duplicate names and excess entries are repaired by
+`PinUiRecord::sanitized`, so a hand-edited or older envelope cannot fail the
+whole settings load. The record stores no model, probe, report or sampled
+value: pinned radius edits go through `GaussShellState::set_probe_radius`, the
+same setter as the original control, and pinned readings are formatted from the
+ordinary `report_for`/`State::induction` values each frame. A pinned item that
+the active model cannot supply is listed with an explicit reason instead of a
+stale value. The app draws the tray in the wide Controls panel and at the top of
+every compact sheet; the radius and flux rows stay single-line so the flux
+remains visible beside its radius in a default-height compact sheet.
+
+**Pinned by.** [tests/pins_test.rs](../tests/pins_test.rs):
+`pin_unpin_and_reorder_keep_order_and_reject_duplicates`,
+`named_arrangements_round_trip_and_bounded_names_are_repaired`,
+`invalid_and_missing_pin_entries_decode_without_corrupting_the_envelope`,
+`named_preference_round_trips_and_restores_the_same_model`,
+`layout_switch_and_sheet_restore_preserve_the_model`,
+`compact_radius_edit_keeps_the_pinned_flux_visible_and_shared`,
+`pinned_items_explain_unavailability_and_never_show_stale_values`, and
+`tray_pointer_and_keyboard_paths_pin_the_same_items`.
+
 #### `src/ui/wire_lesson.rs` — surface-current wire B/circulation activity (#227)
 
 **Purpose.** The Griffiths 5.14(a) route. It loads the shipped
@@ -4388,7 +4418,7 @@ migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-seed_layouts, preset_ui, object_style, up_axis, bake }`,
+seed_layouts, preset_ui, object_style, up_axis, bake, pin_ui }`,
 `BakeSettings { enabled, resolution_3d, resolution_2d }`,
 `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
@@ -4411,6 +4441,7 @@ seed_layouts, preset_ui, object_style, up_axis, bake }`,
 | `object_style: ObjectStyle` | `Solid` or `Wireframe` | `#[serde(default)]`; an absent key loads `Solid`; an unknown token is repaired to `Solid` with one warning by the enum decoder, and a non-string stored value is repaired to `Solid` by the field wrapper, leaving every other field intact |
 | `up_axis: UpAxis` | display-only `Z` (default), `X` or `Y`, stored lowercase as `z`, `x`, `y` | `#[serde(default)]`; an absent key loads `Z`; an unknown token is repaired to `Z` with one warning by the enum decoder, and a non-string stored value is repaired to `Z` by the field wrapper. The default is genuinely Z-up (physics convention); the token `y` selects the old historical Y-up view. It is assigned at the startup seam without dirtying and never appears in `ViewRecord`, scenes, appearance profiles or edit history |
 | `bake: BakeSettings` | `enabled` (default false), `resolution_3d` (default 48), `resolution_2d` (default 128) | `#[serde(default)]`; an absent key loads the disabled record; out-of-range resolutions clamp into `16..=64` / `32..=256` with one warning. Only the settings are stored; the lattice is runtime-only and never enters `ViewRecord`, scenes, profiles or history. An enabled startup build is bounded and non-dirtying; a refusal records the reason instead of failing startup |
+| `pin_ui: PinUiRecord` | `active: PinSet { items: [gauss_radius, gauss_flux, induction_frequency] }` and `saved: [PinArrangement { name, items }]` | `#[serde(default)]`; an absent key starts with no pins. Unknown item tokens, duplicates, empty/overlong names, duplicate arrangement names and entries beyond 8 items / 12 arrangements are dropped by `PinUiRecord::sanitized` through lenient decoders, so invalid entries cannot fail the envelope. The record holds no model, probe or sampled value |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
