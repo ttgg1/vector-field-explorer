@@ -180,6 +180,19 @@ fn a_stale_armed_probe_selects_inspect_instead_of_advertising_a_seed_tool() {
 }
 
 #[test]
+fn the_default_placement_mode_keeps_placing() {
+    assert!(
+        Controls::new().viewport_sticky,
+        "issue #228 preserves the historical repeated-click default"
+    );
+    let state = State::new(false);
+    assert!(
+        viewport_tool::derive_for(&state, &Controls::new()).sticky,
+        "the strip inherits the Keep placing default"
+    );
+}
+
+#[test]
 fn the_sticky_choice_is_carried_through_derivation() {
     let mut input = inputs();
     input.sticky = false;
@@ -263,11 +276,14 @@ fn sticky_placement_keeps_the_tool_across_two_clicks() {
     );
 }
 
+/// Select the strip's Place probe the way its button does, so these tests cover
+/// the tool the user actually picks rather than a raw control flag.
 fn probe_app(sticky: bool) -> VfApp {
     let mut app = VfApp::new();
     app.layout.help_visible = false;
     app.controls.viewport_sticky = sticky;
-    app.controls.scalar_place_probe = true;
+    let view = viewport_tool::derive_for(&app.state, &app.controls);
+    viewport_tool::activate(ViewportTool::PlaceProbe, &view, &mut app.controls);
     app
 }
 
@@ -322,6 +338,39 @@ fn one_shot_probe_placement_arms_once_then_inspects() {
         app.state.probes.points.len(),
         1,
         "the second click places nothing"
+    );
+}
+
+#[test]
+fn a_sidebar_probe_arm_stays_one_shot_under_the_sticky_default() {
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    assert!(
+        app.controls.viewport_sticky,
+        "the strip default is Keep placing"
+    );
+    // The Scalar section's "Place probe" checkbox sets this arming flag.
+    app.controls.scalar_place_probe = true;
+    app.controls.viewport_armed_one_shot = true;
+
+    let rect = probe_viewport();
+    let aspect = rect.width() / rect.height();
+    app.test_seed_click(rect.center(), rect, aspect, 0.0);
+    assert_eq!(app.state.probes.points.len(), 1, "the checkbox places once");
+    assert!(
+        !app.controls.scalar_place_probe,
+        "the standalone checkbox disarms after one probe"
+    );
+    assert!(
+        app.controls.viewport_inspect,
+        "the standalone checkbox returns to Inspect after one probe"
+    );
+
+    app.test_seed_click(rect.center() + egui::vec2(40.0, 0.0), rect, aspect, 0.0);
+    assert_eq!(
+        app.state.probes.points.len(),
+        1,
+        "the sticky default does not keep the sidebar checkbox armed"
     );
 }
 

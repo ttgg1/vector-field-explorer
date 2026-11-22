@@ -1147,9 +1147,11 @@ impl Controls {
             pending_layout_delete: None,
             left_click_action: LeftClickAction::SeedStreamline,
             viewport_inspect: false,
-            // One-shot is the conservative default: a placement click places
-            // once unless the strip's "Keep placing" is chosen.
-            viewport_sticky: false,
+            // Keep placing preserves the historical repeated-click behaviour:
+            // before issue #228, every viewport click seeded or burst again.
+            // The standalone Scalar "Place probe" checkbox still arms one
+            // placement through `viewport_armed_one_shot`.
+            viewport_sticky: true,
             viewport_armed_one_shot: false,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
@@ -1515,8 +1517,16 @@ fn scalar_view_section(ui: &mut egui::Ui, state: &mut State, controls: &mut Cont
 
             scalar_analysis_section(ui, state, controls);
 
-            ui.checkbox(&mut controls.scalar_place_probe, "Place probe")
-                .on_hover_text("Click the viewport plane to add one point probe");
+            // The standalone checkbox is the historical one-shot arm: it must
+            // not inherit the strip's "Keep placing" mode.
+            if ui
+                .checkbox(&mut controls.scalar_place_probe, "Place probe")
+                .on_hover_text("Click the viewport plane to add one point probe")
+                .changed()
+                && controls.scalar_place_probe
+            {
+                controls.viewport_armed_one_shot = true;
+            }
 
             let mut remove = None;
             let domain = state.scene_domain();

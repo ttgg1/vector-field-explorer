@@ -1437,8 +1437,8 @@ fn left_click_action_offers_both_choices_with_the_features_default_off() {
 fn features_reset_returns_the_left_click_action_to_seed_streamline() {
     let mut c = Controls::new();
     c.left_click_action = LeftClickAction::AddParticles;
-    let default_sticky = c.viewport_sticky;
-    c.viewport_sticky = !default_sticky;
+    assert!(c.viewport_sticky, "Keep placing is the historical default");
+    c.viewport_sticky = false;
 
     c.reset_features();
 
@@ -1447,9 +1447,9 @@ fn features_reset_returns_the_left_click_action_to_seed_streamline() {
         LeftClickAction::SeedStreamline,
         "Reset Features restores Seed streamline",
     );
-    assert_eq!(
-        c.viewport_sticky, default_sticky,
-        "Reset Features restores the strip's session-only placement mode",
+    assert!(
+        c.viewport_sticky,
+        "Reset Features restores the strip's Keep placing default",
     );
 }
 
@@ -2802,6 +2802,30 @@ fn unsupported_z_formula_disables_the_heatmap_checkbox_with_the_reason() {
         widget_disabled(&out, "Show heatmap"),
         Some(true),
         "an inapplicable scalar view must disable the heatmap toggle"
+    );
+}
+
+#[test]
+fn place_probe_checkbox_arms_one_shot_under_the_sticky_default() {
+    let mut h = NamedLayouts::new(SeedLayoutLibrary::default());
+    assert!(
+        h.controls.viewport_sticky,
+        "the strip default is Keep placing"
+    );
+    h.open_header("Scalar view");
+
+    let out = h.idle();
+    let probe = label_rect(&out, "Place probe").expect("the Place probe checkbox is exposed");
+    h.click(probe.center());
+
+    assert!(h.controls.scalar_place_probe, "the checkbox arms the click");
+    assert!(
+        h.controls.viewport_armed_one_shot,
+        "the standalone checkbox forces one-shot even while Keep placing is selected"
+    );
+    assert!(
+        h.controls.viewport_sticky,
+        "the checkbox does not silently change the strip's mode"
     );
 }
 
