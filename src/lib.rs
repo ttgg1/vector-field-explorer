@@ -80,6 +80,7 @@ pub mod source_presets;
 pub mod source_scene;
 pub mod sources;
 pub mod streamlines;
+pub mod sweep;
 pub mod tour;
 pub mod ui;
 pub mod version;
