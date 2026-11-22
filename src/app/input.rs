@@ -596,6 +596,12 @@ impl VfApp {
             self.last_click_seed = None;
             if let Some(seed) = self.ode_compare_world_seed(pos, rect, aspect) {
                 self.apply_ode_compare_seed(seed);
+            } else {
+                restart_hint(
+                    &mut self.status.hint,
+                    &mut self.hint_elapsed,
+                    "The picked point is outside the ODE field domain",
+                );
             }
             return;
         }

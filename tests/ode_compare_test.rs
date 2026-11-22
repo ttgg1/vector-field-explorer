@@ -253,6 +253,82 @@ fn armed_pick_replaces_the_seed_solves_once_and_clears_the_arm() {
         .view_domain();
     assert!(seed[0] >= domain.min.x as f64 && seed[0] <= domain.max.x as f64);
     assert!(seed[1] >= domain.min.y as f64 && seed[1] <= domain.max.y as f64);
+
+    // The next simulation frame rebuilds the comparison geometry from the new
+    // seed, so the frozen line starts where the user picked.
+    app.test_harness().advance_simulation();
+    let frozen = app
+        .ode
+        .compare
+        .frozen
+        .as_ref()
+        .expect("the picked seed rebuilds the frozen line");
+    let junction = frozen
+        .points
+        .iter()
+        .position(|point| *point == seed)
+        .expect("the frozen line is traced from the picked seed");
+    assert!(
+        junction > 0 && junction + 1 < frozen.points.len(),
+        "the picked seed is the junction of both trace directions: {junction}"
+    );
+}
+
+#[test]
+fn visibility_checkbox_rebuilds_frozen_segments_without_another_edit() {
+    let ctx = panel_context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.ode_expanded = true;
+    app.state.set_field_mode(FieldMode::Ode);
+    apply_time_dependent_reference(&mut app.state).expect("reference scene solves");
+
+    let out = idle_frame(&ctx, &mut app);
+    let baseline = app.test_harness().ode_line_count();
+    assert!(!app.ode.compare.enabled, "the comparison starts off");
+    assert!(app.ode.compare.frozen.is_none());
+    let checkbox = widget_bounds(&out, "Show frozen line vs trajectory")
+        .expect("the comparison checkbox is exposed to accessibility");
+    click(&ctx, &mut app, checkbox.center());
+
+    assert!(
+        app.ode.compare.enabled,
+        "the checkbox enables the comparison"
+    );
+    let frozen = app
+        .ode
+        .compare
+        .frozen
+        .clone()
+        .expect("enabling caches the frozen line in the same frame");
+    assert!(
+        frozen.points.len() > 2,
+        "the frozen line has interior samples"
+    );
+    assert!(
+        app.test_harness().ode_line_count() > baseline,
+        "enabling appends frozen segments without an unrelated edit"
+    );
+
+    // Uncheck the same control; its cached segments must disappear at once.
+    let out = idle_frame(&ctx, &mut app);
+    let checkbox = widget_bounds(&out, "Show frozen line vs trajectory")
+        .expect("the comparison checkbox is still exposed");
+    click(&ctx, &mut app, checkbox.center());
+
+    assert!(
+        !app.ode.compare.enabled,
+        "the checkbox disables the comparison"
+    );
+    assert!(
+        app.ode.compare.frozen.is_none(),
+        "disabling drops the cached frozen line"
+    );
+    assert_eq!(
+        app.test_harness().ode_line_count(),
+        baseline,
+        "disabling removes the frozen segments in the same frame"
+    );
 }
 
 #[test]
@@ -402,13 +478,13 @@ fn panel_frame(
     output
 }
 
-fn frame(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) {
+fn frame(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) -> egui::FullOutput {
     let mut native = eframe::Frame::_new_kittest();
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1200.0, 800.0),
+                egui::vec2(1200.0, 1000.0),
             )),
             events,
             ..Default::default()
@@ -416,6 +492,48 @@ fn frame(ctx: &egui::Context, app: &mut VfApp, events: Vec<egui::Event>) {
         |ui| eframe::App::ui(app, ui, &mut native),
     );
     output.textures_delta.clear();
+    output
+}
+
+/// Settle three input-free frames so the panel publishes its accessibility
+/// nodes and the simulation rebuilds any pending geometry.
+fn idle_frame(ctx: &egui::Context, app: &mut VfApp) -> egui::FullOutput {
+    for _ in 0..3 {
+        let _ = frame(ctx, app, Vec::new());
+    }
+    frame(ctx, app, Vec::new())
+}
+
+fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+
+fn click(ctx: &egui::Context, app: &mut VfApp, pos: egui::Pos2) {
+    let _ = frame(ctx, app, pointer(pos, true));
+    let _ = frame(ctx, app, pointer(pos, false));
+}
+
+/// Screen-space bounds of the accessibility node carrying `label`.
+fn widget_bounds(output: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
+    let update = output.platform_output.accesskit_update.as_ref()?;
+    update.nodes.iter().find_map(|(_, node)| {
+        if node.label() != Some(label) && node.value() != Some(label) {
+            return None;
+        }
+        let bounds = node.bounds()?;
+        Some(egui::Rect::from_min_max(
+            egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+            egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+        ))
+    })
 }
 
 fn key(key: egui::Key) -> egui::Event {

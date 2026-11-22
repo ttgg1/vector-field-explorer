@@ -937,6 +937,17 @@ impl VfApp {
                     self.state.dirty = true;
                 }
             }
+            crate::ui::ode_panel::OdePanelAction::CompareVisibilityChanged { enabled } => {
+                if !enabled {
+                    // The panel already cleared its cache; make sure the drawn
+                    // segments go away with it in this frame.
+                    self.ode.compare.frozen = None;
+                }
+                // Checkbox visibility is display state, not a scene edit.
+                // Mark dirty so `advance_ode`, which runs after chrome in the
+                // same frame, rebuilds the cached lines for both transitions.
+                self.state.dirty = true;
+            }
         }
     }
 

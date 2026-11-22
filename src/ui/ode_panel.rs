@@ -31,6 +31,9 @@ pub enum OdePanelAction {
     ReferenceSteady,
     /// Put back the formula that the last reference replaced.
     RestoreFormula,
+    /// The frozen-line comparison checkbox changed to `enabled`. The app marks
+    /// the state dirty so the display geometry rebuilds in this same frame.
+    CompareVisibilityChanged { enabled: bool },
 }
 
 /// Panel-local state: the editable draft, the last rejected-edit message and
@@ -401,6 +404,7 @@ fn show_compare(
             compare.arm_seed = false;
             compare.frozen = None;
         }
+        action = Some(OdePanelAction::CompareVisibilityChanged { enabled });
     }
     if compare.enabled && state.ode.source != crate::ode::OdeSource::CurrentField {
         ui.colored_label(
@@ -414,8 +418,14 @@ fn show_compare(
         compare.reference_time, compare.seed[0], compare.seed[1], compare.seed[2]
     ));
     if ui
-        .selectable_label(compare.arm_seed, "Pick seed in viewport")
+        .add_enabled(
+            compare.enabled,
+            egui::Button::selectable(compare.arm_seed, "Pick seed in viewport"),
+        )
         .on_hover_text("Arm the next ODE viewport click as the shared seed; Escape cancels")
+        .on_disabled_hover_text(
+            "Enable the comparison first so the picked seed also starts the frozen line",
+        )
         .clicked()
     {
         compare.arm_seed = !compare.arm_seed;
