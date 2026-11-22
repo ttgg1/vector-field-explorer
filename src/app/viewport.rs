@@ -8,6 +8,51 @@ use crate::layer_style::LayerStyles;
 use super::*;
 
 impl VfApp {
+    /// Exercise both vector dispatches without opening a save dialog or requiring a GPU.
+    #[doc(hidden)]
+    pub fn test_take_vector_capture_provenances(
+        &mut self,
+    ) -> [Option<crate::export_provenance::ExportProvenance>; 2] {
+        let svg = (self.take_svg_export_route() == super::plot::SvgExportRoute::Allowed)
+            .then(|| self.vector_svg_capture_provenance())
+            .flatten();
+        [svg, self.take_vector_png_capture().flatten()]
+    }
+
+    fn vector_capture_provenance(
+        &self,
+        queued: Option<crate::export_provenance::ExportProvenance>,
+    ) -> Option<crate::export_provenance::ExportProvenance> {
+        // Wave parameters and accepted-point counts belong to the pass that
+        // produced the dispatched scene. Also discard a wave snapshot when
+        // that display was switched off between the shortcut and the paint.
+        if (self.state.field_mode == FieldMode::Maxwell && self.state.maxwell_wave().is_some())
+            || queued.as_ref().is_some_and(|p| {
+                p.metadata
+                    .iter()
+                    .any(|(key, value)| key == "vfe.maxwell_display" && value == "plane_wave")
+            })
+        {
+            self.field_export_provenance()
+        } else {
+            queued.or_else(|| self.field_export_provenance())
+        }
+    }
+
+    fn vector_svg_capture_provenance(
+        &mut self,
+    ) -> Option<crate::export_provenance::ExportProvenance> {
+        let queued = self.take_svg_export_provenance();
+        self.vector_capture_provenance(queued)
+    }
+
+    fn take_vector_png_capture(
+        &mut self,
+    ) -> Option<Option<crate::export_provenance::ExportProvenance>> {
+        let queued = self.screenshot.take_request_with_provenance()?;
+        Some(self.vector_capture_provenance(queued))
+    }
+
     /// Frame phase: the wgpu field viewport, its camera input, click-to-seed,
     /// screenshot capture and the captured-pointer crosshair.
     pub(super) fn frame_viewport(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -385,7 +430,7 @@ impl VfApp {
                     f64::from(clear[2]),
                     f64::from(clear[3]),
                 ];
-                let provenance = self.take_svg_export_provenance();
+                let provenance = self.vector_svg_capture_provenance();
                 let svg = screenshot::scene_to_svg_with_provenance(
                     &scene,
                     view_proj,
@@ -431,12 +476,7 @@ impl VfApp {
             // hand the pixels to a worker thread that shows the native save
             // dialog and writes the PNG. Nothing here touches the live
             // surface textures, and the readback is RGBA by contract.
-            if let Some(provenance) = self.screenshot.take_request_with_provenance() {
-                // A request made without capture-time provenance still carries
-                // the active adapter's warning: derive it from the current
-                // state rather than exporting a Source/Induction frame
-                // silently.
-                let provenance = provenance.or_else(|| self.field_export_provenance());
+            if let Some(provenance) = self.take_vector_png_capture() {
                 // `rect` is in logical points; a capture must have the viewport's
                 // *physical* pixels, so scale by the display's pixels-per-point
                 // before rounding (HiDPI fix round 1). The cap applies after that.
