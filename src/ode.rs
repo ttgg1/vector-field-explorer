@@ -425,27 +425,40 @@ pub fn integrate_ode_with_step(prepared: &OdePrepared, step: f64, max_steps: usi
         });
         let mut stop = OdeStop::Complete;
         let mut n = 1usize;
+        let mut previous_time = 0.0_f64;
         loop {
-            let time = n as f64 * step;
-            if time > prepared.duration + 1e-12 {
-                break;
-            }
+            let full_time = n as f64 * step;
+            // A span that is not a whole number of steps still ends at the
+            // requested duration. Take one bounded remainder step instead of
+            // dropping the tail and relabelling the last full step Complete.
+            let (time, h, final_step) = if full_time > prepared.duration + 1e-12 {
+                let remaining = prepared.duration - previous_time;
+                if remaining <= 0.0 {
+                    break;
+                }
+                (prepared.duration, remaining, true)
+            } else {
+                (full_time, step, false)
+            };
             if points.len() >= max_steps {
                 stop = OdeStop::StepLimit;
                 break;
             }
-            let previous_time = (n - 1) as f64 * step;
             match rk4_step(
                 &prepared.field,
                 prepared.dimension,
                 &position,
                 previous_time,
-                step,
+                h,
             ) {
                 Some(next) => {
                     position = next;
                     points.push(OdeSample { time, position });
+                    previous_time = time;
                     n += 1;
+                    if final_step {
+                        break;
+                    }
                 }
                 None => {
                     stop = OdeStop::NonFinite;

@@ -418,6 +418,9 @@ pub struct VfApp {
     particle_available: bool,
     /// The field mode observed last frame; a change clears formula transients.
     last_field_mode: FieldMode,
+    /// The whole-view restore epoch observed last frame, so a load/undo rebinds
+    /// panel drafts without a per-frame model comparison.
+    last_restore_epoch: u64,
     /// Issue #86 slice A2: the bounded, memory-only edit history. Never
     /// persisted.
     history: EditHistory<EditSnapshot>,
@@ -530,6 +533,7 @@ impl VfApp {
         let last_plot_epoch = state.plot.transition_epoch;
         let last_plot_was_vector = state.is_vector_mode();
         let last_field_mode = state.field_mode;
+        let last_restore_epoch = state.view_restore_epoch();
         let last_ode_epoch = Some(state.ode_epoch);
         // A restored Materials record must seed the panel draft from the
         // committed scene, exactly like entering the mode; otherwise the panel
@@ -545,6 +549,12 @@ impl VfApp {
         // Issue #222: restore the persisted notebook without applying a scene
         // or measurement. `load` already sanitized the bounded entries.
         maxwell.notebook = settings.notebook.clone();
+        // ODE restores lazily but the durable scene is already present, so the
+        // panel draft must start from it instead of the default scene.
+        let mut ode = OdePanelState::default();
+        if state.field_mode == FieldMode::Ode {
+            ode.sync_from(&state);
+        }
         let saved_vector_orbit = if last_plot_was_vector {
             None
         } else {
@@ -604,7 +614,7 @@ impl VfApp {
             controls,
             sources: SourcesPanelState::default(),
             induction: InductionPanelState::default(),
-            ode: OdePanelState::default(),
+            ode,
             material,
             maxwell,
             wide_presets_width: layout::DEFAULT_PRESETS_WIDTH,
@@ -698,6 +708,7 @@ impl VfApp {
             scene_frame,
             particle_available,
             last_field_mode,
+            last_restore_epoch,
             history: EditHistory::new(),
             last_committed,
         }

@@ -316,6 +316,44 @@ fn maxwell_refresh_clears_a_bake_from_a_bypassed_mode_write() {
 }
 
 #[test]
+fn bake_controls_invalidate_cached_flow_geometry() {
+    let mut state = State::new(false);
+    state.set_formula("(x, y)".into());
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "the formula edit produces one baseline snapshot"
+    );
+    assert!(
+        state.snapshot_if_dirty().is_none(),
+        "the baseline consumes the dirty flag"
+    );
+
+    state.set_field_bake_enabled(true);
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "enabling the bake changes the traced evaluator and must rebuild geometry"
+    );
+
+    assert!(state.set_bake_resolution(48));
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "a resolution change drops the lattice and must rebuild geometry"
+    );
+
+    state.rebuild_field_bake(48).unwrap();
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "a rebuild installs a new evaluator and must rebuild geometry"
+    );
+
+    state.set_field_bake_enabled(false);
+    assert!(
+        state.snapshot_if_dirty().is_some(),
+        "disabling the bake returns to the exact evaluator and must rebuild"
+    );
+}
+
+#[test]
 fn memory_cap_rejects_an_over_cap_resolution_and_axis() {
     assert_eq!(MAX_LATTICE_BYTES, 3_145_728);
     // 64³ × 12 bytes is exactly the ADR cap and remains allowed.

@@ -5,6 +5,7 @@ use glam::UVec2;
 
 use super::State;
 use crate::{
+    field::normalize_formula_input,
     plot::{PlotKind, curve_edges_at, sample_curve_at, sample_surface_at},
     plot_examples::PlotExample,
     plot_scene::{PlotScene, build_plot_scene},
@@ -83,6 +84,7 @@ impl State {
         source: String,
         force: bool,
     ) -> bool {
+        let source = normalize_formula_input(&source);
         let draft = self.scalar_draft_mut(context);
         if !force && draft.source == source {
             return false;
