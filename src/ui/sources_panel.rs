@@ -20,12 +20,8 @@ use crate::source_scene::{
     validate_source,
 };
 use crate::sources::{MAX_SOURCES, Source, SourceKind};
+use crate::ui::object_style_control::OBJECT_STYLE_HELP;
 use crate::viewmodel::{DensityReportRow, MAX_DENSITIES, State};
-
-/// The persistent help line under the object-style pair. It names both modes
-/// and keeps the vector-export boundary explicit.
-pub const OBJECT_STYLE_HELP: &str = "Solid draws filled bodies; Wireframe draws edge outlines. \
-     SVG exports keep the line blueprint.";
 
 /// One editable source row. `committed` is always the last valid source; the
 /// numeric mirrors may be invalid or non-finite while the user types.

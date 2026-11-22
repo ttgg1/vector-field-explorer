@@ -231,6 +231,14 @@ pub fn show(
     let family = maxwell_family(panel.draft.case);
     ui.label(format!("Family: {} (display)", family_label(family)));
 
+    crate::ui::object_style_control::show(ui, state);
+    if state.object_style() == crate::object_scene::ObjectStyle::Solid
+        && let Some(note) =
+            crate::object_scene::maxwell_style_note(&panel.draft, state.plane_frame().as_ref())
+    {
+        ui.label(note);
+    }
+
     let gauss_family = match maxwell_family(state.maxwell.case) {
         MaxwellFamily::Electric => FieldFamily::Electric,
         MaxwellFamily::Magnetic => FieldFamily::Magnetic,

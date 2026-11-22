@@ -524,7 +524,12 @@ fn tube_mesh() -> Vec<MeshVertex> {
 use glam::Vec3;
 
 use crate::domain::Domain;
-use crate::plane::PlaneFrame;
+use crate::material::{
+    MATERIAL_ELECTRIC_COLOR, MATERIAL_MAGNETIC_COLOR, MaterialCase, MaterialFamily, MaterialScene,
+    material_family,
+};
+use crate::maxwell::{ConductorOutline, MaxwellCase, MaxwellFamily, MaxwellScene, maxwell_family};
+use crate::plane::{PlaneAxis, PlaneFrame};
 use crate::source_scene::{ELECTRIC_COLOR, MAGNETIC_COLOR, SourceDisplay, SourceScene};
 use crate::sources::{FieldFamily, SourceKind};
 
@@ -632,16 +637,207 @@ impl MeshScene {
             drawn += triangles;
         }
 
-        let clip = plane.map(|frame| SliceClip {
-            normal: [frame.normal.x, frame.normal.y, frame.normal.z],
-            offset: frame.normal.dot(frame.origin),
-        });
         let generation = fingerprint(&objects);
 
         Self {
             objects,
             generation,
-            clip,
+            clip: slice_clip(plane),
+        }
+    }
+
+    /// Map one bounded Materials case to a faithful solid body.
+    ///
+    /// A sphere case is a filled [`MeshPrimitive::Sphere`] at the material
+    /// radius. A planar-boundary case is a thin [`MeshPrimitive::Disc`] on the
+    /// interface plane: it marks the interface, never a filled half-space.
+    /// Family colour and unit opacity match the source mapping; `plane` adds the
+    /// same [`SliceClip`] the source mapping uses. A sphere body depends only on
+    /// its radius, so 2D and 3D share one generation for the same scene; a
+    /// boundary disc is domain-derived, so a changed domain rebuilds it.
+    #[must_use]
+    pub fn from_material(
+        scene: &MaterialScene,
+        domain: &Domain,
+        plane: Option<&PlaneFrame>,
+    ) -> Self {
+        let extent = scene_extent(domain);
+        let color = material_color(scene.case);
+        let bodies = match scene.case {
+            MaterialCase::DielectricSphere | MaterialCase::PermeableSphere => {
+                let radius = positive_dimension(scene.radius, 0.05 * extent);
+                vec![body(
+                    MeshPrimitive::Sphere,
+                    Vec3::ZERO,
+                    Vec3::Y,
+                    Vec3::splat(radius),
+                    color,
+                )]
+            }
+            MaterialCase::DielectricBoundary | MaterialCase::PermeableBoundary => {
+                let size = domain.domain_size();
+                let (u_extent, v_extent) = match scene.interface_axis {
+                    PlaneAxis::X => (size.y, size.z),
+                    PlaneAxis::Y => (size.x, size.z),
+                    PlaneAxis::Z => (size.x, size.y),
+                };
+                let half = 0.55 * u_extent.abs().max(v_extent.abs());
+                let radius = if half.is_finite() && half > MIN_EXTENT {
+                    half
+                } else {
+                    0.5 * extent
+                };
+                let mut center = domain.center();
+                let normal = axis_vector(scene.interface_axis);
+                match scene.interface_axis {
+                    PlaneAxis::X => center.x = scene.interface_offset as f32,
+                    PlaneAxis::Y => center.y = scene.interface_offset as f32,
+                    PlaneAxis::Z => center.z = scene.interface_offset as f32,
+                }
+                vec![body(
+                    MeshPrimitive::Disc,
+                    center,
+                    normal,
+                    Vec3::new(radius, 0.02 * extent, radius),
+                    color,
+                )]
+            }
+        };
+        Self::from_bodies(bodies, plane)
+    }
+
+    /// Map one bounded Maxwell case to the bodies its geometry actually names.
+    ///
+    /// Plates are thin discs at their separation, coaxial cases fill the inner
+    /// conductor, the wire and solenoid use a cylinder/tube along `Z`, the image
+    /// sphere is a conductor and the image plane is the real charge plus a thin
+    /// grounded disc. Bodies with a domain-centred outline use
+    /// [`Domain::center`] on the same axes as that outline. Thin shells and the
+    /// square conductor have no faithful filled primitive, so they stay
+    /// outline-only; see [`maxwell_style_note`].
+    #[must_use]
+    pub fn from_maxwell(scene: &MaxwellScene, domain: &Domain, plane: Option<&PlaneFrame>) -> Self {
+        let extent = scene_extent(domain);
+        let size = domain.domain_size();
+        let center = domain.center();
+        let thin = 0.02 * extent;
+        let color = maxwell_color(scene.case);
+        let bodies = match scene.case {
+            MaxwellCase::ParallelPlates => {
+                let separation = positive_dimension(scene.separation, extent);
+                let radius = 0.55 * extent;
+                let mut bodies = Vec::with_capacity(2);
+                for sign in [-1.0_f32, 1.0] {
+                    bodies.push(body(
+                        MeshPrimitive::Disc,
+                        Vec3::new(center.x, center.y, sign * 0.5 * separation),
+                        Vec3::Z,
+                        Vec3::new(radius, thin, radius),
+                        color,
+                    ));
+                }
+                bodies
+            }
+            MaxwellCase::CoaxialElectric | MaxwellCase::CoaxialMagnetic => {
+                let radius = positive_dimension(scene.radius, 0.05 * extent);
+                vec![cylinder_along_z(
+                    Vec3::new(0.0, 0.0, center.z),
+                    radius,
+                    axial_length(size, extent),
+                    color,
+                )]
+            }
+            MaxwellCase::HollowSphere => Vec::new(),
+            MaxwellCase::InfiniteWire => {
+                let radius = positive_dimension(scene.radius, 0.05 * extent);
+                vec![cylinder_along_z(
+                    Vec3::new(0.0, 0.0, center.z),
+                    radius,
+                    axial_length(size, extent),
+                    color,
+                )]
+            }
+            MaxwellCase::Solenoid => {
+                let radius = positive_dimension(scene.radius, 0.05 * extent);
+                vec![body(
+                    MeshPrimitive::Tube,
+                    Vec3::new(0.0, 0.0, center.z),
+                    Vec3::Z,
+                    Vec3::new(radius, axial_length(size, extent), radius),
+                    color,
+                )]
+            }
+            MaxwellCase::ImageSphere => {
+                let radius = positive_dimension(scene.radius, 0.05 * extent);
+                vec![body(
+                    MeshPrimitive::Sphere,
+                    Vec3::ZERO,
+                    Vec3::Y,
+                    Vec3::splat(radius),
+                    color,
+                )]
+            }
+            MaxwellCase::ImagePlane => {
+                let height = positive_dimension(scene.charge_height, extent);
+                let plane_radius = 0.55 * extent;
+                vec![
+                    body(
+                        MeshPrimitive::Sphere,
+                        Vec3::new(0.0, 0.0, height),
+                        Vec3::Y,
+                        Vec3::splat(0.05 * extent),
+                        color,
+                    ),
+                    body(
+                        MeshPrimitive::Disc,
+                        Vec3::new(center.x, center.y, 0.0),
+                        Vec3::Z,
+                        Vec3::new(plane_radius, thin, plane_radius),
+                        color,
+                    ),
+                ]
+            }
+            MaxwellCase::Conductor2D => match (plane, scene.outline) {
+                (Some(frame), ConductorOutline::Circle { radius }) => {
+                    let radius = positive_dimension(radius, 0.05 * extent);
+                    let local_center = frame.to_local(Vec3::ZERO);
+                    let center = frame.to_world(Vec3::new(local_center.x, local_center.y, 0.0));
+                    vec![body(
+                        MeshPrimitive::Cylinder,
+                        center,
+                        frame.normal,
+                        Vec3::new(radius / 0.5, 0.1 * extent, radius / 0.5),
+                        color,
+                    )]
+                }
+                // The square has no faithful box primitive and the circle is
+                // undefined in 3D; both keep the existing outline.
+                _ => Vec::new(),
+            },
+        };
+        Self::from_bodies(bodies, plane)
+    }
+
+    /// Assemble bodies with the shared caps, slice clip and fingerprint.
+    fn from_bodies(bodies: Vec<MeshObject>, plane: Option<&PlaneFrame>) -> Self {
+        let mut objects = Vec::with_capacity(bodies.len().min(MAX_OBJECTS));
+        let mut drawn = 0usize;
+        for body in bodies {
+            if objects.len() >= MAX_OBJECTS {
+                break;
+            }
+            let triangles = body.primitive.triangles();
+            if drawn.saturating_add(triangles) > MAX_DRAWN_TRIANGLES {
+                break;
+            }
+            drawn += triangles;
+            objects.push(body);
+        }
+        let generation = fingerprint(&objects);
+        Self {
+            objects,
+            generation,
+            clip: slice_clip(plane),
         }
     }
 
@@ -800,6 +996,117 @@ fn positive_dimension(value: f64, fallback: f32) -> f32 {
         value
     } else {
         fallback
+    }
+}
+
+fn slice_clip(plane: Option<&PlaneFrame>) -> Option<SliceClip> {
+    plane.map(|frame| SliceClip {
+        normal: [frame.normal.x, frame.normal.y, frame.normal.z],
+        offset: frame.normal.dot(frame.origin),
+    })
+}
+
+/// One unit-opacity body at `center` with local `+Y` along `axis`.
+fn body(
+    primitive: MeshPrimitive,
+    center: Vec3,
+    axis: Vec3,
+    scale: Vec3,
+    color: [f32; 3],
+) -> MeshObject {
+    MeshObject {
+        primitive,
+        transform: object_transform(center, axis, scale),
+        color,
+        opacity: 1.0,
+        sign: 1,
+    }
+}
+
+/// A `Y`-axial cylinder scaled to a radius and a `Z` length, centred at `center`.
+fn cylinder_along_z(center: Vec3, radius: f32, length: f32, color: [f32; 3]) -> MeshObject {
+    body(
+        MeshPrimitive::Cylinder,
+        center,
+        Vec3::Z,
+        Vec3::new(radius / 0.5, length, radius / 0.5),
+        color,
+    )
+}
+
+/// The conductor spans the visible domain along its axis, with an extent floor.
+fn axial_length(size: Vec3, extent: f32) -> f32 {
+    let value = size.z.abs();
+    if value.is_finite() && value > MIN_EXTENT {
+        value
+    } else {
+        extent
+    }
+}
+
+fn axis_vector(axis: PlaneAxis) -> Vec3 {
+    match axis {
+        PlaneAxis::X => Vec3::X,
+        PlaneAxis::Y => Vec3::Y,
+        PlaneAxis::Z => Vec3::Z,
+    }
+}
+
+fn color_from_rgb([red, green, blue]: [u8; 3]) -> [f32; 3] {
+    [
+        f32::from(red) / 255.0,
+        f32::from(green) / 255.0,
+        f32::from(blue) / 255.0,
+    ]
+}
+
+fn material_color(case: MaterialCase) -> [f32; 3] {
+    color_from_rgb(match material_family(case) {
+        MaterialFamily::Electric => MATERIAL_ELECTRIC_COLOR,
+        MaterialFamily::Magnetic => MATERIAL_MAGNETIC_COLOR,
+    })
+}
+
+fn maxwell_color(case: MaxwellCase) -> [f32; 3] {
+    color_from_rgb(match maxwell_family(case) {
+        MaxwellFamily::Electric => ELECTRIC_COLOR,
+        MaxwellFamily::Magnetic => MAGNETIC_COLOR,
+    })
+}
+
+/// Why a Maxwell case draws no faithful filled body, if it does not.
+///
+/// `None` means the mapped scene is faithful in both styles. Unsupported cases
+/// keep the existing `maxwell_outline` geometry; the panel shows this text next
+/// to the style selector so an outline-only case is never mistaken for a bug.
+#[must_use]
+pub fn maxwell_style_note(
+    scene: &MaxwellScene,
+    plane: Option<&PlaneFrame>,
+) -> Option<&'static str> {
+    match scene.case {
+        MaxwellCase::HollowSphere => Some(
+            "Hollow sphere is an ideal thin shell; Solid keeps its outline instead of a filled conductor.",
+        ),
+        MaxwellCase::CoaxialElectric | MaxwellCase::CoaxialMagnetic => Some(
+            "The outer conductor is a thin shell; only the inner conductor is drawn as a filled body.",
+        ),
+        MaxwellCase::ImageSphere => {
+            Some("The image charge is a construction; only the real conducting sphere is drawn.")
+        }
+        MaxwellCase::ImagePlane => Some(
+            "The image charge is a construction; only the real charge and the grounded plane are drawn.",
+        ),
+        MaxwellCase::Conductor2D => match (&scene.outline, plane) {
+            (ConductorOutline::Square { .. }, _) => Some(
+                "A square conductor cross-section has no faithful box primitive; only its outline is drawn.",
+            ),
+            (ConductorOutline::Circle { .. }, None) => {
+                Some("Conductor2D is defined on a 2D slice; switch to 2D to see its cross-section.")
+            }
+            (ConductorOutline::Circle { .. }, Some(_)) => None,
+        },
+        MaxwellCase::ParallelPlates | MaxwellCase::InfiniteWire | MaxwellCase::Solenoid => None,
     }
 }
 
