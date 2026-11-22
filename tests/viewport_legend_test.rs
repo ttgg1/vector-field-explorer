@@ -12,9 +12,12 @@ use glam::Vec3;
 use crate::support;
 
 use vector_field_explorer::color_mapping::{ColorSample, ColorStats};
+use vector_field_explorer::color_ramp::Rgb;
+use vector_field_explorer::layer_style::PhysicsFamily;
 use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene};
-use vector_field_explorer::source_scene::{FieldMode, SourceDisplay};
+use vector_field_explorer::source_scene::{FamilyColors, FieldMode, SourceDisplay};
 use vector_field_explorer::sources::FieldFamily;
+use vector_field_explorer::ui::appearance_panel::{AppearanceEdit, apply_edit};
 use vector_field_explorer::ui::gauss_shell::GaussShellState;
 use vector_field_explorer::ui::sidebar::{self, Controls};
 use vector_field_explorer::ui::viewport_legend::{
@@ -294,9 +297,65 @@ fn family_quantity_labels_are_honest_for_e_b_and_both() {
     assert!(!both.numeric_ramp, "Both has no single numeric ramp");
     assert!(!both.lockable);
     let scales = both.family_scales.expect("Both names its family scales");
-    assert_eq!(scales[0].0, "E amber");
-    assert_eq!(scales[1].0, "B cyan");
+    assert_eq!(scales[0].0, "E");
+    assert_eq!(scales[1].0, "B");
+    assert_eq!(scales[0].1, FamilyColors::default().electric);
+    assert_eq!(scales[1].1, FamilyColors::default().magnetic);
     assert_ne!(scales[0].1, scales[1].1, "the family colours differ");
+    assert!(!BOTH_NOTE.to_lowercase().contains("amber"));
+    assert!(!BOTH_NOTE.to_lowercase().contains("cyan"));
+}
+
+#[test]
+fn both_family_scales_follow_appearance_overrides_and_reset() {
+    let mut legend = Legend::new(false);
+    source_state(&mut legend.state, SourceDisplay::Both);
+    let electric = Rgb([12, 34, 56]);
+    let magnetic = Rgb([200, 150, 100]);
+    apply_edit(
+        &mut legend.state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, Some(electric)),
+    )
+    .unwrap();
+    apply_edit(
+        &mut legend.state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Magnetic, Some(magnetic)),
+    )
+    .unwrap();
+
+    // Reading the snapshot that the next paint uses is the same-frame path.
+    let both = LegendSnapshot::new(&legend.state, &STATS);
+    let scales = both.family_scales.expect("Both names its family scales");
+    assert_eq!(scales, [("E", electric.0), ("B", magnetic.0)]);
+
+    let (out, frame) = legend.idle();
+    assert!(frame.body_visible);
+    let rows = nodes(&out);
+    assert!(has_value(&rows, "E"));
+    assert!(has_value(&rows, "B"));
+    assert!(!has_value(&rows, "E amber"));
+    assert!(!has_value(&rows, "B cyan"));
+
+    apply_edit(
+        &mut legend.state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Electric, None),
+    )
+    .unwrap();
+    apply_edit(
+        &mut legend.state,
+        AppearanceEdit::FamilyColor(PhysicsFamily::Magnetic, None),
+    )
+    .unwrap();
+    let both = LegendSnapshot::new(&legend.state, &STATS);
+    let scales = both.family_scales.expect("Both names its family scales");
+    assert_eq!(
+        scales,
+        [
+            ("E", FamilyColors::default().electric),
+            ("B", FamilyColors::default().magnetic)
+        ],
+        "clearing the Appearance overrides restores the shipped colours"
+    );
 }
 
 #[test]
@@ -306,15 +365,15 @@ fn both_display_overlay_names_family_colours_without_a_numeric_ramp() {
     let (out, frame) = legend.idle();
     assert!(frame.body_visible);
     let rows = nodes(&out);
-    assert!(has_value(&rows, "E amber"));
-    assert!(has_value(&rows, "B cyan"));
+    assert!(has_value(&rows, "E"));
+    assert!(has_value(&rows, "B"));
     assert!(
         has_value(&rows, BOTH_NOTE),
-        "Both must explain that the families are fixed colours"
+        "Both must explain that each family keeps its own colour"
     );
     assert!(
         !has_value(&rows, &format!("Units: {PANEL_UNITS_NOTE}")),
-        "fixed family colours carry no numeric magnitude, so no units line"
+        "one family colour per field carries no numeric magnitude, so no units line"
     );
     assert!(!has_value(&rows, "Lock range"));
     assert!(

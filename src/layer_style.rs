@@ -187,6 +187,11 @@ impl LayerStyles {
             && self.families.iter().all(LayerOverride::is_neutral)
     }
 
+    /// The committed fixed colour for one physics family, if overridden.
+    pub fn family_color(&self, family: PhysicsFamily) -> Option<Rgb> {
+        self.families[family.index()].color
+    }
+
     /// Resolve one layer, applying the optional family override before the
     /// layer override, per attribute. Defaults are `1.0`, `1.0`, no colour.
     pub fn resolve(&self, layer: LayerId, family: Option<PhysicsFamily>) -> ResolvedLayerStyle {

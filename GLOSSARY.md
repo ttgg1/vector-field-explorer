@@ -247,8 +247,9 @@ _Avoid_: waveform, trace
 
 **E/B display**:
 The Sources or Induction panel choice Electric, Magnetic or Both. Both draws E
-amber and B cyan as separate families, without summation or one shared magnitude
-scale.
+and B as separate families, each in its own family colour, without summation or
+one shared magnitude scale. Sources family colours follow the committed
+Appearance overrides, falling back to the shipped defaults when unset.
 _Avoid_: combined field, total field
 
 **Accuracy opt-in**:

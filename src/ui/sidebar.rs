@@ -422,9 +422,9 @@ pub fn bake_status_text(enabled: bool, active: bool, error: Option<&str>) -> Opt
 }
 
 /// Explained in place of the Coloring widgets when the Both source display
-/// owns the colours: fixed family colours replace the colormap, so there is no
-/// shared magnitude range to choose.
-pub const BOTH_COLORING_NOTE: &str = "Both uses fixed family colours (E amber, B cyan); choose Electric or Magnetic to use a colormap.";
+/// owns the colours: each family keeps its own Appearance colour instead of a
+/// shared colormap, so there is no shared magnitude range to choose.
+pub const BOTH_COLORING_NOTE: &str = "Both draws E and B in their Appearance family colours, not a colormap; choose Electric or Magnetic to use a colormap.";
 
 /// Why the Direction quantity is disabled in the 3D view.
 pub const DIRECTION_3D_EXPLANATION: &str =
@@ -438,9 +438,9 @@ pub const MIN_SIGNED_LOG_HALF_WIDTH: f32 = 1.0e-6;
 pub const MAX_SIGNED_LOG_HALF_WIDTH: f32 = 1.0e6;
 
 /// Whether the Coloring section renders the colormap, auto-fit and range
-/// widgets. Sources in the `Both` display paint fixed family colours instead,
-/// so those controls would be silently inert; single-family source displays
-/// and Formula mode use the normal colormap path.
+/// widgets. Sources in the `Both` display paint one family colour per field
+/// instead, so those controls would be silently inert; single-family source
+/// displays and Formula mode use the normal colormap path.
 pub fn coloring_controls_visible(field_mode: FieldMode, display: SourceDisplay) -> bool {
     !(field_mode == FieldMode::Sources && display == SourceDisplay::Both)
 }

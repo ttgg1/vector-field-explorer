@@ -25,10 +25,11 @@ All eight validated kinds are editable in the panel: point charge, finite line
 charge, charged ring, charged disc, solid sphere, straight wire, current loop
 and solenoid. Each kind shows only its relevant parameters.
 
-**Display** chooses Electric, Magnetic or Both. In Both, electric arrows are
-amber and magnetic arrows are cyan. The two families are never added together
-and do not share one magnitude scale; an empty family simply contributes no
-arrows.
+**Display** chooses Electric, Magnetic or Both. In Both, each family uses its
+Appearance colour: the shipped defaults are amber for electric and cyan for
+magnetic, and either can be replaced in the Appearance panel. The two families
+are never added together and do not share one magnitude scale; an empty family
+simply contributes no arrows.
 
 ## Softening and accuracy
 
@@ -48,7 +49,8 @@ family.
 ## Source glyphs and the selected slice
 
 Every enabled source draws a line glyph in the viewport, coloured by family
-(amber for electric, cyan for magnetic). A glyph marks the source's position,
+(the family's Appearance colour, defaulting to amber for electric and cyan for
+magnetic). A glyph marks the source's position,
 axis and signed charge/current; it is a contextual marker, not a depth-tested
 surface, so it may show through field geometry.
 
