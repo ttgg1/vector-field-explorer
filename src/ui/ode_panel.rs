@@ -12,6 +12,7 @@ use crate::ode::{
     ODE_COLORS, ODE_MAX_DIMENSION, ODE_MAX_DURATION, ODE_MAX_SEEDS, ODE_MIN_DIMENSION, ODE_STEP,
     OdeChart, OdeScene, OdeSeed,
 };
+use crate::ode_compare::OdeCompareState;
 use crate::ui::help_overlay::{HelpRow, HelpSection};
 use crate::viewmodel::State;
 
@@ -24,6 +25,12 @@ pub enum OdePanelAction {
     Fit,
     /// Restore the default ODE scene and view.
     Reset,
+    /// One-click `v = (1, t)` frozen-line reference.
+    ReferenceTimeDependent,
+    /// One-click steady uniform `v = (1, 0)` reference.
+    ReferenceSteady,
+    /// Put back the formula that the last reference replaced.
+    RestoreFormula,
 }
 
 /// Panel-local state: the editable draft, the last rejected-edit message and
@@ -34,6 +41,8 @@ pub struct OdePanelState {
     pub draft: OdeScene,
     pub error: Option<String>,
     pub advanced: bool,
+    /// Session-only frozen-line comparison. Never serialized.
+    pub compare: OdeCompareState,
     variables_all_off: bool,
 }
 
@@ -64,6 +73,59 @@ impl OdePanelState {
         self.draft = state.ode.clone();
         self.error = state.ode_error.clone();
         self.variables_all_off = false;
+        // Entering/resetting the workbench cancels any stale pick arm; the
+        // session-only comparison seed itself survives.
+        self.compare.arm_seed = false;
+    }
+
+    /// Apply the `v = (1, t)` reference in one shot. The previous formula is
+    /// kept in the session-only comparison state so the user can restore it.
+    pub fn use_time_dependent_reference(&mut self, state: &mut State) -> bool {
+        self.use_reference(state, true)
+    }
+
+    /// Apply the steady uniform `v = (1, 0)` reference in one shot.
+    pub fn use_steady_reference(&mut self, state: &mut State) -> bool {
+        self.use_reference(state, false)
+    }
+
+    fn use_reference(&mut self, state: &mut State, time_dependent: bool) -> bool {
+        let result = if time_dependent {
+            crate::ode_compare::apply_time_dependent_reference(state)
+        } else {
+            crate::ode_compare::apply_steady_reference(state)
+        };
+        match result {
+            Ok(previous) => {
+                self.compare.enabled = true;
+                self.compare.arm_seed = false;
+                self.compare.seed = crate::ode_compare::REFERENCE_SEED;
+                self.compare.reference_time = crate::ode_compare::FROZEN_REFERENCE_TIME;
+                self.compare.frozen = None;
+                self.compare.previous_formula = Some(previous);
+                self.sync_from(state);
+                true
+            }
+            Err(_) => {
+                self.error = state
+                    .ode_error
+                    .clone()
+                    .or_else(|| Some("The reference scene could not be solved.".to_owned()));
+                false
+            }
+        }
+    }
+
+    /// Put back the formula the last reference replaced. The scene re-solves
+    /// lazily through the ordinary current-field edit path.
+    pub fn restore_previous_formula(&mut self, state: &mut State) -> bool {
+        let Some(previous) = self.compare.previous_formula.take() else {
+            return false;
+        };
+        self.compare.frozen = None;
+        let changed = state.set_formula(previous);
+        self.sync_from(state);
+        changed
     }
 }
 
@@ -221,6 +283,10 @@ pub fn show(
         }
     });
 
+    if let Some(next) = show_compare(ui, panel, state) {
+        action = Some(next);
+    }
+
     ui.horizontal_wrapped(|ui| {
         for (chart, label) in [
             (OdeChart::Phase, "Phase portrait"),
@@ -310,6 +376,85 @@ pub fn show(
     if commit {
         panel.commit(state);
     }
+    action
+}
+
+/// The session-only frozen-line comparison section: enable, seed readout and
+/// armed pick, reference actions, legend and the velocity-field caveat.
+fn show_compare(
+    ui: &mut egui::Ui,
+    panel: &mut OdePanelState,
+    state: &State,
+) -> Option<OdePanelAction> {
+    let mut action = None;
+    let compare = &mut panel.compare;
+    ui.separator();
+    ui.label(egui::RichText::new("Frozen line vs trajectory").strong());
+    let mut enabled = compare.enabled;
+    if ui
+        .checkbox(&mut enabled, "Show frozen line vs trajectory")
+        .on_hover_text("Trace the frozen field line of v(x, 0) beside the ODE trajectory")
+        .changed()
+    {
+        compare.enabled = enabled;
+        if !enabled {
+            compare.arm_seed = false;
+            compare.frozen = None;
+        }
+    }
+    if compare.enabled && state.ode.source != crate::ode::OdeSource::CurrentField {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            "The comparison draws the current formula field; choose Current field as the ODE source.",
+        );
+    }
+
+    ui.label(format!(
+        "Seed at t = {:.0}: ({:.2}, {:.2}, {:.2})",
+        compare.reference_time, compare.seed[0], compare.seed[1], compare.seed[2]
+    ));
+    if ui
+        .selectable_label(compare.arm_seed, "Pick seed in viewport")
+        .on_hover_text("Arm the next ODE viewport click as the shared seed; Escape cancels")
+        .clicked()
+    {
+        compare.arm_seed = !compare.arm_seed;
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Use v = (1, t) reference")
+            .on_hover_text("One click: formula (1, t), current-field ODE from the origin")
+            .clicked()
+        {
+            action = Some(OdePanelAction::ReferenceTimeDependent);
+        }
+        if ui
+            .button("Use v = (1, 0) reference")
+            .on_hover_text("One click: steady uniform field; both curves follow the same path")
+            .clicked()
+        {
+            action = Some(OdePanelAction::ReferenceSteady);
+        }
+        if compare.previous_formula.is_some() && ui.button("Restore previous formula").clicked() {
+            action = Some(OdePanelAction::RestoreFormula);
+        }
+    });
+
+    if compare.enabled {
+        ui.colored_label(
+            rgba(crate::ode_compare::FROZEN_COLOR),
+            crate::ode_compare::FROZEN_LABEL,
+        );
+        ui.colored_label(seed_color(0), crate::ode_compare::TRAJECTORY_LABEL);
+        ui.add(
+            egui::Label::new(
+                "Playback advances the trajectory marker; the frozen line stays at its t = 0 reference.",
+            )
+            .wrap(),
+        );
+    }
+    ui.add(egui::Label::new(crate::ode_compare::CAVEAT).wrap());
     action
 }
 
@@ -530,12 +675,15 @@ fn paint_time_series(ui: &mut egui::Ui, state: &State) {
 }
 
 fn seed_color(index: usize) -> egui::Color32 {
-    let color = ODE_COLORS[index % ODE_COLORS.len()];
+    rgba(ODE_COLORS[index % ODE_COLORS.len()])
+}
+
+fn rgba(color: [f32; 4]) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(
-        (color[0] * 255.0) as u8,
-        (color[1] * 255.0) as u8,
-        (color[2] * 255.0) as u8,
-        (color[3] * 255.0) as u8,
+        (color[0].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[1].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[2].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[3].clamp(0.0, 1.0) * 255.0) as u8,
     )
 }
 

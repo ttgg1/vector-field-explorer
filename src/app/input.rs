@@ -157,6 +157,8 @@ impl VfApp {
             // Issue #228: Escape always returns the viewport click tool to
             // Inspect and cancels any armed one-shot placement.
             crate::ui::viewport_tool::inspect(&mut self.controls);
+            // Issue #221: Escape also cancels an armed frozen-line seed pick.
+            self.ode.compare.arm_seed = false;
         }
         domain_before
     }
@@ -586,6 +588,17 @@ impl VfApp {
     /// [`view_command::click_action_plan`] owns the feature gates and the
     /// one-line no-op hint; this wrapper owns the seed/burst side effects.
     pub(super) fn seed_click(&mut self, pos: egui::Pos2, rect: egui::Rect, aspect: f32, time: f64) {
+        // Issue #221: while the Ode comparison's seed pick is armed, this click
+        // replaces the shared seed, solves once and disarms. Every other Ode
+        // click keeps its ordinary (no-seed) behavior below.
+        if self.state.field_mode == FieldMode::Ode && self.ode.compare.arm_seed {
+            self.ode.compare.arm_seed = false;
+            self.last_click_seed = None;
+            if let Some(seed) = self.ode_compare_world_seed(pos, rect, aspect) {
+                self.apply_ode_compare_seed(seed);
+            }
+            return;
+        }
         // Issue #92 slice B1: an armed "Place probe" plants one point probe on
         // the active plane and disarms; it never also seeds a streamline. If
         // the probe path disappeared (field mode or plot kind switched), disarm
@@ -1193,6 +1206,27 @@ impl VfApp {
             // precomputed, so a click has no seed target.
             return None;
         }
+        self.ray_click_world_seed(pos, rect, aspect)
+    }
+
+    /// Issue #221: the armed frozen-line comparison pick maps through the same
+    /// camera seam as the ordinary click, but against Ode's solution domain.
+    fn ode_compare_world_seed(
+        &self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+    ) -> Option<Vec3> {
+        let position = self.ray_click_world_seed(pos, rect, aspect)?;
+        let domain = self.state.scene_domain();
+        if position.cmpge(domain.min).all() && position.cmple(domain.max).all() {
+            Some(position)
+        } else {
+            None
+        }
+    }
+
+    fn ray_click_world_seed(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<Vec3> {
         let width = rect.width().max(1.0);
         let height = rect.height().max(1.0);
         let ndc = Vec2::new(
@@ -1209,6 +1243,41 @@ impl VfApp {
             None => ViewCamera::Orbit(&self.orbit),
         };
         click_seed(view_camera, &self.state.scene_domain(), aspect, ndc, ortho)
+    }
+
+    /// Replace the ODE scene's initial conditions with the picked seed and
+    /// solve once. The comparison seed and cached frozen line follow only on
+    /// success; the arm was already cleared by the caller.
+    fn apply_ode_compare_seed(&mut self, seed: Vec3) {
+        let dimension = self
+            .state
+            .field
+            .dimension
+            .clamp(crate::ode::ODE_MIN_DIMENSION, crate::ode::ODE_MAX_DIMENSION);
+        let mut position = [seed.x as f64, seed.y as f64, seed.z as f64];
+        for value in position.iter_mut().skip(dimension) {
+            *value = 0.0;
+        }
+        let mut scene = self.state.ode.clone();
+        scene.source = crate::ode::OdeSource::CurrentField;
+        scene.dimension = dimension;
+        scene.seeds = vec![crate::ode::OdeSeed { position }];
+        match self.state.set_ode_scene(scene) {
+            Ok(()) => {
+                self.ode.compare.seed = position;
+                self.ode.compare.reference_time = crate::ode_compare::FROZEN_REFERENCE_TIME;
+                self.ode.compare.frozen = None;
+                self.ode.sync_from(&self.state);
+                self.state.dirty = true;
+            }
+            Err(_) => {
+                restart_hint(
+                    &mut self.status.hint,
+                    &mut self.hint_elapsed,
+                    "The picked seed could not be solved",
+                );
+            }
+        }
     }
 
     /// Take back the burst the previous single click planted when it turns out
