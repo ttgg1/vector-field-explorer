@@ -180,6 +180,7 @@ mod scene_store_test;
 mod screenshot_test;
 mod seed_layout_library_test;
 mod seed_layout_test;
+mod shell_lesson_test;
 mod shortcut_test;
 mod sidebar_camera_ui_test;
 mod sidebar_colormap_ui_test;

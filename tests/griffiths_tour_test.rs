@@ -1,9 +1,9 @@
 //! Issue #223 phase 1: the optional Griffiths branch from the quick-tour
 //! welcome card and the Help window, plus its safe four-route picker.
 //!
-//! Only the charged-ring route (#224) ships in this slice. The other three
-//! routes must stay reachable without changing the scene and must say plainly
-//! that their lesson is not available yet.
+//! Only the charged-ring (#224) and charged-shell (#225) routes ship in this
+//! slice. The other two routes must stay reachable without changing the scene
+//! and must say plainly that their lesson is not available yet.
 
 use eframe::egui;
 
@@ -263,11 +263,7 @@ fn unavailable_routes_are_safe_labelled_placeholders() {
     h.idle();
     let before = h.app.capture_document_for_test();
     h.app.open_griffiths_branch();
-    for route in [
-        GriffithsRoute::Shell,
-        GriffithsRoute::Plane,
-        GriffithsRoute::Wire,
-    ] {
+    for route in [GriffithsRoute::Plane, GriffithsRoute::Wire] {
         assert!(!route.available(), "{route:?} is not implemented yet");
         h.app.start_griffiths_route(route);
         assert!(
