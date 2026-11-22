@@ -2048,6 +2048,18 @@ a malformed scene payload falls back to the default scene and reports only for a
 stored Maxwell mode. Global Reset calls
 `reset_maxwell` and returns to Formula. PNG/SVG requests derive
 `maxwell_export_provenance` from the scene and cached sampling at request time.
+While a wave is displayed, the same request-time seam instead derives
+`maxwell_wave_export_provenance` from the stored `WaveSpec` and whether
+`maxwell_wave_sampling` exists, so the capture names the wave display, both
+families, its normalized assumptions and its sampling status without inheriting
+the hidden case's label. Field probes follow the same displayed-field rule:
+`probe_field` builds a `ProbeAdapterKind::Wave` over `maxwell_wave::sample_wave`
+for the explicit probe family instead of sampling the hidden case, and
+`maxwell_wave` is part of `ProbeFieldIdentity` so a wave edit invalidates the
+cached reports. The wave panel's capture note says PNG/GUI screenshots include
+the arrows while SVG does not, and the existing Maxwell animation control stays
+disabled; the panel labels animation export as unavailable rather than promising
+it.
 
 **2D and outline.** `maxwell_outline` draws world geometry in 3D (plates, coaxial
 circles, sphere great circles, wire axis and ticks, solenoid rings, image-plane
@@ -5912,6 +5924,7 @@ induction_mode, ode_mode, material_mode, maxwell_mode }`,
 `ode_export_provenance(mode, scene, solution, error, timeline)`,
 `material_export_provenance(mode, scene, sampling)`,
 `maxwell_export_provenance(mode, scene, sampling)`,
+`maxwell_wave_export_provenance(mode, spec, sampled)`,
 `provenance_lines`, `provenance_metadata`, and the exact ASCII copy constants
 `MODEL_LINE`, `ACCURACY_LINE`, `UNAVAILABLE_LINE`, `INVALID_LINE`,
 `NO_SAMPLING_LINE`, `INDUCTION_MODEL_LINE`, `INDUCTION_NO_SAMPLING_LINE`,
@@ -5919,7 +5932,9 @@ induction_mode, ode_mode, material_mode, maxwell_mode }`,
 `ODE_UNAVAILABLE_LINE`, `ODE_INVALID_LINE`, `ODE_TIMELINE_LINE`,
 `MATERIAL_MODEL_LINE`, `MATERIAL_NO_SAMPLING_LINE`, `MATERIAL_INVALID_LINE`,
 `MAXWELL_MODEL_LINE`, `MAXWELL_NO_SAMPLING_LINE`, `MAXWELL_DISPLAY_UNITS_LINE`,
-`MAXWELL_INVALID_LINE`.
+`MAXWELL_INVALID_LINE`, `MAXWELL_WAVE_MODEL_LINE`,
+`MAXWELL_WAVE_NO_SAMPLING_LINE`, `MAXWELL_WAVE_UNITS_LINE`,
+`MAXWELL_WAVE_INVALID_LINE`.
 
 **Invariants.**
 - Formula mode returns `None` from all helpers; Sources/Induction/Ode always
@@ -5949,6 +5964,17 @@ induction_mode, ode_mode, material_mode, maxwell_mode }`,
   three BEM coarse/fine/relative-difference keys only when convergence exists,
   and `vfe.validation_error` only when present. Requesting an export never
   samples the grid and never runs `solve_bem`.
+- When the Maxwell display is the analytic plane wave, `maxwell_wave_export_provenance`
+  returns `Some` with `maxwell_mode = true`, the first line
+  `Plane wave - analytic source-free full-wave illustration - no general solver`,
+  and metadata `vfe.model = maxwell-plane-wave-teaching`,
+  `vfe.maxwell_display = plane_wave`, `vfe.maxwell_family = electric+magnetic`,
+  `vfe.maxwell_units = normalized-teaching`, the parameterized wave assumptions,
+  and `vfe.maxwell_sampling = sampled|unavailable`. A missing wave pass adds
+  `Plane-wave sampling unavailable`; an invalid spec adds
+  `Plane wave invalid: {error}` and `vfe.validation_error`; the last line is
+  always `Normalized teaching units: c = 1, so |E| = |B|; these are not SI measurements.`.
+  The hidden case's `vfe.maxwell_case` and family are never inherited.
 - Materials metadata is exactly `vfe.model = materials-bounded-analytic`,
   `vfe.material_case`, `vfe.material_family`, `vfe.background_eps_r`,
   `vfe.background_mu_r`, `vfe.material_eps_r`, `vfe.material_mu_r`,

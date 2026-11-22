@@ -51,7 +51,7 @@ use crate::maxwell::{
     MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family,
     maxwell_field_with_bem, maxwell_outline, sample_maxwell_with_bem, solve_bem, validate_maxwell,
 };
-use crate::maxwell_wave::{WaveSpec, sample_wave_grid};
+use crate::maxwell_wave::{WaveSpec, sample_wave, sample_wave_grid};
 use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
@@ -326,6 +326,7 @@ struct ProbeFieldIdentity {
     induction: InductionScene,
     material: MaterialScene,
     maxwell: MaxwellScene,
+    maxwell_wave: Option<WaveSpec>,
     maxwell_bem_solves: u64,
     domain: Domain,
     family: FieldFamily,
@@ -420,10 +421,11 @@ enum ProbeAdapterKind {
         bem: Option<Arc<BemSolution>>,
     },
     Materials(Box<MaterialScene>),
+    Wave(WaveSpec),
 }
 
 impl ProbeField for ProbeAdapter {
-    fn eval(&self, point: Vec3, _time: f64) -> Option<Vec3> {
+    fn eval(&self, point: Vec3, time: f64) -> Option<Vec3> {
         match &self.kind {
             ProbeAdapterKind::Sources(evaluator) => {
                 let sample = evaluator.borrow_mut().evaluate(point.as_dvec3(), &|| false);
@@ -460,6 +462,13 @@ impl ProbeField for ProbeAdapter {
                 maxwell_field_with_bem(scene, point, bem.as_deref()).ok()
             }
             ProbeAdapterKind::Materials(scene) => material_field(scene, point).ok(),
+            ProbeAdapterKind::Wave(spec) => {
+                let sample = sample_wave(spec, point, time)?;
+                Some(match self.family {
+                    FieldFamily::Electric => sample.e,
+                    FieldFamily::Magnetic => sample.b,
+                })
+            }
         }
     }
 }
@@ -3712,6 +3721,7 @@ impl State {
             induction: self.induction.clone(),
             material: self.material.clone(),
             maxwell: self.maxwell.clone(),
+            maxwell_wave: self.maxwell_wave,
             maxwell_bem_solves: self.maxwell_bem_solves,
             domain: self.scene_domain(),
             family: self.probe_family,
@@ -3792,6 +3802,18 @@ impl State {
                 })
             }
             FieldMode::Maxwell => {
+                if let Some(spec) = self.maxwell_wave {
+                    // The wave arrows replace the case field, so a probe must
+                    // sample the displayed wave and its two families instead
+                    // of silently falling through to the hidden case.
+                    let mut spec = spec;
+                    spec.validate()
+                        .map_err(|error| format!("Plane wave is invalid: {error}"))?;
+                    return Ok(ProbeAdapter {
+                        family: self.probe_family,
+                        kind: ProbeAdapterKind::Wave(spec),
+                    });
+                }
                 let family = match maxwell_family(self.maxwell.case) {
                     MaxwellFamily::Electric => FieldFamily::Electric,
                     MaxwellFamily::Magnetic => FieldFamily::Magnetic,

@@ -13,12 +13,17 @@ use crate::support;
 use glam::Vec3;
 
 use vector_field_explorer::VfApp;
+use vector_field_explorer::animation_job::AnimationEligibility;
+use vector_field_explorer::field_probe::{
+    CirculationLoop, GaussianSurface, LoopKind, ProbeField, SurfaceKind, circulation, flux,
+};
 use vector_field_explorer::maxwell_wave::{MAX_AMPLITUDE, WaveSpec, sample_wave};
 use vector_field_explorer::persistence::ViewRecord;
 use vector_field_explorer::source_scene::{ELECTRIC_COLOR, FieldMode, MAGNETIC_COLOR};
+use vector_field_explorer::sources::FieldFamily;
 use vector_field_explorer::ui::maxwell_panel::{
-    self, MaxwellPanelState, WAVE_NORMALIZED_NOTE, WAVE_SCOPE_NOTE, WAVE_STATUS_CLOCK_NOTE,
-    WAVE_SVG_NOTE,
+    self, MaxwellPanelState, WAVE_ANIMATION_NOTE, WAVE_NORMALIZED_NOTE, WAVE_SCOPE_NOTE,
+    WAVE_STATUS_CLOCK_NOTE, WAVE_SVG_NOTE,
 };
 use vector_field_explorer::ui::sidebar::Controls;
 use vector_field_explorer::viewmodel::State;
@@ -40,6 +45,23 @@ fn wave_state(mode_3d: bool) -> State {
     assert!(state.set_maxwell_wave(Some(valid_wave())));
     state.refresh_maxwell_sampling();
     state
+}
+
+/// The same analytic wave seam the display samples, exposed as a probe field so
+/// the test can compute the expected integral independently of the app.
+struct WaveProbeField {
+    spec: WaveSpec,
+    family: FieldFamily,
+}
+
+impl ProbeField for WaveProbeField {
+    fn eval(&self, point: Vec3, time: f64) -> Option<Vec3> {
+        let sample = sample_wave(&self.spec, point, time)?;
+        Some(match self.family {
+            FieldFamily::Electric => sample.e,
+            FieldFamily::Magnetic => sample.b,
+        })
+    }
 }
 
 #[test]
@@ -255,6 +277,7 @@ fn wave_panel_shows_validation_messages_and_equation_statuses() {
         WAVE_NORMALIZED_NOTE,
         WAVE_STATUS_CLOCK_NOTE,
         WAVE_SVG_NOTE,
+        WAVE_ANIMATION_NOTE,
         "Gauss's law for electricity: Analytic",
         "Gauss's law for magnetism: Analytic",
         "Faraday's law of induction: Analytic",
@@ -395,6 +418,109 @@ fn disabling_the_wave_restores_the_case_sampling() {
         baseline,
         "disabling the wave restores the exact case sampling"
     );
+}
+
+#[test]
+fn wave_display_routes_surface_and_loop_probes_to_the_wave_field() {
+    let mut state = State::new(true);
+    state.set_field_mode(FieldMode::Maxwell);
+    // The default electric canonical case is the hidden field. A probe routed
+    // to the case would still resolve, so only a direct comparison with the
+    // wave sample distinguishes the two displays.
+    assert!(state.set_maxwell_wave(Some(valid_wave())));
+    state.time = 0.37;
+    state.set_probe_family(FieldFamily::Electric);
+
+    let surface = GaussianSurface {
+        kind: SurfaceKind::Sphere,
+        center: Vec3::new(0.2, -0.1, 0.05),
+        axis: Vec3::Z,
+        size: Vec3::splat(1.4),
+        segments: 24,
+    };
+    let loop_ = CirculationLoop {
+        kind: LoopKind::Circle,
+        center: Vec3::new(-0.15, 0.25, 0.0),
+        axis: Vec3::Z,
+        size: Vec3::splat(1.6),
+        segments: 24,
+    };
+    state.add_probe_surface(surface).expect("valid surface");
+    state.add_probe_loop(loop_).expect("valid loop");
+    state.refresh_probe_reports(true);
+
+    let time = f64::from(state.time);
+    let wave = WaveProbeField {
+        spec: valid_wave(),
+        family: FieldFamily::Electric,
+    };
+    let expected_surface = flux(&wave, &surface, FieldFamily::Electric, time);
+    let expected_loop = circulation(&wave, &loop_, FieldFamily::Electric, time);
+    assert!(matches!(
+        expected_surface.status,
+        vector_field_explorer::field_probe::IntegralStatus::Estimate { .. }
+    ));
+    assert!(matches!(
+        expected_loop.status,
+        vector_field_explorer::field_probe::IntegralStatus::Estimate { .. }
+    ));
+
+    let actual_surface = state
+        .probe_surface_report(0)
+        .expect("the visible refresh built a surface report")
+        .clone();
+    let actual_loop = state
+        .probe_loop_report(0)
+        .expect("the visible refresh built a loop report")
+        .clone();
+    assert_eq!(actual_surface.family, FieldFamily::Electric);
+    assert_eq!(actual_loop.family, FieldFamily::Electric);
+    assert_eq!(
+        actual_surface.status, expected_surface.status,
+        "the flux must come from the displayed wave, not the hidden case"
+    );
+    assert_eq!(actual_surface.samples, expected_surface.samples);
+    assert_eq!(
+        actual_loop.status, expected_loop.status,
+        "the circulation must come from the displayed wave, not the hidden case"
+    );
+    assert_eq!(actual_loop.samples, expected_loop.samples);
+
+    // The magnetic family is displayed too and uses the same wave evaluator.
+    state.set_probe_family(FieldFamily::Magnetic);
+    state.refresh_probe_reports(true);
+    let magnetic_wave = WaveProbeField {
+        spec: valid_wave(),
+        family: FieldFamily::Magnetic,
+    };
+    let expected_magnetic = flux(&magnetic_wave, &surface, FieldFamily::Magnetic, time);
+    assert_eq!(
+        state
+            .probe_surface_report(0)
+            .expect("a magnetic report exists")
+            .status,
+        expected_magnetic.status
+    );
+}
+
+#[test]
+fn wave_panel_never_promises_an_unsupported_animation_export() {
+    assert!(
+        !WAVE_SVG_NOTE.to_lowercase().contains("animations include"),
+        "the capture note must not promise animation export"
+    );
+    assert!(
+        WAVE_ANIMATION_NOTE.contains("unavailable"),
+        "the wave panel names animation export as unavailable: {WAVE_ANIMATION_NOTE}"
+    );
+
+    let state = wave_state(true);
+    let eligibility = AnimationEligibility::from_state(&state);
+    assert!(
+        !eligibility.allowed,
+        "Maxwell animation export is disabled rather than promised"
+    );
+    assert!(eligibility.reason.is_some());
 }
 
 fn rgb(color: [u8; 3]) -> [f32; 3] {

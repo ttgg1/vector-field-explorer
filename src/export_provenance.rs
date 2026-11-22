@@ -22,6 +22,7 @@ use crate::maxwell::{
     MAXWELL_BEM_NOTE, MaxwellCase, MaxwellFamily, MaxwellSampling, MaxwellScene, MaxwellStop,
     maxwell_assumptions, maxwell_family, validate_maxwell,
 };
+use crate::maxwell_wave::WaveSpec;
 use crate::ode::{ODE_STEP, OdeScene, OdeSolution, OdeSource};
 use crate::sim_clock::SimClock;
 use crate::source_scene::{
@@ -78,6 +79,18 @@ pub const MAXWELL_DISPLAY_UNITS_LINE: &str =
 pub const MAXWELL_NO_SAMPLING_LINE: &str = "Maxwell sampling unavailable";
 /// Validation-failure line for the durable Maxwell scene.
 pub const MAXWELL_INVALID_LINE: &str = "Maxwell scene invalid: {error}";
+
+/// The always-present plane-wave model line. A wave replaces the case field, so
+/// a wave export names the wave rather than the hidden case model.
+pub const MAXWELL_WAVE_MODEL_LINE: &str =
+    "Plane wave - analytic source-free full-wave illustration - no general solver";
+/// Warning when a wave export starts before the first wave sampling pass.
+pub const MAXWELL_WAVE_NO_SAMPLING_LINE: &str = "Plane-wave sampling unavailable";
+/// Validation-failure line for a stored plane-wave spec.
+pub const MAXWELL_WAVE_INVALID_LINE: &str = "Plane wave invalid: {error}";
+/// The wave's normalized-unit contract; not SI and not a boundary-value result.
+pub const MAXWELL_WAVE_UNITS_LINE: &str =
+    "Normalized teaching units: c = 1, so |E| = |B|; these are not SI measurements.";
 
 /// Capture-time export context shared by the PNG and SVG paths.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -586,6 +599,85 @@ pub fn maxwell_export_provenance(
         material_mode: false,
         maxwell_mode: true,
     })
+}
+
+/// Derive export provenance for the displayed analytic plane wave.
+///
+/// Pure and request-time: it reads the durable [`WaveSpec`] and whether the
+/// wave arrow pass has already been sampled. It never evaluates the field and
+/// never samples the hidden Maxwell case. Non-Maxwell modes return `None`, so
+/// another adapter cannot gain wave metadata. The wave display supplies both
+/// electric and magnetic families, so the case's family is never inherited.
+pub fn maxwell_wave_export_provenance(
+    mode: FieldMode,
+    spec: &WaveSpec,
+    sampled: bool,
+) -> Option<ExportProvenance> {
+    if mode != FieldMode::Maxwell {
+        return None;
+    }
+
+    let mut checked = *spec;
+    let validation_error = checked.validate().err();
+    let mut warning_lines = vec![MAXWELL_WAVE_MODEL_LINE.to_string()];
+    let mut metadata = vec![
+        (
+            "vfe.model".to_string(),
+            "maxwell-plane-wave-teaching".to_string(),
+        ),
+        ("vfe.maxwell_display".to_string(), "plane_wave".to_string()),
+        (
+            "vfe.maxwell_family".to_string(),
+            "electric+magnetic".to_string(),
+        ),
+        (
+            "vfe.maxwell_units".to_string(),
+            "normalized-teaching".to_string(),
+        ),
+        (
+            "vfe.maxwell_assumptions".to_string(),
+            maxwell_wave_assumptions(&checked),
+        ),
+        (
+            "vfe.maxwell_sampling".to_string(),
+            if sampled { "sampled" } else { "unavailable" }.to_string(),
+        ),
+    ];
+
+    if let Some(error) = validation_error {
+        warning_lines.push(MAXWELL_WAVE_INVALID_LINE.replace("{error}", &error));
+        metadata.push(("vfe.validation_error".to_string(), error));
+    }
+    if !sampled {
+        warning_lines.push(MAXWELL_WAVE_NO_SAMPLING_LINE.to_string());
+    }
+    warning_lines.push(MAXWELL_WAVE_UNITS_LINE.to_string());
+
+    Some(ExportProvenance {
+        warning_lines,
+        metadata,
+        source_mode: false,
+        induction_mode: false,
+        ode_mode: false,
+        material_mode: false,
+        maxwell_mode: true,
+    })
+}
+
+/// The wave's model assumptions and exact normalized parameters.
+fn maxwell_wave_assumptions(spec: &WaveSpec) -> String {
+    format!(
+        "Analytic source-free plane wave in normalized teaching units (c = 1, |E| = |B|); amplitude = {}, wavelength = {}, direction = {}, polarization = {}, phase = {}. Not SI and not a boundary-value solution.",
+        spec.amplitude,
+        spec.wavelength,
+        wave_axis(spec.direction),
+        wave_axis(spec.polarization),
+        spec.phase,
+    )
+}
+
+fn wave_axis(vector: glam::Vec3) -> String {
+    format!("({:.4}, {:.4}, {:.4})", vector.x, vector.y, vector.z)
 }
 
 /// The visible warning/context lines, in paint order.

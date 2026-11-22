@@ -48,7 +48,10 @@ pub const WAVE_STATUS_CLOCK_NOTE: &str =
 /// The Ampere-Maxwell limit: source-free means no modelled free current.
 pub const WAVE_AMPERE_NOTE: &str = "Ampere-Maxwell is unsupported for a source-free wave: no free-current density j is modelled, and no zero is substituted.";
 /// Capture honesty: the GPU path includes wave arrows, the SVG blueprint does not.
-pub const WAVE_SVG_NOTE: &str = "PNG, GUI screenshots and animations include the wave arrows through the GPU scene; the SVG blueprint carries no arrows today.";
+pub const WAVE_SVG_NOTE: &str = "PNG and GUI screenshots include the wave arrows through the GPU scene; the SVG blueprint carries no arrows today.";
+/// The existing animation control is disabled in Maxwell, so the panel must not
+/// imply that a wave animation can be exported.
+pub const WAVE_ANIMATION_NOTE: &str = "Animation export is unavailable in Maxwell mode, so the wave arrows cannot be exported as video or GIF.";
 
 /// A one-shot request from the panel to the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -505,6 +508,7 @@ fn show_wave_section(
                 ui.label(WAVE_AMPERE_NOTE);
             }
             ui.label(WAVE_SVG_NOTE);
+            ui.label(WAVE_ANIMATION_NOTE);
         });
     if response.header_response.clicked() {
         open = !open;

@@ -177,11 +177,21 @@ impl VfApp {
     ) -> Option<crate::export_provenance::ExportProvenance> {
         match self.state.field_mode {
             FieldMode::Formula => None,
-            FieldMode::Maxwell => crate::export_provenance::maxwell_export_provenance(
-                self.state.field_mode,
-                &self.state.maxwell,
-                self.state.maxwell_sampling.as_ref(),
-            ),
+            FieldMode::Maxwell => {
+                if let Some(wave) = self.state.maxwell_wave() {
+                    crate::export_provenance::maxwell_wave_export_provenance(
+                        self.state.field_mode,
+                        &wave,
+                        self.state.maxwell_wave_sampling.is_some(),
+                    )
+                } else {
+                    crate::export_provenance::maxwell_export_provenance(
+                        self.state.field_mode,
+                        &self.state.maxwell,
+                        self.state.maxwell_sampling.as_ref(),
+                    )
+                }
+            }
             FieldMode::Ode => crate::export_provenance::ode_export_provenance(
                 self.state.field_mode,
                 &self.state.ode,
