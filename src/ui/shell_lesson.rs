@@ -19,6 +19,10 @@ use crate::ui::gauss_shell::{
     GAUSS_SHELL_MIN_RADIUS, GaussShellReading, GaussShellReadingKind, GaussShellReport,
     GaussShellState,
 };
+use crate::ui::griffiths::{
+    GRIFFITHS_EXPLORE_FROM_HERE, GRIFFITHS_HIDE_HINT, GRIFFITHS_SHOW_HINT, GRIFFITHS_SKIP_STEP,
+    GriffithsCheckpoint,
+};
 
 /// Window title for the activity.
 pub const SHELL_LESSON_TITLE: &str = "Griffiths 2.11 · Charged shell";
@@ -95,6 +99,8 @@ pub enum ShellLessonAction {
     Back,
     /// Keep the shell scene and close the lesson.
     KeepExploring,
+    /// Temporarily explore from the current checkpoint.
+    ExploreFromHere,
 }
 
 /// Session-only activity state. `Default` is inactive.
@@ -106,6 +112,7 @@ pub struct ShellLessonState {
     skipped: bool,
     revealed: bool,
     completed: bool,
+    hint_visible: bool,
     gauss: GaussShellState,
 }
 
@@ -118,6 +125,7 @@ impl ShellLessonState {
         self.skipped = false;
         self.revealed = false;
         self.completed = false;
+        self.hint_visible = false;
         self.gauss.activate(scene);
     }
 
@@ -181,6 +189,27 @@ impl ShellLessonState {
     /// Whether the result has been revealed.
     pub fn revealed(&self) -> bool {
         self.revealed
+    }
+
+    /// The current meaningful step, derived from the prediction/reveal gate.
+    pub fn checkpoint(&self) -> GriffithsCheckpoint {
+        if self.revealed {
+            GriffithsCheckpoint::Result
+        } else if self.can_reveal() {
+            GriffithsCheckpoint::Reveal
+        } else {
+            GriffithsCheckpoint::Predict
+        }
+    }
+
+    /// Whether the contextual hint is currently shown.
+    pub fn hint_visible(&self) -> bool {
+        self.hint_visible
+    }
+
+    /// Toggle the contextual hint without changing the prediction gate.
+    pub fn toggle_hint(&mut self) {
+        self.hint_visible = !self.hint_visible;
     }
 
     /// The reveal is gated on both predictions or an explicit skip.
@@ -295,7 +324,11 @@ pub fn show(
             ui.label(SHELL_QUESTION);
             ui.add_space(4.0);
             ui.strong(SHELL_PROMPT);
-            ui.label(egui::RichText::new(format!("Hint: {SHELL_HINT}")).small());
+            ui.add_space(2.0);
+            draw_step_controls(ui, state, &mut action);
+            if state.hint_visible() {
+                ui.label(egui::RichText::new(format!("Hint: {SHELL_HINT}")).small());
+            }
             ui.add_space(4.0);
 
             if !state.revealed() {
@@ -333,6 +366,44 @@ pub fn show(
             });
         });
     action
+}
+
+fn draw_step_controls(
+    ui: &mut egui::Ui,
+    state: &mut ShellLessonState,
+    action: &mut ShellLessonAction,
+) {
+    let checkpoint = state.checkpoint();
+    ui.strong(checkpoint.label());
+    ui.horizontal_wrapped(|ui| {
+        if checkpoint == GriffithsCheckpoint::Predict
+            && ui
+                .button(GRIFFITHS_SKIP_STEP)
+                .on_hover_text("Advance to the reveal step without revealing the result")
+                .clicked()
+        {
+            state.skip_prediction();
+        }
+        let hint_label = if state.hint_visible() {
+            GRIFFITHS_HIDE_HINT
+        } else {
+            GRIFFITHS_SHOW_HINT
+        };
+        if ui
+            .button(hint_label)
+            .on_hover_text("Reveal this activity's contextual hint")
+            .clicked()
+        {
+            state.toggle_hint();
+        }
+        if ui
+            .button(GRIFFITHS_EXPLORE_FROM_HERE)
+            .on_hover_text("Pause the activity and explore the scene freely")
+            .clicked()
+        {
+            *action = ShellLessonAction::ExploreFromHere;
+        }
+    });
 }
 
 fn draw_predictions(ui: &mut egui::Ui, state: &mut ShellLessonState) {

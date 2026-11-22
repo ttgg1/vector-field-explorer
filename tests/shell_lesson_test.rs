@@ -15,7 +15,7 @@ use vector_field_explorer::ui::gauss_shell::{
     GAUSS_SHELL_INSIDE_NOTE, GAUSS_SHELL_INTERFACE_NOTE, GaussShellReadingKind,
 };
 use vector_field_explorer::ui::griffiths::{
-    GRIFFITHS_PICKER_TITLE, GRIFFITHS_SHELL_LABEL, GriffithsRoute,
+    GRIFFITHS_PICKER_TITLE, GRIFFITHS_SHELL_LABEL, GRIFFITHS_SHOW_HINT, GriffithsRoute,
 };
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::shell_lesson::{
@@ -171,6 +171,8 @@ fn the_prompt_precedes_the_reveal_and_the_hint_separates_shell_radius_from_measu
     h.idle();
     h.app.open_griffiths_branch();
     h.app.start_griffiths_route(GriffithsRoute::Shell);
+    h.idle();
+    click_label(&mut h, GRIFFITHS_SHOW_HINT);
     h.idle();
 
     let out = h.frame(Vec::new());

@@ -13,7 +13,7 @@ use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::sources::FieldFamily;
 use vector_field_explorer::ui::griffiths::{
-    GRIFFITHS_PICKER_TITLE, GRIFFITHS_WIRE_LABEL, GriffithsRoute,
+    GRIFFITHS_PICKER_TITLE, GRIFFITHS_SHOW_HINT, GRIFFITHS_WIRE_LABEL, GriffithsRoute,
 };
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::wire_lesson::{
@@ -189,6 +189,8 @@ fn the_prompt_precedes_the_reveal_and_the_hints_anchor_the_current_and_normal() 
     h.idle();
     h.app.open_griffiths_branch();
     h.app.start_griffiths_route(GriffithsRoute::Wire);
+    h.idle();
+    click_label(&mut h, GRIFFITHS_SHOW_HINT);
     h.idle();
 
     let out = h.frame(Vec::new());

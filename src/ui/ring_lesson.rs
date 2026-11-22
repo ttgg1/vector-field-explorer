@@ -19,6 +19,10 @@ use glam::DVec3;
 use crate::source_presets::{SourcePreset, source_preset};
 use crate::source_scene::SourceScene;
 use crate::sources::{EvalOptions, Evaluator, FamilyResult, SourceSet, WorkLimits};
+use crate::ui::griffiths::{
+    GRIFFITHS_EXPLORE_FROM_HERE, GRIFFITHS_HIDE_HINT, GRIFFITHS_SHOW_HINT, GRIFFITHS_SKIP_STEP,
+    GriffithsCheckpoint,
+};
 
 /// Window title for the activity.
 pub const RING_LESSON_TITLE: &str = "Griffiths 2.5 · Charged ring";
@@ -143,6 +147,7 @@ pub struct RingLessonState {
     prediction: Option<RingPrediction>,
     skipped: bool,
     revealed: bool,
+    hint_visible: bool,
     cache: Option<RingReading>,
 }
 
@@ -154,6 +159,7 @@ impl RingLessonState {
         self.prediction = None;
         self.skipped = false;
         self.revealed = false;
+        self.hint_visible = false;
         self.cache = None;
     }
 
@@ -214,6 +220,27 @@ impl RingLessonState {
         self.revealed
     }
 
+    /// The current meaningful step, derived from the prediction/reveal gate.
+    pub fn checkpoint(&self) -> GriffithsCheckpoint {
+        if self.revealed {
+            GriffithsCheckpoint::Result
+        } else if self.can_reveal() {
+            GriffithsCheckpoint::Reveal
+        } else {
+            GriffithsCheckpoint::Predict
+        }
+    }
+
+    /// Whether the contextual hint is currently shown.
+    pub fn hint_visible(&self) -> bool {
+        self.hint_visible
+    }
+
+    /// Toggle the contextual hint without changing the prediction gate.
+    pub fn toggle_hint(&mut self) {
+        self.hint_visible = !self.hint_visible;
+    }
+
     /// The reveal is gated on a prediction or an explicit skip.
     pub fn can_reveal(&self) -> bool {
         !self.revealed && (self.prediction.is_some() || self.skipped)
@@ -255,6 +282,8 @@ pub enum RingLessonAction {
     Back,
     /// Keep the ring scene and close the lesson.
     KeepExploring,
+    /// Temporarily explore from the current checkpoint.
+    ExploreFromHere,
     /// Put the analytic axis formula into the native CAS input.
     SendToCas,
 }
@@ -276,7 +305,11 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
             ui.label(RING_QUESTION);
             ui.add_space(4.0);
             ui.strong(RING_PROMPT);
-            ui.label(egui::RichText::new(format!("Hint: {RING_HINT}")).small());
+            ui.add_space(2.0);
+            draw_step_controls(ui, state, &mut action);
+            if state.hint_visible() {
+                ui.label(egui::RichText::new(format!("Hint: {RING_HINT}")).small());
+            }
             ui.add_space(4.0);
 
             if !state.revealed() {
@@ -383,6 +416,44 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
             });
         });
     action
+}
+
+fn draw_step_controls(
+    ui: &mut egui::Ui,
+    state: &mut RingLessonState,
+    action: &mut RingLessonAction,
+) {
+    let checkpoint = state.checkpoint();
+    ui.strong(checkpoint.label());
+    ui.horizontal_wrapped(|ui| {
+        if checkpoint == GriffithsCheckpoint::Predict
+            && ui
+                .button(GRIFFITHS_SKIP_STEP)
+                .on_hover_text("Advance to the reveal step without revealing the result")
+                .clicked()
+        {
+            state.skip_prediction();
+        }
+        let hint_label = if state.hint_visible() {
+            GRIFFITHS_HIDE_HINT
+        } else {
+            GRIFFITHS_SHOW_HINT
+        };
+        if ui
+            .button(hint_label)
+            .on_hover_text("Reveal this activity's contextual hint")
+            .clicked()
+        {
+            state.toggle_hint();
+        }
+        if ui
+            .button(GRIFFITHS_EXPLORE_FROM_HERE)
+            .on_hover_text("Pause the activity and explore the scene freely")
+            .clicked()
+        {
+            *action = RingLessonAction::ExploreFromHere;
+        }
+    });
 }
 
 /// Which axial-graph layers are painted. The ideal/softened curves and their

@@ -29,6 +29,70 @@ pub const GRIFFITHS_WIRE_LABEL: &str =
     "Griffiths 5.14(a) · Current-carrying wire: B and circulation";
 /// The picker summary kept after a completed shell activity.
 pub const GRIFFITHS_SHELL_COMPLETED_NOTE: &str = "Charged shell activity completed this session; choose it again to replay with a fresh prediction.";
+/// Reveal the activity's existing contextual hint on request.
+pub const GRIFFITHS_SHOW_HINT: &str = "Show hint";
+/// Hide the contextual hint again.
+pub const GRIFFITHS_HIDE_HINT: &str = "Hide hint";
+/// Advance exactly one pre-reveal step without revealing the result.
+pub const GRIFFITHS_SKIP_STEP: &str = "Skip this step";
+/// Temporarily leave the activity at its current checkpoint.
+pub const GRIFFITHS_EXPLORE_FROM_HERE: &str = "Explore from here";
+/// Return to the pending resume/keep-variation choice.
+pub const GRIFFITHS_RETURN_TO_ACTIVITY: &str = "Return to activity";
+/// Restore the scene and lesson state saved at the checkpoint.
+pub const GRIFFITHS_RESUME_CHECKPOINT: &str = "Resume at checkpoint";
+/// Keep the learner's current scene and lesson edits.
+pub const GRIFFITHS_KEEP_VARIATION: &str = "Keep my variation";
+
+/// The meaningful step of the active activity. Everything here is derived from
+/// the lesson's session state, so it cannot drift from the prediction/reveal
+/// gate the learner sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GriffithsCheckpoint {
+    /// Choosing a prediction; nothing has been revealed.
+    Predict,
+    /// A prediction or an explicit skip is recorded; the result awaits reveal.
+    Reveal,
+    /// The solution is revealed and being read.
+    Result,
+}
+
+impl GriffithsCheckpoint {
+    /// The visible checkpoint text. It names the step, not only a highlight.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Predict => "Checkpoint 1 of 3 · Make your prediction",
+            Self::Reveal => "Checkpoint 2 of 3 · Reveal the result",
+            Self::Result => "Checkpoint 3 of 3 · Read the result",
+        }
+    }
+}
+
+/// The active route and checkpoint, if an activity is open.
+pub fn active_checkpoint(state: &GriffithsState) -> Option<(GriffithsRoute, GriffithsCheckpoint)> {
+    let route = if state.lesson.active() {
+        GriffithsRoute::Ring
+    } else if state.shell.active() {
+        GriffithsRoute::Shell
+    } else if state.plane.active() {
+        GriffithsRoute::Plane
+    } else if state.wire.active() {
+        GriffithsRoute::Wire
+    } else {
+        return None;
+    };
+    Some((route, checkpoint_for(route, state)))
+}
+
+/// The checkpoint for one route, or `Predict` when it is not active.
+pub fn checkpoint_for(route: GriffithsRoute, state: &GriffithsState) -> GriffithsCheckpoint {
+    match route {
+        GriffithsRoute::Ring => state.lesson.checkpoint(),
+        GriffithsRoute::Shell => state.shell.checkpoint(),
+        GriffithsRoute::Plane => state.plane.checkpoint(),
+        GriffithsRoute::Wire => state.wire.checkpoint(),
+    }
+}
 
 /// One optional activity in the Griffiths branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,5 +267,85 @@ pub fn show_picker(ctx: &egui::Context, state: &mut GriffithsState) -> Griffiths
                 action = GriffithsAction::Dismiss;
             }
         });
+    action
+}
+
+/// What the app should do after an exploration overlay interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GriffithsExplorationAction {
+    None,
+    /// Ask the learner whether to resume or keep the variation.
+    Return,
+    /// Restore the snapshot saved at the checkpoint.
+    Resume,
+    /// Keep the current scene and lesson edits.
+    KeepVariation,
+}
+
+/// Draw the temporary-exploration banner, or the resume/keep choice once the
+/// learner returns. The app owns the snapshot and lesson state.
+pub fn show_exploration(
+    ctx: &egui::Context,
+    route: GriffithsRoute,
+    checkpoint: GriffithsCheckpoint,
+    return_prompt: bool,
+) -> GriffithsExplorationAction {
+    let width = (ctx.content_rect().width() - 32.0).clamp(300.0, 460.0);
+    let mut action = GriffithsExplorationAction::None;
+    if return_prompt {
+        egui::Window::new("Return to the activity?")
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(width)
+            .max_width(width)
+            .show(ctx, |ui| {
+                ui.label(format!("Exploring from {}.", route.label()));
+                ui.strong(checkpoint.label());
+                ui.add_space(4.0);
+                ui.label(
+                    "Resume at checkpoint restores the scene, camera and lesson state \
+                     saved when you chose Explore from here.",
+                );
+                ui.label(
+                    "Keep my variation keeps your current scene and lesson edits and \
+                     discards only the saved checkpoint.",
+                );
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button(GRIFFITHS_RESUME_CHECKPOINT)
+                        .on_hover_text("Restore the scene and lesson saved at this checkpoint")
+                        .clicked()
+                    {
+                        action = GriffithsExplorationAction::Resume;
+                    }
+                    if ui
+                        .button(GRIFFITHS_KEEP_VARIATION)
+                        .on_hover_text("Keep your current scene and lesson edits")
+                        .clicked()
+                    {
+                        action = GriffithsExplorationAction::KeepVariation;
+                    }
+                });
+            });
+    } else {
+        egui::Window::new("Exploring from checkpoint")
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(width)
+            .max_width(width)
+            .show(ctx, |ui| {
+                ui.label(format!("{} · {}", route.label(), checkpoint.label()));
+                ui.small(
+                    "The activity is paused at this checkpoint; the scene is yours to edit. \
+                     Return when you want to resume or keep your variation.",
+                );
+                if ui.button(GRIFFITHS_RETURN_TO_ACTIVITY).clicked() {
+                    action = GriffithsExplorationAction::Return;
+                }
+            });
+    }
     action
 }

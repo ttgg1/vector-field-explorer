@@ -23,6 +23,10 @@ use crate::field_probe::{
 use crate::maxwell::{MaxwellCase, MaxwellError, MaxwellScene, maxwell_field};
 use crate::sources::FieldFamily;
 use crate::ui::gauss_shell::{GAUSS_SHELL_MAX_RADIUS, GAUSS_SHELL_MIN_RADIUS};
+use crate::ui::griffiths::{
+    GRIFFITHS_EXPLORE_FROM_HERE, GRIFFITHS_HIDE_HINT, GRIFFITHS_SHOW_HINT, GRIFFITHS_SKIP_STEP,
+    GriffithsCheckpoint,
+};
 
 /// Window title for the activity.
 pub const WIRE_LESSON_TITLE: &str = "Griffiths 5.14(a) · Current-carrying wire";
@@ -174,6 +178,8 @@ pub enum WireLessonAction {
     Back,
     /// Keep the wire scene and close the lesson.
     KeepExploring,
+    /// Temporarily explore from the current checkpoint.
+    ExploreFromHere,
 }
 
 /// One loop radius's honest classification.
@@ -344,6 +350,7 @@ pub struct WireLessonState {
     inside_prediction: Option<WireInsidePrediction>,
     skipped: bool,
     revealed: bool,
+    hint_visible: bool,
     report: Option<WireLessonReport>,
     report_scene: Option<MaxwellScene>,
     report_family: Option<FieldFamily>,
@@ -366,6 +373,7 @@ impl WireLessonState {
         self.inside_prediction = None;
         self.skipped = false;
         self.revealed = false;
+        self.hint_visible = false;
         self.invalidate_report();
     }
 
@@ -461,6 +469,27 @@ impl WireLessonState {
         self.revealed
     }
 
+    /// The current meaningful step, derived from the prediction/reveal gate.
+    pub fn checkpoint(&self) -> GriffithsCheckpoint {
+        if self.revealed {
+            GriffithsCheckpoint::Result
+        } else if self.can_reveal() {
+            GriffithsCheckpoint::Reveal
+        } else {
+            GriffithsCheckpoint::Predict
+        }
+    }
+
+    /// Whether the contextual hints are currently shown.
+    pub fn hint_visible(&self) -> bool {
+        self.hint_visible
+    }
+
+    /// Toggle the contextual hints without changing the prediction gate.
+    pub fn toggle_hint(&mut self) {
+        self.hint_visible = !self.hint_visible;
+    }
+
     /// The reveal is gated on both predictions or an explicit skip.
     pub fn can_reveal(&self) -> bool {
         !self.revealed
@@ -545,7 +574,9 @@ pub fn show(
             }
             ui.add_space(4.0);
             ui.strong(WIRE_PROMPT);
-            if !state.revealed() {
+            ui.add_space(2.0);
+            draw_step_controls(ui, state, &mut action);
+            if state.hint_visible() {
                 ui.label(egui::RichText::new(format!("Hint: {WIRE_DIRECTION_HINT}")).small());
                 ui.label(egui::RichText::new(format!("Hint: {WIRE_ORIENTATION_HINT}")).small());
             }
@@ -596,6 +627,44 @@ pub fn show(
             });
         });
     action
+}
+
+fn draw_step_controls(
+    ui: &mut egui::Ui,
+    state: &mut WireLessonState,
+    action: &mut WireLessonAction,
+) {
+    let checkpoint = state.checkpoint();
+    ui.strong(checkpoint.label());
+    ui.horizontal_wrapped(|ui| {
+        if checkpoint == GriffithsCheckpoint::Predict
+            && ui
+                .button(GRIFFITHS_SKIP_STEP)
+                .on_hover_text("Advance to the reveal step without revealing the result")
+                .clicked()
+        {
+            state.skip_prediction();
+        }
+        let hint_label = if state.hint_visible() {
+            GRIFFITHS_HIDE_HINT
+        } else {
+            GRIFFITHS_SHOW_HINT
+        };
+        if ui
+            .button(hint_label)
+            .on_hover_text("Reveal this activity's contextual hints")
+            .clicked()
+        {
+            state.toggle_hint();
+        }
+        if ui
+            .button(GRIFFITHS_EXPLORE_FROM_HERE)
+            .on_hover_text("Pause the activity and explore the scene freely")
+            .clicked()
+        {
+            *action = WireLessonAction::ExploreFromHere;
+        }
+    });
 }
 
 fn draw_predictions(ui: &mut egui::Ui, state: &mut WireLessonState) {
