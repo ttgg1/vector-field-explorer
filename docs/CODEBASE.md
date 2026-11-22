@@ -532,8 +532,10 @@ selected normal/contour stays visible above the controls. The shell radius
 activity radius. Inside (`r < a`) the reading reports `B = 0` and circulation
 `0`. The ideal interface is excluded by the shipped field's own
 `Unsupported` decision, never a second tolerance; the excluded card states
-[`WIRE_INTERFACE_NOTE`]. Outside, `|B(r)|/|B(2r)| = 2` and the circulation is
-equal within the reported half-resolution quadrature uncertainty. Reversing
+`WIRE_INTERFACE_NOTE`. When both circles are outside the shell, `|B(r)|/|B(2r)| = 2`;
+for a mixed inside/outside pair the lesson withholds the halving claim and
+states that the ratio applies only when both circles are outside. The circulation
+is equal within the reported half-resolution quadrature uncertainty. Reversing
 only the loop normal flips the signed integral and leaves the field vectors
 and viewport arrows unchanged. The result labels normalized teaching
 amplitudes and states the ideal thin surface-current assumption. Back/Exit
@@ -547,6 +549,7 @@ adopts the wire scene.
 `the_ideal_interface_is_excluded_and_explained`,
 `the_excluded_boundary_reading_is_visible_in_the_lesson`,
 `outside_doubling_the_loop_radius_halves_b_and_preserves_the_circulation`,
+`the_halving_claim_is_withheld_unless_both_circles_are_outside_the_shell`,
 `reversing_only_the_loop_orientation_flips_the_signed_circulation_and_keeps_the_field`,
 `back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_wire`, and
 `the_wire_lesson_stays_usable_in_wide_and_compact_layouts`.

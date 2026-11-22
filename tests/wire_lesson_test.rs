@@ -18,8 +18,9 @@ use vector_field_explorer::ui::griffiths::{
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::wire_lesson::{
     WIRE_ASSUMPTION_NOTE, WIRE_DIRECTION_HINT, WIRE_INTERFACE_NOTE, WIRE_LESSON_TITLE,
-    WIRE_ORIENTATION_HINT, WIRE_PROMPT, WIRE_QUESTION, WIRE_UNITS_NOTE, WireDirectionPrediction,
-    WireInsidePrediction, WireLessonState, WireOrientation, WireReadingKind,
+    WIRE_ORIENTATION_HINT, WIRE_PROMPT, WIRE_QUESTION, WIRE_RATIO_EXTERIOR_ONLY_NOTE,
+    WIRE_UNITS_NOTE, WireDirectionPrediction, WireInsidePrediction, WireLessonState,
+    WireOrientation, WireReadingKind,
 };
 
 struct Harness {
@@ -210,6 +211,11 @@ fn the_prompt_precedes_the_reveal_and_the_hints_anchor_the_current_and_normal() 
         "the direction hint anchors the shipped +z current and the right-hand rule"
     );
     assert!(
+        !WIRE_DIRECTION_HINT.contains("clockwise"),
+        "the pre-reveal direction hint asks the question without naming the answer: \
+         {WIRE_DIRECTION_HINT}"
+    );
+    assert!(
         WIRE_ORIENTATION_HINT.contains("normal") && WIRE_ORIENTATION_HINT.contains("circulation"),
         "the orientation hint anchors the loop normal and the signed circulation"
     );
@@ -352,6 +358,60 @@ fn outside_doubling_the_loop_radius_halves_b_and_preserves_the_circulation() {
     assert!(
         circulation_first.abs() > 1.0,
         "the exterior circulation is nonzero in normalized units: {circulation_first}"
+    );
+}
+
+#[test]
+fn the_halving_claim_is_withheld_unless_both_circles_are_outside_the_shell() {
+    let mut h = Harness::new(1200.0, 1600.0);
+    h.idle();
+    h.app.open_griffiths_branch();
+    h.app.start_griffiths_route(GriffithsRoute::Wire);
+    let shell = h.app.state.maxwell.radius;
+    assert!(shell > 0.0, "the wire scene has a positive shell radius");
+    assert!(
+        h.app.set_wire_loop_for_test(shell * 0.75),
+        "the loop moves inside the shell while 2r stays outside"
+    );
+    h.app.predict_wire_for_test(
+        WireDirectionPrediction::CounterClockwise,
+        WireInsidePrediction::BothZero,
+    );
+    assert!(h.app.reveal_wire_for_test());
+    h.idle();
+    let text = texts(&h.frame(Vec::new())).join("\n");
+    assert!(
+        !text.contains("doubling the radius halves |B|"),
+        "an inside/outside pair is not described as halving |B|: {text}"
+    );
+    assert!(
+        text.contains(WIRE_RATIO_EXTERIOR_ONLY_NOTE),
+        "the mixed pair explains that the ratio needs both circles outside: {text}"
+    );
+
+    let mut h = Harness::new(1200.0, 1600.0);
+    h.idle();
+    h.app.open_griffiths_branch();
+    h.app.start_griffiths_route(GriffithsRoute::Wire);
+    let shell = h.app.state.maxwell.radius;
+    assert!(
+        h.app.set_wire_loop_for_test(shell * 1.5),
+        "both r and 2r are outside the shell"
+    );
+    h.app.predict_wire_for_test(
+        WireDirectionPrediction::CounterClockwise,
+        WireInsidePrediction::BothZero,
+    );
+    assert!(h.app.reveal_wire_for_test());
+    h.idle();
+    let text = texts(&h.frame(Vec::new())).join("\n");
+    assert!(
+        text.contains("doubling the radius halves |B|"),
+        "two exterior circles still state the halving result: {text}"
+    );
+    assert!(
+        text.contains("|B(r)| / |B(2r)| = 2.0000"),
+        "the exterior ratio reads the ideal 2.0000: {text}"
     );
 }
 

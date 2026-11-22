@@ -30,8 +30,9 @@ pub const WIRE_LESSON_TITLE: &str = "Griffiths 5.14(a) · Current-carrying wire"
 pub const WIRE_QUESTION: &str = "An ideal infinite straight wire carries a steady current along +z; its thin shell is the ideal surface-current layer. Outside, B circles the wire; inside, there is no field. What does a compass show outside, and what would a smaller loop entirely inside measure?";
 /// The prediction prompt shown before any measured result.
 pub const WIRE_PROMPT: &str = "Predict first, separately: outside the shell, which way do the compass needles point around the wire seen from +z, and what would a smaller loop entirely inside measure for B and circulation?";
-/// Hint anchored to the shipped current direction and the right-hand rule.
-pub const WIRE_DIRECTION_HINT: &str = "The current flows along +z (out of the transverse slice toward you). Point your right thumb along +z; the right-hand rule curls your fingers counter-clockwise in the slice, which is the direction of B outside the shell.";
+/// Hint anchored to the shipped current direction and the right-hand rule,
+/// without naming the exterior field direction the learner must predict.
+pub const WIRE_DIRECTION_HINT: &str = "The current flows along +z (out of the transverse slice toward you). Point your right thumb along +z: which way does the right-hand rule curl your fingers in the slice, and which way would the compass needles point outside the shell?";
 /// Hint anchored to the loop normal, which is independent of the current.
 pub const WIRE_ORIENTATION_HINT: &str = "The loop's positive normal is +z for a counter-clockwise contour and -z for a clockwise contour. Reversing the normal reverses the sign of the circulation; it never changes the field arrows.";
 /// Scope line for every displayed measurement.
@@ -51,6 +52,8 @@ pub const WIRE_ORIENTATION_NOTE: &str = "The field arrows depend on the current,
 pub const WIRE_REASONING: &str = "Outside, B = B0 (a/r) phi-hat: doubling r halves |B|, while the circumference doubles, so the circulation stays 2*pi*B0*a. Inside, the enclosed current is zero, so B and the circulation vanish.";
 /// Reminder that a comparison is sampled, not symbolic.
 pub const WIRE_UNCERTAINTY_NOTE: &str = "The equal-circulation comparison holds within the reported half-resolution quadrature uncertainty; it is a sampled estimate, not an exact symbolic cancellation.";
+/// Why the |B(r)| / |B(2r)| halving statement is withheld for mixed readings.
+pub const WIRE_RATIO_EXTERIOR_ONLY_NOTE: &str = "The |B| ratio and the halving statement apply only when both circles are outside the shell (r > a); a circle inside the ideal shell sees B = 0, so this pair has no halving comparison.";
 
 /// Subdivision count for the lesson loop, matching the shipped default probe.
 pub const WIRE_LOOP_SEGMENTS: u32 = 16;
@@ -877,14 +880,19 @@ fn reading_card(ui: &mut egui::Ui, title: &str, reading: &WireLessonReading) {
 }
 
 fn show_ratios(ui: &mut egui::Ui, report: &WireLessonReport) {
-    if let (Some(first_field), Some(second_field)) =
-        (report.at_radius.field(), report.at_double.field())
+    let both_exterior = matches!(report.at_radius.kind, WireReadingKind::Exterior { .. })
+        && matches!(report.at_double.kind, WireReadingKind::Exterior { .. });
+    if both_exterior
+        && let (Some(first_field), Some(second_field)) =
+            (report.at_radius.field(), report.at_double.field())
         && second_field > 0.0
     {
         ui.label(format!(
             "|B(r)| / |B(2r)| = {:.4} (doubling the radius halves |B|)",
             first_field / second_field
         ));
+    } else if report.at_radius.field().is_some() && report.at_double.field().is_some() {
+        ui.label(WIRE_RATIO_EXTERIOR_ONLY_NOTE);
     }
     if let (Some((first_circulation, first_error)), Some((second_circulation, second_error))) = (
         report.at_radius.circulation_estimate(),
