@@ -1,7 +1,7 @@
 ---
 description: Implements a simple or standard task in OpenAI mode
 mode: subagent
-model: openai/gpt-6.2-astra#low
+model: openai/gpt-6.2-sol#low
 permissions:
   - action: subagent
     resource: "*"
