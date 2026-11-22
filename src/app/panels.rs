@@ -1292,35 +1292,33 @@ impl VfApp {
         }
     }
 
-    /// Restore a captured entry: the scene through [`Self::commit_scene_document`],
-    /// then the captured shell and probe radius. The notebook itself is read
-    /// only; loading never mutates or removes an entry.
+    /// Restore the captured scene and both radii together. A rejected geometry
+    /// leaves the live experiment and saved-scene binding untouched.
     fn load_notebook_entry(&mut self, id: &str) -> bool {
         let Some(entry) = self.maxwell.notebook.get(id).cloned() else {
             self.maxwell.notebook_ui.error = Some(format!("Notebook entry {id:?} is missing."));
             self.maxwell.notebook_ui.message = None;
             return false;
         };
-        if let Err(error) = self.commit_scene_document(&entry.scene) {
-            self.maxwell.notebook_ui.error = Some(format!(
-                "Notebook entry {id:?} could not be restored: {error}"
-            ));
-            self.maxwell.notebook_ui.message = None;
-            return false;
-        }
-        // The restored document is a notebook capture, not the previously
-        // bound saved scene; keep later live edits from overwriting that scene.
-        self.presets.clear_active_scene();
+        let (mut next_state, next_controls) = match self.prepare_scene_document(&entry.scene) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                self.maxwell.notebook_ui.error = Some(format!(
+                    "Notebook entry {id:?} could not be restored: {error}"
+                ));
+                self.maxwell.notebook_ui.message = None;
+                return false;
+            }
+        };
         let NotebookGeometry::Shell {
             shell_radius,
             probe_radius,
         } = entry.snapshot.geometry;
-        if self.state.maxwell.radius.to_bits() != shell_radius.to_bits() {
-            let mut scene = self.state.maxwell.clone();
+        if next_state.maxwell.radius.to_bits() != shell_radius.to_bits() {
+            let mut scene = next_state.maxwell.clone();
             scene.radius = shell_radius;
-            if !self.state.set_maxwell_scene(scene) {
-                let error = self
-                    .state
+            if !next_state.set_maxwell_scene(scene) {
+                let error = next_state
                     .maxwell_error
                     .clone()
                     .unwrap_or_else(|| "The captured shell radius was rejected.".to_owned());
@@ -1329,16 +1327,21 @@ impl VfApp {
                 return false;
             }
         }
-        self.maxwell.sync_from(&self.state);
-        self.state.refresh_maxwell_sampling();
-        self.maxwell.gauss.activate(&self.state.maxwell);
-        if !self.maxwell.gauss.set_probe_radius(probe_radius) {
+        let mut next_gauss = crate::ui::gauss_shell::GaussShellState::default();
+        next_gauss.activate(&next_state.maxwell);
+        if !next_gauss.set_probe_radius(probe_radius) {
             self.maxwell.notebook_ui.error = Some(format!(
                 "Notebook entry {id:?}: the captured probe radius is outside the supported range."
             ));
             self.maxwell.notebook_ui.message = None;
             return false;
         }
+        next_state.refresh_maxwell_sampling();
+        self.install_scene_document(next_state, next_controls, &entry.scene.camera);
+        self.maxwell.sync_from(&self.state);
+        self.maxwell.gauss = next_gauss;
+        // Later live edits must not overwrite the previously bound saved scene.
+        self.presets.clear_active_scene();
         self.maxwell.notebook_ui.message = Some(format!(
             "Restored {id} with shell R = {shell_radius:.3} and probe r = {probe_radius:.3}."
         ));
@@ -2344,6 +2347,15 @@ impl VfApp {
     /// parameters first, then the view record, overlays and camera. The caller
     /// owns any active-scene binding and user-facing message.
     fn commit_scene_document(&mut self, document: &SceneDocument) -> Result<(), String> {
+        let (next_state, next_controls) = self.prepare_scene_document(document)?;
+        self.install_scene_document(next_state, next_controls, &document.camera);
+        Ok(())
+    }
+
+    fn prepare_scene_document(
+        &self,
+        document: &SceneDocument,
+    ) -> Result<(State, Controls), String> {
         document.validate()?;
         // Install the saved parameters first in a candidate state. The view
         // restore validates parameter-dependent entries (custom densities) and
@@ -2358,16 +2370,24 @@ impl VfApp {
         next_state
             .set_overlays(document.overlays.clone())
             .map_err(|error| format!("overlays: {error}"))?;
+        Ok((next_state, next_controls))
+    }
+
+    fn install_scene_document(
+        &mut self,
+        next_state: State,
+        next_controls: Controls,
+        camera: &SceneCamera,
+    ) {
         self.state = next_state;
         self.controls = next_controls;
-        self.apply_scene_camera(&document.camera);
+        self.apply_scene_camera(camera);
         // The load replaced the durable model; rebind any same-mode panel draft
         // before the next interaction can submit the stale one.
         self.sync_panel_drafts_from_state();
         // The loaded pose is explicit. Drop any scalar-plot return pose so the
         // pending plot transition cannot replace the saved camera.
         self.saved_vector_orbit = None;
-        Ok(())
     }
 
     /// Apply a saved pose to the live cameras, clamping to the orbit camera's

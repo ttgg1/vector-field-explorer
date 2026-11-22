@@ -386,6 +386,60 @@ fn maxwell_app() -> VfApp {
     app
 }
 
+fn assert_invalid_import_leaves_experiment_unchanged(radius: &str, value: f64, error: &str) {
+    let mut app = maxwell_app();
+    assert!(app.test_capture_notebook_entry());
+    let mut json = serde_json::to_value(&app.maxwell.notebook).expect("capture serializes");
+    json["entries"][0]["snapshot"]["geometry"][radius] = serde_json::json!(value);
+    let imported = Notebook::from_json(&json.to_string()).expect("JSON imports");
+    let id = imported
+        .entries
+        .first()
+        .expect("entry survives import")
+        .id
+        .clone();
+    app.maxwell.notebook.replace(imported);
+
+    let live_scene = hollow(1.6);
+    assert!(app.state.set_maxwell_scene(live_scene.clone()));
+    assert!(app.maxwell.gauss.set_probe_radius(6.0));
+    app.state.time = 9.0;
+    app.orbit.yaw = 1.25;
+    let orbit = app.orbit;
+    app.presets.bind_active_scene(scene_doc("Previously saved"));
+
+    assert!(!app.test_load_notebook_entry(&id));
+    assert!(
+        app.maxwell
+            .notebook_ui
+            .error
+            .as_deref()
+            .is_some_and(|text| text.contains(error)),
+        "expected {error:?} in {:?}",
+        app.maxwell.notebook_ui.error
+    );
+    assert_eq!(
+        (
+            &app.state.maxwell,
+            app.state.time,
+            app.maxwell.gauss.probe_radius,
+            &app.orbit,
+            app.presets.active_scene(),
+        ),
+        (&live_scene, 9.0, 6.0, &orbit, Some("Previously saved"))
+    );
+}
+
+#[test]
+fn invalid_imported_shell_radius_leaves_experiment_unchanged() {
+    assert_invalid_import_leaves_experiment_unchanged("shell_radius", 1000.0, "outer radius");
+}
+
+#[test]
+fn invalid_imported_probe_radius_leaves_experiment_unchanged() {
+    assert_invalid_import_leaves_experiment_unchanged("probe_radius", 101.0, "probe radius");
+}
+
 #[test]
 fn loading_entries_restores_each_scene_and_radius_and_keeps_the_notebook() {
     let mut app = maxwell_app();
@@ -425,7 +479,9 @@ fn loading_entries_restores_each_scene_and_radius_and_keeps_the_notebook() {
         second_before
     );
 
+    app.presets.bind_active_scene(scene_doc("Previously saved"));
     assert!(app.test_load_notebook_entry(&first_id));
+    assert_eq!(app.presets.active_scene(), None);
     assert_eq!(app.state.maxwell.radius, 1.0);
     assert_eq!(app.maxwell.gauss.probe_radius, 1.5);
     assert!((app.orbit.yaw - 0.25).abs() < 1e-6);
