@@ -2,3 +2,6 @@
 # source notice has two trailing spaces, so suppress the trailing-space warning
 # for this file only; ordinary Markdown stays under the normal diff check.
 THIRD_PARTY_LICENSES.md whitespace=-trailing-space
+# STIXTwoMath-LICENSE.txt is copied verbatim from the distribution and has one
+# trailing space; keep the bytes exact without tripping `git diff --check`.
+assets/fonts/STIXTwoMath-LICENSE.txt whitespace=-trailing-space

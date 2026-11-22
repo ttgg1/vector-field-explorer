@@ -417,22 +417,9 @@ impl VfApp {
     /// (style + layout + view state) is restored from it — absent, corrupt or
     /// older records fall back to sensible defaults — and written back on save.
     ///
-    /// Native callers that own the egui context should use
-    /// [`Self::new_with_storage_and_context`] so the KaTeX faces are registered
-    /// before the first frame.
+    /// Callers that own the egui context register every face through
+    /// [`crate::fonts::install_startup_fonts`] before constructing the app.
     pub fn new_with_storage(storage: Option<&dyn eframe::Storage>) -> Self {
-        Self::build_with_storage(storage)
-    }
-
-    /// Native construction path: register the typeset faces on the real egui
-    /// context before any widget lays text out, then build the app normally.
-    /// Registration is idempotent, so this cannot duplicate font data.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn new_with_storage_and_context(
-        storage: Option<&dyn eframe::Storage>,
-        ctx: &eframe::egui::Context,
-    ) -> Self {
-        crate::ui::math_view::install_math_fonts(ctx);
         Self::build_with_storage(storage)
     }
 
