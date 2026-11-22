@@ -1,9 +1,10 @@
-//! The shared Solid/Wireframe selector for Materials and Maxwell.
+//! The shared Solid/Wireframe selector for Sources, Induction, Materials and
+//! Maxwell.
 //!
-//! Both panels read and write the one persisted [`crate::viewmodel::State::object_style`];
-//! this module owns only the widget text and layout. Sources keeps its own copy
-//! of the same control for now (issue #275 owns that region), so there is still
-//! exactly one durable value.
+//! Every panel reads and writes the one persisted
+//! [`crate::viewmodel::State::object_style`]; this module owns the widget text
+//! and layout so the panels cannot drift. The same durable value also covers
+//! Induction, which uses the Sources glyph path.
 
 use eframe::egui;
 
@@ -11,8 +12,13 @@ use crate::object_scene::ObjectStyle;
 use crate::viewmodel::State;
 
 /// Stable explanation shown under the selector in every panel that embeds it.
+///
+/// For the bounded Materials and Maxwell cases, Wireframe draws the mapped body
+/// edges in addition to the existing case outline; that outline is never
+/// removed.
 pub const OBJECT_STYLE_HELP: &str = "Solid fills the mapped bodies; Wireframe draws their \
-     edges. The same choice applies to Sources, Induction, Materials and Maxwell.";
+     edges. The same choice applies to Sources, Induction, Materials and Maxwell. \
+     SVG exports keep the line blueprint.";
 
 /// Draw the Solid/Wireframe selector against the committed shared state.
 ///

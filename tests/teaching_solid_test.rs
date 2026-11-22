@@ -9,6 +9,7 @@ use glam::Vec3;
 
 use crate::support;
 
+use vector_field_explorer::VfApp;
 use vector_field_explorer::app::object_scene_for_state;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::material::{MaterialCase, MaterialScene};
@@ -18,6 +19,7 @@ use vector_field_explorer::plane::{PlaneAxis, PlaneFrame};
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::material_panel::{self, MaterialPanelState};
 use vector_field_explorer::ui::maxwell_panel::{self, MaxwellPanelState};
+use vector_field_explorer::ui::object_style_control::OBJECT_STYLE_HELP;
 use vector_field_explorer::ui::sources_panel::{self, SourcesPanelState};
 use vector_field_explorer::viewmodel::State;
 
@@ -225,6 +227,70 @@ fn conductor_circle_is_mapped_only_on_its_2d_slice() {
     );
 }
 
+fn assert_translation(object: &MeshObject, expected: Vec3) {
+    let actual = translation(object);
+    assert!(
+        (actual - expected).length() < 1e-5,
+        "body translation {actual:?} does not match the outline centre {expected:?}"
+    );
+}
+
+#[test]
+fn maxwell_bodies_follow_the_domain_centre_where_the_existing_outlines_do() {
+    // Non-centred on every axis so a body placed at the world origin cannot
+    // accidentally agree with an outline that uses `domain.center()`.
+    let domain = Domain::new(Vec3::new(-3.0, 2.0, -1.0), Vec3::new(5.0, 8.0, 3.0));
+    let center = domain.center();
+
+    let plates = MeshScene::from_maxwell(&MaxwellScene::default(), &domain, None);
+    assert_eq!(plates.objects().len(), 2);
+    for (object, z) in plates.objects().iter().zip([-0.5, 0.5]) {
+        assert_translation(object, Vec3::new(center.x, center.y, z));
+    }
+
+    let coaxial = MaxwellScene {
+        case: MaxwellCase::CoaxialElectric,
+        ..MaxwellScene::default()
+    };
+    let coaxial = MeshScene::from_maxwell(&coaxial, &domain, None);
+    assert_translation(&coaxial.objects()[0], Vec3::new(0.0, 0.0, center.z));
+
+    let wire = MaxwellScene {
+        case: MaxwellCase::InfiniteWire,
+        ..MaxwellScene::default()
+    };
+    let wire = MeshScene::from_maxwell(&wire, &domain, None);
+    assert_translation(&wire.objects()[0], Vec3::new(0.0, 0.0, center.z));
+
+    let solenoid = MaxwellScene {
+        case: MaxwellCase::Solenoid,
+        ..MaxwellScene::default()
+    };
+    let solenoid = MeshScene::from_maxwell(&solenoid, &domain, None);
+    assert_translation(&solenoid.objects()[0], Vec3::new(0.0, 0.0, center.z));
+
+    let image_plane = MaxwellScene {
+        case: MaxwellCase::ImagePlane,
+        charge_height: 0.75,
+        ..MaxwellScene::default()
+    };
+    let image_plane = MeshScene::from_maxwell(&image_plane, &domain, None);
+    assert_translation(&image_plane.objects()[0], Vec3::new(0.0, 0.0, 0.75));
+    assert_translation(
+        &image_plane.objects()[1],
+        Vec3::new(center.x, center.y, 0.0),
+    );
+
+    // The outline for a conductor sphere is centred on the world origin, so
+    // the body keeps that convention even in a non-centred domain.
+    let image_sphere = MaxwellScene {
+        case: MaxwellCase::ImageSphere,
+        ..MaxwellScene::default()
+    };
+    let image_sphere = MeshScene::from_maxwell(&image_sphere, &domain, None);
+    assert_translation(&image_sphere.objects()[0], Vec3::ZERO);
+}
+
 #[test]
 fn object_scene_for_state_maps_materials_and_maxwell_and_keeps_formula_ode_empty() {
     let mut state = State::new(true);
@@ -307,13 +373,23 @@ fn context() -> egui::Context {
 fn run_frame(
     ctx: &egui::Context,
     events: Vec<egui::Event>,
+    draw: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    run_frame_sized(ctx, 1200.0, 1600.0, events, draw)
+}
+
+fn run_frame_sized(
+    ctx: &egui::Context,
+    width: f32,
+    height: f32,
+    events: Vec<egui::Event>,
     mut draw: impl FnMut(&mut egui::Ui),
 ) -> egui::FullOutput {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1200.0, 1600.0),
+                egui::vec2(width, height),
             )),
             events,
             ..Default::default()
@@ -356,6 +432,19 @@ fn material_frame(
     })
 }
 
+fn compact_material_frame(
+    ctx: &egui::Context,
+    state: &mut State,
+    panel: &mut MaterialPanelState,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    run_frame_sized(ctx, 390.0, 1600.0, events, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            let _ = material_panel::show(ui, panel, state, true);
+        });
+    })
+}
+
 fn maxwell_frame(
     ctx: &egui::Context,
     state: &mut State,
@@ -365,6 +454,19 @@ fn maxwell_frame(
     run_frame(ctx, events, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             let _ = maxwell_panel::show(ui, panel, state, false);
+        });
+    })
+}
+
+fn compact_maxwell_frame(
+    ctx: &egui::Context,
+    state: &mut State,
+    panel: &mut MaxwellPanelState,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    run_frame_sized(ctx, 390.0, 1600.0, events, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            let _ = maxwell_panel::show(ui, panel, state, true);
         });
     })
 }
@@ -437,6 +539,110 @@ fn materials_and_maxwell_share_the_persisted_object_style() {
         "Solid",
     );
     assert_eq!(state.object_style(), ObjectStyle::Solid);
+}
+
+#[test]
+fn compact_material_and_maxwell_panels_render_the_shared_selector() {
+    let ctx = context();
+    let mut state = State::new(true);
+    assert!(state.set_field_mode(FieldMode::Materials));
+    let mut material = MaterialPanelState::default();
+    material.sync_from(&state);
+
+    let out = compact_material_frame(&ctx, &mut state, &mut material, Vec::new());
+    assert!(find(&nodes(&out), "Object style").is_some());
+    assert!(find(&nodes(&out), "Wireframe").is_some());
+    assert!(
+        painted_texts(&out)
+            .iter()
+            .any(|text| text == OBJECT_STYLE_HELP),
+        "the compact Materials panel must show the shared help"
+    );
+
+    click(
+        &ctx,
+        |ctx, events| compact_material_frame(ctx, &mut state, &mut material, events),
+        "Wireframe",
+    );
+    assert_eq!(state.object_style(), ObjectStyle::Wireframe);
+
+    assert!(state.set_field_mode(FieldMode::Maxwell));
+    let mut maxwell = MaxwellPanelState::default();
+    maxwell.sync_from(&state);
+    let out = compact_maxwell_frame(&ctx, &mut state, &mut maxwell, Vec::new());
+    assert!(find(&nodes(&out), "Object style").is_some());
+    assert!(find(&nodes(&out), "Solid").is_some());
+    assert!(
+        painted_texts(&out)
+            .iter()
+            .any(|text| text == OBJECT_STYLE_HELP),
+        "the compact Maxwell panel must show the shared help"
+    );
+
+    click(
+        &ctx,
+        |ctx, events| compact_maxwell_frame(ctx, &mut state, &mut maxwell, events),
+        "Solid",
+    );
+    assert_eq!(state.object_style(), ObjectStyle::Solid);
+}
+
+#[test]
+fn wireframe_keeps_the_existing_case_outlines_beside_the_body_edges() {
+    let mut app = VfApp::new();
+
+    assert!(app.state.set_field_mode(FieldMode::Materials));
+    assert!(app.state.set_mode(true));
+    assert_eq!(app.state.object_style(), ObjectStyle::Solid);
+    app.test_harness().advance_simulation();
+    let solid_lines = app
+        .test_harness()
+        .test_assemble_viewport_scene()
+        .lines
+        .len();
+    let solid_objects = object_scene_for_state(&app.state).objects().len();
+    assert!(solid_lines > 0, "Materials keeps its outline in Solid");
+    assert!(solid_objects > 0, "Materials maps a body in Solid");
+
+    assert!(app.state.set_object_style(ObjectStyle::Wireframe));
+    app.test_harness().advance_simulation();
+    let wire_lines = app
+        .test_harness()
+        .test_assemble_viewport_scene()
+        .lines
+        .len();
+    let wire_objects = object_scene_for_state(&app.state).objects().len();
+    assert_eq!(
+        wire_lines, solid_lines,
+        "Wireframe adds edges without removing the Materials outline"
+    );
+    assert_eq!(wire_objects, solid_objects);
+
+    assert!(app.state.set_field_mode(FieldMode::Maxwell));
+    assert!(app.state.set_object_style(ObjectStyle::Solid));
+    app.test_harness().advance_simulation();
+    let solid_lines = app
+        .test_harness()
+        .test_assemble_viewport_scene()
+        .lines
+        .len();
+    let solid_objects = object_scene_for_state(&app.state).objects().len();
+    assert!(solid_lines > 0, "Maxwell keeps its outline in Solid");
+    assert!(solid_objects > 0, "Maxwell maps a body in Solid");
+
+    assert!(app.state.set_object_style(ObjectStyle::Wireframe));
+    app.test_harness().advance_simulation();
+    let wire_lines = app
+        .test_harness()
+        .test_assemble_viewport_scene()
+        .lines
+        .len();
+    let wire_objects = object_scene_for_state(&app.state).objects().len();
+    assert_eq!(
+        wire_lines, solid_lines,
+        "Wireframe adds edges without removing the Maxwell outline"
+    );
+    assert_eq!(wire_objects, solid_objects);
 }
 
 #[test]

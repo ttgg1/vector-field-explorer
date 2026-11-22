@@ -5252,14 +5252,23 @@ half-space). `from_maxwell` maps parallel plates to two thin `Disc`s at
 is a thin shell kept as outline), `InfiniteWire` to a `Z`-axis `Cylinder`,
 `Solenoid` to the helical `Tube`, `ImageSphere` to a filled conductor `Sphere`,
 and `ImagePlane` to the real charge `Sphere` plus a thin grounded `Disc`.
-`HollowSphere` is outline-only because no filled primitive is a thin spherical
-shell; a `Conductor2D` circle maps to a short `Cylinder` on its 2D slice, while
-the square stays outline-only because no box primitive exists. Both constructors
-reuse `object_transform`, `SliceClip`, the instance/triangle caps and the same
-FNV-1a generation, so 2D and 3D share one generation and the cache still compares
-generation plus clip. Colour follows the case family, opacity is `1.0`, and the
-shared persisted `State::object_style` selects the renderer's filled or
-barycentric-edge path without changing the mesh.
+Bodies use the same domain-relative placement as the existing outlines:
+parallel plates share `domain.center()` in x/y, the coaxial/wire/solenoid z-axis
+uses `domain.center().z`, the `ImagePlane` grounded disc uses the domain centre
+in x/y, and the `ImageSphere` body stays at the world origin because its
+outline does. `HollowSphere` is outline-only because no filled primitive is a
+thin spherical shell; a `Conductor2D` circle maps to a short `Cylinder` on its
+2D slice, while the square stays outline-only because no box primitive exists.
+Both constructors reuse `object_transform`, `SliceClip`, the instance/triangle
+caps and the same FNV-1a generation. The fingerprint covers the mapped bodies,
+not the clip. Sphere bodies depend only on their radius, so the same sphere has
+one generation in 2D and 3D; boundary discs and the domain-sized Maxwell bodies
+are derived from the domain, so changing the domain rebuilds them and changes
+the generation. The cache always compares generation plus clip. Colour follows
+the case family, opacity is `1.0`, and the shared persisted
+`State::object_style` selects the renderer's filled or barycentric-edge path
+without changing the mesh. Wireframe draws the mapped body edges **in addition
+to** the case's existing outline; it never removes the outline path.
 
 Torus geometry: the primitive has major `0.75` and minor `0.25`, and
 `object_mapping` sets `scale = (radius / 0.75, 0.02 * extent / 0.25, radius /
@@ -5324,7 +5333,8 @@ at 64 instances; the current largest is 1,152, so 64 × 1,152 = 73,728 <
 no clip and another plane all fail to match despite equal generations), and
 `empty_scene_has_no_objects_or_triangles_and_a_distinct_generation`.
 The Materials/Maxwell constructors and their outline-only reasons are pinned by
-`tests/teaching_solid_test.rs`.
+`tests/teaching_solid_test.rs`; so are the non-centred-domain body placement
+and the Wireframe outline-parity check.
 
 **Limitations.** Fixed tessellation, no LOD, no picking metadata and no
 per-triangle colour. Solenoid turns are capped at 12 for honesty; the source's
@@ -5932,10 +5942,13 @@ so it is not compiled. Do not add UI code to it expecting it to run.
 
 **Purpose / API.** One `show(ui, &mut State) -> bool` widget used by the
 Materials and Maxwell panels (issue #274). It reads and writes the single
-persisted `State::object_style`; `OBJECT_STYLE_HELP` is the shared explanation.
-The Sources panel keeps its own copy of the same control until #275's legend
-work settles, so there is still exactly one durable value and no panel-local
-style field.
+persisted `State::object_style`; `OBJECT_STYLE_HELP` is the one explanation
+shared by all four object-backed modes (Sources, Induction, Materials and
+Maxwell), including the Sources SVG-export boundary. Sources keeps its existing
+control layout but imports that constant and writes the same state; there is no
+panel-local style field. For the bounded Materials and Maxwell cases, Wireframe
+draws the mapped body edges in addition to the existing case outline, which
+stays in the line scene.
 
 #### `src/ui/viewport_tool.rs` — the viewport-edge click tool strip
 
@@ -6287,7 +6300,7 @@ plot-section reset.
 
 **Purpose.** The dedicated Sources rail/sheet: display selector (Electric /
 Magnetic / Both with live E / B family-colour swatches), global object-style pair
-(Solid / Wireframe) with its SVG-boundary help line, Add combo and button,
+(Solid / Wireframe) with the shared multi-mode help line, Add combo and button,
 per-entry enable, kind, center/axis and kind parameters, Remove, Reset this
 source, a collapsible Advanced area with softening, the model note, the exact
 accuracy opt-in and the sampling status, plus the formula-field help line.
@@ -6306,8 +6319,10 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
 - Softening uses the scene range `1e-6..=1.0`; the opt-in and display go through
   the committed scene setters. Any valid source edit clears `source_notice`.
 - The object-style pair lives in the existing display section, not a new panel.
-  It writes `State::set_object_style`; `OBJECT_STYLE_HELP` names both modes and
-  states that SVG exports keep the line blueprint.
+  It writes `State::set_object_style`; the imported
+  [`object_style_control::OBJECT_STYLE_HELP`](../src/ui/object_style_control.rs)
+  is the single shared explanation, names both modes and all four object-backed
+  modes, and states that SVG exports keep the line blueprint.
 - `status_text` reports hidden versus shown accuracy and unavailable counts per
   family without inventing counters; a scene validation error is shown readably.
 - The Sources help line explains that streamlines/particles remain formula
@@ -6395,8 +6410,10 @@ plus the shared case/view names, viewport summary and help rows.
 - Materials is arrows-only, with the exact note
   `Arrows only: streamlines, particles and click seeding stay off in Materials.`
 - The shared `Object style` selector ([`object_style_control`](../src/ui/object_style_control.rs))
-  reads/writes `State::object_style`, so Materials, Maxwell and Sources always
-  show the one committed Solid/Wireframe choice (issue #274).
+  reads/writes `State::object_style`; Materials, Maxwell and Sources embed the
+  selector and Induction's glyphs use the same committed choice (issue #274).
+  Wireframe draws the mapped body edges in addition to the case outline; the
+  outline is never removed.
 
 **Pinned by.** `tests/material_panel_test.rs` (wide/compact controls, commit
 and rejection, view/Reset, exact units, disabled Features/CAS, help rows,
@@ -6464,7 +6481,9 @@ Measurement, InvestigateGaussShell, FreeExploreGaussShell}`,
   With Solid selected, `maxwell_style_note` explains every case left
   outline-only: the hollow sphere's thin shell, the coaxial outer shell, the
   image constructions, the square conductor's missing box primitive, and a
-  Conductor2D circle before switching to 2D.
+  Conductor2D circle before switching to 2D. Wireframe draws the mapped body
+  edges in addition to the existing case outline; the outline stays in the line
+  scene.
 - The case controls also embed the session-only
   [`gauss_shell`](../src/ui/gauss_shell.rs) investigation. `Investigate` and
   `Free explore` return their own one-shot actions; the app loads

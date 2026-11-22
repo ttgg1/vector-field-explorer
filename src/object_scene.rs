@@ -652,8 +652,9 @@ impl MeshScene {
     /// radius. A planar-boundary case is a thin [`MeshPrimitive::Disc`] on the
     /// interface plane: it marks the interface, never a filled half-space.
     /// Family colour and unit opacity match the source mapping; `plane` adds the
-    /// same [`SliceClip`] the source mapping uses, so 2D and 3D share one
-    /// generation.
+    /// same [`SliceClip`] the source mapping uses. A sphere body depends only on
+    /// its radius, so 2D and 3D share one generation for the same scene; a
+    /// boundary disc is domain-derived, so a changed domain rebuilds it.
     #[must_use]
     pub fn from_material(
         scene: &MaterialScene,
@@ -710,12 +711,15 @@ impl MeshScene {
     /// Plates are thin discs at their separation, coaxial cases fill the inner
     /// conductor, the wire and solenoid use a cylinder/tube along `Z`, the image
     /// sphere is a conductor and the image plane is the real charge plus a thin
-    /// grounded disc. Thin shells and the square conductor have no faithful
-    /// filled primitive, so they stay outline-only; see [`maxwell_style_note`].
+    /// grounded disc. Bodies with a domain-centred outline use
+    /// [`Domain::center`] on the same axes as that outline. Thin shells and the
+    /// square conductor have no faithful filled primitive, so they stay
+    /// outline-only; see [`maxwell_style_note`].
     #[must_use]
     pub fn from_maxwell(scene: &MaxwellScene, domain: &Domain, plane: Option<&PlaneFrame>) -> Self {
         let extent = scene_extent(domain);
         let size = domain.domain_size();
+        let center = domain.center();
         let thin = 0.02 * extent;
         let color = maxwell_color(scene.case);
         let bodies = match scene.case {
@@ -726,7 +730,7 @@ impl MeshScene {
                 for sign in [-1.0_f32, 1.0] {
                     bodies.push(body(
                         MeshPrimitive::Disc,
-                        Vec3::new(0.0, 0.0, sign * 0.5 * separation),
+                        Vec3::new(center.x, center.y, sign * 0.5 * separation),
                         Vec3::Z,
                         Vec3::new(radius, thin, radius),
                         color,
@@ -736,18 +740,28 @@ impl MeshScene {
             }
             MaxwellCase::CoaxialElectric | MaxwellCase::CoaxialMagnetic => {
                 let radius = positive_dimension(scene.radius, 0.05 * extent);
-                vec![cylinder_along_z(radius, axial_length(size, extent), color)]
+                vec![cylinder_along_z(
+                    Vec3::new(0.0, 0.0, center.z),
+                    radius,
+                    axial_length(size, extent),
+                    color,
+                )]
             }
             MaxwellCase::HollowSphere => Vec::new(),
             MaxwellCase::InfiniteWire => {
                 let radius = positive_dimension(scene.radius, 0.05 * extent);
-                vec![cylinder_along_z(radius, axial_length(size, extent), color)]
+                vec![cylinder_along_z(
+                    Vec3::new(0.0, 0.0, center.z),
+                    radius,
+                    axial_length(size, extent),
+                    color,
+                )]
             }
             MaxwellCase::Solenoid => {
                 let radius = positive_dimension(scene.radius, 0.05 * extent);
                 vec![body(
                     MeshPrimitive::Tube,
-                    Vec3::ZERO,
+                    Vec3::new(0.0, 0.0, center.z),
                     Vec3::Z,
                     Vec3::new(radius, axial_length(size, extent), radius),
                     color,
@@ -776,7 +790,7 @@ impl MeshScene {
                     ),
                     body(
                         MeshPrimitive::Disc,
-                        Vec3::ZERO,
+                        Vec3::new(center.x, center.y, 0.0),
                         Vec3::Z,
                         Vec3::new(plane_radius, thin, plane_radius),
                         color,
@@ -1009,11 +1023,11 @@ fn body(
     }
 }
 
-/// A `Y`-axial cylinder scaled to a radius and a `Z` length.
-fn cylinder_along_z(radius: f32, length: f32, color: [f32; 3]) -> MeshObject {
+/// A `Y`-axial cylinder scaled to a radius and a `Z` length, centred at `center`.
+fn cylinder_along_z(center: Vec3, radius: f32, length: f32, color: [f32; 3]) -> MeshObject {
     body(
         MeshPrimitive::Cylinder,
-        Vec3::ZERO,
+        center,
         Vec3::Z,
         Vec3::new(radius / 0.5, length, radius / 0.5),
         color,
