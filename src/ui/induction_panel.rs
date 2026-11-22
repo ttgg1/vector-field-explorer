@@ -8,9 +8,18 @@
 
 use eframe::egui;
 
-use crate::induction::{InductionCase, InductionFamilyStatus, InductionSampling, InductionScene};
+use crate::field_probe::CirculationLoop;
+use crate::induction::{
+    InductionCase, InductionFamilyStatus, InductionFluxComparison, InductionSampling,
+    InductionScene, induction_flux_comparison, loop_orientation_label,
+};
 use crate::source_scene::{MAX_SOFTENING, MIN_SOFTENING, SourceDisplay};
 use crate::viewmodel::State;
+
+/// The comparison refresh quantum, matching the probe-report convention.
+const FARADAY_REFRESH_SECONDS: f32 = 0.1;
+/// Phase rows in the one-period table (nine values including both ends).
+const FARADAY_SERIES_ROWS: usize = 9;
 
 /// A one-shot request from the panel to the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +39,40 @@ pub struct InductionPanelState {
     pub scene: InductionScene,
     pub error: Option<String>,
     pub advanced: bool,
+    /// Session-only Faraday comparison disclosure. Not part of the document.
+    pub faraday_open: bool,
+    /// Index into the committed probe loops; the comparison never edits them.
+    pub faraday_loop: usize,
+    /// Session-only sign flip of the selected loop's axis and contour.
+    pub faraday_reverse: bool,
+    faraday: FaradayCache,
+}
+
+/// Session-only cache so an open comparison does not re-integrate every frame.
+#[derive(Debug, Clone, Default)]
+struct FaradayCache {
+    series: Option<FaradaySeries>,
+    current: Option<FaradayCurrent>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FaradayKey {
+    loop_: CirculationLoop,
+    scene: InductionScene,
+    softening: f64,
+}
+
+#[derive(Debug, Clone)]
+struct FaradaySeries {
+    key: FaradayKey,
+    comparisons: Vec<InductionFluxComparison>,
+}
+
+#[derive(Debug, Clone)]
+struct FaradayCurrent {
+    key: FaradayKey,
+    quantized: i64,
+    comparison: InductionFluxComparison,
 }
 
 impl InductionPanelState {
@@ -193,6 +236,18 @@ pub fn show(
     }
     panel.advanced = advanced;
 
+    let mut faraday_open = panel.faraday_open;
+    let response = egui::CollapsingHeader::new("Faraday check: ∮E·dl vs −dΦB/dt")
+        .id_salt("induction_faraday_check")
+        .open(Some(faraday_open))
+        .show(ui, |ui| {
+            show_faraday(ui, panel, state);
+        });
+    if response.header_response.clicked() {
+        faraday_open = !faraday_open;
+    }
+    panel.faraday_open = faraday_open;
+
     if edited && action.is_none() {
         panel.commit(state);
     }
@@ -310,4 +365,166 @@ fn family_text(family: &InductionFamilyStatus) -> String {
         parts.push(format!("{} unavailable", family.unavailable));
     }
     format!("[{}]", parts.join(", "))
+}
+
+/// The session-only Faraday comparison section. It reads the committed
+/// induction scene and the selected committed probe loop and never edits
+/// either; the selected loop is copied, and an optional sign flip lives only
+/// in the panel state.
+fn show_faraday(ui: &mut egui::Ui, panel: &mut InductionPanelState, state: &State) {
+    ui.label(
+        "∮E·dl is the direct circulation of the model's E around the loop; −dΦB/dt \
+         samples the model's magnetic field through the enclosed planar surface. \
+         Both are evaluated independently at the same time.",
+    );
+    ui.label("Normalized teaching units; this is not an SI calibration.");
+
+    let loops = state.probe_loops().to_vec();
+    if loops.is_empty() {
+        ui.label(
+            "No circulation loop yet. Add one in Field probes, then return here to \
+             compare it with the flux through its enclosed surface.",
+        );
+        return;
+    }
+    if panel.faraday_loop >= loops.len() {
+        panel.faraday_loop = 0;
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Loop");
+        for (index, loop_) in loops.iter().enumerate() {
+            let kind = match loop_.kind {
+                crate::field_probe::LoopKind::Circle => "circle",
+                crate::field_probe::LoopKind::Rectangle => "rectangle",
+            };
+            if ui
+                .selectable_label(panel.faraday_loop == index, format!("Loop {}", index + 1))
+                .on_hover_text(format!("{kind} loop from the Field probes section"))
+                .clicked()
+            {
+                panel.faraday_loop = index;
+            }
+        }
+    });
+    ui.checkbox(
+        &mut panel.faraday_reverse,
+        "Reverse contour and normal (session only)",
+    );
+
+    let mut loop_ = loops[panel.faraday_loop];
+    if panel.faraday_reverse {
+        loop_.axis = -loop_.axis;
+    }
+    ui.label(loop_orientation_label(&loop_));
+
+    refresh_faraday(panel, state, &loop_);
+
+    if let Some(current) = &panel.faraday.current {
+        let comparison = &current.comparison;
+        ui.label(format!(
+            "At t = {:.3}: I = {:+.4}, dI/dt = {:+.4}",
+            comparison.time, comparison.current, comparison.current_derivative
+        ));
+        ui.monospace(format!(
+            "∮E·dl   = {}",
+            estimate_text(comparison.circulation_estimate())
+        ));
+        ui.monospace(format!(
+            "−dΦB/dt = {}",
+            estimate_text(comparison.flux_derivative_estimate())
+        ));
+        ui.label(format!(
+            "Method: midpoint segments on the loop ({} samples) and midpoint patches on \
+             the enclosed planar surface ({} patches); uncertainty is the \
+             full/half-resolution difference, not a certified bound.",
+            comparison.circulation_samples, comparison.unit_flux_samples
+        ));
+        let status = comparison.status_label();
+        if comparison.is_confident() {
+            ui.label(status);
+        } else {
+            ui.colored_label(ui.visuals().error_fg_color, status);
+        }
+        ui.label(format!("Softening: {:.4}", comparison.softening));
+    }
+
+    if state.induction.is_animated() {
+        if let Some(series) = &panel.faraday.series {
+            ui.label("One period on the shared time axis:");
+            egui::Grid::new("induction_faraday_series")
+                .num_columns(3)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.strong("t");
+                    ui.strong("∮E·dl");
+                    ui.strong("−dΦB/dt");
+                    ui.end_row();
+                    for comparison in &series.comparisons {
+                        ui.monospace(format!("{:.3}", comparison.time));
+                        ui.monospace(estimate_text(comparison.circulation_estimate()));
+                        ui.monospace(estimate_text(comparison.flux_derivative_estimate()));
+                        ui.end_row();
+                    }
+                });
+        }
+    } else {
+        ui.label(
+            "Static current: I is constant, so both readouts are exactly zero within \
+             their reported uncertainty.",
+        );
+    }
+}
+
+fn refresh_faraday(panel: &mut InductionPanelState, state: &State, loop_: &CirculationLoop) {
+    let key = FaradayKey {
+        loop_: *loop_,
+        scene: state.induction.clone(),
+        softening: state.sources.softening,
+    };
+    if panel.faraday.series.as_ref().map(|series| &series.key) != Some(&key) {
+        let comparisons = series_times(&state.induction)
+            .into_iter()
+            .map(|t| induction_flux_comparison(&state.induction, loop_, t, key.softening))
+            .collect();
+        panel.faraday.series = Some(FaradaySeries {
+            key: key.clone(),
+            comparisons,
+        });
+    }
+
+    let quantized = (state.time / FARADAY_REFRESH_SECONDS).round() as i64;
+    let quantized_time = quantized as f32 * FARADAY_REFRESH_SECONDS;
+    let stale = match &panel.faraday.current {
+        Some(current) => current.key != key || current.quantized != quantized,
+        None => true,
+    };
+    if stale {
+        panel.faraday.current = Some(FaradayCurrent {
+            key: key.clone(),
+            quantized,
+            comparison: induction_flux_comparison(&key.scene, loop_, quantized_time, key.softening),
+        });
+    }
+}
+
+/// One period for an animated scene; a static scene has no phase axis.
+fn series_times(scene: &InductionScene) -> Vec<f32> {
+    if scene.is_animated() {
+        let period = 1.0 / scene.frequency;
+        if period.is_finite() && period > 0.0 {
+            let last = (FARADAY_SERIES_ROWS - 1) as f64;
+            return (0..FARADAY_SERIES_ROWS)
+                .map(|index| (period * index as f64 / last) as f32)
+                .collect();
+        }
+    }
+    vec![0.0]
+}
+
+fn estimate_text(estimate: Option<(f64, f64)>) -> String {
+    match estimate {
+        Some((value, error)) => format!("{value:+.4} ± {error:.4}"),
+        None => "unavailable".to_string(),
+    }
 }

@@ -116,6 +116,23 @@ pub struct CirculationReport {
     pub one_sided: bool,
 }
 
+/// Flux report for the planar surface bounded by an oriented loop.
+///
+/// The surface is the disk or rectangle enclosed by the loop, with the loop's
+/// positive normal (`axis`) as its oriented area normal, so the contour and
+/// the surface obey the right-hand rule together.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenSurfaceFluxReport {
+    pub loop_: CirculationLoop,
+    pub family: FieldFamily,
+    pub status: IntegralStatus,
+    /// Patches in the full-resolution pass, bounded by `MAX_PROBE_SAMPLES`.
+    pub samples: u32,
+    /// Patches without a finite sample in the failing pass. Never silently
+    /// converted to a zero contribution.
+    pub failed_patches: u32,
+}
+
 impl GaussianSurface {
     /// Validate the finite, non-degenerate geometry and the bounded sample
     /// budget before any integration work.
@@ -348,6 +365,108 @@ pub fn circulation(
         samples: full.samples,
         failed_segments: half.failed(),
         one_sided: false,
+    }
+}
+
+/// Integrate `field · n` over the planar surface bounded by one oriented loop.
+///
+/// `field_probe` owns closed Gaussian surfaces only; a loop-bounded surface is
+/// open and planar, so it cannot be expressed as a [`GaussianSurface`]. This
+/// helper keeps the same midpoint, full/half-resolution and bounded-sample
+/// conventions as [`flux`] and [`circulation`], with the loop's normalized
+/// `axis` as the positive area normal (right-hand rule with the contour).
+pub fn open_surface_flux(
+    field: &dyn ProbeField,
+    loop_: &CirculationLoop,
+    family: FieldFamily,
+    time: f64,
+) -> OpenSurfaceFluxReport {
+    if let Err(error) = loop_.validate() {
+        return OpenSurfaceFluxReport {
+            loop_: *loop_,
+            family,
+            status: IntegralStatus::Unresolved {
+                reason: format!("invalid geometry: {error}"),
+            },
+            samples: 0,
+            failed_patches: 0,
+        };
+    }
+    if loop_.segments * loop_.segments > MAX_PROBE_SAMPLES {
+        return OpenSurfaceFluxReport {
+            loop_: *loop_,
+            family,
+            status: IntegralStatus::Unresolved {
+                reason: format!(
+                    "open surface needs {} patches, exceeding MAX_PROBE_SAMPLES \
+                     ({MAX_PROBE_SAMPLES})",
+                    loop_.segments * loop_.segments
+                ),
+            },
+            samples: 0,
+            failed_patches: 0,
+        };
+    }
+
+    let full = match integrate_open_surface(field, loop_, loop_.segments, time, "full") {
+        Ok(pass) => pass,
+        Err(error) => {
+            return OpenSurfaceFluxReport {
+                loop_: *loop_,
+                family,
+                status: IntegralStatus::Unresolved { reason: error },
+                samples: 0,
+                failed_patches: 0,
+            };
+        }
+    };
+    if full.failed() > 0 {
+        let status = failure_status(&full, &PassTotals::default()).unwrap_or_else(|| {
+            IntegralStatus::Unresolved {
+                reason: "the full-resolution pass failed".to_string(),
+            }
+        });
+        return OpenSurfaceFluxReport {
+            loop_: *loop_,
+            family,
+            status,
+            samples: full.samples,
+            failed_patches: full.failed(),
+        };
+    }
+
+    let half_resolution = half_segments(loop_.segments);
+    let half = match integrate_open_surface(field, loop_, half_resolution, time, "half-resolution")
+    {
+        Ok(pass) => pass,
+        Err(error) => {
+            return OpenSurfaceFluxReport {
+                loop_: *loop_,
+                family,
+                status: IntegralStatus::Unresolved { reason: error },
+                samples: full.samples,
+                failed_patches: 0,
+            };
+        }
+    };
+
+    let status = failure_status(&full, &half).unwrap_or_else(|| {
+        let value = full.sum;
+        let error = (full.sum - half.sum).abs();
+        if value.is_finite() && error.is_finite() {
+            IntegralStatus::Estimate { value, error }
+        } else {
+            IntegralStatus::Unresolved {
+                reason: "the integral was not finite".to_string(),
+            }
+        }
+    });
+    OpenSurfaceFluxReport {
+        loop_: *loop_,
+        family,
+        status,
+        samples: full.samples,
+        failed_patches: half.failed(),
     }
 }
 
@@ -595,6 +714,90 @@ fn integrate_cylinder(
                 );
                 accumulate(field, point, normal, area, time, pass_label, pass);
             }
+        }
+    }
+}
+
+fn integrate_open_surface(
+    field: &dyn ProbeField,
+    loop_: &CirculationLoop,
+    segments: u32,
+    time: f64,
+    pass_label: &str,
+) -> Result<PassTotals, String> {
+    let w = unit_axis(loop_.axis).ok_or_else(|| "axis became degenerate".to_string())?;
+    let (u, v, _) = local_basis(w);
+    let mut pass = PassTotals::default();
+    match loop_.kind {
+        LoopKind::Circle => {
+            integrate_open_disk(field, loop_, segments, time, pass_label, u, v, w, &mut pass);
+        }
+        LoopKind::Rectangle => {
+            integrate_open_rectangle(field, loop_, segments, time, pass_label, u, v, w, &mut pass);
+        }
+    }
+    Ok(pass)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn integrate_open_disk(
+    field: &dyn ProbeField,
+    loop_: &CirculationLoop,
+    segments: u32,
+    time: f64,
+    pass_label: &str,
+    u: Vec3,
+    v: Vec3,
+    w: Vec3,
+    pass: &mut PassTotals,
+) {
+    let count = segments as usize;
+    let radius = (loop_.size.x as f64) * 0.5;
+    let dphi = std::f64::consts::TAU / segments as f64;
+    for ring in 0..count {
+        let inner = radius * ring as f64 / segments as f64;
+        let outer = radius * (ring + 1) as f64 / segments as f64;
+        let mid = (inner + outer) * 0.5;
+        // Each ring is split into `segments` equal angular patches.
+        let area = std::f64::consts::PI * (outer * outer - inner * inner) / segments as f64;
+        for sector in 0..count {
+            let phi = (sector as f64 + 0.5) * dphi;
+            let point = world(
+                loop_.center,
+                u,
+                v,
+                w,
+                [mid * phi.cos(), mid * phi.sin(), 0.0],
+            );
+            accumulate(field, point, w, area, time, pass_label, pass);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn integrate_open_rectangle(
+    field: &dyn ProbeField,
+    loop_: &CirculationLoop,
+    segments: u32,
+    time: f64,
+    pass_label: &str,
+    u: Vec3,
+    v: Vec3,
+    w: Vec3,
+    pass: &mut PassTotals,
+) {
+    let count = segments as usize;
+    let half_x = (loop_.size.x as f64) * 0.5;
+    let half_y = (loop_.size.y as f64) * 0.5;
+    let step_x = 2.0 * half_x / segments as f64;
+    let step_y = 2.0 * half_y / segments as f64;
+    let area = step_x * step_y;
+    for i in 0..count {
+        let x = -half_x + (i as f64 + 0.5) * step_x;
+        for j in 0..count {
+            let y = -half_y + (j as f64 + 0.5) * step_y;
+            let point = world(loop_.center, u, v, w, [x, y, 0.0]);
+            accumulate(field, point, w, area, time, pass_label, pass);
         }
     }
 }
