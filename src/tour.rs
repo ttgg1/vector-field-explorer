@@ -120,6 +120,8 @@ pub enum ControlId {
     ScalarContours,
     /// The scalar `Place probe` checkbox.
     FieldProbePlace,
+    /// The Field probes `Add sphere` button: a real integral surface probe.
+    FieldProbeSurface,
     /// The appearance profile selector.
     ProfileSelector,
     /// The saved-scene `Save` button.
@@ -148,6 +150,7 @@ impl ControlId {
         ControlId::ScalarHeatmap,
         ControlId::ScalarContours,
         ControlId::FieldProbePlace,
+        ControlId::FieldProbeSurface,
         ControlId::ProfileSelector,
         ControlId::SaveScene,
     ];
@@ -174,6 +177,7 @@ impl ControlId {
             ControlId::ScalarHeatmap => "scalar_heatmap",
             ControlId::ScalarContours => "scalar_contours",
             ControlId::FieldProbePlace => "field_probe_place",
+            ControlId::FieldProbeSurface => "field_probe_surface",
             ControlId::ProfileSelector => "profile_selector",
             ControlId::SaveScene => "save_scene",
         }
@@ -200,11 +204,20 @@ impl ControlId {
             | ControlId::Particles
             | ControlId::ScalarHeatmap
             | ControlId::ScalarContours
-            | ControlId::FieldProbePlace => PanelId::Controls,
+            | ControlId::FieldProbePlace
+            | ControlId::FieldProbeSurface => PanelId::Controls,
             ControlId::SourceAdd => PanelId::Sources,
             ControlId::MaxwellCase | ControlId::MaxwellResidualCheck => PanelId::Maxwell,
             ControlId::ProfileSelector => PanelId::Appearance,
         }
+    }
+
+    /// Whether the tour must anchor to the control's own painted rectangle
+    /// rather than falling back to its containing panel. The integral-probe
+    /// control needs this: an absent Field probes body must not highlight the
+    /// whole Controls panel as if it were the surface probe.
+    pub const fn requires_live_rect(self) -> bool {
+        matches!(self, ControlId::FieldProbeSurface)
     }
 }
 
@@ -405,8 +418,10 @@ pub const TOUR: &[TourStop] = &[
         title: "Field probes",
         body: "The Field probes section adds bounded Gaussian surfaces and \
                circulation loops. It reports flux and circulation estimates with \
-               an explicit resolved, unresolved or singular status.",
-        target: TourTarget::Control(ControlId::FieldProbePlace),
+               an explicit resolved, unresolved or singular status. This step \
+               switches to the Sources adapter if the current adapter cannot \
+               supply a probe field.",
+        target: TourTarget::Control(ControlId::FieldProbeSurface),
         advance: AdvanceRule::Next,
     },
     TourStop {

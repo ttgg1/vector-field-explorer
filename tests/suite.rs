@@ -102,6 +102,7 @@ mod maxwell_bench_test;
 mod maxwell_export_test;
 mod maxwell_learning_panel_test;
 mod maxwell_learning_test;
+mod maxwell_measurement_test;
 mod maxwell_panel_test;
 mod maxwell_persistence_test;
 mod maxwell_residual_test;
