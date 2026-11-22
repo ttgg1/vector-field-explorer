@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::scene_document::SceneDocument;
+use crate::scene_document::{MAX_SCENE_NAME_BYTES, SceneDocument};
 
 /// The only scene-store envelope version this module writes or accepts.
 pub const SCENE_STORE_VERSION: u32 = 1;
@@ -125,6 +125,55 @@ impl SceneStore {
         self.scenes.len() != before
     }
 
+    /// A unique copy name derived from `base`: `Base copy`, `Base copy 2`, …
+    ///
+    /// The result always satisfies [`SceneDocument::validate`]'s name rule even
+    /// when `base` is already at [`MAX_SCENE_NAME_BYTES`]: the stem is truncated
+    /// on a character boundary to leave room for the suffix. An empty or blank
+    /// base becomes `Experiment`.
+    pub fn unique_copy_name(&self, base: &str) -> String {
+        let trimmed = base.trim();
+        let base = if trimmed.is_empty() {
+            "Experiment"
+        } else {
+            trimmed
+        };
+        for index in 1..=MAX_SCENES + 1 {
+            let suffix = if index == 1 {
+                " copy".to_string()
+            } else {
+                format!(" copy {index}")
+            };
+            let candidate = format!("{}{suffix}", truncate_name(base, &suffix));
+            if self.get(&candidate).is_none() {
+                return candidate;
+            }
+        }
+        // Every candidate from the loop is already reserved; this fallback is
+        // unreachable while the store holds at most MAX_SCENES entries.
+        format!("{}{}", truncate_name(base, " copy"), " copy")
+    }
+
+    /// Store an independent copy of the scene named `source`.
+    ///
+    /// Returns the unique copy name. A missing source or a full store is an
+    /// error naming the reason and leaves the store unchanged.
+    pub fn duplicate(&mut self, source: &str) -> Result<String, String> {
+        let Some(document) = self.get(source).cloned() else {
+            return Err(format!("no scene named {source:?} is saved"));
+        };
+        if self.scenes.len() >= MAX_SCENES {
+            return Err(format!(
+                "scene store is full: at most {MAX_SCENES} scenes are allowed"
+            ));
+        }
+        let name = self.unique_copy_name(source);
+        let mut copy = document;
+        copy.name = name.clone();
+        self.upsert(copy)?;
+        Ok(name)
+    }
+
     /// Serialize the compact envelope `{"version":1,"scenes":[...]}`.
     ///
     /// Never returns an empty string: a document serde cannot represent (for
@@ -159,6 +208,19 @@ fn validate_scene(scene: &SceneDocument) -> Result<(), String> {
     scene
         .validate()
         .map_err(|error| format!("invalid scene {:?}: {error}", scene.name))
+}
+
+/// Truncate `base` so `suffix` fits within the scene-name byte limit.
+fn truncate_name<'a>(base: &'a str, suffix: &str) -> &'a str {
+    let max = MAX_SCENE_NAME_BYTES.saturating_sub(suffix.len());
+    if base.len() <= max {
+        return base;
+    }
+    let mut end = max;
+    while end > 0 && !base.is_char_boundary(end) {
+        end -= 1;
+    }
+    &base[..end]
 }
 
 /// Validate and serialize a store through [`SceneStore::to_json`].
