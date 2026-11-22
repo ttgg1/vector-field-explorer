@@ -41,6 +41,90 @@ fn context() -> &'static katex_native::katex::KatexContext {
     math_view::shared_context()
 }
 
+/// Paint `tex` through the production helper and return the allocated rectangle,
+/// every painted shape's visual bounds, and whether a text glyph was emitted.
+fn painted_formula(tex: &str) -> (bool, egui::Rect, Vec<egui::Rect>, bool) {
+    let ctx = crate::support::context();
+    let mut warmup = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        },
+        |_| {},
+    );
+    warmup.textures_delta.clear();
+    let mut painted = None;
+    let mut allocated = None;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            painted = Some(math_view::paint_tex_or_linear(ui, Some(tex), "linear"));
+            allocated = Some(ui.min_rect());
+        },
+    );
+    output.textures_delta.clear();
+    let shape_bounds = output
+        .shapes
+        .iter()
+        .map(|clipped| clipped.shape.visual_bounding_rect())
+        .collect();
+    let has_text = output
+        .shapes
+        .iter()
+        .any(|clipped| matches!(clipped.shape, egui::Shape::Text(_)));
+    (painted.unwrap(), allocated.unwrap(), shape_bounds, has_text)
+}
+
+fn assert_painted_formula_fits(tex: &str) {
+    let (painted, allocated, shape_bounds, has_text) = painted_formula(tex);
+    assert!(painted, "{tex} should typeset instead of falling back");
+    assert!(
+        allocated.width().is_finite() && allocated.height().is_finite(),
+        "allocated rect must be finite: {allocated:?}"
+    );
+    assert!(
+        allocated.width() > 1.0 && allocated.height() > 1.0,
+        "allocated rect must not be a thin strip: {allocated:?}"
+    );
+    assert!(!shape_bounds.is_empty(), "{tex} painted no shapes");
+    let union = shape_bounds
+        .iter()
+        .copied()
+        .fold(egui::Rect::NOTHING, egui::Rect::union);
+    assert!(
+        union.width() > 1.0 && union.height() > 1.0,
+        "painted shapes must have real extent, got {union:?}"
+    );
+    for bounds in &shape_bounds {
+        assert!(
+            allocated.contains_rect(*bounds),
+            "shape {bounds:?} falls outside the allocated {allocated:?}"
+        );
+    }
+    assert!(has_text, "{tex} painted no glyph shape");
+}
+
+/// `3*x^3` differentiated is `9*x^2`; the reported blank strip came from this
+/// scalar result being painted outside the metadata-sized allocated rect.
+#[test]
+fn differentiated_scalar_result_paints_inside_allocated_rect() {
+    assert_painted_formula_fits(r"9x^{2}");
+}
+
+#[test]
+fn fraction_paints_inside_allocated_rect() {
+    assert_painted_formula_fits(r"\frac{x^{2}+1}{x-3}");
+}
+
 #[test]
 fn layout_math_paints_a_supported_formula() {
     let layout = with_ui(|ui| math_view::layout_math(ui, r"\frac{x^{2}+1}{x-3}", context()))
@@ -48,6 +132,15 @@ fn layout_math_paints_a_supported_formula() {
     assert!(layout.width > 0.0);
     assert!(layout.height > 0.0);
     assert!(!layout.is_empty());
+    let bounds = layout.paint_bounds();
+    assert!(
+        bounds.is_finite() && bounds.width() > 1.0 && bounds.height() > 1.0,
+        "converted shapes must have real visual bounds: {bounds:?}"
+    );
+    assert!(
+        layout.content_size().x >= bounds.width() && layout.content_size().y >= bounds.height(),
+        "allocated content must contain the painted bounds"
+    );
 }
 
 #[test]
