@@ -47,6 +47,7 @@ pub mod parameters;
 pub mod particles;
 pub mod perf_present;
 pub mod persistence;
+pub mod pin_layout;
 pub mod plane;
 pub mod plot;
 pub mod plot_camera;

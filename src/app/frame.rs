@@ -96,6 +96,7 @@ impl eframe::App for VfApp {
             preset_ui: PresetUiRecord {
                 expanded: self.presets.expanded_state(),
             },
+            pin_ui: self.pins.record.clone(),
         };
         persistence::save(storage, &settings);
     }
