@@ -2867,8 +2867,9 @@ language or physics model.
 **Public API.** `PromptModel`, `SourceSpec`, `SourceRole`, `Magnitude`,
 `Separation`, `DipoleGeometry`, `DipoleEnd`, `Axis`, `Quantity`, `Convention`,
 `Question`, `Preview`, `PromptModelError`, `parse_prompt`, `preview`, `apply`,
-`MAX_PROMPT_BYTES = 512`, `DEFAULT_SEPARATION`, `DEFAULT_MAGNITUDE`,
-`DEFAULT_SOFTENING`, `FRAME_NOTE`, `UNITS_NOTE`, `FORMULA_PATH`.
+`DEFAULT_SEPARATION`, `DEFAULT_MAGNITUDE`, `DEFAULT_SOFTENING`, `FRAME_NOTE`,
+`UNITS_NOTE`, `FORMULA_PATH`. Prompt input is bounded by the shared
+`cas_intent::MAX_INPUT_BYTES` (512 bytes), not a separate prompt constant.
 
 **Invariants.** The accepted vocabulary is a positive/negative point charge at
 the origin and two equal/opposite point charges (a dipole) along x, y or z.
