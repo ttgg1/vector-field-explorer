@@ -41,7 +41,7 @@ owner-waived check, not a code defect.
 
 | Group | Rows | Closed | Superseded | Deferred | Confirmed | Evidence limit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Whole-codebase review (C-1, I4–I13, M1–M34) | 41 | 1 | 1 | 9 | 30 | 0 |
+| Whole-codebase review (C-1, I4, I5, I10–I13, M1–M34) | 41 | 1 | 1 | 9 | 30 | 0 |
 | Scoped origins 01–71 follow-up | 39 | 6 | 2 | 21 | 3 | 7 |
 | **Total** | **80** | **7** | **3** | **30** | **33** | **7** |
 
