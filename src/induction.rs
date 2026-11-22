@@ -5,17 +5,21 @@
 //! axisymmetric vector potential, `E = -dA/dt`. The two families stay separate
 //! at every seam.
 
+use std::cell::{Cell, RefCell};
 use std::f64::consts::PI;
 
 use glam::{DVec3, UVec3, Vec3};
 
 use crate::domain::Domain;
+use crate::field_probe::{
+    CirculationLoop, IntegralStatus, LoopKind, ProbeField, circulation, open_surface_flux,
+};
 use crate::plane::{PlaneAxis, PlaneFrame};
 use crate::sampling::{ArrowData, ViewOptions};
 use crate::source_scene::SourceDisplay;
 use crate::sources::{
-    AccuracyRequest, Diagnostics, Estimate, EvalOptions, Evaluator, FamilyResult, KERNEL_ID,
-    Source, SourceKind, SourceSet, StopReason, WorkLimits,
+    AccuracyRequest, Diagnostics, Estimate, EvalOptions, Evaluator, FamilyResult, FieldFamily,
+    KERNEL_ID, Source, SourceKind, SourceSet, StopReason, WorkLimits,
 };
 
 /// Shared-clock integration cap for the 3D induction grid.
@@ -265,6 +269,33 @@ impl InductionScene {
         } else {
             self.axis.cross(radial / r)
         }
+    }
+
+    /// The induced electric field at one world point and time, using the same
+    /// vector-potential path and [`AccuracyRequest::default`] classification as
+    /// [`evaluate_induction_point`]. This is the per-sample source of truth for
+    /// the loop circulation.
+    pub fn electric_field(&self, point: DVec3, t: f32, softening: f64) -> InductionFamilyResult {
+        if self.validate().is_err() || !point.is_finite() {
+            return InductionFamilyResult::Unavailable(StopReason::InvalidQuery);
+        }
+        if validate_softening(softening).is_err() {
+            return InductionFamilyResult::Unavailable(StopReason::NumericRange);
+        }
+        let derivative = self.current_derivative(t);
+        if !derivative.is_finite() {
+            return InductionFamilyResult::Unavailable(StopReason::NumericRange);
+        }
+        let (potential, uncertainty) = match self.azimuthal_potential(point, softening) {
+            Ok(pair) => pair,
+            Err(_) => return InductionFamilyResult::Unavailable(StopReason::NumericRange),
+        };
+        let unit_e = -potential * self.azimuthal_basis(point);
+        let value = unit_e * derivative;
+        let e_uncertainty = derivative.abs() * uncertainty;
+        let accuracy = AccuracyRequest::default();
+        let target = accuracy.epsilon * accuracy.e_scale + accuracy.epsilon * value.length();
+        classify_induction(value, e_uncertainty, target)
     }
 }
 
@@ -841,19 +872,324 @@ pub fn evaluate_induction_point(
         FamilyResult::Unavailable(reason) => FamilyResult::Unavailable(reason),
     };
 
-    let (potential, uncertainty) = match scene.azimuthal_potential(point, softening) {
-        Ok(pair) => pair,
-        Err(_) => {
-            return InductionPointSample {
-                electric: InductionFamilyResult::Unavailable(StopReason::NumericRange),
-                magnetic,
-            };
-        }
-    };
-    let unit_e = -potential * scene.azimuthal_basis(point);
-    let value = unit_e * derivative;
-    let e_uncertainty = derivative.abs() * uncertainty;
-    let target = accuracy.epsilon * accuracy.e_scale + accuracy.epsilon * value.length();
-    let electric = classify_induction(value, e_uncertainty, target);
+    let electric = scene.electric_field(point, t, softening);
     InductionPointSample { electric, magnetic }
+}
+
+/// One independent Faraday comparison at a single time.
+///
+/// `circulation` is the direct line integral of the induction model's `E`
+/// around the loop. `unit_flux` is the independent magnetic flux of the
+/// model's unit-current field through the planar surface bounded by the loop;
+/// the physical flux and its rate are the unit flux scaled by the analytic
+/// `current(t)` and `current_derivative(t)`. Neither side is derived from the
+/// other.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InductionFluxComparison {
+    pub loop_: CirculationLoop,
+    /// The loop's unit positive normal (right-hand rule with the contour).
+    pub normal: DVec3,
+    pub time: f32,
+    pub current: f64,
+    pub current_derivative: f64,
+    pub softening: f64,
+    /// Direct `∮E·dl` on the loop.
+    pub circulation: IntegralStatus,
+    /// Midpoint segments in the full-resolution circulation pass.
+    pub circulation_samples: u32,
+    /// Magnetic flux of the model's unit-current field through the loop surface.
+    pub unit_flux: IntegralStatus,
+    /// Midpoint patches in the full-resolution flux pass.
+    pub unit_flux_samples: u32,
+    /// Samples whose estimate did not meet the model's accuracy target. They are
+    /// withheld rather than reported as confident values.
+    pub inaccurate_samples: u32,
+    /// Samples the model could not supply at all.
+    pub unavailable_samples: u32,
+    /// Scene/loop/softening rejection that makes both readouts unavailable.
+    pub unavailable: Option<String>,
+}
+
+impl InductionFluxComparison {
+    /// The signed circulation and its full/half-resolution difference.
+    pub fn circulation_estimate(&self) -> Option<(f64, f64)> {
+        estimate(&self.circulation)
+    }
+
+    /// The signed magnetic flux `ΦB = I(t)·Φ_unit`, with its spread.
+    pub fn flux_estimate(&self) -> Option<(f64, f64)> {
+        scaled(&self.unit_flux, self.current)
+    }
+
+    /// The signed `−dΦB/dt = −(dI/dt)·Φ_unit`, with its spread.
+    pub fn flux_derivative_estimate(&self) -> Option<(f64, f64)> {
+        scaled(&self.unit_flux, -self.current_derivative)
+    }
+
+    /// Both sides have a value and every sample met the model's target.
+    pub fn is_confident(&self) -> bool {
+        self.unavailable.is_none()
+            && self.inaccurate_samples == 0
+            && self.unavailable_samples == 0
+            && self.circulation_estimate().is_some()
+            && self.flux_derivative_estimate().is_some()
+    }
+
+    /// Why a value is withheld, or a concise resolved/failed summary.
+    pub fn status_label(&self) -> String {
+        if let Some(reason) = &self.unavailable {
+            return format!("Unavailable: {reason}");
+        }
+        if self.inaccurate_samples > 0 {
+            return format!(
+                "Inaccurate: {} sample(s) did not meet the accuracy target; no confident value is shown",
+                self.inaccurate_samples
+            );
+        }
+        if self.unavailable_samples > 0 {
+            return format!(
+                "Unavailable: {} sample(s) could not be evaluated; no confident value is shown",
+                self.unavailable_samples
+            );
+        }
+        for status in [&self.circulation, &self.unit_flux] {
+            match status {
+                IntegralStatus::Estimate { .. } => {}
+                IntegralStatus::Unresolved { reason } => {
+                    return format!("Unavailable: {reason}");
+                }
+                IntegralStatus::Singular { reason } => {
+                    return format!("Singular: {reason}");
+                }
+            }
+        }
+        "Resolved".to_string()
+    }
+}
+
+fn estimate(status: &IntegralStatus) -> Option<(f64, f64)> {
+    match status {
+        IntegralStatus::Estimate { value, error } => Some((*value, *error)),
+        IntegralStatus::Unresolved { .. } | IntegralStatus::Singular { .. } => None,
+    }
+}
+
+fn scaled(status: &IntegralStatus, factor: f64) -> Option<(f64, f64)> {
+    let (value, error) = estimate(status)?;
+    if !factor.is_finite() {
+        return None;
+    }
+    if factor == 0.0 {
+        Some((0.0, 0.0))
+    } else {
+        Some((value * factor, error * factor.abs()))
+    }
+}
+
+/// A one-line orientation label for the comparison table.
+pub fn loop_orientation_label(loop_: &CirculationLoop) -> String {
+    let axis = loop_.axis.as_dvec3();
+    let length = axis.length();
+    let normal = if length.is_finite() && length > 0.0 {
+        axis / length
+    } else {
+        DVec3::ZERO
+    };
+    let contour = match loop_.kind {
+        LoopKind::Circle => "counter-clockwise seen from the normal's tip",
+        LoopKind::Rectangle => "traversal +u -> +v -> -u -> -v in the loop's local frame",
+    };
+    let value = |component: f64| if component == 0.0 { 0.0 } else { component };
+    format!(
+        "Normal (right-hand rule): ({:.3}, {:.3}, {:.3}); contour {contour}.",
+        value(normal.x),
+        value(normal.y),
+        value(normal.z)
+    )
+}
+
+/// The unit-current magnetic field of an induction scene.
+///
+/// This is the existing softened source evaluator at unit current, exactly the
+/// magnetic half of [`evaluate_induction_point`] without a per-point rebuild.
+/// A `None` sample is an unavailable or accuracy-not-met point; callers inspect
+/// the counters to report an explicit unavailable/inaccurate state.
+pub(crate) struct InductionUnitMagneticField {
+    evaluator: RefCell<Evaluator>,
+    inaccurate: Cell<u32>,
+    unavailable: Cell<u32>,
+}
+
+impl InductionUnitMagneticField {
+    pub(crate) fn new(scene: &InductionScene, softening: f64) -> Result<Self, String> {
+        scene.validate()?;
+        validate_softening(softening)?;
+        let source = scene.unit_source();
+        let set = SourceSet::new(&[source], &WorkLimits::default(), &|| false)
+            .map_err(|error| format!("induction unit field is invalid: {error}"))?;
+        let options = EvalOptions {
+            softening,
+            ..EvalOptions::default()
+        };
+        let evaluator = Evaluator::new(&set, options, &|| false)
+            .map_err(|error| format!("induction unit field is unavailable: {error}"))?;
+        Ok(Self {
+            evaluator: RefCell::new(evaluator),
+            inaccurate: Cell::new(0),
+            unavailable: Cell::new(0),
+        })
+    }
+
+    pub(crate) fn inaccurate_samples(&self) -> u32 {
+        self.inaccurate.get()
+    }
+
+    pub(crate) fn unavailable_samples(&self) -> u32 {
+        self.unavailable.get()
+    }
+}
+
+impl ProbeField for InductionUnitMagneticField {
+    fn eval(&self, point: Vec3, _time: f64) -> Option<Vec3> {
+        let sample = self
+            .evaluator
+            .borrow_mut()
+            .evaluate(point.as_dvec3(), &|| false)
+            .magnetic;
+        match sample {
+            FamilyResult::TargetMet(estimate) => {
+                let value = estimate.value.as_vec3();
+                value.is_finite().then_some(value)
+            }
+            FamilyResult::AccuracyNotMet(_, _) => {
+                self.inaccurate.set(self.inaccurate.get() + 1);
+                None
+            }
+            FamilyResult::Unavailable(_) => {
+                self.unavailable.set(self.unavailable.get() + 1);
+                None
+            }
+        }
+    }
+}
+
+struct InductionElectricField<'a> {
+    scene: &'a InductionScene,
+    t: f32,
+    softening: f64,
+    inaccurate: Cell<u32>,
+    unavailable: Cell<u32>,
+}
+
+impl ProbeField for InductionElectricField<'_> {
+    fn eval(&self, point: Vec3, _time: f64) -> Option<Vec3> {
+        match self
+            .scene
+            .electric_field(point.as_dvec3(), self.t, self.softening)
+        {
+            InductionFamilyResult::TargetMet(estimate) => {
+                let value = estimate.value.as_vec3();
+                value.is_finite().then_some(value)
+            }
+            InductionFamilyResult::AccuracyNotMet(_, _) => {
+                self.inaccurate.set(self.inaccurate.get() + 1);
+                None
+            }
+            InductionFamilyResult::Unavailable(_) => {
+                self.unavailable.set(self.unavailable.get() + 1);
+                None
+            }
+        }
+    }
+}
+
+/// Compare `∮E·dl` with `−dΦB/dt` at one time for one oriented loop.
+///
+/// Both sides are evaluated independently from the induction model at the same
+/// `t`: the circulation samples `E` directly, while the flux samples the model's
+/// unit-current `B` over the planar surface bounded by the loop and scales by
+/// the analytic `I(t)`/`dI/dt`. The same full/half-resolution convention and
+/// bounding as the probe integrals is used. Values are normalized teaching
+/// units, not SI.
+pub fn induction_flux_comparison(
+    scene: &InductionScene,
+    loop_: &CirculationLoop,
+    t: f32,
+    softening: f64,
+) -> InductionFluxComparison {
+    let axis = loop_.axis.as_dvec3();
+    let length = axis.length();
+    let normal = if length.is_finite() && length > 0.0 {
+        axis / length
+    } else {
+        DVec3::ZERO
+    };
+    let unavailable = |reason: String| InductionFluxComparison {
+        loop_: *loop_,
+        normal,
+        time: t,
+        current: 0.0,
+        current_derivative: 0.0,
+        softening,
+        circulation: IntegralStatus::Unresolved {
+            reason: reason.clone(),
+        },
+        circulation_samples: 0,
+        unit_flux: IntegralStatus::Unresolved {
+            reason: reason.clone(),
+        },
+        unit_flux_samples: 0,
+        inaccurate_samples: 0,
+        unavailable_samples: 0,
+        unavailable: Some(reason),
+    };
+
+    if let Err(error) = scene.validate() {
+        return unavailable(error);
+    }
+    if let Err(error) = validate_softening(softening) {
+        return unavailable(error);
+    }
+    if !t.is_finite() {
+        return unavailable("comparison time must be finite".to_string());
+    }
+    if let Err(error) = loop_.validate() {
+        return unavailable(format!("loop geometry is invalid: {error}"));
+    }
+    let current = scene.current(t);
+    let derivative = scene.current_derivative(t);
+    if !current.is_finite() || !derivative.is_finite() {
+        return unavailable("induction waveform is not finite at this time".to_string());
+    }
+
+    let electric = InductionElectricField {
+        scene,
+        t,
+        softening,
+        inaccurate: Cell::new(0),
+        unavailable: Cell::new(0),
+    };
+    let circulation_report = circulation(&electric, loop_, FieldFamily::Electric, f64::from(t));
+
+    let magnetic = match InductionUnitMagneticField::new(scene, softening) {
+        Ok(field) => field,
+        Err(error) => return unavailable(error),
+    };
+    let flux_report = open_surface_flux(&magnetic, loop_, FieldFamily::Magnetic, f64::from(t));
+
+    InductionFluxComparison {
+        loop_: *loop_,
+        normal,
+        time: t,
+        current,
+        current_derivative: derivative,
+        softening,
+        circulation: circulation_report.status,
+        circulation_samples: circulation_report.samples,
+        unit_flux: flux_report.status,
+        unit_flux_samples: flux_report.samples,
+        inaccurate_samples: electric.inaccurate.get() + magnetic.inaccurate_samples(),
+        unavailable_samples: electric.unavailable.get() + magnetic.unavailable_samples(),
+        unavailable: None,
+    }
 }
