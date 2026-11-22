@@ -9,8 +9,8 @@ use vector_field_explorer::colormap::Colormap;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::sampling::{ViewOptions, magnitude_range};
 use vector_field_explorer::source_scene::{
-    ELECTRIC_COLOR, FieldMode, MAGNETIC_COLOR, MAX_SOFTENING, MIN_SOFTENING, SourceDisplay,
-    SourceEntry, SourceKindTag, SourceScene, SourceSceneError, sample_source_scene,
+    ELECTRIC_COLOR, FamilyColors, FieldMode, MAGNETIC_COLOR, MAX_SOFTENING, MIN_SOFTENING,
+    SourceDisplay, SourceEntry, SourceKindTag, SourceScene, SourceSceneError, sample_source_scene,
 };
 use vector_field_explorer::sources::{Source, SourceKind};
 
@@ -58,6 +58,7 @@ fn sampled(
         UVec3::new(5, 5, 5),
         None,
         view,
+        FamilyColors::default(),
     )
     .arrows
 }
@@ -246,12 +247,10 @@ fn source_legacy_colours_are_byte_identical_without_a_mapping() {
 #[test]
 fn both_display_keeps_fixed_family_colours_with_a_mapping() {
     let mut scene = point_charge_scene();
-    scene
-        .entries
-        .push(SourceEntry {
-            enabled: true,
-            source: SourceKindTag::StraightWire.default_source(),
-        });
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: SourceKindTag::StraightWire.default_source(),
+    });
     scene.set_display(SourceDisplay::Both);
     let arrows = sampled(
         &scene,
@@ -273,4 +272,42 @@ fn both_display_keeps_fixed_family_colours_with_a_mapping() {
     }
     assert!(saw_electric, "the electric family is drawn");
     assert!(saw_magnetic, "the magnetic family is drawn");
+}
+
+#[test]
+fn both_sampling_accepts_the_effective_family_colours() {
+    let mut scene = SourceScene::default();
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: SourceKindTag::PointCharge.default_source(),
+    });
+    scene.entries.push(SourceEntry {
+        enabled: true,
+        source: SourceKindTag::StraightWire.default_source(),
+    });
+    scene.set_display(SourceDisplay::Both);
+    let colors = FamilyColors {
+        electric: [12, 34, 56],
+        magnetic: [200, 150, 100],
+    };
+    let sampling = sample_source_scene(
+        &scene,
+        &Domain::new(Vec3::splat(-1.0), Vec3::splat(1.0)),
+        UVec3::new(5, 5, 5),
+        None,
+        &view(Colormap::Turbo, None, None),
+        colors,
+    );
+    assert!(!sampling.arrows.is_empty(), "Both drew arrows");
+    let mut saw_electric = false;
+    let mut saw_magnetic = false;
+    for arrow in &sampling.arrows {
+        match arrow.color {
+            color if color == colors.electric => saw_electric = true,
+            color if color == colors.magnetic => saw_magnetic = true,
+            other => panic!("Both must use the resolved family colours, got {other:?}"),
+        }
+    }
+    assert!(saw_electric, "the electric family uses its resolved colour");
+    assert!(saw_magnetic, "the magnetic family uses its resolved colour");
 }

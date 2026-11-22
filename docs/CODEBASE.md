@@ -1560,8 +1560,10 @@ arrows through the real evaluator.
 `enabled_sources`, `validate`, `to_records` and `from_records`. `SourceKindTag`
 also exposes `of(&SourceKind)`. Sampling adds `SourceSampling`,
 `SourceFamilyStatus`, `FamilyDisposition`, `classify_family_result`,
-`sample_source_scene`, and the fixed `ELECTRIC_COLOR = [255, 176, 64]` /
-`MAGNETIC_COLOR = [64, 196, 255]` used by `Both`. Readable-error helpers
+`FamilyColors` (with `resolve(&LayerStyles)`), `sample_source_scene` (which
+accepts the resolved `FamilyColors`), and the default
+`ELECTRIC_COLOR = [255, 176, 64]` / `MAGNETIC_COLOR = [64, 196, 255]` used when
+`Both` has no override. Readable-error helpers
 `validate_source`, `enabled_row`, `error_message` and
 `scene_error_message` keep raw enum debug out of the panel and map an
 enabled-only validation index to the 1-based row the user sees.
@@ -1589,9 +1591,11 @@ reset leaves sources alone.
 `Domain::grid_points`; a 2D view samples the existing `PlaneFrame` local grid,
 evaluates in world and projects onto the plane, returning local `(u, v, 0)`
 positions. `TargetMet` is drawable; `AccuracyNotMet` is drawable only with the
-opt-in; `Unavailable` and non-finite values never are. `Both` tags E amber and B
-cyan without summing or sharing one magnitude scale, ignoring any active colour
-mapping; a single family colours through `ViewOptions::color_mapping` when one is
+opt-in; `Unavailable` and non-finite values never are. `Both` tags E and B with
+`FamilyColors`, resolved once from the committed Appearance family overrides
+(falling back to the shipped `ELECTRIC_COLOR`/`MAGNETIC_COLOR`), without summing
+or sharing one magnitude scale and ignoring any active colour mapping; a
+single-family display colours through `ViewOptions::color_mapping` when one is
 set, otherwise the normal colormap over its drawn magnitudes. An enabled family
 with no sources is `empty: true` with zero arrows and no error, and invalid scenes
 return their typed message with no arrows. Counters track sources, drawn arrows,
@@ -1606,9 +1610,11 @@ target-met, accuracy-not-met total/drawn and unavailable per family.
 `softening_is_bounded_and_never_nan`,
 `disabled_entries_are_not_part_of_the_validated_scene`,
 `source_arrows_follow_the_active_colour_mapping`,
-`source_legacy_colours_are_byte_identical_without_a_mapping` and
-`both_display_keeps_fixed_family_colours_with_a_mapping`; source-mode behaviour is
-in [tests/source_mode_test.rs](../tests/source_mode_test.rs).
+`source_legacy_colours_are_byte_identical_without_a_mapping`,
+`both_display_keeps_fixed_family_colours_with_a_mapping` and
+`both_sampling_accepts_the_effective_family_colours`; source-mode behaviour,
+including Appearance family-colour overrides and reset, is in
+[tests/source_mode_test.rs](../tests/source_mode_test.rs).
 
 **Limitations.** Sampling is CPU and static. Persistence stores the scene; the
 editable panel lives in `src/ui/sources_panel.rs`. Classic field presets return
@@ -2176,10 +2182,10 @@ line-glyph callers while the object-backed path can request only markers.
 
 **Invariants.** Electric kinds appear only for `Electric`/`Both` and magnetic
 kinds only for `Magnetic`/`Both`; disabled entries emit nothing. Family colours
-are fixed E amber and B cyan, independent of the colormap, unless that family's
-resolved colour override is set. A non-neutral layer/family record multiplies
-the base alpha and width and may replace the fixed family RGB; mapped colours
-are never touched. Alpha is the on-slice `0.9` or off-slice `0.45` times the
+fall back to E amber and B cyan, independent of the colormap, and follow that
+family's resolved colour override when one is set. A non-neutral layer/family
+record multiplies the base alpha and width and may replace the fixed family RGB;
+mapped colours are never touched. Alpha is the on-slice `0.9` or off-slice `0.45` times the
 resolved opacity, clamped to `0.0..=1.0`; `reference::sanitized_opacity` repairs
 the opacity *multiplier* before the multiply (non-finite becomes `1.0`), so a
 corrupt value keeps the neutral base alpha instead of brightening to fully
@@ -3814,7 +3820,7 @@ decisions that do not need a window.
   animation keep `prepare_scene`'s committed styles.
 - Source mode fields: `field_mode`, `sources`, `source_sampling` and
   `source_notice`; `active_dimension`, `refresh_source_sampling`,
-  `source_sampling` and `reset_sources`.
+  `source_sampling`, `source_family_colors` and `reset_sources`.
 - Induction mode fields: `induction`, `induction_prepared`,
   `induction_sampling` and `induction_error`; `set_induction_scene`,
   `refresh_induction` and `reset_induction`.
@@ -5850,10 +5856,10 @@ length mode with its meaning. It reuses `State::color_mapping()`/`ColorStats`
 and the existing `freeze_color_range`, `set_color_range` and `set_auto_fit`
 setters; it adds no colour math. Lock, min/max `DragValue` edits and Unlock sync
 the `Controls` mirrors in the same frame, so the sidebar and overlay agree
-without a reload. The `Sources`/`Both` display shows the distinct fixed E/B
-family colours instead of claiming one numeric ramp. The header is a normal
-collapsing widget and compact defaults it shut with a width that leaves most of
-the viewport visible. `tests/viewport_legend_test.rs` covers the snapshot,
+without a reload. The `Sources`/`Both` display shows the live E/B family colours
+from the committed Appearance overrides instead of claiming one numeric ramp.
+The header is a normal collapsing widget and compact defaults it shut with a
+width that leaves most of the viewport visible. `tests/viewport_legend_test.rs` covers the snapshot,
 lock/edit/unlock round trips in both directions, Both, collapse/compact, and the
 #219 locked-range invariance under a changed probe radius.
 
@@ -6169,7 +6175,7 @@ plot-section reset.
 #### `src/ui/sources_panel.rs` — editable source scene
 
 **Purpose.** The dedicated Sources rail/sheet: display selector (Electric /
-Magnetic / Both with the E amber / B cyan legend), global object-style pair
+Magnetic / Both with live E / B family-colour swatches), global object-style pair
 (Solid / Wireframe) with its SVG-boundary help line, Add combo and button,
 per-entry enable, kind, center/axis and kind parameters, Remove, Reset this
 source, a collapsible Advanced area with softening, the model note, the exact
@@ -6178,7 +6184,8 @@ accuracy opt-in and the sampling status, plus the formula-field help line.
 **Public API.** `SourceDraft`, `SourcesPanelState` (`add_kind`, `drafts`) with
 `sync`, `mark_edited`, `set_radius`, `set_strength`, `set_length`, `set_turns`,
 `set_center`, `set_axis`, `commit`, `set_softening`, `set_allow_inaccurate`;
-`show(ui, state, panel, compact)`; `status_text(&SourceSampling)`.
+`show(ui, state, panel, compact)`; `both_legend(FamilyColors)` and
+`paint_both_legend`; `status_text(&SourceSampling)`.
 
 **Invariants.**
 - A draft keeps invalid text across frames; `sync` only rebuilds new/removed

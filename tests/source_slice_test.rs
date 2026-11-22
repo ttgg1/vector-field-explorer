@@ -11,7 +11,7 @@ use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::sampling::ViewOptions;
 use vector_field_explorer::source_glyph::source_glyphs;
 use vector_field_explorer::source_scene::{
-    FieldMode, SourceEntry, SourceKindTag, SourceScene, sample_source_scene,
+    FamilyColors, FieldMode, SourceEntry, SourceKindTag, SourceScene, sample_source_scene,
 };
 use vector_field_explorer::sources::Source;
 
@@ -49,8 +49,22 @@ fn slice_sampling_matches_the_3d_samples_projected_onto_the_plane() {
     let frame = plane(&domain, 2);
     let scene = one_point(0.5);
     let view = ViewOptions::default();
-    let world = sample_source_scene(&scene, &domain, UVec3::new(3, 3, 3), None, &view);
-    let slice = sample_source_scene(&scene, &domain, UVec3::new(3, 3, 3), Some(&frame), &view);
+    let world = sample_source_scene(
+        &scene,
+        &domain,
+        UVec3::new(3, 3, 3),
+        None,
+        &view,
+        FamilyColors::default(),
+    );
+    let slice = sample_source_scene(
+        &scene,
+        &domain,
+        UVec3::new(3, 3, 3),
+        Some(&frame),
+        &view,
+        FamilyColors::default(),
+    );
     assert_eq!(slice.arrows.len(), 9);
     for arrow in &slice.arrows {
         let world_point = frame.to_world(arrow.position);

@@ -8,6 +8,7 @@
 use glam::{DVec3, UVec3, Vec3};
 
 use crate::domain::Domain;
+use crate::layer_style::{LayerStyles, PhysicsFamily};
 use crate::plane::PlaneFrame;
 use crate::sampling::{ArrowData, ViewOptions};
 use crate::sources::{
@@ -580,10 +581,44 @@ fn parameter_name(parameter: SourceParameter) -> &'static str {
     }
 }
 
-/// Fixed electric-family arrow colour in `Both` display: amber.
+/// Shipped electric-family arrow colour when no Appearance override is set.
 pub const ELECTRIC_COLOR: [u8; 3] = [255, 176, 64];
-/// Fixed magnetic-family arrow colour in `Both` display: cyan.
+/// Shipped magnetic-family arrow colour when no Appearance override is set.
 pub const MAGNETIC_COLOR: [u8; 3] = [64, 196, 255];
+
+/// The effective arrow colour of each family in a two-family `Both` display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FamilyColors {
+    /// Effective electric-family arrow colour.
+    pub electric: [u8; 3],
+    /// Effective magnetic-family arrow colour.
+    pub magnetic: [u8; 3],
+}
+
+impl Default for FamilyColors {
+    fn default() -> Self {
+        Self {
+            electric: ELECTRIC_COLOR,
+            magnetic: MAGNETIC_COLOR,
+        }
+    }
+}
+
+impl FamilyColors {
+    /// Resolve the committed Appearance family overrides, falling back to the
+    /// shipped constants family by family when a colour is unset.
+    pub fn resolve(styles: &LayerStyles) -> Self {
+        let fallback = Self::default();
+        Self {
+            electric: styles
+                .family_color(PhysicsFamily::Electric)
+                .map_or(fallback.electric, |color| color.0),
+            magnetic: styles
+                .family_color(PhysicsFamily::Magnetic)
+                .map_or(fallback.magnetic, |color| color.0),
+        }
+    }
+}
 
 /// Per-family counters for one source sampling pass.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -648,6 +683,7 @@ pub fn sample_source_scene(
     grid: UVec3,
     plane: Option<&PlaneFrame>,
     view: &ViewOptions,
+    family_colors: FamilyColors,
 ) -> SourceSampling {
     let electric = family_status(scene, FieldFamily::Electric);
     let magnetic = family_status(scene, FieldFamily::Magnetic);
@@ -729,7 +765,7 @@ pub fn sample_source_scene(
                         position,
                         dir,
                         mag,
-                        color: ELECTRIC_COLOR,
+                        color: family_colors.electric,
                     }),
             );
             arrows.extend(
@@ -739,7 +775,7 @@ pub fn sample_source_scene(
                         position,
                         dir,
                         mag,
-                        color: MAGNETIC_COLOR,
+                        color: family_colors.magnetic,
                     }),
             );
             arrows
