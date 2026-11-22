@@ -805,24 +805,36 @@ fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
     let Some(removed) = state.remove_overlay(id) else {
         return;
     };
+    let was_contours = removed.dependency == OverlayDependency::Linked
+        && removed.layer == OverlayLayer::Contours
+        && state.plot.surface.source == removed.formula;
     let was_drawn = state
         .gradient
         .as_ref()
         .is_some_and(|spec| overlay_is_drawn(&removed, spec));
-    if !was_drawn {
+    if !was_contours && !was_drawn {
         return;
     }
-    let still_drawn = {
-        let Some(spec) = state.gradient.as_ref() else {
-            return;
-        };
-        state
-            .overlays()
-            .iter()
-            .any(|overlay| overlay_is_drawn(overlay, spec))
-    };
-    if !still_drawn && state.set_gradient(None).is_ok() {
-        state.refresh_scalar_analysis(true);
+    if was_drawn {
+        let still_drawn = state.gradient.as_ref().is_some_and(|spec| {
+            state
+                .overlays()
+                .iter()
+                .any(|overlay| overlay_is_drawn(overlay, spec))
+        });
+        if !still_drawn && state.set_gradient(None).is_ok() {
+            state.refresh_scalar_analysis(true);
+        }
+    }
+    if was_contours {
+        let still_owned = state.overlays().iter().any(|overlay| {
+            overlay.dependency == OverlayDependency::Linked
+                && overlay.layer == OverlayLayer::Contours
+                && overlay.formula == removed.formula
+        });
+        if !still_owned && state.scalar_contour_levels() > 0 {
+            let _ = state.set_scalar_contour_levels(0);
+        }
     }
 }
 

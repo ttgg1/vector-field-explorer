@@ -60,11 +60,23 @@ impl LegendSnapshot {
     pub fn new(state: &State, stats: &ColorStats) -> Self {
         let mapping = state.color_mapping();
         let legend = mapping.legend(stats);
-        let both =
-            state.field_mode == FieldMode::Sources && state.sources.display == SourceDisplay::Both;
+        let family_display = match state.field_mode {
+            FieldMode::Sources => Some(state.sources.display),
+            FieldMode::Induction => Some(state.induction.display),
+            _ => None,
+        };
+        let both = family_display == Some(SourceDisplay::Both);
         let directional = state.color_quantity == ColorQuantity::Direction2d;
-        let family_scales =
-            both.then(|| crate::ui::sources_panel::both_legend(state.source_family_colors()));
+        let family_scales = if both {
+            let colors = match state.field_mode {
+                FieldMode::Sources => state.source_family_colors(),
+                // Induction keeps the shipped fixed family colours.
+                _ => crate::source_scene::FamilyColors::default(),
+            };
+            Some(crate::ui::sources_panel::both_legend(colors))
+        } else {
+            None
+        };
         let (quantity, quantity_detail) = quantity_labels(state);
         let range = if directional {
             format!("{:.0}\u{b0} - {:.0}\u{b0}", legend.min, legend.max)
@@ -103,7 +115,14 @@ fn quantity_labels(state: &State) -> (&'static str, String) {
     let quantity = state.color_quantity.label();
     let (short, family) = match state.field_mode {
         FieldMode::Formula | FieldMode::Ode => ("F", "Formula field"),
-        FieldMode::Induction => ("E", "Electric field"),
+        FieldMode::Induction => match state.induction.display {
+            SourceDisplay::Electric => ("E", "Electric field"),
+            SourceDisplay::Magnetic => ("B", "Magnetic field"),
+            SourceDisplay::Both => (
+                "E + B",
+                "Electric and magnetic fields (one live colour per family)",
+            ),
+        },
         FieldMode::Sources => match state.sources.display {
             SourceDisplay::Electric => ("E", "Electric field"),
             SourceDisplay::Magnetic => ("B", "Magnetic field"),
@@ -121,8 +140,11 @@ fn quantity_labels(state: &State) -> (&'static str, String) {
             MaxwellFamily::Magnetic => ("B", "Magnetic field"),
         },
     };
-    let both =
-        state.field_mode == FieldMode::Sources && state.sources.display == SourceDisplay::Both;
+    let both = match state.field_mode {
+        FieldMode::Sources => state.sources.display == SourceDisplay::Both,
+        FieldMode::Induction => state.induction.display == SourceDisplay::Both,
+        _ => false,
+    };
     if both {
         (short, family.to_owned())
     } else {

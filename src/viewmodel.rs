@@ -66,7 +66,8 @@ use crate::scalar_analysis::{
     ComparisonSeries, ComparisonSet, GradientSample, GradientSpec, SeriesRole, sample_gradient,
 };
 use crate::scalar_overlay::{
-    OverlayId, OverlayLayer, OverlayLive, OverlayResolution, OverlayUnavailable, ScalarOverlaySet,
+    OverlayDependency, OverlayId, OverlayLayer, OverlayLive, OverlayResolution, OverlayUnavailable,
+    ScalarOverlaySet,
 };
 use crate::scalar_view::{
     MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MIN_GRID_SIDE, PointProbe, ProbeSet,
@@ -1464,7 +1465,7 @@ impl State {
                     }
                 }
                 FieldMode::Formula => {
-                    if self.field.is_time_dependent() {
+                    if self.field.is_time_dependent() || self.linked_overlay_is_time_dependent() {
                         self.mark_dirty();
                     }
                 }
@@ -1501,7 +1502,9 @@ impl State {
                 // solve keeps the clock alive long enough to produce it.
                 FieldMode::Ode => self.ode_solution.is_some() || self.ode_dirty,
                 FieldMode::Formula => {
-                    self.particle_target().is_some() || self.field.is_time_dependent()
+                    self.particle_target().is_some()
+                        || self.field.is_time_dependent()
+                        || self.linked_overlay_is_time_dependent()
                 }
             }
         } else {
@@ -3215,6 +3218,11 @@ impl State {
         Ok(())
     }
 
+    /// Install a validated startup overlay set without dirtying the scene.
+    pub(crate) fn restore_overlays(self: &mut State, next: ScalarOverlaySet) {
+        self.overlays = next;
+    }
+
     /// Add a linked overlay that will follow the live committed parameters,
     /// frame and time. The record is structural; the panel validates the
     /// current result before calling this.
@@ -3274,6 +3282,69 @@ impl State {
                 time: f64::from(self.time),
             },
         )
+    }
+
+    /// Whether any linked overlay's expression reads simulated time.
+    fn linked_overlay_is_time_dependent(self: &State) -> bool {
+        self.overlays
+            .iter()
+            .filter(|overlay| overlay.dependency == OverlayDependency::Linked)
+            .any(|overlay| {
+                scalar_view_expr(&overlay.formula, &self.parameters)
+                    .is_ok_and(|expr| expr.is_time_dependent())
+            })
+    }
+
+    /// Keep an installed linked potential-layer gradient on the current frame.
+    ///
+    /// The gradient request stores the frame it was sampled on. A later slice
+    /// or domain change must resolve the installed overlay against the live
+    /// frame instead of leaving the old plane painted. Manual gradients with no
+    /// owning linked overlay are left alone.
+    pub fn sync_linked_overlay_layers(self: &mut State) {
+        let frame = self.scalar_view_frame();
+        let Some(spec) = self.gradient.as_ref() else {
+            return;
+        };
+        let owned = self.overlays.iter().any(|overlay| {
+            overlay.dependency == OverlayDependency::Linked
+                && overlay.layer == OverlayLayer::PotentialField
+                && overlay.formula == spec.expr
+        });
+        if !owned || spec.frame == frame {
+            return;
+        }
+        let mut next = spec.clone();
+        next.frame = frame;
+        if next.validate().is_ok() {
+            self.gradient = Some(next);
+            self.mark_dirty();
+        }
+    }
+
+    /// Sample the installed linked overlays independently of panel visibility.
+    ///
+    /// A contour layer needs its scalar-view cache current, and a potential
+    /// layer needs its analysis geometry current. Both calls hit their existing
+    /// identity caches, so an unchanged frame performs no sampling.
+    pub fn refresh_linked_overlay_layers(self: &mut State) {
+        let mut potential = false;
+        let mut contours = false;
+        for overlay in self.overlays.iter() {
+            if overlay.dependency != OverlayDependency::Linked {
+                continue;
+            }
+            match overlay.layer {
+                OverlayLayer::PotentialField => potential = true,
+                OverlayLayer::Contours => contours = true,
+            }
+        }
+        if potential {
+            self.refresh_scalar_analysis(true);
+        }
+        if contours {
+            let _ = self.refresh_scalar_view(true);
+        }
     }
 
     /// Append one point probe through the shared cap and validation seam. The
@@ -3770,9 +3841,13 @@ impl State {
         // Issue #93 slice B: comparison curves and gradient arrows ride the
         // same line collection as contours/probes, so PNG/SVG/animation
         // captures include them without a new capture path. The cache is only
-        // sampled by the visible panel; this composition never evaluates.
-        lines.extend_from_slice(&self.scalar_analysis.curves);
-        lines.extend_from_slice(&self.scalar_analysis.gradient);
+        // sampled by the visible panel or an installed linked overlay; stale
+        // geometry from an earlier frame is not painted.
+        let analysis_key = ScalarAnalysisKey::new(self);
+        if self.scalar_analysis.key.as_ref() == Some(&analysis_key) {
+            lines.extend_from_slice(&self.scalar_analysis.curves);
+            lines.extend_from_slice(&self.scalar_analysis.gradient);
+        }
         lines
     }
 
@@ -3823,7 +3898,7 @@ impl State {
     /// sample count, text colour or the 100 ms-quantised clock (the #92 10 Hz
     /// rule). An unchanged identity is a cache hit and does not dirty.
     pub fn refresh_scalar_analysis(self: &mut State, visible: bool) {
-        if !visible || !self.scalar_view_applicable() {
+        if !visible {
             return;
         }
         let key = ScalarAnalysisKey::new(self);

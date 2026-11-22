@@ -124,6 +124,9 @@ impl EditSnapshot {
         if self.parameters != after.parameters {
             return "change parameters".to_string();
         }
+        if self.view.overlays != after.view.overlays {
+            return "change CAS overlay".to_string();
+        }
         if let Some(label) = surface_change(&self.view.probe_surfaces, &after.view.probe_surfaces) {
             return label.to_string();
         }

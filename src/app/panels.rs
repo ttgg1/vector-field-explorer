@@ -1290,7 +1290,16 @@ impl VfApp {
         self.griffiths.placeholder = None;
         self.clear_griffiths_exploration();
         if self.griffiths_start.is_none() {
+            // A lesson is a temporary scene. Persist the bound experiment and
+            // suspend its binding before any lesson state replaces the live
+            // document, so an autosave cannot write lesson state under the
+            // experiment's name. Exit resumes the explicit binding from the
+            // snapshot; Keep intentionally leaves the adopted scene untitled.
+            if let Err(error) = self.presets.flush_scenes() {
+                self.presets.set_scene_message(Some(error));
+            }
             self.griffiths_start = Some(self.griffiths_start_snapshot());
+            self.presets.clear_active_scene();
         }
         match route {
             GriffithsRoute::Ring => {
@@ -1403,6 +1412,7 @@ impl VfApp {
             self.griffiths.shell_completed = true;
         }
         self.clear_griffiths_exploration();
+        let mut restore_scene = None;
         if let Some(start) = self.griffiths_start.take() {
             self.state = start.state;
             self.orbit = start.orbit;
@@ -1410,12 +1420,28 @@ impl VfApp {
             self.camera.scale = start.camera_scale;
             self.history = start.history;
             self.last_committed = start.last_committed;
+            restore_scene = start.scene;
         }
         self.griffiths.lesson.deactivate();
         self.griffiths.shell.deactivate();
         self.griffiths.plane.deactivate();
         self.griffiths.wire.deactivate();
         self.griffiths.close();
+        // Exit restores the exact pre-lesson document; an explicit binding to
+        // that same saved scene resumes, so ordinary edits keep updating it.
+        if let Some(name) = restore_scene
+            && self.presets.scenes().get(&name).is_some()
+        {
+            self.presets.bind_active_scene(
+                SceneDocument::capture(
+                    name,
+                    ViewRecord::capture(&self.state),
+                    self.state.parameters.clone(),
+                    self.scene_camera(),
+                )
+                .with_overlays(self.state.overlays().clone()),
+            );
+        }
     }
 
     /// Adopt the activity scene: drop the starting snapshot and keep the
@@ -1441,6 +1467,7 @@ impl VfApp {
             camera_scale: self.camera.scale,
             history: self.history.clone(),
             last_committed: self.last_committed.clone(),
+            scene: self.presets.active_scene().map(str::to_owned),
         }
     }
 
@@ -2044,16 +2071,7 @@ impl VfApp {
         // so switching between an experiment and its duplicate preserves each
         // one's independent edits. The store is flushed before any scene action
         // below; an idle frame only compares a snapshot.
-        if let Some(name) = self.presets.active_scene().map(str::to_owned) {
-            let document = SceneDocument::capture(
-                name,
-                ViewRecord::capture(&self.state),
-                self.state.parameters.clone(),
-                self.scene_camera(),
-            )
-            .with_overlays(self.state.overlays().clone());
-            self.presets.sync_active_scene(document);
-        }
+        self.sync_active_scene_from_state();
 
         if let Some(action) = self.presets.take_scene_action() {
             // Persist pending edits before switching away; a failed write must
@@ -2069,6 +2087,26 @@ impl VfApp {
                 SceneAction::Duplicate(name) => self.duplicate_scene(&name),
             }
         }
+    }
+
+    /// Capture the live document into its bound saved scene.
+    ///
+    /// This is called every frame after the chrome and viewport, independent of
+    /// whether the wide Presets panel or the compact sheet drew, and again
+    /// before the eframe save hook flushes. A no-op when nothing is bound or
+    /// the capture already matches the stored baseline.
+    pub(super) fn sync_active_scene_from_state(&mut self) {
+        let Some(name) = self.presets.active_scene().map(str::to_owned) else {
+            return;
+        };
+        let document = SceneDocument::capture(
+            name,
+            ViewRecord::capture(&self.state),
+            self.state.parameters.clone(),
+            self.scene_camera(),
+        )
+        .with_overlays(self.state.overlays().clone());
+        self.presets.sync_active_scene(document);
     }
 
     /// Capture the live view as a [`SceneCamera`]. The 2D record mirrors the
@@ -2121,9 +2159,11 @@ impl VfApp {
         let _ = self.presets.duplicate_scene(name);
     }
 
-    /// Load the named scene: view first, then parameters, then the camera.
-    /// Every step stops on its own error, and no UI preference record is
-    /// touched.
+    /// Load the named scene: parameters, then the view, then the camera.
+    /// The parameters are installed into a candidate state first so the view
+    /// restore validates parameter-dependent records against them; the
+    /// candidate swaps in only if every step succeeds, and any error leaves
+    /// the live experiment unchanged. No UI preference record is touched.
     fn load_scene(&mut self, name: &str) {
         let Some(document) = self.presets.scenes().get(name).cloned() else {
             self.presets
@@ -2135,20 +2175,31 @@ impl VfApp {
                 .set_scene_message(Some(format!("Scene {name:?} is invalid: {error}")));
             return;
         }
-        document.view.restore(&mut self.state, &mut self.controls);
-        if let Err(error) = self.state.commit_parameters(document.parameters.clone()) {
+        // Install the saved parameters first in a candidate state. The view
+        // restore validates parameter-dependent entries (custom densities) and
+        // prepares the Current Field ODE against the committed set; using the
+        // previous experiment's parameters would silently drop them.
+        let mut next_state = self.state.clone();
+        let mut next_controls = self.controls.clone();
+        if let Err(error) = next_state.commit_parameters(document.parameters.clone()) {
             self.presets.set_scene_message(Some(format!(
                 "Scene {name:?} parameters are invalid: {error}"
             )));
             return;
         }
-        if let Err(error) = self.state.set_overlays(document.overlays.clone()) {
+        document.view.restore(&mut next_state, &mut next_controls);
+        if let Err(error) = next_state.set_overlays(document.overlays.clone()) {
             self.presets.set_scene_message(Some(format!(
                 "Scene {name:?} overlays are invalid: {error}"
             )));
             return;
         }
+        self.state = next_state;
+        self.controls = next_controls;
         self.apply_scene_camera(&document.camera);
+        // The loaded pose is explicit. Drop any scalar-plot return pose so the
+        // pending plot transition cannot replace the saved camera.
+        self.saved_vector_orbit = None;
         // Bind the live document to the loaded scene, using the post-clamp live
         // capture as the unchanged baseline so merely visiting a scene writes
         // nothing back.
