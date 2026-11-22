@@ -67,7 +67,9 @@ snapshot, not the compact current `progress.md`. Archives are evidence, not poli
    paths always require review. Record the reason and diff identity. Otherwise,
    a fresh read-only independent reviewer checks the original requirements and
    complete actual diff. High-risk work still requires independent review; effort
-   increases only through the documented task-local escalation process.
+   increases only through the documented task-local escalation process, except the
+   explicit owner-authorized release-review role defined in
+   [Native roles and recovery](#native-roles-and-recovery).
 4. Use [the fix loop](fix-loop.md) for actionable findings. Simple, low-risk fixes
    with passing applicable tests may skip independent re-review with closure
    evidence; complex/high-risk fixes require scoped re-review. Limit a task to
@@ -100,11 +102,15 @@ after checking requirements, context, and approach; record the failure and
 reason. Escalation is local to that task/role. A new independent task resets to
 lowest effort. More expensive model changes require explicit owner authorization.
 
-OpenAI: GPT-6.2 Sol low for orchestration, complex implementation, and review;
-GPT-6.2 Astra uses its lowest supported variant (`low`) for simple/standard
-implementation and review fixes, because the 6.2 family exposes no `none`. OpenCode Go: DeepSeek V4.1 Flash low for orchestration, implementation,
-and fixes; GLM 5.3 Flash low for independent review. MiMo V2.6 Flash is an
-explicit alternative reviewer; the current catalog exposes no variant for it.
+OpenAI: GPT-6.2 Sol low for orchestration, simple/standard implementation,
+routine review, and scoped fixes. GPT-6.2 Astra uses its lowest supported
+variant (`low`) for complex implementation and release-blocking/high-risk fixes,
+because the 6.2 family exposes no `none`. The explicit `reviewer-openai-release`
+role uses GPT-6.2 Sol high for the owner-authorized release/high-risk review
+gate; every other review starts at low. OpenCode Go: DeepSeek V4.1 Flash low for
+orchestration, implementation, and fixes; GLM 5.3 Flash low for independent
+review. MiMo V2.6 Flash is an explicit alternative reviewer; the current catalog
+exposes no variant for it.
 Catalog discovery confirms model IDs/capabilities, not internal checkpoints,
 actual billing, or subscription allowance consumption.
 

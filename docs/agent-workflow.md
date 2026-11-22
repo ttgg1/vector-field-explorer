@@ -9,17 +9,22 @@ deterministic orchestration service.
 
 - `/develop-openai <request>` explicitly selects the OpenAI orchestrator.
 - `/develop-opencode-go <request>` explicitly selects the OpenCode Go orchestrator.
-- `/review-openai <diff-package> <acceptance-criteria>` uses a fresh read-only GPT-6.2 Sol reviewer.
+- `/review-openai <diff-package> <acceptance-criteria>` uses a fresh read-only GPT-6.2 Sol reviewer at low effort for routine diffs.
+- `/review-openai-release <diff-package> <acceptance-criteria>` uses the explicit release/high-risk GPT-6.2 Sol reviewer at high effort.
 - `/review-opencode-go <diff-package> <acceptance-criteria>` uses a fresh read-only GLM 5.3 Flash reviewer.
 - `/review-opencode-go-mimo ...` explicitly chooses MiMo V2.6 Flash instead; it is not an automatic fallback.
 
-The current configured roles use GPT-6.2 Sol low for OpenAI orchestration,
-complex implementation, and review; GPT-6.2 Astra `low` (its catalog's lowest
-variant) for simple/standard implementation and review fixes; DeepSeek V4.1 Flash low
-for Go orchestration, implementation, and fixes; and GLM 5.3 Flash low for Go
-review. MiMo V2.6 Flash currently exposes no effort variant. Verify the enabled
-catalog when changing profiles. These model IDs do not establish provider
-checkpoint or actual subscription billing/allowance semantics.
+The configured OpenAI roles use GPT-6.2 Sol low for orchestration,
+simple/standard implementation, routine review, and scoped fixes; GPT-6.2 Astra
+`low` (its catalog's lowest variant) for complex implementation and
+release-blocking/high-risk fixes; and the explicit `reviewer-openai-release`
+role at GPT-6.2 Sol high for release/high-risk review. The release reviewer is
+the owner-authorized exception to beginning every review at low effort. The Go
+roles use DeepSeek V4.1 Flash low for orchestration, implementation, and fixes,
+and GLM 5.3 Flash low for review. MiMo V2.6 Flash currently exposes no effort
+variant. Verify the enabled catalog when changing profiles. These model IDs do
+not establish provider checkpoint or actual subscription billing/allowance
+semantics.
 
 Every fresh task/role begins at its profile's lowest configured effort. A prior
 escalation does not change another task's starting point. Escalation is manual,
