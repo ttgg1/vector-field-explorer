@@ -190,6 +190,23 @@ pub struct ScalarPresetSpec {
     pub contour_levels: u32,
 }
 
+/// A catalogue prompt that has a working, clickable destination. Only prompts
+/// with a tested destination are listed; every other `exploration_prompt`
+/// stays informational text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplorationActivity {
+    /// Issue #218 session-only closed-box flux investigation.
+    UniformFlux,
+}
+
+/// The promoted activity for a catalogue entry, if its prompt is clickable.
+pub fn exploration_activity(name: &str) -> Option<ExplorationActivity> {
+    match name {
+        "Uniform field" => Some(ExplorationActivity::UniformFlux),
+        _ => None,
+    }
+}
+
 /// One indexed preset.
 #[derive(Debug, Clone)]
 pub struct PresetEntry {

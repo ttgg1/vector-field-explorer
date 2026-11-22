@@ -21,6 +21,7 @@ use crate::scene_document::SceneDocument;
 use crate::scene_store::{self, SceneStore};
 use crate::source_presets::source_preset;
 use crate::source_scene::FieldMode;
+use crate::ui::uniform_flux::UniformFluxState;
 use crate::view_command::ViewCommand;
 use crate::viewmodel::State;
 
@@ -162,6 +163,8 @@ pub struct PresetPanel {
     scene_action: Option<SceneAction>,
     /// Portable collection text buffer.
     scene_text: String,
+    /// Session-only promoted prompt activity (#218).
+    uniform_flux: UniformFluxState,
 }
 
 impl Default for PresetPanel {
@@ -243,6 +246,7 @@ impl PresetPanel {
             pending_scene_delete: None,
             scene_action: None,
             scene_text: String::new(),
+            uniform_flux: UniformFluxState::default(),
         }
     }
 
@@ -803,9 +807,18 @@ impl PresetPanel {
 
     /// Draw one library row: its label keeps the formula annotations, its
     /// summary follows inline, and a click applies through the existing
-    /// formula/source loader. Returns true when a source entry loaded, so the
-    /// caller can frame it. Expansion/search state is never touched here.
-    fn show_entry(&mut self, ui: &mut egui::Ui, entry: &PresetEntry, state: &mut State) -> bool {
+    /// formula/source loader. When `show_prompt` is set for a catalogue (not
+    /// quick-start) row, the loaded row's prompt, assumptions and promoted
+    /// activity follow the row (#218). Returns true when a source entry loaded,
+    /// so the caller can frame it. Expansion/search state is never touched
+    /// here.
+    fn show_entry(
+        &mut self,
+        ui: &mut egui::Ui,
+        entry: &PresetEntry,
+        state: &mut State,
+        show_prompt: bool,
+    ) -> bool {
         let selected = match entry.group {
             PresetGroup::Classic | PresetGroup::Physics => match entry.scalar {
                 Some(spec) => {
@@ -855,7 +868,46 @@ impl PresetPanel {
                 ui.weak(entry.summary);
             }
         });
+        if show_prompt {
+            self.show_entry_prompt(ui, entry, state);
+        }
         source_loaded
+    }
+
+    /// The loaded row's prompt, assumptions and (where promoted) clickable
+    /// activity, rendered directly under its catalogue row so it stays beside
+    /// the loaded scene in wide and compact layouts. Only prompts with a
+    /// tested destination get an action; every other prompt is informational
+    /// text (#218).
+    fn show_entry_prompt(&mut self, ui: &mut egui::Ui, entry: &PresetEntry, state: &mut State) {
+        let active = match entry.group {
+            PresetGroup::Classic | PresetGroup::Physics => {
+                self.active_field.as_deref() == Some(entry.name)
+            }
+            PresetGroup::Sources | PresetGroup::Gallery => {
+                self.active_source.as_deref() == Some(entry.name)
+            }
+        };
+        if !active || entry.exploration_prompt.is_empty() {
+            return;
+        }
+        ui.separator();
+        ui.weak(format!("Exploring {}", entry.name));
+        if !entry.assumptions.is_empty() {
+            ui.label(format!("Assumptions: {}", entry.assumptions));
+        }
+        ui.label(entry.exploration_prompt);
+        if crate::preset_library::exploration_activity(entry.name).is_some() {
+            if self.uniform_flux.is_open() {
+                crate::ui::uniform_flux::show(ui, state, &mut self.uniform_flux);
+            } else if ui
+                .button("Open flux investigation")
+                .on_hover_text("Read the closed-box flux of the loaded formula in this session")
+                .clicked()
+            {
+                self.uniform_flux.open();
+            }
+        }
     }
 
     /// Draw the panel. Returns the camera command a `Reset view` / `Fit
@@ -943,7 +995,7 @@ impl PresetPanel {
         if !start_here.is_empty() {
             ui.weak("Start here");
             for entry in start_here {
-                if self.show_entry(ui, entry, state) {
+                if self.show_entry(ui, entry, state, false) {
                     requested = Some(ViewCommand::Fit);
                 }
             }
@@ -966,7 +1018,7 @@ impl PresetPanel {
                     .open(Some(self.expanded[index]))
                     .show(ui, |ui| {
                         for entry in entries {
-                            if self.show_entry(ui, entry, state) {
+                            if self.show_entry(ui, entry, state, true) {
                                 requested = Some(ViewCommand::Fit);
                             }
                         }
