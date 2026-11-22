@@ -413,3 +413,47 @@ fn upsert_rejects_an_invalid_scene_without_mutating_the_store() {
     assert_eq!(names(&store), vec!["kept"]);
     assert!(store.get("invalid").is_none());
 }
+
+/// A staging failure must leave the previously saved store exactly as it was.
+///
+/// A read-only directory blocks creating the sibling temporary file, but it
+/// does not block truncating an already-existing writable file. The direct
+/// write this replaces therefore used to replace the only JSON despite the
+/// reported failure; the staged write returns the error and preserves it.
+#[cfg(unix)]
+#[test]
+fn a_refused_scene_write_preserves_the_previous_store() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let original = scene_with_scale("A", 1.0);
+    let mut store = SceneStore::new();
+    store.upsert(original.clone()).unwrap();
+    save_dir(dir.path(), &store).expect("the first save succeeds");
+    let path = dir.path().join(SCENES_FILE);
+    let before = fs::read_to_string(&path).expect("the first save wrote a file");
+
+    let mut changed = store.clone();
+    changed
+        .upsert(scene_with_scale("A", 4.0))
+        .expect("the update stores in memory");
+    let mut permissions = fs::metadata(dir.path()).unwrap().permissions();
+    permissions.set_mode(0o555);
+    fs::set_permissions(dir.path(), permissions).unwrap();
+    let result = save_dir(dir.path(), &changed);
+    let mut permissions = fs::metadata(dir.path()).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(dir.path(), permissions).unwrap();
+
+    assert!(
+        result.is_err(),
+        "a write that cannot stage a sibling reports the failure"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).expect("the old file survives"),
+        before,
+        "the previous store is not truncated or replaced"
+    );
+    let (reloaded, _) = load_dir(dir.path());
+    assert_eq!(reloaded.get("A").map(|scene| scene.camera.scale), Some(1.0));
+}

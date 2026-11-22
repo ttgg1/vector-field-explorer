@@ -272,6 +272,10 @@ fn unusable_note(path: &std::path::Path, error: &str) -> String {
 }
 
 /// Create `dir`, serialize `store` and write `scenes.json` into it.
+///
+/// The JSON is staged in a sibling temporary file and renamed into place, so a
+/// failed or interrupted write returns the error while the previous store file
+/// remains intact instead of being truncated by the only write.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_dir(dir: impl AsRef<std::path::Path>, store: &SceneStore) -> Result<(), String> {
     let dir = dir.as_ref();
@@ -282,9 +286,65 @@ pub fn save_dir(dir: impl AsRef<std::path::Path>, store: &SceneStore) -> Result<
         )
     })?;
     let text = store.to_json()?;
+    write_store_atomically(dir, &text)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_store_atomically(dir: &std::path::Path, text: &str) -> Result<(), String> {
     let path = dir.join(SCENES_FILE);
-    std::fs::write(&path, text)
-        .map_err(|error| format!("could not write scene file {}: {error}", path.display()))
+    let temporary = dir.join(format!(".{SCENES_FILE}.tmp"));
+    if let Err(error) = std::fs::write(&temporary, text) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "could not write scene file {}: {error}",
+            path.display()
+        ));
+    }
+    if let Err(error) = replace_staged(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "could not replace scene file {}: {error}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Rename the staged file over `path`.
+///
+/// Unix `rename` replaces atomically. Windows refuses to replace an existing
+/// file, so the previous destination is first moved to a sibling backup and
+/// restored if the second rename fails; only a successful replacement removes
+/// the backup. The old store therefore survives every failure path.
+#[cfg(not(target_arch = "wasm32"))]
+fn replace_staged(temporary: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        let backup = path.with_file_name(format!(".{SCENES_FILE}.bak"));
+        let had_previous = path.exists();
+        if had_previous {
+            let _ = std::fs::remove_file(&backup);
+            std::fs::rename(path, &backup)?;
+        }
+        match std::fs::rename(temporary, path) {
+            Ok(()) => {
+                if had_previous {
+                    let _ = std::fs::remove_file(&backup);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                if had_previous {
+                    let _ = std::fs::rename(&backup, path);
+                }
+                Err(error)
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(temporary, path)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

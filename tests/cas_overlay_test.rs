@@ -12,14 +12,15 @@ use vector_field_explorer::VfApp;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
 use vector_field_explorer::persistence::ViewRecord;
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame};
-use vector_field_explorer::scalar_analysis::SeriesRole;
+use vector_field_explorer::scalar_analysis::{SeriesRole, potential_field_spec};
 use vector_field_explorer::scalar_overlay::{
     FROZEN_RENDER_NOTE, MAX_OVERLAYS, OVERLAY_ASSUMPTIONS, OverlayDependency, OverlayLayer,
     OverlayLive, ScalarOverlay, ScalarOverlaySet,
 };
 use vector_field_explorer::scalar_view::scalar_view_expr;
 use vector_field_explorer::scene_document::{SceneCamera, SceneDocument};
-use vector_field_explorer::ui::cas_panel::{self, CasPanelState, Operation, Variable};
+use vector_field_explorer::ui::cas_panel::{self, CasPanelState, Operation, SceneTarget, Variable};
+use vector_field_explorer::ui::sidebar::Controls;
 use vector_field_explorer::viewmodel::State;
 
 fn xy_slice(z: f32) -> PlaneFrame {
@@ -874,5 +875,181 @@ fn the_overlay_layer_labels_do_not_claim_an_unshipped_physics_model() {
         "x",
         OverlayLayer::PotentialField,
         "linked",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Release-audit slice: overlay history, restart and live-input truth
+// ---------------------------------------------------------------------------
+
+#[test]
+fn adding_and_removing_a_cas_overlay_is_one_document_edit() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.controls_width = 460.0;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
+    app.state.set_formula("(1, 0)".into());
+    app.cas = scalar_panel("x*y");
+    for _ in 0..4 {
+        idle(&ctx, &mut app);
+    }
+    let base = app.history_len();
+
+    click_app_button(&ctx, &mut app, "Add linked overlay");
+    assert_eq!(app.state.overlays().len(), 1);
+    assert_eq!(
+        app.history_len(),
+        base + 1,
+        "adding a CAS overlay is one document edit"
+    );
+    assert_eq!(app.next_undo_label(), Some("add linked CAS overlay"));
+    let id = app.state.overlays().as_slice()[0].id;
+
+    // Remove the same overlay through the panel; the row and its drawing must
+    // both be reversible by ordinary Undo, not just the gradient setting.
+    click_app_button(&ctx, &mut app, &format!("Remove {id}"));
+    assert!(
+        app.state.overlays().is_empty(),
+        "the overlay row is removed"
+    );
+    let removed = app.history_len();
+    assert!(removed > base, "removal is recorded");
+    assert_eq!(app.next_undo_label(), Some("change CAS overlay"));
+    assert!(app.undo_document(&ctx));
+    assert_eq!(
+        app.state.overlays().len(),
+        1,
+        "one undo restores the overlay row that owned the drawing"
+    );
+    assert!(app.redo_document(&ctx));
+    assert!(
+        app.state.overlays().is_empty(),
+        "redo removes the overlay row again"
+    );
+}
+
+#[test]
+fn cas_overlays_survive_workspace_settings_without_a_named_scene() {
+    let mut state = State::new(false);
+    state
+        .add_linked_overlay("x*y", OverlayLayer::PotentialField)
+        .expect("the overlay is added");
+    let record = ViewRecord::capture(&state);
+
+    let mut restored = State::new(false);
+    record.restore(&mut restored, &mut Controls::new());
+    assert_eq!(
+        restored.overlays().len(),
+        1,
+        "the workspace view record carries CAS overlays"
+    );
+    assert_eq!(
+        restored.overlays().as_slice()[0].formula,
+        "x*y",
+        "the restored overlay keeps its expression"
+    );
+}
+
+#[test]
+fn a_linked_gradient_keeps_following_the_live_frame_with_no_open_section() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.controls_expanded = false;
+    app.sheet.close();
+    app.state.set_formula("(0, 0)".into());
+    app.state.set_scalar_source(
+        vector_field_explorer::scalar::ScalarContext::Surface,
+        "x*y".into(),
+    );
+    let frame = app.state.scalar_view_frame();
+    app.state
+        .set_gradient(Some(potential_field_spec("x*y".into(), frame).unwrap()))
+        .expect("the gradient is valid");
+    app.state
+        .add_linked_overlay("x*y", OverlayLayer::PotentialField)
+        .expect("the linked overlay is added");
+    app.state.refresh_scalar_analysis(true);
+    assert!(!app.state.scalar_overlay_lines().is_empty());
+
+    // The slice/domain moved after the panel was last open.
+    app.state
+        .set_domain(glam::Vec3::splat(-3.0), glam::Vec3::splat(3.0));
+    let current = app.state.scalar_view_frame();
+    assert_ne!(frame, current);
+    assert!(
+        app.state.scalar_overlay_lines().is_empty(),
+        "stale analysis geometry is not painted after the frame changes"
+    );
+
+    idle(&ctx, &mut app);
+    let gradient = app.state.gradient.as_ref().expect("the gradient stays");
+    assert_eq!(
+        gradient.frame, current,
+        "the installed linked gradient resolves against the live frame"
+    );
+    assert!(
+        !app.state.scalar_overlay_lines().is_empty(),
+        "the overlay is refreshed without the Scalar analysis section open"
+    );
+}
+
+#[test]
+fn a_linked_time_dependent_overlay_keeps_the_shared_clock_consumer() {
+    let mut state = State::new(false);
+    state.set_formula("(0, 0)".into());
+    state.set_scalar_source(
+        vector_field_explorer::scalar::ScalarContext::Surface,
+        "x*y".into(),
+    );
+    assert!(!state.has_time_dependent_consumer());
+    state
+        .add_linked_overlay("t*x", OverlayLayer::PotentialField)
+        .expect("a time-dependent linked overlay is valid");
+    assert!(
+        state.has_time_dependent_consumer(),
+        "a linked time-dependent overlay consumes the clock"
+    );
+    state.dirty = false;
+    assert!(state.set_time(0.4));
+    assert!(
+        state.dirty,
+        "advancing time invalidates the live overlay geometry"
+    );
+}
+
+#[test]
+fn removing_a_contour_overlay_removes_its_drawing() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut state = State::new(false);
+    state.set_formula("(0, 0)".into());
+    let mut panel = scalar_panel("x*y");
+    panel
+        .apply_scene(&mut state, 2, SceneTarget::Contours)
+        .expect("contours are plotted");
+    assert_eq!(state.scalar_contour_levels(), 8);
+    assert_eq!(state.overlays().len(), 1);
+    let id = state.overlays().as_slice()[0].id;
+    assert!(!state.scalar_overlay_lines().is_empty());
+
+    let output = render_panel(&ctx, 460.0, &mut state, &mut panel, Vec::new());
+    let remove = button_bounds(&output, &format!("Remove {id}"))
+        .expect("the contour overlay has a Remove control");
+    click(&ctx, 460.0, &mut state, &mut panel, remove.center());
+
+    assert!(state.overlays().is_empty());
+    assert_eq!(
+        state.scalar_contour_levels(),
+        0,
+        "removing the contour layer hides the drawing, not just the row"
+    );
+    assert!(
+        state.scalar_overlay_lines().is_empty(),
+        "no stale contour segments remain after removal"
     );
 }
