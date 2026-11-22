@@ -203,6 +203,7 @@ mod tour_overlay_test;
 mod tour_test;
 mod ui_preset_test;
 mod ui_style_panel_test;
+mod uniform_flux_test;
 mod version_test;
 mod view_command_test;
 mod view_orientation_test;
