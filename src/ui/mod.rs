@@ -20,6 +20,7 @@ pub mod ode_panel;
 pub mod panel_rails;
 pub mod plot_panel;
 pub mod presets;
+pub mod prompt_model;
 pub mod sidebar;
 pub mod sources_panel;
 pub mod status_bar;
