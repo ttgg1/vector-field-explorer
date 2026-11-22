@@ -6,7 +6,135 @@ use vector_field_explorer::{
     plot_scene::{PlotGeometry, build_plot_scene},
     plot_state::{PlotSettings, SampledPlot},
 };
-use vector_field_explorer::{plot_examples::EXAMPLES, scalar::ScalarContext, viewmodel::State};
+use vector_field_explorer::{
+    parameters::{Parameter, ParameterSet},
+    plot_examples::EXAMPLES,
+    scalar::ScalarContext,
+    viewmodel::State,
+};
+
+fn separation_parameter(value: f64) -> ParameterSet {
+    ParameterSet {
+        version: 1,
+        entries: vec![Parameter {
+            name: "d".into(),
+            value,
+            min: None,
+            max: None,
+            step: 0.1,
+        }],
+    }
+}
+
+#[test]
+fn parameterized_surface_install_rejects_before_touching_any_state() {
+    let mut s = State::new(false);
+    s.set_plot_kind(PlotKind::Surface3D);
+    assert!(s.plot_scene().bounds.is_some(), "the old mesh is painted");
+    let before_parameters = s.parameters.clone();
+    let before_source = s.plot.surface.source.clone();
+    let before_samples = s.plot.surface.samples.clone().expect("sampled mesh");
+    let before_generation = s.plot.generation;
+
+    let error = s
+        .apply_parameterized_surface(separation_parameter(1.0), "d +".into())
+        .expect_err("the parameter-aware surface parser rejects the draft");
+
+    assert!(
+        error.contains("parse") || error.contains("error"),
+        "the parser error is actionable: {error}"
+    );
+    assert_eq!(
+        s.parameters, before_parameters,
+        "no parameter was committed"
+    );
+    assert_eq!(s.plot.surface.source, before_source, "source unchanged");
+    assert!(
+        Arc::ptr_eq(
+            &before_samples,
+            s.plot.surface.samples.as_ref().expect("mesh unchanged")
+        ),
+        "the old mesh stays under its old source"
+    );
+    assert_eq!(s.plot.generation, before_generation, "no scene rebuild");
+    assert!(
+        s.plot.surface.error.is_none(),
+        "a rejected install does not overwrite the retained status"
+    );
+}
+
+#[test]
+fn parameterized_surface_install_accepts_d_and_rebuilds_the_mesh() {
+    let mut s = State::new(false);
+    s.set_plot_kind(PlotKind::Surface3D);
+    assert!(s.plot_scene().bounds.is_some());
+    let before_samples = s.plot.surface.samples.clone().expect("sampled mesh");
+
+    s.apply_parameterized_surface(separation_parameter(1.5), "d*x".into())
+        .expect("the parameter-aware parser accepts d");
+
+    assert_eq!(s.parameters.value("d"), Some(1.5));
+    assert_eq!(s.plot.surface.source, "d*x");
+    assert!(s.plot.surface.accepted.is_some());
+    assert!(
+        s.plot.surface.samples.is_some(),
+        "the validated mesh is installed"
+    );
+    assert!(s.plot_scene().bounds.is_some(), "the mesh rebuilds from d");
+    assert!(
+        !Arc::ptr_eq(
+            &before_samples,
+            s.plot.surface.samples.as_ref().expect("the rebuilt mesh")
+        ),
+        "the accepted d is baked into a fresh mesh"
+    );
+}
+
+#[test]
+fn parameter_edits_reparse_and_invalidate_the_installed_surface() {
+    let mut s = State::new(false);
+    s.set_plot_kind(PlotKind::Surface3D);
+    s.apply_parameterized_surface(separation_parameter(1.5), "d*x".into())
+        .expect("install the parameter-aware surface");
+    assert!(s.plot_scene().bounds.is_some());
+    assert_eq!(
+        s.plot
+            .surface
+            .accepted
+            .as_ref()
+            .expect("accepted expression")
+            .eval_at(1.0, 0.0, 0.0),
+        Some(1.5)
+    );
+    let before_samples = s.plot.surface.samples.clone().expect("sampled mesh");
+
+    let mut next = s.parameters.clone();
+    next.entries[0].value = 3.0;
+    s.commit_parameters(next)
+        .expect("the ordinary Variables commit path");
+
+    assert_eq!(s.parameters.value("d"), Some(3.0));
+    assert_eq!(s.plot.surface.source, "d*x", "the source stays editable");
+    let scene = s.plot_scene();
+    assert!(scene.bounds.is_some(), "the mesh rebuilds for the new d");
+    assert_eq!(
+        s.plot
+            .surface
+            .accepted
+            .as_ref()
+            .expect("reparsed expression")
+            .eval_at(1.0, 0.0, 0.0),
+        Some(3.0),
+        "the accepted expression follows the committed parameter"
+    );
+    assert!(
+        !Arc::ptr_eq(
+            &before_samples,
+            s.plot.surface.samples.as_ref().expect("fresh mesh")
+        ),
+        "the old parameter value's mesh is invalidated"
+    );
+}
 
 #[test]
 fn active_invalid_edit_keeps_last_valid_but_destination_clears() {

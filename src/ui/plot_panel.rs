@@ -8,7 +8,7 @@
 use eframe::egui;
 
 use crate::colormap::Colormap;
-use crate::parameters::{Parameter, ParameterSet};
+use crate::parameters::Parameter;
 use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::plot_examples::EXAMPLES;
@@ -268,18 +268,17 @@ fn apply_dipole_route(state: &mut State, axis: PlaneAxis, separation: f64) -> St
             ..Parameter::default()
         }),
     }
-    if let Err(error) = ParameterSet::validate(&parameters) {
-        return error;
+    match state.apply_parameterized_surface(parameters, dipole.expr) {
+        Ok(()) => format!(
+            "Loaded on the {}. {} At load: d = {separation}.",
+            slice_label(&frame),
+            dipole.valid_region
+        ),
+        Err(error) => format!(
+            "Could not load the analytic potential: {error}. Nothing was changed; \
+             adjust the separation, axis or plane and try again."
+        ),
     }
-    if let Err(error) = state.commit_parameters(parameters) {
-        return error;
-    }
-    state.set_active_source(dipole.expr.clone());
-    format!(
-        "Loaded on the {}. {} Separation d = {separation}.",
-        slice_label(&frame),
-        dipole.valid_region
-    )
 }
 
 fn curve_controls(ui: &mut egui::Ui, state: &mut State) {

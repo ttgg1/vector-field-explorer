@@ -5,11 +5,14 @@
 //! following `button_sizing_test.rs` / `responsive_test.rs` conventions. They
 //! assert the controls that are actually painted, not a replica of the rules.
 
+use std::sync::Arc;
+
 use eframe::egui;
 
 use crate::support;
 
 use vector_field_explorer::{
+    parameters::{Parameter, ParameterSet},
     plot::PlotKind,
     presets::presets,
     screenshot::SCALAR_SVG_MESSAGE,
@@ -550,6 +553,136 @@ fn vector_only_controls_and_svg_explain_disabled_state() {
             .iter()
             .any(|shortcut| shortcut.label.to_lowercase().contains("fit")),
         "Fit plot adds no keyboard shortcut"
+    );
+}
+
+#[test]
+fn analytic_dipole_route_loads_d_only_after_a_successful_commit() {
+    let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    h.state.set_plot_resolution(5);
+    h.idle();
+    assert!(h.state.parameters.value("d").is_none());
+    let before_source = h.state.plot.surface.source.clone();
+
+    h.click_label("Analytic dipole potential");
+    h.click_label("Use analytic potential");
+    let out = h.idle();
+
+    assert_eq!(h.state.parameters.value("d"), Some(1.0));
+    assert_ne!(h.state.plot.surface.source, before_source);
+    assert!(h.state.plot.surface.source.contains('d'));
+    assert!(h.state.plot.surface.accepted.is_some());
+    let Some(vector_field_explorer::plot_state::SampledPlot::Surface(mesh)) =
+        h.state.plot.surface.samples.as_deref()
+    else {
+        panic!("missing sampled dipole");
+    };
+    assert!(mesh.diagnostics.rejected_cells > 0 && !mesh.indices.is_empty());
+    assert!(h.state.plot_scene().bounds.is_some());
+    assert!(
+        nodes(&out).iter().any(|node| node.label.contains("Loaded")),
+        "success is reported only after the mesh exists: {:?}",
+        nodes(&out).iter().map(|n| &n.label).collect::<Vec<_>>()
+    );
+    let mut parameters = h.state.parameters.clone();
+    parameters.entries[0].value = 2.0;
+    h.state.commit_parameters(parameters).unwrap();
+    let painted = nodes(&h.idle());
+    assert!(painted.iter().any(|n| n.label.contains("At load: d = 1")));
+}
+
+#[test]
+fn analytic_dipole_route_undrawable_candidate_rolls_back() {
+    let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    // Normal dipole: both poles project onto the single cell's center.
+    h.state.set_plot_resolution(2);
+    h.idle();
+    h.click_label("Analytic dipole potential");
+    h.click_label("z");
+    assert_failed_dipole_rollback(&mut h);
+}
+
+#[test]
+fn analytic_dipole_route_failure_changes_nothing_and_has_no_loaded_status() {
+    let mut h = PlotHarness::new(1200.0, false, PlotKind::Surface3D);
+    // The parameter cap is already full, so adding the separation `d` cannot
+    // commit. The route must reject the whole action before touching anything.
+    let mut parameters = ParameterSet::default();
+    for index in 0..32 {
+        parameters.entries.push(Parameter {
+            name: format!("p{index}"),
+            value: 1.0,
+            min: None,
+            max: None,
+            step: 0.1,
+        });
+    }
+    h.state
+        .commit_parameters(parameters)
+        .expect("a full-but-valid set");
+    h.idle();
+    h.click_label("Analytic dipole potential");
+    assert_failed_dipole_rollback(&mut h);
+}
+
+fn assert_failed_dipole_rollback(h: &mut PlotHarness) {
+    let before_parameters = h.state.parameters.clone();
+    let before_source = h.state.plot.surface.source.clone();
+    let before_samples = h.state.plot.surface.samples.clone().expect("sampled mesh");
+    let before_generation = h.state.plot.generation;
+    let accepted = |h: &PlotHarness| {
+        h.state
+            .plot
+            .surface
+            .accepted
+            .as_ref()
+            .unwrap()
+            .eval(0.2, 0.3)
+    };
+    let before_value = accepted(h);
+    let before_error = h.state.plot.surface.error.clone();
+
+    h.click_label("Use analytic potential");
+    let out = h.idle();
+    let painted = nodes(&out);
+
+    assert_eq!(
+        h.state.parameters, before_parameters,
+        "no parameter changed"
+    );
+    assert_eq!(
+        h.state.plot.surface.source, before_source,
+        "source unchanged"
+    );
+    assert_eq!(accepted(h), before_value);
+    assert_eq!(h.state.plot.surface.error, before_error);
+    assert!(
+        Arc::ptr_eq(
+            &before_samples,
+            h.state
+                .plot
+                .surface
+                .samples
+                .as_ref()
+                .expect("mesh unchanged")
+        ),
+        "the old mesh is still the one on screen"
+    );
+    assert_eq!(
+        h.state.plot.generation, before_generation,
+        "no scene rebuild was requested"
+    );
+    assert!(
+        painted
+            .iter()
+            .any(|node| node.label.contains("Could not load")
+                && node.label.contains("Nothing was changed")),
+        "an actionable failure is shown: {:?}",
+        painted.iter().map(|n| &n.label).collect::<Vec<_>>()
+    );
+    assert!(
+        !painted.iter().any(|node| node.label.contains("Loaded")),
+        "failure never claims success"
     );
 }
 

@@ -36,6 +36,57 @@ fn snapshot(app: &mut VfApp) -> (Vec<Vec3>, Vec<Vec<Vec3>>, f32, usize) {
 }
 
 #[test]
+fn parameter_commit_refreshes_the_cached_dipole_surface() {
+    use vector_field_explorer::{
+        parameters::{Parameter, ParameterSet},
+        plane::PlaneAxis,
+        scalar_analysis::analytic_dipole_potential,
+    };
+
+    let mut app = VfApp::new();
+    app.state.set_plot_kind(PlotKind::Surface3D);
+    let dipole = analytic_dipole_potential(PlaneAxis::X, "d", &app.state.scalar_view_frame())
+        .expect("dipole along the slice");
+    let mut parameters = ParameterSet::default();
+    parameters.entries.push(Parameter {
+        name: "d".into(),
+        value: 1.0,
+        min: Some(0.01),
+        step: 0.1,
+        max: None,
+    });
+    app.state
+        .apply_parameterized_surface(parameters.clone(), dipole.expr)
+        .unwrap();
+    step(&mut app, 0.0);
+    let before = app.test_harness().plot_scene().unwrap();
+    assert!(before.bounds.is_some());
+
+    app.state.commit_parameters(parameters.clone()).unwrap();
+    parameters.entries[0].step = 0.2;
+    app.state.commit_parameters(parameters.clone()).unwrap();
+    parameters.entries[0].value = -1.0;
+    assert!(app.state.commit_parameters(parameters.clone()).is_err());
+    step(&mut app, 0.0);
+    assert_eq!(app.state.parameters.value("d"), Some(1.0));
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &app.test_harness().plot_scene().unwrap()
+    ));
+
+    parameters.entries[0].value = 2.0;
+    app.state.commit_parameters(parameters).unwrap();
+    step(&mut app, 0.0);
+    let after = app.test_harness().plot_scene().unwrap();
+    assert!(
+        after.generation > before.generation,
+        "viewport kept its stale scene"
+    );
+    assert!(after.bounds.is_some());
+    assert_ne!(after.bounds.unwrap().max, before.bounds.unwrap().max);
+}
+
+#[test]
 fn plot_mode_freezes_vector_consumers_and_restores() {
     let mut app = VfApp::new();
     app.state.set_mode(true);
