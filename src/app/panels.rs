@@ -2159,9 +2159,11 @@ impl VfApp {
         let _ = self.presets.duplicate_scene(name);
     }
 
-    /// Load the named scene: view first, then parameters, then the camera.
-    /// Every step stops on its own error, and no UI preference record is
-    /// touched.
+    /// Load the named scene: parameters, then the view, then the camera.
+    /// The parameters are installed into a candidate state first so the view
+    /// restore validates parameter-dependent records against them; the
+    /// candidate swaps in only if every step succeeds, and any error leaves
+    /// the live experiment unchanged. No UI preference record is touched.
     fn load_scene(&mut self, name: &str) {
         let Some(document) = self.presets.scenes().get(name).cloned() else {
             self.presets

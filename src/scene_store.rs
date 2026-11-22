@@ -238,14 +238,32 @@ pub fn import_store(text: &str) -> Result<SceneStore, String> {
 /// A missing file is an empty store with no note. An unreadable, corrupt or
 /// invalid file is an empty store plus a note naming the unusable file; the
 /// failure is logged and never panics.
+///
+/// If the primary file is missing, the sibling backup is consulted: the Windows
+/// replace path moves the old file aside before renaming the replacement in, so
+/// a crash between those renames leaves only `.scenes.json.bak`. A backup that
+/// parses is promoted back to the primary name, so the previous store survives
+/// the crash window instead of loading as empty.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_dir(dir: impl AsRef<std::path::Path>) -> (SceneStore, Option<String>) {
-    use std::io::ErrorKind;
-
     let path = dir.as_ref().join(SCENES_FILE);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return (SceneStore::new(), None),
+    let backup = backup_path(&path);
+    let (source_path, from_backup, text) = match read_existing(&path) {
+        Ok(Some(text)) => (path.clone(), false, text),
+        Ok(None) => match read_existing(&backup) {
+            Ok(Some(text)) => (backup.clone(), true, text),
+            Ok(None) => return (SceneStore::new(), None),
+            Err(error) => {
+                log::warn!(
+                    "scene store backup {} could not be read: {error}",
+                    backup.display()
+                );
+                return (
+                    SceneStore::new(),
+                    Some(unusable_note(&backup, &error.to_string())),
+                );
+            }
+        },
         Err(error) => {
             log::warn!("scene store {} could not be read: {error}", path.display());
             return (
@@ -255,12 +273,42 @@ pub fn load_dir(dir: impl AsRef<std::path::Path>) -> (SceneStore, Option<String>
         }
     };
     match SceneStore::from_json(&text) {
-        Ok(store) => (store, None),
+        Ok(store) => {
+            if from_backup {
+                // Put the recovered store back at the primary name so the next
+                // save starts from a consistent pair. A failed promotion still
+                // returns the recovered data; the next save replaces it anyway.
+                if let Err(error) = std::fs::rename(&backup, &path) {
+                    log::warn!(
+                        "recovered scene store {} could not be restored to {}: {error}",
+                        backup.display(),
+                        path.display()
+                    );
+                }
+            }
+            (store, None)
+        }
         Err(error) => {
-            log::warn!("scene store {} is unusable: {error}", path.display());
-            (SceneStore::new(), Some(unusable_note(&path, &error)))
+            log::warn!("scene store {} is unusable: {error}", source_path.display());
+            (SceneStore::new(), Some(unusable_note(&source_path, &error)))
         }
     }
+}
+
+/// Read `path`, treating a missing file as `Ok(None)`.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_existing(path: &std::path::Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Sibling backup used by the Windows replace path.
+#[cfg(not(target_arch = "wasm32"))]
+fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
+    path.with_file_name(format!(".{SCENES_FILE}.bak"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -320,7 +368,7 @@ fn write_store_atomically(dir: &std::path::Path, text: &str) -> Result<(), Strin
 fn replace_staged(temporary: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
-        let backup = path.with_file_name(format!(".{SCENES_FILE}.bak"));
+        let backup = backup_path(path);
         let had_previous = path.exists();
         if had_previous {
             let _ = std::fs::remove_file(&backup);

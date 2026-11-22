@@ -327,6 +327,31 @@ fn native_round_trip_writes_and_reads_scenes() {
     assert_eq!(names(&loaded), vec!["first", "second"]);
 }
 
+/// After a crash between the two Windows renames, the previous store lives in
+/// the sibling backup while the primary file is absent. Loading must consult
+/// that backup instead of reporting an empty store and losing every scene.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_missing_primary_recovers_the_staged_backup() {
+    let dir = TempDir::new("backup-recovery");
+    let store = store_of(&["first", "second"]);
+    save_dir(dir.path(), &store).expect("the first save succeeds");
+
+    let path = dir.path().join(SCENES_FILE);
+    let backup = dir.path().join(format!(".{SCENES_FILE}.bak"));
+    fs::rename(&path, &backup).expect("the committed file moves to the backup slot");
+    assert!(!path.exists(), "the crash window leaves no primary file");
+
+    let (loaded, note) = load_dir(dir.path());
+
+    assert_eq!(note, None, "a successful recovery is silent");
+    assert_eq!(
+        loaded, store,
+        "the previous store is recovered from the backup"
+    );
+    assert_eq!(names(&loaded), vec!["first", "second"]);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn native_corrupt_file_yields_empty_store_and_a_note() {

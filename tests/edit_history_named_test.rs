@@ -979,6 +979,43 @@ fn starting_a_lesson_never_overwrites_the_bound_scene() {
 }
 
 #[test]
+fn keeping_a_lesson_leaves_the_bound_scene_untouched() {
+    let ctx = render_context();
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    app.state.set_formula("x + y".to_string());
+    app.presets.set_scene_name("A");
+    click_app_label(&ctx, &mut app, "Save current scene");
+    click_app_label(&ctx, &mut app, "Load");
+    assert_eq!(app.presets.active_scene(), Some("A"));
+
+    app.start_griffiths_route(GriffithsRoute::Ring);
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "the lesson suspends the experiment binding"
+    );
+
+    // Keep adopts the temporary lesson document. It is a new untitled scene,
+    // not an edit to the experiment that was bound before the lesson started.
+    app.state.set_formula("y - x".to_string());
+    app.keep_griffiths_scene();
+    assert_eq!(
+        app.presets.active_scene(),
+        None,
+        "Keep leaves the adopted lesson untitled"
+    );
+    idle(&ctx, &mut app);
+    save_app(&mut app);
+    let (persisted, _) = vector_field_explorer::scene_store::load_dir(dir.path());
+    assert_eq!(
+        persisted.get("A").expect("A survives").view.formula,
+        "x + y",
+        "the kept lesson is not written under the saved experiment's name"
+    );
+}
+
+#[test]
 fn compact_closed_sheet_syncs_the_bound_edit_before_save() {
     let ctx = render_context();
     let dir = tempfile::tempdir().unwrap();

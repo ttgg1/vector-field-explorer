@@ -955,6 +955,35 @@ fn cas_overlays_survive_workspace_settings_without_a_named_scene() {
 }
 
 #[test]
+fn a_legacy_view_record_without_overlays_restores_an_empty_set() {
+    let mut state = State::new(false);
+    state
+        .add_linked_overlay("x*y", OverlayLayer::PotentialField)
+        .expect("the overlay is added");
+
+    // An older workspace envelope has no `overlays` key at all.
+    let mut value = serde_json::to_value(ViewRecord::capture(&state))
+        .expect("a view record serializes to JSON");
+    value
+        .as_object_mut()
+        .expect("a view record object")
+        .remove("overlays");
+    let legacy: ViewRecord =
+        serde_json::from_value(value).expect("the legacy record still deserializes");
+
+    assert!(
+        legacy.overlays.is_empty(),
+        "a missing overlays field defaults to the empty set"
+    );
+    let mut restored = State::new(false);
+    legacy.restore(&mut restored, &mut Controls::new());
+    assert!(
+        restored.overlays().is_empty(),
+        "the restored live set is empty"
+    );
+}
+
+#[test]
 fn a_linked_gradient_keeps_following_the_live_frame_with_no_open_section() {
     let ctx = support::context();
     let mut app = VfApp::new();
