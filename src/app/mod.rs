@@ -910,6 +910,17 @@ impl VfApp {
         self.sync_tour_snapshot();
         if let Some(rect) = self.last_viewport_rect {
             self.record_tour_viewport(rect);
+            // Issue #228: the click tool strip sits at the viewport's top edge.
+            // It derives from live state and edits only the session controls;
+            // the next frame's sidebar handoff applies any prerequisite change.
+            let view = crate::ui::viewport_tool::derive_for(&self.state, &self.controls);
+            crate::ui::viewport_tool::show(
+                ctx,
+                rect,
+                &view,
+                &mut self.controls,
+                &self.interaction.bindings,
+            );
         }
         let Some(progress) = self.tour.as_ref() else {
             self.tour_card_rect = None;

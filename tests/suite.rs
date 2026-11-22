@@ -205,5 +205,6 @@ mod view_command_test;
 mod view_orientation_test;
 mod viewmodel_test;
 mod viewport_style_test;
+mod viewport_tool_test;
 mod web_assets_test;
 mod window_test;

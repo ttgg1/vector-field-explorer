@@ -1047,6 +1047,18 @@ pub struct Controls {
     pub pending_layout_delete: Option<String>,
     /// What one explicit left click does (ticket 60).
     pub left_click_action: LeftClickAction,
+    /// Session-only Inspect choice for the viewport tool strip (issue #228).
+    /// While set, a viewport click places nothing even when a left-click action
+    /// is selected; choosing an action in the strip or sidebar clears it.
+    pub viewport_inspect: bool,
+    /// Placement mode shown by the viewport tool strip (issue #228): `true`
+    /// keeps the tool selected across clicks, `false` returns to Inspect after
+    /// one successful placement.
+    pub viewport_sticky: bool,
+    /// One placement armed by the strip's enable-and-place entry (issue #228).
+    /// It forces one-shot even when sticky mode is selected, so enabling a
+    /// prerequisite cannot leave the tool firing on later clicks.
+    pub viewport_armed_one_shot: bool,
     pub particles: bool,
     /// Dot radius multiplier on the grid spacing (ticket 30).
     pub particle_size: f32,
@@ -1134,6 +1146,9 @@ impl Controls {
             seed_layout_message: String::new(),
             pending_layout_delete: None,
             left_click_action: LeftClickAction::SeedStreamline,
+            viewport_inspect: false,
+            viewport_sticky: true,
+            viewport_armed_one_shot: false,
             particles: false,
             particle_size: DEFAULT_PARTICLE_SIZE,
             particle_count: 0,
@@ -1184,6 +1199,8 @@ impl Controls {
         self.seed_mode = defaults.seed_mode;
         self.streamline_count = defaults.streamline_count;
         self.left_click_action = defaults.left_click_action;
+        self.viewport_inspect = defaults.viewport_inspect;
+        self.viewport_armed_one_shot = defaults.viewport_armed_one_shot;
         self.particles = defaults.particles;
         self.particle_size = defaults.particle_size;
         self.particle_count = defaults.particle_count;
@@ -2646,6 +2663,9 @@ fn show_inner(
             }
             // Ticket 60: the left click action stays visible even while its feature
             // is off; the click is then a hinted no-op rather than a dead control.
+            // Issue #228: choosing an action here also leaves Inspect, so the
+            // viewport strip and this selector stay synchronized.
+            let action_before = controls.left_click_action;
             button_row(ui, |ui| {
                 ui.label("Left click");
                 for action in LeftClickAction::ALL {
@@ -2664,6 +2684,10 @@ fn show_inner(
                         .on_hover_text(hover);
                 }
             });
+            if controls.left_click_action != action_before {
+                controls.viewport_inspect = false;
+                controls.viewport_armed_one_shot = false;
+            }
             ui.checkbox(&mut controls.particles, "Particles")
                 .on_hover_text(
                     "Animate dots carried by the field; 2D needs a three-component field and \

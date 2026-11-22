@@ -5431,9 +5431,25 @@ and `math_view`, `formula_bar`, `help_overlay`, `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
-`status_bar`, `style_panel`, `top_bar`, `transport`.
+`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_tool`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
+
+#### `src/ui/viewport_tool.rs` — the viewport-edge click tool strip
+
+**Purpose.** Issue #228 makes the next viewport click self-explanatory. The
+strip at the viewport's top edge derives its effective tool from live state
+(the left-click action plus the Streamline and Particle feature gates) and the
+session-only arming choices in `Controls`, never from a second independent
+flag. Inspect, Place probe, Seed streamline and Add particles are offered where
+supported; a tool whose prerequisite is off becomes an explicit enable-and-place
+entry, and unsupported tools carry a specific reason. Placement is one-shot or
+sticky, the strip's buttons are ordinary focusable egui buttons (Tab plus
+Enter/Space select them), and Escape returns to Inspect and cancels an armed
+placement. The strip only surfaces existing S/P bindings; it never assigns or
+repurposes a chord. `tests/viewport_tool_test.rs` covers the derivation table,
+one-shot/sticky placement, enable-and-place, Escape, keyboard selection and both
+layout widths.
 
 #### `src/ui/appearance_panel.rs` — the Appearance panel
 
