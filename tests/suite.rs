@@ -160,6 +160,7 @@ mod preset_test;
 mod presets_test;
 mod probe_state_test;
 mod profile_library_test;
+mod prompt_model_test;
 mod reference_lines_test;
 mod renderer_sort_test;
 mod renderer_test;

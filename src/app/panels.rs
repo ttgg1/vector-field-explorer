@@ -648,6 +648,27 @@ impl VfApp {
                 Err(error) => self.cas.action_rejection = Some(error.to_string()),
             }
         }
+        self.show_prompt_model_body(ui);
+    }
+
+    /// Issue #213: render the session-only prompt-model section. The state lives
+    /// in egui's temporary store, so previewing never enters the document, the
+    /// dirty flag or the saved scene.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_prompt_model_body(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::prompt_model::{self, PromptModelState};
+
+        let id = egui::Id::unique("prompt_model_state");
+        let mut state = ui
+            .data_mut(|data| data.get_temp::<PromptModelState>(id))
+            .unwrap_or_default();
+        if let Some(action) = prompt_model::show(ui, &mut state) {
+            match self.apply_prompt_model_action(&mut state, action) {
+                Ok(_) => state.error = None,
+                Err(error) => state.error = Some(error.to_string()),
+            }
+        }
+        ui.data_mut(|data| data.insert_temp(id, state));
     }
 
     /// Apply one typed CAS action through the existing setters.
@@ -862,6 +883,67 @@ impl VfApp {
             self.record_explicit_edit("change camera");
         }
         Ok(crate::cas_actions::preview(action))
+    }
+
+    /// Issue #213: apply one prompt-model panel action. Parsing, previewing and
+    /// editing the separation stay session-local; only `Apply` touches the
+    /// document, through the ordinary source-scene setters.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_prompt_model_action(
+        &mut self,
+        state: &mut crate::ui::prompt_model::PromptModelState,
+        action: crate::ui::prompt_model::PromptModelAction,
+    ) -> Result<String, crate::prompt_model::PromptModelError> {
+        use crate::prompt_model::PromptModelError;
+        use crate::ui::prompt_model::PromptModelAction;
+
+        match action {
+            PromptModelAction::Parse => {
+                state.parse();
+                match &state.error {
+                    Some(error) => Err(PromptModelError::BadValue(error.clone())),
+                    None => Ok("Interpreted the prompt.".to_owned()),
+                }
+            }
+            PromptModelAction::Resolve { question, answer } => {
+                if state.resolve(&question, answer) {
+                    Ok("Updated the dipole orientation.".to_owned())
+                } else {
+                    Err(PromptModelError::BadValue(
+                        "the orientation question no longer applies".to_owned(),
+                    ))
+                }
+            }
+            PromptModelAction::ResolveAxis { axis } => {
+                if state.resolve_axis(axis) {
+                    Ok("Updated the dipole axis.".to_owned())
+                } else {
+                    Err(PromptModelError::BadValue(
+                        "the axis question no longer applies".to_owned(),
+                    ))
+                }
+            }
+            PromptModelAction::SetSeparation(value) => {
+                if state.set_separation(value) {
+                    Ok(format!("Separation set to {value}."))
+                } else {
+                    Err(PromptModelError::BadValue(format!(
+                        "separation `{value}` is not a finite positive number"
+                    )))
+                }
+            }
+            PromptModelAction::Apply => {
+                let model = state.model.clone().ok_or(PromptModelError::NoModel)?;
+                crate::prompt_model::apply(&model, &mut self.state)?;
+                let message = "Applied the interpreted model.".to_owned();
+                state.message = Some(message.clone());
+                Ok(message)
+            }
+            PromptModelAction::Cancel => {
+                state.cancel();
+                Ok("Cancelled the interpretation.".to_owned())
+            }
+        }
     }
 
     /// Keep the Controls colour mirrors in step with an action-driven colour
