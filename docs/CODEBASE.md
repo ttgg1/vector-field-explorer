@@ -2544,6 +2544,68 @@ and `restoring_invalid_probes_drops_them_without_dirtying`; the family record in
 `magnetic_probe_family_round_trips_and_keeps_magnetic_reports_working` and
 `corrupt_or_unavailable_probe_family_sanitises_to_electric_without_dirtying`.
 
+#### `src/field_compare.rs` and `src/ui/field_compare.rs` — candidate beside the model (#215)
+
+**Purpose.** Let a student put a candidate vector expression beside the active
+formula model, sample both at the same two points, and read signed components,
+vectors, `candidate - model`, magnitudes and a relative difference in identical
+normalized teaching units and arrow/scale convention. The comparison is
+sampled, never a symbolic identity claim.
+
+**Public API.** `DirectionRelation`, `SideSample`, `PointComparison`,
+`ComparisonReport`, `compare_point`, `compare_samples`, `NOT_IDENTITY_NOTE` and
+`TEACHING_UNITS_NOTE`. The UI module owns `FieldCompareControls`, `Prediction`,
+`visible`, `show` and the testable `show_body`.
+
+**Invariants.**
+- `compare_point` samples the model and candidate independently at one shared
+  world point. A point outside the visible sampled domain, a non-finite value or
+  an evaluation failure makes that **side** `Unavailable` with a reason; it is
+  never replaced by zero.
+- The difference is always candidate minus model. Relative difference is
+  `|candidate - model| / |model|` and is `None` when the model magnitude is zero;
+  the zero case carries an explicit "undefined because the model magnitude is
+  zero" note.
+- Direction is `With`, `Against`, `Different` or `Undefined` from the normalized
+  dot product; zero vectors leave it undefined.
+- `compare_samples` reads both points together: opposite at both is a sign
+  signal; agreeing directions with a changed relative difference is a power-law
+  signal; an unchanged relative difference is a uniform scale signal. Every
+  note ends with the sampled-not-symbolic disclaimer.
+- `FieldCompareControls` is session-only. `apply` parses with
+  `FieldExpr::parse_with_parameters`, resets the prediction gate, and leaves the
+  previous candidate and the model untouched on error. `predict`/`skip` reveal
+  the numbers; `parameters_stale` warns when the applied candidate predates a
+  parameter change.
+- The sidebar section is Formula-only in a vector view, collapses by default,
+  and samples nothing while collapsed. It never writes `State`, the scene,
+  history or persistence.
+
+**Pinned by.** [tests/field_compare_test.rs](../tests/field_compare_test.rs):
+`a_matching_candidate_agrees_at_regular_sampled_points`,
+`reversing_the_model_sign_exposes_the_opposite_reading`,
+`a_second_sample_separates_a_sign_error_from_a_power_law_error`,
+`an_unavailable_side_is_named_and_never_fabricated_as_zero`,
+`outside_the_visible_domain_both_sides_are_unavailable`,
+`relative_difference_is_undefined_at_zero_model_magnitude`,
+`a_two_times_candidate_reports_a_defined_relative_difference`,
+`the_section_is_formula_and_vector_only`,
+`applying_a_candidate_arms_the_prediction_gate`,
+`skip_is_an_explicit_way_past_the_prediction_gate`,
+`a_parse_error_keeps_the_previous_candidate_and_names_the_failure`,
+`applying_an_invalid_candidate_never_touches_the_model_or_scene`,
+`the_comparison_body_renders_the_gate_before_the_numbers`,
+`the_comparison_body_fits_a_compact_sidebar_and_names_the_second_point`,
+`a_reversed_model_sign_also_reads_as_against`,
+`a_direction_disagreement_between_points_is_named`,
+`a_named_parameter_binds_in_the_candidate_and_a_change_marks_it_stale`, and
+`a_prediction_grade_names_the_point_it_was_made_at`.
+
+**Limitations.** Two points expose scale and sign errors but do not prove a
+power law, and no symbolic identity check exists. Values come through the f32
+`eval3_at_f64` boundary; comparisons use relative thresholds rather than exact
+equality.
+
 #### `src/flow.rs` — the tracer's velocity-field abstraction
 
 **Purpose.** Give the streamline tracer one `Flow::eval(point, t)` seam over
@@ -5926,8 +5988,8 @@ thread.
 
 Declares `appearance_panel`, `branding`, `cas_preview` (compiled on both
 targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`
-and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
-`induction_panel`,
+and `math_view`, `field_compare`, `formula_bar`, `gauss_shell`, `griffiths`,
+`help_overlay`, `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `object_style_control`, `ode_panel`, `panel_rails`, `plane_lesson`, `plot_panel`, `presets`,

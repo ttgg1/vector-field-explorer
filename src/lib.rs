@@ -26,6 +26,7 @@ pub mod export_provenance;
 pub mod field;
 pub mod field_bake;
 pub mod field_cache;
+pub mod field_compare;
 pub mod field_probe;
 pub mod flow;
 pub mod fly_camera;
