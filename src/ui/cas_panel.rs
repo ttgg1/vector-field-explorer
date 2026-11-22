@@ -2,8 +2,41 @@
 use eframe::egui;
 
 use crate::cas_actions::{self, CasAction, CasActionError};
-use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage, PreviewPlane};
-use crate::{cas, field::FieldExpr, source_scene::FieldMode, viewmodel::State};
+use crate::scalar_analysis::{
+    ANALYTIC_DIPOLE_ROUTE_NOTE, NATIVE_SYMBOLIC_NOTE, potential_field_spec,
+};
+use crate::scalar_view::{sampled_layer_label, scalar_view_expr, slice_label, slice_valid_region};
+use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage};
+use crate::{
+    cas, field::FieldExpr, scalar::ScalarContext, source_scene::FieldMode, viewmodel::State,
+};
+
+/// Where a scalar CAS result is plotted in the active scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneTarget {
+    /// Plot the result as scalar contours on the active slice.
+    Contours,
+    /// Overlay the derived electric field `E = -∇V` on the active slice.
+    PotentialField,
+}
+
+impl SceneTarget {
+    /// The user-facing button/message name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Contours => "Plot contours",
+            Self::PotentialField => "Overlay E = -∇V",
+        }
+    }
+
+    /// The one named history edit this application records.
+    pub fn edit_label(self) -> &'static str {
+        match self {
+            Self::Contours => "plot CAS contours",
+            Self::PotentialField => "overlay E = -∇V",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Operation {
@@ -90,6 +123,12 @@ pub struct CasPanelState {
     pub action_message: Option<String>,
     /// Rejection from applying a parsed action (shown until the input edits).
     pub action_rejection: Option<String>,
+    /// The last scalar result applied to the active scene, with its region note.
+    pub scene_message: Option<String>,
+    /// The rejection from plotting a scalar result into the scene.
+    pub scene_error: Option<String>,
+    /// One named history edit reported to the app after a scene application.
+    scene_edit: Option<&'static str>,
     /// Show a typeset rendering of the preview when possible (issue #171).
     /// The canonical linear string is always kept for Copy and Apply.
     pub typeset_output: bool,
@@ -114,6 +153,9 @@ impl Default for CasPanelState {
             action_error: None,
             action_message: None,
             action_rejection: None,
+            scene_message: None,
+            scene_error: None,
+            scene_edit: None,
             typeset_output: true,
             last_request: None,
             last_action_input: None,
@@ -137,6 +179,9 @@ impl CasPanelState {
             self.last_action_input = Some(self.input.clone());
             self.action_message = None;
             self.action_rejection = None;
+            self.scene_message = None;
+            self.scene_error = None;
+            self.scene_edit = None;
         }
         // A recognised action verb wins over the mathematical intent grammar.
         match cas_actions::parse_action(&self.input) {
@@ -226,6 +271,121 @@ impl CasPanelState {
         let formula = preview.formula.clone();
         state.set_formula(formula)
     }
+    /// The honest provenance shown beside a result: the expression is the
+    /// analytic symbolic result, while every drawn value is sampled.
+    pub fn preview_provenance(&self) -> &'static str {
+        "Analytic symbolic result; plotted values are sampled on the active slice with the \
+         committed parameters and current time."
+    }
+
+    /// The valid region for the current result: the live slice and its holes.
+    pub fn preview_valid_region(&self, state: &State) -> String {
+        let frame = state.scalar_view_frame();
+        match self.preview.as_ref() {
+            Some(preview) if preview.kind == ResultKind::Scalar => {
+                match scalar_view_expr(&preview.formula, &state.parameters) {
+                    Ok(_) => format!(
+                        "{} {}",
+                        sampled_layer_label(&frame, f64::from(state.time)),
+                        slice_valid_region(&frame)
+                    ),
+                    Err(error) => error.to_string(),
+                }
+            }
+            Some(_) => format!(
+                "Components are sampled on the {} at t = {:.3}; each arrow uses the same \
+                 committed parameters.",
+                slice_label(&frame),
+                state.time
+            ),
+            None => "No current result.".to_owned(),
+        }
+    }
+
+    /// Plot the current scalar result into the active scene.
+    ///
+    /// Contours replace only the scalar-view layer that draws them and leave
+    /// the CAS input and the physics model source untouched. The potential
+    /// overlay reuses the shipped potential-gradient seam and leaves the
+    /// scalar source untouched. Both bind the current committed parameters,
+    /// simulated time and live slice; neither samples during this call beyond
+    /// the ordinary visible refresh.
+    pub fn apply_scene(
+        &mut self,
+        state: &mut State,
+        dimension: usize,
+        target: SceneTarget,
+    ) -> Result<String, String> {
+        self.scene_error = None;
+        let current_dimension = cas_dimension(state);
+        if dimension != current_dimension {
+            return Err(format!(
+                "the CAS result targets {dimension}D but the app is in {current_dimension}D"
+            ));
+        }
+        let Some(preview) = self.preview.as_ref() else {
+            return Err("there is no current CAS result to plot".to_owned());
+        };
+        if preview.kind != ResultKind::Scalar || preview.request != self.request(current_dimension)
+        {
+            return Err("only the current scalar result can be plotted".to_owned());
+        }
+        if state.field_mode != FieldMode::Formula || !state.is_vector_mode() {
+            return Err(
+                "switch to the Formula vector view to plot a CAS result on the scene".to_owned(),
+            );
+        }
+        let formula = preview.formula.clone();
+        scalar_view_expr(&formula, &state.parameters).map_err(|error| error.to_string())?;
+        let frame = state.scalar_view_frame();
+        let slice = slice_label(&frame);
+        let time = f64::from(state.time);
+        let region = slice_valid_region(&frame);
+        match target {
+            SceneTarget::Contours => {
+                state.set_scalar_source(ScalarContext::Surface, formula.clone());
+                if state.scalar_contour_levels() == 0 {
+                    state
+                        .set_scalar_contour_levels(8)
+                        .map_err(|error| error.to_string())?;
+                }
+                state.refresh_scalar_view(true);
+                self.scene_message = Some(format!(
+                    "Plotting analytic contours of {formula} on the {slice}; values are \
+                     sampled with the committed parameters at t = {time:.3}. {region} \
+                     The CAS input and the physics model source are unchanged."
+                ));
+            }
+            SceneTarget::PotentialField => {
+                if !state.scalar_view_applicable() {
+                    return Err(
+                        "the scalar overlay needs a valid surface source; plot the result as \
+                         contours first or fix the current scalar source"
+                            .to_owned(),
+                    );
+                }
+                let spec = potential_field_spec(formula.clone(), frame)?;
+                state
+                    .set_gradient(Some(spec))
+                    .map_err(|error| error.to_string())?;
+                state.refresh_scalar_analysis(true);
+                self.scene_message = Some(format!(
+                    "Overlaying E = -∇V from analytic V = {formula} on the {slice}. \
+                     Arrows point downhill: the minus sign is applied, so E points from \
+                     higher to lower V. Values are sampled with the committed parameters \
+                     at t = {time:.3}; the scalar source is unchanged. {region}"
+                ));
+            }
+        }
+        self.scene_edit = Some(target.edit_label());
+        Ok(self.scene_message.clone().unwrap_or_default())
+    }
+
+    /// Take the one named history edit the app should record for this frame.
+    pub fn take_scene_edit(&mut self) -> Option<&'static str> {
+        self.scene_edit.take()
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -378,12 +538,24 @@ const PREVIEW_RANGE: [f64; 2] = [-1.0, 1.0];
 /// A heatmap build failure is intentionally silent: the scalar result text still
 /// conveys the answer, and storing no image keeps a stale texture off screen.
 fn show_scalar_preview(ui: &mut egui::Ui, state: &State, panel: &mut CasPanelState, formula: &str) {
-    let key = cas_preview::preview_key(formula, PREVIEW_RANGE, state.colormap);
+    let frame = state.scalar_view_frame();
+    let time = f64::from(state.time);
+    let Ok(expr) = scalar_view_expr(formula, &state.parameters) else {
+        panel.preview_image = None;
+        panel.preview_image_key = None;
+        panel.preview_cache.clear();
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            "This result cannot be sampled on the active slice.",
+        );
+        return;
+    };
+    let key = cas_preview::slice_preview_key(formula, &frame, time, PREVIEW_RANGE, state.colormap);
     if panel.preview_image_key != Some(key) {
         panel.preview_image_key = Some(key);
         // Silent on failure: the result text is the answer and `None` drops stale texels.
         panel.preview_image =
-            cas_preview::scalar_heatmap(formula, PreviewPlane::Xy, PREVIEW_RANGE, state.colormap)
+            cas_preview::scalar_slice_heatmap(&expr, &frame, time, PREVIEW_RANGE, state.colormap)
                 .ok();
     }
     panel
@@ -392,7 +564,10 @@ fn show_scalar_preview(ui: &mut egui::Ui, state: &State, panel: &mut CasPanelSta
     if let Some(texture) = panel.preview_cache.texture() {
         let side = ui.available_width().clamp(1.0, PREVIEW_MAX_EDGE as f32);
         ui.add(egui::Image::new((texture.id(), egui::vec2(side, side))));
-        ui.label("Normalized teaching preview — not SI");
+        ui.label(format!(
+            "Normalized teaching preview — not SI · {} at t = {time:.3} with the committed parameters",
+            slice_label(&frame)
+        ));
     }
 }
 
@@ -468,7 +643,10 @@ fn show_enabled(
         panel.last_request = None;
     }
     panel.refresh(dimension);
+    ui.small(NATIVE_SYMBOLIC_NOTE);
+    ui.small(ANALYTIC_DIPOLE_ROUTE_NOTE);
     let mut apply_action = None;
+    let mut scene_target = None;
     if let Some(error) = &panel.action_error {
         ui.colored_label(ui.visuals().error_fg_color, format!("Error: {error}"));
     }
@@ -503,6 +681,14 @@ fn show_enabled(
             }
         ))
         .on_hover_text("Result kind is determined by the operation, not component count");
+        ui.small(panel.preview_provenance());
+        ui.small(panel.preview_valid_region(state));
+        if let Some(error) = &panel.scene_error {
+            ui.colored_label(ui.visuals().error_fg_color, format!("Scene: {error}"));
+        }
+        if let Some(message) = &panel.scene_message {
+            ui.label(format!("Scene: {message}"));
+        }
         ui.checkbox(&mut panel.typeset_output, "Typeset result")
             .on_hover_text("Show this result as typeset math when the expression is supported");
         if panel.typeset_output {
@@ -541,6 +727,53 @@ fn show_enabled(
         });
         if p.kind == ResultKind::Scalar {
             show_scalar_preview(ui, state, panel, &p.formula);
+            ui.horizontal_wrapped(|ui| {
+                let scene_ready = !sources_mode && vector_mode;
+                let contours = ui
+                    .add_enabled(
+                        scene_ready,
+                        egui::Button::new(SceneTarget::Contours.label()),
+                    )
+                    .on_hover_text(
+                        "Plot this analytic result as contours on the active slice; the CAS \
+                         input and the physics model source stay unchanged",
+                    );
+                let contours = if scene_ready {
+                    contours
+                } else {
+                    contours.on_disabled_hover_text(
+                        "switch to the Formula vector view to plot on the scene",
+                    )
+                };
+                if contours.clicked() {
+                    scene_target = Some(SceneTarget::Contours);
+                }
+                let overlay = ui
+                    .add_enabled(
+                        scene_ready,
+                        egui::Button::new(SceneTarget::PotentialField.label()),
+                    )
+                    .on_hover_text(
+                        "Overlay E = -∇V from this potential without replacing the scalar \
+                         source; arrows point downhill",
+                    );
+                let overlay = if scene_ready {
+                    overlay
+                } else {
+                    overlay.on_disabled_hover_text(
+                        "switch to the Formula vector view to overlay on the scene",
+                    )
+                };
+                if overlay.clicked() {
+                    scene_target = Some(SceneTarget::PotentialField);
+                }
+            });
+        }
+    }
+    if let Some(target) = scene_target {
+        match panel.apply_scene(state, dimension, target) {
+            Ok(_) => panel.scene_error = None,
+            Err(error) => panel.scene_error = Some(error),
         }
     }
     // Vector results and structured errors keep the text-only output; drop any

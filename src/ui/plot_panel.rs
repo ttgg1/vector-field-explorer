@@ -8,9 +8,39 @@
 use eframe::egui;
 
 use crate::colormap::Colormap;
+use crate::parameters::{Parameter, ParameterSet};
+use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::plot_examples::EXAMPLES;
+use crate::scalar_analysis::{
+    ANALYTIC_DIPOLE_ROUTE_NOTE, NATIVE_SYMBOLIC_NOTE, analytic_dipole_potential,
+};
+use crate::scalar_view::slice_label;
 use crate::viewmodel::State;
+
+/// Session-only draft for the analytic dipole route. It is stored in egui's
+/// temporary data so it never enters the document, the dirty flag or a saved
+/// scene.
+#[derive(Clone, Debug)]
+struct DipoleDraft {
+    axis: PlaneAxis,
+    separation: f64,
+    message: String,
+}
+
+impl Default for DipoleDraft {
+    fn default() -> Self {
+        Self {
+            axis: PlaneAxis::X,
+            separation: 1.0,
+            message: String::new(),
+        }
+    }
+}
+
+fn dipole_route_id() -> egui::Id {
+    egui::Id::unique("plot_analytic_dipole_route")
+}
 
 /// An app-level action the panel cannot run without a viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +136,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut State, compact: bool) -> Option<PlotP
             match state.plot.kind {
                 PlotKind::Curve2D => curve_controls(ui, state),
                 // Surface's one control (resolution) lives in Advanced.
-                PlotKind::Surface3D | PlotKind::VectorField => {}
+                PlotKind::Surface3D => dipole_route(ui, state),
+                PlotKind::VectorField => {}
             }
             color_controls(ui, state);
             range_controls(ui, state);
@@ -168,6 +199,87 @@ fn example_selector(ui: &mut egui::Ui, state: &mut State) {
     {
         state.select_plot_example(example);
     }
+}
+
+/// The analytic dipole route offered to every build, including web. The
+/// expression is plain surface text, so it never depends on the native symbolic
+/// engine; the symbolic CAS operations remain labelled native-only.
+fn dipole_route(ui: &mut egui::Ui, state: &mut State) {
+    let id = dipole_route_id();
+    let mut draft = ui
+        .data_mut(|data| data.get_temp::<DipoleDraft>(id))
+        .unwrap_or_default();
+    egui::CollapsingHeader::new("Analytic dipole potential")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.small(ANALYTIC_DIPOLE_ROUTE_NOTE);
+            ui.small(NATIVE_SYMBOLIC_NOTE);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Axis");
+                for axis in PlaneAxis::ALL {
+                    ui.selectable_value(&mut draft.axis, axis, axis.label());
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Separation d");
+                ui.add(
+                    egui::DragValue::new(&mut draft.separation)
+                        .speed(0.05)
+                        .range(0.01..=100.0),
+                );
+            });
+            if ui
+                .button("Use analytic potential")
+                .on_hover_text(
+                    "Load the closed-form dipole V as the surface source; the separation \
+                     stays editable as the committed parameter d",
+                )
+                .clicked()
+            {
+                draft.message = apply_dipole_route(state, draft.axis, draft.separation);
+            }
+            if !draft.message.is_empty() {
+                ui.label(&draft.message);
+            }
+        });
+    ui.data_mut(|data| data.insert_temp(id, draft));
+}
+
+fn apply_dipole_route(state: &mut State, axis: PlaneAxis, separation: f64) -> String {
+    if !separation.is_finite() || separation <= 0.0 {
+        return "Separation must be a finite positive number.".to_owned();
+    }
+    let frame = state.scalar_view_frame();
+    let dipole = match analytic_dipole_potential(axis, "d", &frame) {
+        Ok(dipole) => dipole,
+        Err(error) => return error,
+    };
+    let mut parameters = state.parameters.clone();
+    match parameters
+        .entries
+        .iter_mut()
+        .find(|entry| entry.name == "d")
+    {
+        Some(entry) => entry.value = separation,
+        None => parameters.entries.push(Parameter {
+            name: "d".to_owned(),
+            value: separation,
+            step: 0.1,
+            ..Parameter::default()
+        }),
+    }
+    if let Err(error) = ParameterSet::validate(&parameters) {
+        return error;
+    }
+    if let Err(error) = state.commit_parameters(parameters) {
+        return error;
+    }
+    state.set_active_source(dipole.expr.clone());
+    format!(
+        "Loaded on the {}. {} Separation d = {separation}.",
+        slice_label(&frame),
+        dipole.valid_region
+    )
 }
 
 fn curve_controls(ui: &mut egui::Ui, state: &mut State) {

@@ -653,6 +653,11 @@ impl VfApp {
                 Err(error) => self.cas.action_rejection = Some(error.to_string()),
             }
         }
+        // A result plotted into the active scene is one named document edit,
+        // even when the two layers are applied in the same frame.
+        if let Some(label) = self.cas.take_scene_edit() {
+            self.record_explicit_edit(label);
+        }
         self.show_prompt_model_body(ui);
     }
 

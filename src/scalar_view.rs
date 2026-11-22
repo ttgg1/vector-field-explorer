@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     domain::Domain,
     parameters::{ParameterSet, RESERVED_NAMES},
-    plane::PlaneFrame,
+    plane::{PlaneAxis, PlaneFrame},
     scalar::{ScalarContext, ScalarExpr},
     seed_layout::SeedAnchor,
 };
@@ -36,6 +36,40 @@ pub const MAX_CONTOUR_LEVELS: usize = 16;
 pub const SCALAR_RESAMPLE_INTERVAL: f64 = 0.1;
 /// User-facing reason for a formula that refers to `z`.
 pub const UNSUPPORTED_Z_REASON: &str = "scalar views support x/y formulas";
+
+/// A short, honest label for a slice frame, such as `XY slice at z = 1`.
+pub fn slice_label(frame: &PlaneFrame) -> String {
+    let plane = match frame.axis {
+        PlaneAxis::X => "YZ",
+        PlaneAxis::Y => "XZ",
+        PlaneAxis::Z => "XY",
+    };
+    let coordinate = frame.origin.dot(frame.normal);
+    format!("{plane} slice at {} = {coordinate}", frame.axis.label())
+}
+
+/// The display region a scalar view paints: the slice's in-plane half extents.
+pub fn slice_valid_region(frame: &PlaneFrame) -> String {
+    format!(
+        "{} covers x = {}..{} and y = {}..{} in slice coordinates; samples outside \
+         the finite domain are holes, never substituted values",
+        slice_label(frame),
+        -frame.half_u,
+        frame.half_u,
+        -frame.half_v,
+        frame.half_v
+    )
+}
+
+/// The one-line provenance a plotted scalar layer shows: the expression is
+/// analytic, while the drawn values are sampled on the active slice.
+pub fn sampled_layer_label(frame: &PlaneFrame, time: f64) -> String {
+    format!(
+        "Analytic expression; values are sampled on the {} at t = {time:.3} with the \
+         committed parameters.",
+        slice_label(frame)
+    )
+}
 
 /// One evaluated scalar sample. `value` is `None` when evaluation failed at
 /// this point (pole, domain exit, non-finite result), never a substituted

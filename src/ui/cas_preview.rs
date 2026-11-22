@@ -16,6 +16,8 @@ use std::hash::{Hash, Hasher};
 use eframe::egui;
 
 use crate::colormap::Colormap;
+use crate::plane::PlaneFrame;
+use crate::scalar::ScalarExpr;
 
 /// Maximum preview texels per axis.
 pub const PREVIEW_MAX_EDGE: u32 = 160;
@@ -109,6 +111,87 @@ pub fn scalar_heatmap(
         height,
         rgba,
     })
+}
+
+/// Paint a scalar result on the live slice frame at the live time.
+///
+/// `expr` is already parameter-substituted by the caller, so this preview shows
+/// the same values the vector scene's contour layer samples. The image spans
+/// the frame's real half extents rather than the fixed teaching window; a
+/// non-finite sample stays transparent.
+pub fn scalar_slice_heatmap(
+    expr: &ScalarExpr,
+    frame: &PlaneFrame,
+    time: f64,
+    range: [f64; 2],
+    palette: Colormap,
+) -> Result<PreviewImage, String> {
+    let [low, high] = range;
+    if !low.is_finite() || !high.is_finite() || high <= low {
+        return Err("preview range must be finite and increasing".into());
+    }
+    let half_u = f64::from(frame.half_u.abs());
+    let half_v = f64::from(frame.half_v.abs());
+    if !half_u.is_finite() || !half_v.is_finite() {
+        return Err("slice frame must be finite".into());
+    }
+    let width = PREVIEW_MAX_EDGE;
+    let height = PREVIEW_MAX_EDGE;
+    let mut rgba = vec![0; (width * height * 4) as usize];
+    let column_step = if width > 1 {
+        2.0 * half_u / f64::from(width - 1)
+    } else {
+        0.0
+    };
+    let row_step = if height > 1 {
+        2.0 * half_v / f64::from(height - 1)
+    } else {
+        0.0
+    };
+    let mut index = 0;
+    for row in 0..height {
+        let v = half_v - f64::from(row) * row_step;
+        for column in 0..width {
+            let u = -half_u + f64::from(column) * column_step;
+            if let Some(value) = expr.eval_at(u, v, time)
+                && value.is_finite()
+            {
+                let t = ((value - low) / (high - low)).clamp(0.0, 1.0) as f32;
+                let [r, g, b] = palette.from_unit(t);
+                rgba[index..index + 4].copy_from_slice(&[r, g, b, 255]);
+            }
+            index += 4;
+        }
+    }
+    Ok(PreviewImage {
+        width,
+        height,
+        rgba,
+    })
+}
+
+/// The cache identity of a live-slice preview: expression, slice frame, time,
+/// value range and palette.
+pub fn slice_preview_key(
+    expr: &str,
+    frame: &PlaneFrame,
+    time: f64,
+    range: [f64; 2],
+    palette: Colormap,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    expr.hash(&mut hasher);
+    frame.origin.to_array().map(f32::to_bits).hash(&mut hasher);
+    frame.right.to_array().map(f32::to_bits).hash(&mut hasher);
+    frame.up.to_array().map(f32::to_bits).hash(&mut hasher);
+    frame.normal.to_array().map(f32::to_bits).hash(&mut hasher);
+    frame.half_u.to_bits().hash(&mut hasher);
+    frame.half_v.to_bits().hash(&mut hasher);
+    time.to_bits().hash(&mut hasher);
+    range[0].to_bits().hash(&mut hasher);
+    range[1].to_bits().hash(&mut hasher);
+    palette.label().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The cache identity of a preview: expression, value range and palette.
