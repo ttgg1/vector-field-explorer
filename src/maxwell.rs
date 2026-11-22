@@ -34,6 +34,13 @@ pub const MAXWELL_INTERFACE_TOLERANCE_FACTOR: f64 = 1e-9;
 pub const MAXWELL_MAX_RELATIVE: f64 = 1e3;
 /// Largest accepted absolute display amplitude.
 pub const MAXWELL_MAX_AMPLITUDE: f64 = 1e3;
+/// Normalized teaching Coulomb constant for the grounded-plane potential. This
+/// is `k = 1` in teaching units, not the SI `1/(4*pi*epsilon_0)`.
+pub const IMAGE_PLANE_K: f64 = 1.0;
+/// Stated absolute tolerance for the normalized boundary-potential check at
+/// `z = 0`. The correct image pair cancels exactly in `f64`; this is the
+/// threshold a displayed reading must meet to be called zero.
+pub const IMAGE_PLANE_BOUNDARY_TOLERANCE: f64 = 1e-12;
 
 /// Exact interface warning text; never suppressible.
 pub const MAXWELL_INTERFACE_WARNING: &str = "Samples exactly on the interface are omitted because the analytic field is discontinuous there.";
@@ -1023,6 +1030,67 @@ fn image_plane_field(scene: &MaxwellScene, point: Vec3) -> Result<DVec3, Maxwell
     let real = offset / (distance * distance * distance);
     let image = image_offset / (image_distance * image_distance * image_distance);
     Ok((real - image) * scene.charge)
+}
+
+/// Normalized `k = 1` analytic potential for the physical grounded-plane image
+/// pair: a charge `q` at `(0, 0, h)` and the opposite image `-q` at `(0, 0, -h)`,
+/// so above the plane `V = q/|r - r1| - q/|r - r2|`. This is a pure evaluation
+/// of the shipped scene's charge and height, not a second physical case.
+///
+/// The valid half-space is `z > 0`; the boundary `z = 0` is where the analytic
+/// limit is checked. Below the plane and at both point singularities the value
+/// is unavailable rather than fabricated, matching [`image_plane_field`].
+pub fn image_plane_potential(scene: &MaxwellScene, point: Vec3) -> Result<f64, MaxwellError> {
+    let sign = -1.0;
+    let height = -scene.charge_height;
+    image_plane_trial_potential(scene, point, sign, height)
+}
+
+/// Evaluate a candidate image construction's normalized `k = 1` potential:
+/// a real charge `q` at `(0, 0, h)` and an image `image_sign * q` at
+/// `(0, 0, image_height)`. `image_sign = -1` with
+/// `image_height = -h` is the physical grounded-plane construction used by
+/// [`image_plane_potential`].
+///
+/// This is the lesson's pure boundary-test seam; it does not change the shipped
+/// field or add a second source model. The valid half-space is `z > 0`, and the
+/// source and candidate image singularities are excluded with the case's
+/// existing tolerance.
+pub fn image_plane_trial_potential(
+    scene: &MaxwellScene,
+    point: Vec3,
+    image_sign: f64,
+    image_height: f64,
+) -> Result<f64, MaxwellError> {
+    if scene.case != MaxwellCase::ImagePlane {
+        return Err(MaxwellError::InvalidScene(
+            "the image-plane potential is defined for the shipped ImagePlane case".into(),
+        ));
+    }
+    if !point.is_finite() || !image_sign.is_finite() || !image_height.is_finite() {
+        return Err(MaxwellError::Unsupported(
+            "the potential sample must be finite".into(),
+        ));
+    }
+    let p = point.as_dvec3();
+    if p.z < 0.0 {
+        return Err(MaxwellError::Unsupported(
+            "the grounded-plane potential is defined in the valid half-space z > 0".into(),
+        ));
+    }
+    let height = scene.charge_height;
+    let source = DVec3::new(0.0, 0.0, height);
+    let image_source = DVec3::new(0.0, 0.0, image_height);
+    let tolerance = case_tolerance(height);
+    let source_distance = (p - source).length();
+    if source_distance <= tolerance {
+        return Err(MaxwellError::Unsupported("point-charge singularity".into()));
+    }
+    let image_distance = (p - image_source).length();
+    if image_distance <= tolerance {
+        return Err(MaxwellError::Unsupported("image-charge singularity".into()));
+    }
+    Ok(IMAGE_PLANE_K * scene.charge * (1.0 / source_distance + image_sign / image_distance))
 }
 
 /// Renderer-independent outline for the selected case.

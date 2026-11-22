@@ -144,6 +144,7 @@ mod perf_baseline_test;
 mod perf_present_test;
 mod persistence_test;
 mod pins_test;
+mod plane_lesson_test;
 mod plane_particles_test;
 mod plane_scene_test;
 mod plane_test;

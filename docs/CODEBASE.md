@@ -425,18 +425,17 @@ The welcome card also carries the optional **Try a Griffiths problem** button
 
 **Purpose.** A session-only four-route picker reachable from the welcome card
 and the Help window. `GriffithsRoute::ALL` lists ring, shell, plane and wire with
-their edition/locator labels; `Ring`, `Shell` and `Wire` are available in this
-slice. The picker draws into `GriffithsState` (`picker_open`, `placeholder`,
-`lesson`, `shell`, `wire`) and returns `GriffithsAction::{OpenRing, OpenShell,
-OpenWire, Placeholder(route), Dismiss}`. Selecting an unavailable route never
-touches the scene; it sets a plainly labelled "not available yet" placeholder
-that the learner can close.
+their edition/locator labels; all four routes are available in this slice. The
+picker draws into `GriffithsState` (`picker_open`, `placeholder`, `lesson`,
+`shell`, `plane`, `wire`) and returns `GriffithsAction::{OpenRing, OpenShell,
+OpenPlane, OpenWire, Placeholder(route), Dismiss}`. The placeholder path remains
+safe for a future unavailable route; no shipped route currently uses it.
 
 **Pinned by.** [tests/griffiths_tour_test.rs](../tests/griffiths_tour_test.rs):
 `the_welcome_card_offers_the_optional_griffiths_branch`,
 `help_offers_the_branch_and_can_replay_it_after_a_lesson`,
 `the_branch_and_ring_route_work_in_wide_and_compact_layouts`,
-`unavailable_routes_are_safe_labelled_placeholders`, and
+`all_four_routes_are_available_and_the_plane_route_opens_its_lesson`, and
 `the_legacy_help_window_has_no_dead_griffiths_control`. The last test renders
 `help_window_with_bindings`, which cannot act on a branch request, and proves it
 draws no inert Griffiths button; only the app's `help_window_with_branch` path
@@ -556,6 +555,48 @@ remains visible beside its radius in a default-height compact sheet.
 `pinned_readouts_show_the_active_model_and_hide_inactive_ones`,
 `pinned_items_explain_unavailability_and_never_show_stale_values`, and
 `tray_pointer_and_keyboard_paths_pin_the_same_items`.
+
+#### `src/ui/plane_lesson.rs` — grounded-plane image-charge activity (#226)
+
+**Purpose.** The Griffiths §3.2 route. It loads the shipped
+`MaxwellCase::ImagePlane` scene in a vertical `x-z` slice (a `PlaneAxis::Y`
+slice of the ordinary 2D view) and wraps the shipped `maxwell_field` plus one
+pure normalized `k = 1` potential helper in a prediction-gated activity. The
+helper evaluates `V = q/|r - r1| - q/|r - r2|` for the source at `(0, 0, h)` and
+the mirror image at `(0, 0, -h)`; the trial form is the same expression with a
+signed candidate image. No new physical case, quadrature, solver, arbitrary
+tolerance or durable probe surface exists, and the scene's charge and height are
+the shipped fields unchanged.
+
+**Invariants.** The question and the separate trial sign/location prompts precede
+the construction and result; `can_reveal` requires both predictions or an
+explicit skip, and predictions remain revisable until the reveal. Before the
+reveal the learner can move the lateral boundary test across several positions;
+the candidate table is labelled as a trial construction, not the physical
+scene. The correct image gives `V = 0` at `z = 0` at every tested lateral
+position within the stated `1e-12` tolerance, while a same-sign image is visibly
+nonzero and the lesson states that failure. The result reveals the mirror
+negative image, the valid half-space `z > 0`, the renderer's omitted ground
+slice, and the source/image singularities excluded at `(0, 0, ±h)`. The field
+probe just above the plane shows a small but finite tangential component at a
+finite height and the normal limiting field; all values are normalized `k = 1`
+teaching units, not SI. The analytic vertical-slice expression is offered with
+its provenance and, on native, can be placed in the CAS input through the
+existing #214 CAS/scalar route; no second CAS model is created. Back/Exit
+restores the scene, slice, projection and camera snapshot; Keep exploring adopts
+the plane scene and slice; a fresh activation (including Help replay) resets the
+prediction.
+
+**Pinned by.** [tests/plane_lesson_test.rs](../tests/plane_lesson_test.rs):
+`the_plane_route_is_selectable_from_the_picker_and_replayable_from_help`,
+`the_prompt_precedes_the_reveal_and_states_the_construction`,
+`the_correct_image_has_zero_boundary_potential_at_multiple_lateral_positions`,
+`a_same_sign_image_fails_the_boundary_potential_test`,
+`the_limiting_field_just_above_the_plane_has_no_tangential_component`,
+`the_valid_half_space_and_both_singularities_are_excluded`,
+`the_analytic_potential_formula_reaches_the_cas_input_with_provenance`,
+`back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_plane`, and
+`the_plane_lesson_stays_usable_in_wide_and_compact_layouts`.
 
 #### `src/ui/wire_lesson.rs` — surface-current wire B/circulation activity (#227)
 
@@ -5846,9 +5887,8 @@ and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
 `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
-`ode_panel`, `panel_rails`, `plot_panel`, `presets`, `prompt_help`,
-`prompt_model`,
-`ring_lesson`, `shell_lesson`, `sidebar`,
+`ode_panel`, `panel_rails`, `plane_lesson`, `plot_panel`, `presets`, `prompt_help`,
+`prompt_model`, `ring_lesson`, `shell_lesson`, `sidebar`,
 `sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
 `viewport_tool`, `wire_lesson`.
@@ -6113,7 +6153,7 @@ browser or JavaScript engine.
 **Public API.** `shared_context() -> &'static KatexContext`;
 `install_math_fonts(ctx)` (idempotent startup registration);
 `layout_math(ui, tex, context) -> Option<MathLayout>`;
-`MathLayout::{is_empty, size, paint}`;
+`MathLayout::{is_empty, size, paint_bounds, content_size, paint}`;
 `paint_tex_or_linear(ui, tex, linear) -> bool`; `show_linear(ui, linear)`;
 and the `#[doc(hidden)] math_layout_from_items` finiteness test seam.
 
@@ -6127,9 +6167,14 @@ at app startup (before the first frame, on native and WebAssembly through
 text, rectangles, line segments, and convex paths wholly inside their clip are
 emitted; radicals and other non-convex or clipped paths fall back to linear. A
 layout wider or taller than the available space falls back to linear instead of
-painting a clipped fragment. Dimensions use the body text size and the layout's
-baseline/depth. `Layout.tag` and `equation_numbers` are ignored because the
-settings never enable numbering and the printer never emits `\tag`.
+painting a clipped fragment. The painted extent is the union of every converted
+shape's `visual_bounding_rect`, not just KaTeX's width/height metadata; the
+caller allocates that union plus a small padding and [`MathLayout::paint`]
+offsets the shapes into it, so overhanging glyphs are never clipped to an empty
+strip. Both the metadata box and the painted bounds are checked against the
+available space before allocating. Dimensions use the body text size and the
+layout's baseline/depth. `Layout.tag` and `equation_numbers` are ignored because
+the settings never enable numbering and the printer never emits `\tag`.
 
 **wasm evidence.** `katex-rs` and `katex-native` are target-independent
 dependencies, and `math_view` compiles for `wasm32-unknown-unknown` so the
