@@ -730,7 +730,7 @@ impl VfApp {
     fn show_prompt_model_body(&mut self, ui: &mut egui::Ui) {
         use crate::ui::prompt_model::{self, PromptModelState};
 
-        let id = egui::Id::unique("prompt_model_state");
+        let id = prompt_model::state_id();
         let mut state = ui
             .data_mut(|data| data.get_temp::<PromptModelState>(id))
             .unwrap_or_default();

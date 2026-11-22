@@ -3162,19 +3162,50 @@ summary, not a numeric answer.
 ambiguity questions, separation editor and Apply/Cancel controls for one typed
 prompt.
 
-**Public API.** `PromptModelState` (`input`, `model`, `error`, `message`;
-`parse`, `resolve`, `resolve_axis`, `set_separation`, `cancel`, `preview`),
-`PromptModelAction` (`Parse`, `Resolve`, `ResolveAxis`, `SetSeparation`,
-`Apply`, `Cancel`), `show`.
+**Public API.** `PromptModelState` (`input`, `model`, `error`, `message`,
+`help_open`; `parse`, `resolve`, `resolve_axis`, `set_separation`, `cancel`,
+`preview`), `PromptModelAction` (`Parse`, `Resolve`, `ResolveAxis`,
+`SetSeparation`, `Apply`, `Cancel`), `state_id`, `show`.
 
 **Invariants.** The panel is session-local: it draws from the model and returns
 at most one explicit action per frame; it never mutates `State`, a saved scene or
-a durable probe. Applying is delegated to
+a durable probe. Opening or closing the in-context glossary toggles only
+`help_open`; it preserves the typed prompt, parsed model, error and message.
+Escape is consumed by the open glossary so it dismisses only that panel.
+Applying is delegated to
 `VfApp::apply_prompt_model_action`, which uses the ordinary scene setters.
-`tests/prompt_model_test.rs` pins the section's painted title and preview.
+`tests/prompt_model_test.rs` pins the section's painted title and preview;
+`tests/prompt_help_test.rs` pins the help pointer, focus, Escape, compact/wide
+and document-neutral paths.
 
 **Limitations.** The controls are a section inside the CAS area (native only in
 this slice); they do not add a new top-level layout mode.
+
+#### `src/ui/prompt_help.rs` — in-context prompt glossary
+
+**Purpose.** Issue #273: the session-only Help / Glossary beside the
+`Interpret a prompt` heading. It explains only the shipped point-charge and
+dipole vocabulary, source signs and placements, dipole axis/orientation and the
+positive-end question, separation, frame and normalized teaching units, ideal
+versus softened evaluation, ambiguity questions, unsupported distributions and
+the formula path, and Apply versus Cancel.
+
+**Public API.** `PromptModelState::help_open`, `prompt_help::show` plus the stable
+`GLOSSARY_SECTIONS`, `ACCEPTED_EXAMPLES`, `REJECTED_EXAMPLES` and
+`UNSUPPORTED_DISTRIBUTION_TERMS` tables. `state_id` names the egui temporary-store
+key so the app and tests share one state instance.
+
+**Invariants.** The glossary is rendered inside the prompt section and is
+session-only; opening it does not parse, apply, persist or edit anything.
+Accepted and rejected examples are validated against
+`prompt_model::parse_prompt` in `tests/prompt_help_test.rs`, so the help cannot
+drift into a second grammar. Each `UNSUPPORTED_DISTRIBUTION_TERMS` noun is
+absent from `ACCEPTED_EXAMPLES` and has a matching `REJECTED_EXAMPLES` prompt;
+that restriction covers the example tables, not prose that merely names an
+unsupported distribution.
+
+**Limitations.** The help is a long in-panel glossary, not a separate window or
+saved document.
 
 #### `src/domain.rs` — sampling box and grid iterator
 
@@ -5858,8 +5889,8 @@ and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
 `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
-`ode_panel`, `panel_rails`, `plot_panel`, `presets`, `prompt_model`,
-`plane_lesson`, `ring_lesson`, `shell_lesson`, `sidebar`,
+`ode_panel`, `panel_rails`, `plane_lesson`, `plot_panel`, `presets`, `prompt_help`,
+`prompt_model`, `ring_lesson`, `shell_lesson`, `sidebar`,
 `sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
 `viewport_tool`, `wire_lesson`.
