@@ -4,6 +4,7 @@ pub mod branding;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cas_panel;
 pub mod cas_preview;
+pub mod field_compare;
 pub mod formula_bar;
 pub mod gauss_shell;
 pub mod griffiths;

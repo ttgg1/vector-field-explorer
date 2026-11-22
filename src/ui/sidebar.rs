@@ -59,6 +59,7 @@ use crate::seed_layout::{
 use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, SeedLayoutDocument, SeedLayoutProfile};
 use crate::source_scene::{FieldMode, SourceDisplay};
 use crate::sources::FieldFamily;
+use crate::ui::field_compare::FieldCompareControls;
 use crate::view_command::{ClickActionPlan, click_action_plan};
 use crate::viewmodel::{
     ArrowLengthMode, DEFAULT_DENSITY_2D, DEFAULT_MAGNITUDE_SCALE, DEFAULT_PARTICLE_SIZE,
@@ -1014,6 +1015,8 @@ pub struct Controls {
     pub palette_apply_requested: bool,
     /// Session-only named-parameter drafts for the Variables section.
     pub variables: VariablesControls,
+    /// Session-only candidate comparison drafts and prediction gate (issue #215).
+    pub field_compare: FieldCompareControls,
     pub streamlines: bool,
     /// Which streamline seed sources are shown while the Feature is on.
     pub seed_mode: StreamlineSeedMode,
@@ -1131,6 +1134,7 @@ impl Controls {
             palette_message: String::new(),
             palette_apply_requested: false,
             variables: VariablesControls::default(),
+            field_compare: FieldCompareControls::default(),
             streamlines: false,
             seed_mode: StreamlineSeedMode::Auto,
             streamline_count: 0,
@@ -2894,6 +2898,12 @@ fn show_inner(
     // sections and only exists for the formula field in a vector view.
     if variables_visible(state.field_mode, vector_mode) {
         variables_section(ui, state, controls);
+    }
+
+    // Issue #215: the session-only candidate comparison sits beside the
+    // formula-only sections. Its collapsed body samples nothing.
+    if crate::ui::field_compare::visible(state.field_mode, vector_mode) {
+        crate::ui::field_compare::show(ui, state, &mut controls.field_compare);
     }
 
     if state.field_mode != crate::source_scene::FieldMode::Ode
