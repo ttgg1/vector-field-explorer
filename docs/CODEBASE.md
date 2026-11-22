@@ -405,6 +405,55 @@ compact sheet in compact layout; a second layout path does not exist.
 `help_menu_entry_is_labelled_start_or_restart_truthfully`; the flux control
 target is also pinned in `tests/tour_test.rs`.
 
+The welcome card also carries the optional **Try a Griffiths problem** button
+(#223 phase 1). It returns `TourAction::Griffiths`; the card itself, the ordered
+`TOUR` and every quick-tour behavior are unchanged.
+
+#### `src/ui/griffiths.rs` — optional Griffiths branch picker (#223 phase 1)
+
+**Purpose.** A session-only four-route picker reachable from the welcome card
+and the Help window. `GriffithsRoute::ALL` lists ring, shell, plane and wire with
+their edition/locator labels; only `Ring` is available in this slice. The picker
+draws into `GriffithsState` (`picker_open`, `placeholder`, `lesson`) and returns
+`GriffithsAction::{OpenRing, Placeholder(route), Dismiss}`. Selecting an
+unavailable route never touches the scene; it sets a plainly labelled "not
+available yet" placeholder that the learner can close.
+
+**Pinned by.** [tests/griffiths_tour_test.rs](../tests/griffiths_tour_test.rs):
+`the_welcome_card_offers_the_optional_griffiths_branch`,
+`help_offers_the_branch_and_can_replay_it_after_a_lesson`,
+`the_branch_and_ring_route_work_in_wide_and_compact_layouts`, and
+`unavailable_routes_are_safe_labelled_placeholders`.
+
+#### `src/ui/ring_lesson.rs` — charged-ring axial-field activity (#224)
+
+**Purpose.** The Griffiths 2.5 activity. It reuses the shipped `Uniform ring`
+source preset and the ordinary public source `Evaluator`, so the softened curve
+is the same model the Sources adapter draws; no new ring, quadrature or hidden
+tolerance exists. The ideal reference is `Ez = kQz/(R^2+z^2)^(3/2)` with the
+preset's normalized `Q = 1`, `R = 1` and softening `0.1`.
+
+**Invariants.** The question and prediction prompt precede the result block;
+`can_reveal` requires a prediction or an explicit skip, and predictions remain
+revisable until the reveal. The first hint distinguishes the fixed ring radius
+`R` from the probe coordinate `z`. Moving the probe invalidates the cached
+reading and updates the signed component, the side-view vector and the graph
+marker. The ideal and softened curves are drawn separately and the softened
+peak is never graded against the ideal `|z| = R/√2` peak. On native, the
+revealed formula can be sent to the CAS input with `Q` and `R` symbolic; the
+reading itself never requires the CAS backend. Session state only;
+the app snapshots the scene and camera before the lesson, Back/Exit restores
+that snapshot, and Keep exploring drops it and adopts the ring scene.
+
+**Pinned by.** [tests/ring_lesson_test.rs](../tests/ring_lesson_test.rs):
+`the_ideal_curve_is_zero_odd_and_peaks_at_r_over_root_two`,
+`the_softened_evaluator_is_a_distinct_curve_and_zero_at_the_centre`,
+`a_fresh_lesson_shows_the_prompt_before_any_result`,
+`the_probe_updates_the_signed_component_and_marker_value`,
+`predicting_or_skipping_unlocks_the_reveal_and_revision_is_allowed`,
+`the_ring_route_loads_the_shipped_preset_and_restores_the_starting_scene`, and
+`keep_exploring_adopts_the_ring_scene`.
+
 #### `src/main.rs` — native and wasm bootstrap
 
 **Purpose.** Native `main` and the browser `wasm_bindgen(start)` entry point,
@@ -5533,10 +5582,12 @@ thread.
 
 Declares `appearance_panel`, `branding`, `cas_preview` (compiled on both
 targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`
-and `math_view`, `formula_bar`, `gauss_shell`, `help_overlay`, `induction_panel`,
+and `math_view`, `formula_bar`, `gauss_shell`, `griffiths`, `help_overlay`,
+`induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
-`ode_panel`, `panel_rails`, `plot_panel`, `presets`, `sidebar`, `sources_panel`,
+`ode_panel`, `panel_rails`, `plot_panel`, `presets`, `ring_lesson`, `sidebar`,
+`sources_panel`,
 `status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
 `viewport_tool`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,

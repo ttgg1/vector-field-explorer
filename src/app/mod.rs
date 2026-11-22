@@ -39,6 +39,7 @@ use crate::tour::{PanelId, TourProgress};
 use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogState};
 use crate::ui::appearance_panel::AppearancePanelState;
 use crate::ui::formula_bar::FormulaBarState;
+use crate::ui::griffiths::GriffithsState;
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::interaction_panel::InteractionPanel;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
@@ -88,6 +89,17 @@ mod viewport;
 #[cfg(not(target_arch = "wasm32"))]
 pub fn presets_data_dir() -> std::path::PathBuf {
     default_preset_dir()
+}
+
+/// The scene and camera captured before a temporary Griffiths activity opens.
+/// Back/Exit restores it; Keep exploring drops it and adopts the activity scene.
+struct GriffithsStart {
+    state: State,
+    orbit: OrbitCamera,
+    camera_position: [f32; 2],
+    camera_scale: f32,
+    history: EditHistory<EditSnapshot>,
+    last_committed: EditSnapshot,
 }
 
 /// What the status bar reports this frame: the latest formula parse state
@@ -253,6 +265,12 @@ pub struct VfApp {
     /// active or finished so the Help entry can restart it; nothing here is
     /// persisted or recorded in history.
     pub tour: Option<TourProgress>,
+    /// Issue #223 phase 1: the optional Griffiths branch, its four-route picker
+    /// and the ring lesson. Session-only; never persisted or recorded in history.
+    pub griffiths: GriffithsState,
+    /// The scene and camera captured before the ring lesson opened, used by
+    /// Back/Exit. `None` outside the lesson or after Keep exploring adopts.
+    griffiths_start: Option<GriffithsStart>,
     /// The value snapshotted for an `AdvanceRule::Changed` stop, keyed by the
     /// stop index so it is recaptured exactly when that stop becomes current.
     tour_snapshot: Option<(usize, Option<String>)>,
@@ -605,6 +623,8 @@ impl VfApp {
             about_open: false,
             help_open: false,
             tour: None,
+            griffiths: GriffithsState::default(),
+            griffiths_start: None,
             tour_snapshot: None,
             tour_rects: TourFrameRects::new(),
             tour_card_rect: None,
@@ -900,7 +920,9 @@ impl VfApp {
             Some(crate::ui::tour_overlay::TourAction::Next) => self.tour_next(),
             Some(crate::ui::tour_overlay::TourAction::Back) => self.tour_back(),
             Some(crate::ui::tour_overlay::TourAction::Dismiss) => self.tour_dismiss(),
-            Some(crate::ui::tour_overlay::TourAction::None) | None => {}
+            Some(crate::ui::tour_overlay::TourAction::None)
+            | Some(crate::ui::tour_overlay::TourAction::Griffiths)
+            | None => {}
         }
     }
 
@@ -940,6 +962,12 @@ impl VfApp {
             crate::ui::tour_overlay::TourAction::Next => self.tour_next(),
             crate::ui::tour_overlay::TourAction::Back => self.tour_back(),
             crate::ui::tour_overlay::TourAction::Dismiss => self.tour_dismiss(),
+            crate::ui::tour_overlay::TourAction::Griffiths => {
+                // The optional branch replaces the quick-tour card; the quick
+                // tour stays restartable from Help.
+                self.tour_dismiss();
+                self.open_griffiths_branch();
+            }
             crate::ui::tour_overlay::TourAction::None => {}
         }
     }

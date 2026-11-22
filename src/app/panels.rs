@@ -14,8 +14,10 @@ use crate::scalar_view::MAX_PROBES;
 use crate::scene_document::{SceneCamera, SceneDocument};
 use crate::sources::FieldFamily;
 use crate::tour::{ControlId, TourTarget};
+use crate::ui::griffiths::{GriffithsAction, GriffithsRoute};
 use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
 use crate::ui::presets::SceneAction;
+use crate::ui::ring_lesson::{RingLessonAction, RingPrediction, RingReading};
 use crate::viewmodel::{MAX_DENSITY_2D, MAX_DENSITY_3D, MIN_DENSITY};
 
 impl VfApp {
@@ -1111,6 +1113,170 @@ impl VfApp {
         }
     }
 
+    /// Open the optional Griffiths branch from the welcome card or the Help
+    /// window. It never touches the scene until a route is chosen.
+    pub fn open_griffiths_branch(&mut self) {
+        self.help_open = false;
+        self.griffiths.open();
+    }
+
+    /// Start one Griffiths route. The ring route captures the starting scene
+    /// once and loads the shipped `Uniform ring` preset through its ordinary
+    /// loader; unavailable routes only set a safe placeholder message.
+    pub fn start_griffiths_route(&mut self, route: GriffithsRoute) {
+        if !route.available() {
+            self.griffiths.placeholder = Some(route);
+            self.griffiths.picker_open = true;
+            return;
+        }
+        self.griffiths.picker_open = false;
+        self.griffiths.placeholder = None;
+        if self.griffiths_start.is_none() {
+            self.griffiths_start = Some(GriffithsStart {
+                state: self.state.clone(),
+                orbit: self.orbit,
+                camera_position: self.camera.position,
+                camera_scale: self.camera.scale,
+                history: self.history.clone(),
+                last_committed: self.last_committed.clone(),
+            });
+        }
+        let preset = crate::source_presets::source_preset("Uniform ring")
+            .expect("the shipped Uniform ring preset exists");
+        if !crate::source_presets::load_source_preset(preset, &mut self.state) {
+            // The shipped preset is validated by tests; if it ever fails, do
+            // not leave a half-open lesson pretending a ring was loaded.
+            self.exit_griffiths_lesson();
+            return;
+        }
+        // Side view: look along +X so the ring is edge-on and the z axis runs
+        // vertically in the viewport.
+        self.orbit.yaw = 0.0;
+        self.orbit.pitch = std::f32::consts::FRAC_PI_2;
+        self.orbit.distance = 4.0;
+        self.orbit.target = Vec3::ZERO;
+        self.camera.position = [0.0, 0.0];
+        self.camera.scale = 1.0;
+        self.griffiths.lesson.activate();
+        self.help_open = false;
+    }
+
+    /// Back/Exit from the ring lesson: restore the exact scene and camera from
+    /// before the branch opened.
+    pub fn exit_griffiths_lesson(&mut self) {
+        if let Some(start) = self.griffiths_start.take() {
+            self.state = start.state;
+            self.orbit = start.orbit;
+            self.camera.position = start.camera_position;
+            self.camera.scale = start.camera_scale;
+            self.history = start.history;
+            self.last_committed = start.last_committed;
+        }
+        self.griffiths.lesson.deactivate();
+        self.griffiths.close();
+    }
+
+    /// Adopt the activity scene: drop the starting snapshot and keep the ring.
+    pub fn keep_griffiths_scene(&mut self) {
+        self.griffiths_start = None;
+        self.griffiths.lesson.deactivate();
+        self.griffiths.close();
+    }
+
+    /// Test seam: whether the four-route picker is up.
+    #[doc(hidden)]
+    pub fn griffiths_picker_open_for_test(&self) -> bool {
+        self.griffiths.picker_open
+    }
+
+    /// Test seam: the unavailable route whose placeholder is showing.
+    #[doc(hidden)]
+    pub fn griffiths_placeholder(&self) -> Option<GriffithsRoute> {
+        self.griffiths.placeholder
+    }
+
+    /// Test seam: clear an unavailable-route placeholder.
+    #[doc(hidden)]
+    pub fn close_griffiths_placeholder(&mut self) -> bool {
+        self.griffiths.close_placeholder()
+    }
+
+    /// Test seam: whether the ring activity is active.
+    #[doc(hidden)]
+    pub fn ring_lesson_active_for_test(&self) -> bool {
+        self.griffiths.lesson.active()
+    }
+
+    /// Test seam: whether the pre-lesson snapshot has been dropped.
+    #[doc(hidden)]
+    pub fn griffiths_start_snapshot_is_none_for_test(&self) -> bool {
+        self.griffiths_start.is_none()
+    }
+
+    /// Test seam: move the lesson probe.
+    #[doc(hidden)]
+    pub fn set_ring_probe_for_test(&mut self, z: f64) {
+        self.griffiths.lesson.set_probe_z(z);
+    }
+
+    /// Test seam: commit a prediction.
+    #[doc(hidden)]
+    pub fn predict_ring_for_test(&mut self, prediction: RingPrediction) {
+        self.griffiths.lesson.select_prediction(prediction);
+    }
+
+    /// Test seam: reveal the lesson result.
+    #[doc(hidden)]
+    pub fn reveal_ring_for_test(&mut self) {
+        self.griffiths.lesson.reveal();
+    }
+
+    /// Test seam: the current signed/ideal reading.
+    #[doc(hidden)]
+    pub fn ring_lesson_reading_for_test(&mut self) -> Option<RingReading> {
+        self.griffiths
+            .lesson
+            .active()
+            .then(|| self.griffiths.lesson.reading().clone())
+    }
+
+    /// Test seam: apply the "Show axis formula in CAS" action.
+    #[doc(hidden)]
+    pub fn send_ring_formula_to_cas_for_test(&mut self) {
+        self.send_ring_formula_to_cas();
+    }
+
+    /// Draw the optional Griffiths branch and apply its one-shot actions.
+    fn show_griffiths_overlays(&mut self, ctx: &egui::Context) {
+        match crate::ui::griffiths::show_picker(ctx, &mut self.griffiths) {
+            GriffithsAction::OpenRing => self.start_griffiths_route(GriffithsRoute::Ring),
+            GriffithsAction::Placeholder(route) => self.griffiths.placeholder = Some(route),
+            GriffithsAction::Dismiss => self.griffiths.close(),
+            GriffithsAction::None => {}
+        }
+        match crate::ui::ring_lesson::show(ctx, &mut self.griffiths.lesson) {
+            RingLessonAction::Back => self.exit_griffiths_lesson(),
+            RingLessonAction::KeepExploring => self.keep_griffiths_scene(),
+            RingLessonAction::SendToCas => self.send_ring_formula_to_cas(),
+            RingLessonAction::None => {}
+        }
+    }
+
+    /// Put the ideal axis formula in the native CAS input with `Q` and `R`
+    /// symbolic. The core activity reading never depends on this backend.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn send_ring_formula_to_cas(&mut self) {
+        self.cas.input = crate::ui::ring_lesson::RING_CAS_EXPRESSION.to_owned();
+        self.layout.cas_expanded = true;
+        if self.layout_mode == LayoutMode::Compact {
+            self.sheet.open(SheetState::Cas);
+            self.sheet_expanded = SheetSize::Default;
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn send_ring_formula_to_cas(&mut self) {}
+
     /// Open the probe that actually checks the selected Maxwell statement form,
     /// or run the existing pointwise check for a differential form. An integral
     /// action never overwrites an existing user probe; it reuses the first one
@@ -2114,13 +2280,21 @@ impl VfApp {
         // its × (its open flag is the window's visibility).
         top_bar::about_window(ui.ctx(), &mut self.about_open);
 
-        // Help > Keyboard & mouse (ticket 18): the full help table, the same
-        // strings the overlay above renders.
-        crate::ui::help_overlay::help_window_with_bindings(
+        let mut branch_requested = false;
+        crate::ui::help_overlay::help_window_with_branch(
             ui.ctx(),
             &mut self.help_open,
             &self.interaction.bindings,
+            &mut branch_requested,
         );
+        if branch_requested {
+            self.open_griffiths_branch();
+        }
+
+        // Issue #223 phase 1 / #224: the optional Griffiths picker and ring
+        // activity. Both are session-only windows over the current scene; they
+        // paint after Help so a branch opened from Help is visible immediately.
+        self.show_griffiths_overlays(ui.ctx());
 
         // Animation export: publish the running job's progress, then draw the
         // dialog over everything. The dialog returns one action; the app owns
