@@ -17,7 +17,7 @@ use vector_field_explorer::maxwell::{
 use vector_field_explorer::plane::PlaneAxis;
 use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::griffiths::{
-    GRIFFITHS_PICKER_TITLE, GRIFFITHS_PLANE_LABEL, GriffithsRoute,
+    GRIFFITHS_PICKER_TITLE, GRIFFITHS_PLANE_LABEL, GRIFFITHS_SHOW_HINT, GriffithsRoute,
 };
 use vector_field_explorer::ui::menu::MenuAction;
 use vector_field_explorer::ui::plane_lesson::{
@@ -210,6 +210,8 @@ fn the_prompt_precedes_the_reveal_and_states_the_construction() {
     h.idle();
     h.app.open_griffiths_branch();
     h.app.start_griffiths_route(GriffithsRoute::Plane);
+    h.idle();
+    click_label(&mut h, GRIFFITHS_SHOW_HINT);
     h.idle();
 
     let text = texts(&h.frame(Vec::new())).join("\n");

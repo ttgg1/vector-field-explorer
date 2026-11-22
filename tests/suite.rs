@@ -80,6 +80,7 @@ mod fly_camera_test;
 mod fonts_test;
 mod gauss_shell_selection_test;
 mod gauss_shell_test;
+mod griffiths_checkpoint_test;
 mod griffiths_tour_test;
 mod heatmap_gpu_test;
 mod help_overlay_test;

@@ -39,7 +39,7 @@ use crate::tour::{PanelId, TourProgress};
 use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogState};
 use crate::ui::appearance_panel::AppearancePanelState;
 use crate::ui::formula_bar::FormulaBarState;
-use crate::ui::griffiths::GriffithsState;
+use crate::ui::griffiths::{GriffithsCheckpoint, GriffithsRoute, GriffithsState};
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::interaction_panel::InteractionPanel;
 use crate::ui::layout::{self, LayoutMode, LayoutState, SheetSize, SheetState};
@@ -101,6 +101,15 @@ struct GriffithsStart {
     camera_scale: f32,
     history: EditHistory<EditSnapshot>,
     last_committed: EditSnapshot,
+}
+
+/// The session-only scene and lesson snapshot saved when the learner chooses
+/// Explore from here. Resuming restores it; keeping the variation drops it.
+struct GriffithsExploration {
+    route: GriffithsRoute,
+    checkpoint: GriffithsCheckpoint,
+    scene: GriffithsStart,
+    lesson_state: GriffithsState,
 }
 
 /// What the status bar reports this frame: the latest formula parse state
@@ -277,6 +286,11 @@ pub struct VfApp {
     /// The scene and camera captured before a Griffiths lesson opened, used by
     /// Back/Exit. `None` outside the lesson or after Keep exploring adopts.
     griffiths_start: Option<GriffithsStart>,
+    /// The temporary exploration snapshot, if the learner chose Explore from
+    /// here. Distinct from `griffiths_start`; session-only.
+    griffiths_exploration: Option<GriffithsExploration>,
+    /// Whether the learner returned and is choosing resume or keep variation.
+    griffiths_return_prompt: bool,
     /// The value snapshotted for an `AdvanceRule::Changed` stop, keyed by the
     /// stop index so it is recaptured exactly when that stop becomes current.
     tour_snapshot: Option<(usize, Option<String>)>,
@@ -622,6 +636,8 @@ impl VfApp {
             tour: None,
             griffiths: GriffithsState::default(),
             griffiths_start: None,
+            griffiths_exploration: None,
+            griffiths_return_prompt: false,
             tour_snapshot: None,
             tour_rects: TourFrameRects::new(),
             tour_card_rect: None,
