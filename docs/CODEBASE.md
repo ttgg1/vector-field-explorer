@@ -5853,10 +5853,11 @@ faraday_loop, faraday_reverse }`, `InductionPanelState::default`,
 - The collapsed-by-default Faraday comparison reads the committed scene and the
   selected committed probe loop without editing either. `faraday_loop` selects
   an existing loop, and `faraday_reverse` flips a session-only copy of its axis
-  (and therefore both the contour and the normal). The one-period table and the
-  current readout are cached on the 100 ms-quantised clock, show the method,
-  sample counts, softening and full/half-resolution spread, and paint an
-  explicit unavailable/inaccurate state instead of a confident number.
+  (and therefore both the contour and the normal). The one-period series is
+  keyed by the loop, scene and softening; only the live current readout is
+  quantised to 100 ms. Both show the method, sample counts, softening and
+  full/half-resolution spread, and paint an explicit unavailable/inaccurate
+  state instead of a confident number.
 
 **Pinned by.** `tests/induction_panel_test.rs`
 (`induction_panel_wide_and_compact_expose_all_controls`,

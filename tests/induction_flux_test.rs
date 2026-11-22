@@ -231,6 +231,73 @@ fn open_surface_flux_uses_the_loop_normal_and_area() {
     assert!((value + expected).abs() <= 1e-12, "{value}");
 }
 
+struct MissingField;
+
+impl ProbeField for MissingField {
+    fn eval(&self, _point: Vec3, _time: f64) -> Option<Vec3> {
+        None
+    }
+}
+
+#[test]
+fn open_surface_flux_withholds_missing_samples_instead_of_reporting_zero() {
+    let loop_ = circle(0.5, 8);
+    let report = open_surface_flux(&MissingField, &loop_, FieldFamily::Magnetic, 0.0);
+    match &report.status {
+        IntegralStatus::Unresolved { reason } => {
+            assert!(reason.contains("missing"), "{reason}");
+            assert!(reason.contains("unsupported"), "{reason}");
+            assert!(reason.contains("sample"), "{reason}");
+        }
+        other => panic!("an all-missing field must be unresolved, got {other:?}"),
+    }
+    assert_eq!(report.samples, 64, "one full-resolution patch per sample");
+    assert_eq!(
+        report.failed_patches, 64,
+        "every withheld patch is counted, never folded into a zero contribution"
+    );
+}
+
+#[test]
+fn comparison_withholds_unavailable_magnetic_samples_and_both_flux_estimates() {
+    let scene = scene();
+    // A very small softening makes the unit-current B samples unavailable
+    // while the independent E circulation still resolves. The comparison must
+    // name the withheld samples rather than publish a confident flux.
+    let comparison = induction_flux_comparison(&scene, &circle(0.5, 8), 0.0, 1e-9);
+    assert!(comparison.unavailable.is_none(), "{comparison:?}");
+    assert!(
+        matches!(comparison.unit_flux, IntegralStatus::Unresolved { .. }),
+        "the open-surface flux must be unresolved: {comparison:?}"
+    );
+    assert!(
+        comparison.unavailable_samples > 0,
+        "unavailable B samples are counted: {comparison:?}"
+    );
+    assert_eq!(comparison.inaccurate_samples, 0, "{comparison:?}");
+    assert_eq!(
+        comparison.unit_flux_samples, 64,
+        "the full-resolution patch count survives a failed pass"
+    );
+    assert!(
+        comparison.flux_estimate().is_none(),
+        "no magnetic flux estimate may be published"
+    );
+    assert!(
+        comparison.flux_derivative_estimate().is_none(),
+        "no flux-rate estimate may be published"
+    );
+    assert!(!comparison.is_confident(), "{comparison:?}");
+    let label = comparison.status_label();
+    assert!(label.to_lowercase().contains("unavailable"), "{label}");
+    assert!(label.contains("could not be evaluated"), "{label}");
+    // The electric side is independent and still resolves at this softening.
+    assert!(
+        comparison.circulation_estimate().is_some(),
+        "the E circulation must not be withheld by unavailable B samples: {comparison:?}"
+    );
+}
+
 fn widget_labels(output: &eframe::egui::FullOutput) -> Vec<String> {
     let Some(update) = output.platform_output.accesskit_update.as_ref() else {
         return Vec::new();
