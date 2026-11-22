@@ -41,6 +41,8 @@ mod cas_preview_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_rails_test;
 #[cfg(not(target_arch = "wasm32"))]
+mod cas_scene_test;
+#[cfg(not(target_arch = "wasm32"))]
 mod cas_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod cas_tex_test;
@@ -141,6 +143,7 @@ mod perf_baseline_test;
 #[cfg(not(target_arch = "wasm32"))]
 mod perf_present_test;
 mod persistence_test;
+mod pins_test;
 mod plane_particles_test;
 mod plane_scene_test;
 mod plane_test;

@@ -544,6 +544,7 @@ fn sample_settings() -> AppSettings {
         seed_layouts: Vec::new(),
         up_axis: Default::default(),
         bake: BakeSettings::default(),
+        pin_ui: Default::default(),
     }
 }
 

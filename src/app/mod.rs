@@ -47,6 +47,7 @@ use crate::ui::material_panel::MaterialPanelState;
 use crate::ui::maxwell_panel::MaxwellPanelState;
 use crate::ui::menu::{self, MenuAction};
 use crate::ui::ode_panel::OdePanelState;
+use crate::ui::pins::PinsState;
 use crate::ui::presets::PresetPanel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::presets::default_preset_dir;
@@ -234,6 +235,10 @@ pub struct VfApp {
     /// without applying a layout or dirtying the scene, and written back in
     /// [`eframe::App::save`]. The Flow-section UI edits it in slice S3b.
     pub seed_layouts: SeedLayoutLibrary,
+    /// The durable pin working set and named arrangements (issue #232).
+    /// Restored without touching the physical model and written back in
+    /// [`eframe::App::save`]. Session-only name text and messages live here too.
+    pub pins: PinsState,
     /// The persisted look-and-feel record (ticket 07): restored from eframe's
     /// app-state storage on startup and written back in [`eframe::App::save`].
     /// It lives app-side and never touches the viewmodel `State`.
@@ -561,6 +566,9 @@ impl VfApp {
                 log::warn!("persisted seed layouts could not be loaded: {error}");
                 SeedLayoutLibrary::default()
             });
+        // Issue #232: restore the pin preference without applying a model edit.
+        // `load` already sanitized the record.
+        let pins = PinsState::new(settings.pin_ui);
         // Issue #171: restore the CAS result-display preference directly. This
         // is a display setting and never dirties the scene.
         #[cfg(not(target_arch = "wasm32"))]
@@ -601,6 +609,7 @@ impl VfApp {
             interaction,
             interaction_profiles,
             seed_layouts,
+            pins,
             style: settings.style,
             layout: settings.layout,
             layout_mode: LayoutMode::Wide,

@@ -512,6 +512,51 @@ The app loads the route through the ordinary `set_field_mode(Maxwell)` and
 `back_exit_restores_the_starting_scene_and_keep_exploring_adopts_the_shell`, and
 `the_shell_lesson_stays_usable_in_wide_and_compact_layouts`.
 
+#### `src/pin_layout.rs` and `src/ui/pins.rs` — pinned controls and readings (#232)
+
+**Purpose.** A bounded reference list over existing controls and readouts:
+`PinItem::{GaussRadius, GaussFlux, GaussShellRadius, GaussScaleLock,
+InductionFrequency, InductionTime, InductionOrientation}`, the ordered
+`PinSet`, named `PinArrangement`s and the durable `PinUiRecord`
+(`active` plus `saved`). `GaussRadius` is the only editable control for now;
+every other item is a read-only readout. `ui/pins.rs` draws the tray and
+returns one `PinAction::SetGaussRadius` when the learner edits the pinned
+radius.
+
+**Scope.** The catalogue covers the items named by the issue through the
+ordinary app state. `GaussShellRadius` reports the committed
+`MaxwellScene::radius` (`R = …`), `GaussScaleLock` reports `State::auto_fit` as
+`Auto`/`Locked` and is available in every model, and `InductionTime` /
+`InductionOrientation` report the shared `SimClock` time and the committed
+`InductionScene::axis` while induction is active. No new control is invented
+for the readouts, and no value is fabricated when its model is inactive.
+
+**Invariants.** Pin identities are stable tokens; unknown or duplicate items,
+empty/overlong/duplicate names and excess entries are repaired by
+`PinUiRecord::sanitized`, so a hand-edited or older envelope cannot fail the
+whole settings load. The record stores no model, probe, report or sampled
+value: pinned radius edits go through `GaussShellState::set_probe_radius`, the
+same setter as the original control, and pinned readings are formatted from the
+ordinary `report_for`/`State::induction`/clock values each frame. A pinned item
+that the active model cannot supply is listed with an explicit reason instead of
+a stale value. The app draws the tray in the wide Controls panel and at the top
+of every compact sheet; the radius and flux rows stay single-line so the flux
+remains visible beside its radius in a default-height compact sheet.
+
+**Pinned by.** [tests/pins_test.rs](../tests/pins_test.rs):
+`pin_unpin_and_reorder_keep_order_and_reject_duplicates`,
+`named_arrangements_round_trip_and_bounded_names_are_repaired`,
+`invalid_and_missing_pin_entries_decode_without_corrupting_the_envelope`,
+`named_preference_round_trips_and_restores_the_same_model`,
+`layout_switch_and_sheet_restore_preserve_the_model`,
+`pinned_radius_widget_action_applies_through_the_shared_setter`,
+`catalogue_has_stable_ids_and_one_editable_control`,
+`readout_values_follow_shared_state_and_the_scale_lock_is_always_available`,
+`gauss_shell_radius_readout_follows_the_committed_scene`,
+`pinned_readouts_show_the_active_model_and_hide_inactive_ones`,
+`pinned_items_explain_unavailability_and_never_show_stale_values`, and
+`tray_pointer_and_keyboard_paths_pin_the_same_items`.
+
 #### `src/ui/wire_lesson.rs` — surface-current wire B/circulation activity (#227)
 
 **Purpose.** The Griffiths 5.14(a) route. It loads the shipped
@@ -2516,7 +2561,10 @@ never interpolated. Contour levels are finite, strictly increasing and at most
 formulas return `UNSUPPORTED_Z_REASON` ("scalar views support x/y formulas").
 A hidden cache samples nothing; a changed key causes exactly one rebuild.
 Probes keep world positions and optional `SeedAnchor`s as document state while
-sampled values/points remain runtime-only and unpersisted.
+sampled values/points remain runtime-only and unpersisted. Issue #214 adds
+display helpers `slice_label`, `slice_valid_region` and `sampled_layer_label`;
+they only format the frame's axis, constant coordinate and half extents for the
+CAS and plot provenance text, and they never sample or mutate.
 
 **Pinned by.** [tests/scalar_view_test.rs](../tests/scalar_view_test.rs):
 `constant_field_grid_is_uniform_and_finite` through
@@ -2614,9 +2662,26 @@ series and no gradient. `State::set_comparison_series`/`set_gradient` validate
 and dirty once on a real change; they never touch arrows, colour mapping or
 probes.
 
+**Issue #214 analytic route.** `AnalyticDipole { expr, valid_region, role }`,
+`analytic_dipole_potential(dipole_axis, separation_name, frame)`,
+`potential_field_spec(expr, frame)`, `DEFAULT_GRADIENT_STEP = 1e-3`,
+`DEFAULT_GRADIENT_MAX_ERROR = 5e-2`, `ANALYTIC_DIPOLE_ROUTE_NOTE` and
+`NATIVE_SYMBOLIC_NOTE` add the platform-neutral closed-form dipole potential on
+one slice. The potential is ordinary surface text in `x`, `y` and a committed
+separation parameter (normally `d`), so editing that parameter re-evaluates
+both contour and gradient layers from the same expression. The dipoles are
+ideal normalized unit charges at `±separation/2` around the slice origin's
+projection; the valid-region text names the slice and both poles, and a dipole
+normal to the slice is reported as degenerate rather than hidden.
+`potential_field_spec` builds the existing `E = -∇V` request with the shipped
+bounds; no second solver or tolerance is introduced. `NATIVE_SYMBOLIC_NOTE`
+lists the symbolic operations as native-only without claiming the
+finite-difference overlay, which is platform-neutral, is symbolic.
+
 **Pinned by.** `tests/scalar_analysis_test.rs` (the fourteen contract tests),
 series/gradient envelope and corrupt-record pins in `tests/persistence_test.rs`,
-and the scene JSON round-trip/legacy pins in `tests/scene_document_test.rs`.
+the scene JSON round-trip/legacy pins in `tests/scene_document_test.rs`, and
+`tests/cas_scene_test.rs` for the analytic route and parameter-driven layers.
 
 **Slice B UI/render seam.** The Scalar view's collapsed "Scalar analysis"
 subsection owns session-only `Controls` drafts (`ScalarAnalysisControls`,
@@ -4388,7 +4453,7 @@ migration and corruption tolerance.
 
 **Public API.** `AppSettings { style, layout, view, parameters, viewport_style,
 layer_styles, appearance_profiles, interaction, interaction_profiles,
-seed_layouts, preset_ui, object_style, up_axis, bake }`,
+seed_layouts, preset_ui, object_style, up_axis, bake, pin_ui }`,
 `BakeSettings { enabled, resolution_3d, resolution_2d }`,
 `AppSettings::sanitized`;
 `ViewRecord` (all fields, `capture`, `restore`, `restore_material_fields`,
@@ -4411,6 +4476,7 @@ seed_layouts, preset_ui, object_style, up_axis, bake }`,
 | `object_style: ObjectStyle` | `Solid` or `Wireframe` | `#[serde(default)]`; an absent key loads `Solid`; an unknown token is repaired to `Solid` with one warning by the enum decoder, and a non-string stored value is repaired to `Solid` by the field wrapper, leaving every other field intact |
 | `up_axis: UpAxis` | display-only `Z` (default), `X` or `Y`, stored lowercase as `z`, `x`, `y` | `#[serde(default)]`; an absent key loads `Z`; an unknown token is repaired to `Z` with one warning by the enum decoder, and a non-string stored value is repaired to `Z` by the field wrapper. The default is genuinely Z-up (physics convention); the token `y` selects the old historical Y-up view. It is assigned at the startup seam without dirtying and never appears in `ViewRecord`, scenes, appearance profiles or edit history |
 | `bake: BakeSettings` | `enabled` (default false), `resolution_3d` (default 48), `resolution_2d` (default 128) | `#[serde(default)]`; an absent key loads the disabled record; out-of-range resolutions clamp into `16..=64` / `32..=256` with one warning. Only the settings are stored; the lattice is runtime-only and never enters `ViewRecord`, scenes, profiles or history. An enabled startup build is bounded and non-dirtying; a refusal records the reason instead of failing startup |
+| `pin_ui: PinUiRecord` | `active: PinSet { items: [] }` (empty by default; for example `[gauss_radius, gauss_flux, induction_frequency]` when the learner pins them) and `saved: [PinArrangement { name, items }]` | `#[serde(default)]`; an absent key starts with no pins. Unknown item tokens, duplicates, empty/overlong names, duplicate arrangement names and entries beyond 8 items / 12 arrangements are dropped by `PinUiRecord::sanitized` through lenient decoders, so invalid entries cannot fail the envelope. The record holds no model, probe or sampled value |
 
 **Migration and fallback rules.**
 1. `load(None)` → defaults.
@@ -5923,26 +5989,37 @@ The GPU plot and export paths stay untouched.
 **Public API.** `PREVIEW_MAX_EDGE`, `PREVIEW_SPAN`, `PreviewPlane`
 (`Xy`/`Xz`/`Yz`), `PreviewImage { width, height, rgba }`,
 `scalar_heatmap(expr, plane, range, palette)`, `preview_key(expr, range,
-palette)`, and `PreviewCache` with `sync(ctx, image, key)` and `texture()`.
+palette)`, the issue #214 live-slice pair `scalar_slice_heatmap(expr, frame,
+time, range, palette)` / `slice_preview_key(expr, parameters, frame, time,
+range, palette)`, and `PreviewCache` with `sync(ctx, image, key)` and
+`texture()`.
 
 **Invariants.** Both axes are capped at `PREVIEW_MAX_EDGE` (160) texels. The
 expression is parsed through the existing `meval` scalar environment and binds
 `x`, `y`, `z`, `t`; a non-finite sample is fully transparent and never a NaN
 colour. Finite values map through `Colormap::from_unit` after clamping to the
-caller-supplied range. `preview_key` hashes only expression, range, and palette.
-`PreviewCache` uploads one `egui::TextureHandle` and ignores an unchanged key,
-so the panel neither resamples nor allocates a texture per frame.
+caller-supplied range. `preview_key` hashes only expression, range, and palette;
+`slice_preview_key` also hashes the committed parameter names/values, the frame
+basis and half extents, and the sampled time, so editing a parameter, moving the
+slice or advancing the clock invalidates the image. The slice painter samples
+the frame's real half extents through `ScalarExpr::eval_at` after the panel
+substitutes committed parameters. `PreviewCache` uploads one
+`egui::TextureHandle` and ignores an unchanged key, so the panel neither
+resamples nor allocates a texture per frame.
 
 **Pinned by.** `tests/cas_preview_test.rs`:
 `test_preview_heatmap_is_bounded_and_finite`,
 `test_preview_matches_palette_endpoints`,
 `test_preview_key_changes_with_expression_range_and_palette`,
 `test_non_finite_samples_are_transparent`,
-`test_cache_does_not_rebuild_for_an_unchanged_key`.
+`test_cache_does_not_rebuild_for_an_unchanged_key`;
+`tests/cas_scene_test.rs::the_thumbnail_samples_the_active_slice_time_and_parameters`
+and `tests/cas_scene_test.rs::a_parameter_only_edit_rebuilds_the_scalar_thumbnail`
+for a parameter-only edit rebuilding the painted thumbnail.
 
-**Limitations.** Normalized teaching thumbnail only, not an SI-scaled plot; one
-fixed XY plane and a fixed `[-1, 1]` palette window in the panel; no vector or
-error preview, no export, persistence, or GPU resource.
+**Limitations.** Normalized teaching thumbnail only, not an SI-scaled plot; the
+shipped `scalar_heatmap` helper still uses a fixed `[-1, 1]` teaching window; no
+vector or error preview, no export, persistence, or GPU resource.
 
 #### `src/ui/cas_panel.rs` — native symbolic tools
 
@@ -5978,6 +6055,25 @@ fails to lay the document out, or a display item cannot be painted exactly,
 the panel falls back to the linear editor and the weak note
 `Showing linear result`. Copy still copies the canonical linear formula, and
 structured errors are shown verbatim, never typeset.
+
+Issue #214 connects a scalar result to the active scene. `SceneTarget`
+(`Contours`, `PotentialField`) and `CasPanelState::apply_scene` reuse only the
+shipped layers: contours replace the scalar-view source (creating eight levels
+when the user hid them) and the potential target installs an
+`E = -∇V` `GradientSpec` on the live slice frame while leaving the scalar
+source untouched. Both bind the committed parameters and current time, report
+the slice and its valid region, and label the result as an analytic expression
+whose drawn values are sampled. The scalar thumbnail now samples the active
+slice and time with parameters substituted. `take_scene_edit` reports one named
+history edit (`plot CAS contours`, `overlay E = -∇V`) which
+`app/panels.rs::show_cas_body` records through `record_explicit_edit`. Each
+click is one action and therefore exactly one undo entry: undoing the overlay
+leaves the contours it did not change, and a second undo restores the contour
+source. The panel states that symbolic operations are native-only, separates
+them from the platform-neutral finite-difference overlay, and names the
+platform-neutral analytic dipole route. Pinned by `tests/cas_scene_test.rs`
+(contour/overlay application, per-action undo,
+parameter-driven layer update, provenance/region wording).
 
 #### `src/ui/math_view.rs` — native typeset display-list adapter
 
@@ -6059,8 +6155,16 @@ plot-section reset.
 - Fit is disabled with a visible explanation when no finite geometry exists.
 - The section reset restores plot settings/draft and preserves the vector
   formula; no new shortcut or global settings page is added.
+- Issue #214 adds the collapsed `Analytic dipole potential` route in Surface
+  mode. It builds the closed-form potential through
+  `scalar_analysis::analytic_dipole_potential`, commits the editable separation
+  as parameter `d`, and loads the expression through the ordinary source setter.
+  The route and its note are compiled for web and native; the native symbolic
+  CAS boundary is labelled, not reimplemented. Its draft lives in egui temp data
+  and never enters the document.
 
-**Pinned by.** `tests/plot_ui_test.rs`.
+**Pinned by.** `tests/plot_ui_test.rs` and
+`tests/cas_scene_test.rs::the_plot_panel_offers_the_analytic_dipole_route`.
 
 #### `src/ui/sources_panel.rs` — editable source scene
 

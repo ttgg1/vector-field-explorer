@@ -321,6 +321,7 @@ fn colormap_row_drives_state_scene_and_persistence() {
         up_axis: Default::default(),
         object_style: Default::default(),
         bake: Default::default(),
+        pin_ui: Default::default(),
     };
     let mut storage = MemoryStorage::default();
     vector_field_explorer::persistence::save(&mut storage, &settings);

@@ -45,6 +45,7 @@ use crate::particles::{
     DEFAULT_PARTICLE_FIXED_COLOR, DEFAULT_PARTICLE_OPACITY, DEFAULT_STAGNATION_SECONDS,
     DEFAULT_TRAIL_FADE, DEFAULT_TRAIL_WIDTH, MAX_PARTICLES, ParticleAppearance, ParticleColorMode,
 };
+use crate::pin_layout::PinUiRecord;
 use crate::plane::PlaneAxis;
 use crate::plot::PlotKind;
 use crate::profile_library::MAX_USER_PROFILES;
@@ -145,6 +146,13 @@ pub struct AppSettings {
     /// [`ViewRecord`], scene, profile or history snapshot.
     #[serde(default)]
     pub bake: BakeSettings,
+    /// The active pin working set and named pin arrangements (issue #232).
+    /// Missing on older envelopes, which start with no pins. This record never
+    /// contains model state, probe geometry or sampled values; restoring it
+    /// cannot mutate or stale the physical model. Invalid items/names are
+    /// repaired by [`AppSettings::sanitized`].
+    #[serde(default)]
+    pub pin_ui: PinUiRecord,
 }
 
 /// Persisted Presets-panel state. Only the per-group expansion is durable; the
@@ -353,6 +361,13 @@ impl AppSettings {
             seed_layouts.push(profile);
         }
         self.seed_layouts = seed_layouts;
+        // Issue #232: the pin preference is a pure reference list. Repair its
+        // items, names, duplicates and bounds; it can never touch the model.
+        let repaired_pins = self.pin_ui.clone().sanitized();
+        if repaired_pins != self.pin_ui {
+            log::warn!("persisted pin preference is invalid; repairing it");
+            self.pin_ui = repaired_pins;
+        }
         // `preset_ui` is four bools, so every persisted value is valid; the
         // lenient decoder has already replaced a corrupt record.
         if let Err(error) = self.parameters.validate() {
