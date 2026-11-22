@@ -365,7 +365,8 @@ pub fn show(
     egui::CollapsingHeader::new("Maxwell equations")
         .default_open(false)
         .show(ui, |ui| {
-            measurement = learning.show(ui, committed, bem);
+            measurement =
+                learning.show_with_wave(ui, committed, state.maxwell_wave().as_ref(), bem);
         });
 
     ui.label("View: Field");

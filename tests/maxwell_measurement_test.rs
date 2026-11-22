@@ -10,6 +10,7 @@ use crate::support;
 use vector_field_explorer::VfApp;
 use vector_field_explorer::maxwell::{MaxwellCase, MaxwellScene};
 use vector_field_explorer::maxwell_learning::{EquationForm, MaxwellEquation};
+use vector_field_explorer::maxwell_wave::WaveSpec;
 use vector_field_explorer::sources::FieldFamily;
 use vector_field_explorer::ui::maxwell_learning_panel::{
     MAXWELL_PARTIAL_MEASUREMENT_NOTE, MaxwellLearningPanel, MeasurementKind,
@@ -195,6 +196,16 @@ fn scene(case: MaxwellCase) -> MaxwellScene {
     }
 }
 
+fn wave_spec() -> WaveSpec {
+    WaveSpec {
+        amplitude: 1.5,
+        wavelength: 2.0,
+        direction: glam::Vec3::X,
+        polarization: glam::Vec3::Y,
+        phase: 0.25,
+    }
+}
+
 #[test]
 fn every_equation_and_form_maps_to_the_matching_measurement() {
     for equation in MaxwellEquation::ALL {
@@ -349,6 +360,77 @@ fn applying_an_integral_law_adds_or_reuses_the_matching_family_probe() {
         1,
         "a second action reuses the existing surface"
     );
+}
+
+#[test]
+fn wave_display_allows_both_guided_flux_families() {
+    for (case, equation, family) in [
+        (
+            MaxwellCase::Solenoid,
+            MaxwellEquation::GaussElectric,
+            FieldFamily::Electric,
+        ),
+        (
+            MaxwellCase::ParallelPlates,
+            MaxwellEquation::GaussMagnetic,
+            FieldFamily::Magnetic,
+        ),
+    ] {
+        let mut h = Harness::new(scene(case));
+        assert!(h.app.state.set_maxwell_wave(Some(wave_spec())));
+        h.app.state.refresh_maxwell_sampling();
+        h.app.maxwell.learning.equation = equation;
+        h.app.maxwell.learning.form = EquationForm::Integral;
+
+        h.click("Maxwell equations");
+        let texts = painted_texts(&h.frame(Vec::new())).join("\n");
+        assert!(
+            !texts.contains("supplies") && !texts.contains("cannot measure"),
+            "the wave display supplies both families, so no case-only explanation is shown: {texts}"
+        );
+
+        h.click("Open flux surface");
+        assert_eq!(
+            h.app.state.probe_family(),
+            family,
+            "the guided measurement selects the requested family"
+        );
+        assert_eq!(
+            h.app.state.probe_surfaces().len(),
+            1,
+            "the request reaches one oriented surface"
+        );
+        let report = h
+            .app
+            .state
+            .probe_surface_report(0)
+            .expect("the open Field probes section reports the integrated wave field");
+        assert!(
+            matches!(
+                report.status,
+                vector_field_explorer::field_probe::IntegralStatus::Estimate { .. }
+            ),
+            "the wave supplies the requested family instead of a case-scoped refusal: {:?}",
+            report.status
+        );
+    }
+}
+
+#[test]
+fn case_scoped_measurement_refusal_remains_without_a_wave() {
+    let mut h = Harness::new(scene(MaxwellCase::ParallelPlates));
+    h.app.maxwell.learning.equation = MaxwellEquation::GaussMagnetic;
+    h.app.maxwell.learning.form = EquationForm::Integral;
+
+    h.click("Maxwell equations");
+    h.click("Open flux surface");
+    let texts = painted_texts(&h.frame(Vec::new())).join("\n");
+    assert!(texts.contains("supplies E only"), "{texts}");
+    assert!(h.app.state.probe_surfaces().is_empty());
+
+    assert!(h.app.state.set_maxwell_wave(Some(wave_spec())));
+    let texts = painted_texts(&h.frame(Vec::new())).join("\n");
+    assert!(!texts.contains("supplies E only"), "{texts}");
 }
 
 #[test]
