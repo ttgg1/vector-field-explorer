@@ -774,6 +774,9 @@ fn a_failed_scene_flush_keeps_the_edits_bound_to_the_same_scene() {
     let path = dir.path().join("scenes.json");
     std::fs::remove_file(&path).expect("the saved file exists");
     std::fs::create_dir(&path).expect("the file is replaced by a directory");
+    let marker = path.join("keep.txt");
+    let contents = "not part of the scene store";
+    std::fs::write(&marker, contents).expect("the directory contains unrelated data");
     panel
         .flush_scenes()
         .expect_err("the write is refused while the path is a directory");
@@ -782,12 +785,22 @@ fn a_failed_scene_flush_keeps_the_edits_bound_to_the_same_scene() {
     panel
         .flush_scenes()
         .expect_err("a failed flush does not clear the dirty state");
+    assert!(path.is_dir(), "the obstruction was not moved or replaced");
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("the obstruction still contains its data"),
+        contents
+    );
+    assert!(
+        !dir.path().join(".scenes.json.bak").exists(),
+        "the obstruction was not backed up"
+    );
     assert_eq!(
         panel.scenes().get("A").map(|scene| scene.camera.scale),
         Some(2.0),
         "the in-memory edit stays on the scene it was made against"
     );
 
+    std::fs::remove_file(&marker).expect("the marker is removed");
     std::fs::remove_dir(&path).expect("the blocking directory is removed");
     panel
         .flush_scenes()
