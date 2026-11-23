@@ -107,10 +107,11 @@ routine review, and scoped fixes. GPT-6.2 Astra uses its lowest supported
 variant (`low`) for complex implementation and release-blocking/high-risk fixes,
 because the 6.2 family exposes no `none`. The explicit `reviewer-openai-release`
 role uses GPT-6.2 Sol high for the owner-authorized release/high-risk review
-gate; every other review starts at low. OpenCode Go: DeepSeek V4.1 Flash low for
+gate; every other review starts at its profile's lowest configured effort.
+OpenCode Go: DeepSeek V4.1 Flash low for
 orchestration, implementation, and fixes; GLM 5.3 Flash low for independent
 review. MiMo V2.6 Flash is an explicit alternative reviewer; the current catalog
- exposes no variant for it.
+exposes no variant for it.
 
 ### Free-first lanes (opt-in)
 
@@ -141,7 +142,7 @@ gate. Check data eligibility before sending a review package; in particular,
 [OpenCode Go lists 30-day retention for Beam Free](https://opencode.ai/docs/console/go/#privacy).
 
 Both lane controllers can dispatch only the three HY4 roles. The operator
-invokes any alternate reviewer or approved escalation separately and returns
+invokes any alternate reviewer or approved escalation in a separate session and returns
 its report to the lane controller. Escalate only the blocked role: record the
 failure, exact HEAD, expected deliverable, and owner authorization; then resume
 the chosen lane. Existing effort rules, stop conditions, verification, and
