@@ -83,6 +83,7 @@ pub(crate) fn reference_lines_visible_with(
     if sampling_3d {
         if show_grid {
             cube_grid_and_box(domain, &mut lines, style);
+            mark_grid(&mut lines);
         }
         if show_coordinate_system {
             cube_axes(domain, &mut lines, style);
@@ -90,6 +91,7 @@ pub(crate) fn reference_lines_visible_with(
     } else {
         if show_grid {
             plane_grid(domain, &mut lines, style);
+            mark_grid(&mut lines);
         }
         if show_coordinate_system {
             plane_axes(domain, &mut lines, style);
@@ -120,9 +122,10 @@ pub fn scaled_viewport_style(
 ) -> ViewportStyle {
     let opacity = sanitized_opacity(resolved.opacity);
     let width = if resolved.width.is_finite() {
-        resolved
-            .width
-            .clamp(crate::layer_style::MIN_WIDTH_MULTIPLIER, crate::layer_style::MAX_WIDTH_MULTIPLIER)
+        resolved.width.clamp(
+            crate::layer_style::MIN_WIDTH_MULTIPLIER,
+            crate::layer_style::MAX_WIDTH_MULTIPLIER,
+        )
     } else {
         1.0
     };
@@ -196,6 +199,7 @@ pub fn reference_plane_lines_with(
             );
         }
     }
+    mark_grid(&mut lines);
     if show_coordinate_system {
         push(
             &mut lines,
@@ -234,6 +238,12 @@ fn push(lines: &mut Vec<LineInstanceGPU>, a: Vec3, b: Vec3, color: [f32; 4], wid
         b: [b.x, b.y, b.z, width],
         color,
     });
+}
+
+fn mark_grid(lines: &mut [LineInstanceGPU]) {
+    for line in lines {
+        line.a[3] = LineInstanceGPU::GRID_TAG;
+    }
 }
 
 /// Sample `k` of `divisions` between `lo` and `hi`, inclusive on both ends.

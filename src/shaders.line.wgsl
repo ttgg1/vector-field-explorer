@@ -22,7 +22,7 @@ struct Globals {
 var<uniform> globals: Globals;
 
 struct LineInstance {
-    a: vec4<f32>,       // xyz start, w = 1.0
+    a: vec4<f32>,       // xyz start, w = -1 for reference grid, 1 for painter lines
     b: vec4<f32>,       // xyz end,   w = line width (world units)
     color: vec4<f32>,   // rgba 0..1
 };
@@ -33,6 +33,8 @@ var<storage, read> line_instances: array<LineInstance>;
 struct VertexOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) projected: vec4<f32>,
+    @location(2) @interpolate(flat) role: f32,
 };
 
 @vertex
@@ -58,13 +60,26 @@ fn vs_line(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
         corner = p + side * half_w * sgn;
     }
 
-    return VertexOut(
-        globals.view_proj * vec4<f32>(corner, 1.0),
-        inst.color,
-    );
+    let clip = globals.view_proj * vec4<f32>(corner, 1.0);
+    return VertexOut(clip, inst.color, clip, inst.a.w);
 }
 
 @fragment
 fn fs_line(v: VertexOut) -> @location(0) vec4<f32> {
+    return v.color;
+}
+
+@group(1) @binding(0) var body_depth: texture_depth_2d;
+
+@fragment
+fn fs_object_aware_line(v: VertexOut) -> @location(0) vec4<f32> {
+    if v.role == -1.0 {
+        // Same viewport-local NDC as the object composite, independent of
+        // screen offset, scissor, DPI and capture size.
+        let uv = v.projected.xy / v.projected.w * vec2(0.5, -0.5) + 0.5;
+        let size = vec2<i32>(textureDimensions(body_depth));
+        let texel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2(0), size - 1);
+        if v.pos.z > textureLoad(body_depth, texel, 0) { discard; }
+    }
     return v.color;
 }

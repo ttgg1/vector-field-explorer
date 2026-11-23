@@ -35,7 +35,8 @@ pub const OBJECT_LIGHT_DIR: [f32; 3] = [0.4211, 0.8521, 0.3108];
 
 const OBJECT_COLOR_USAGES: wgpu::TextureUsages =
     wgpu::TextureUsages::RENDER_ATTACHMENT.union(wgpu::TextureUsages::TEXTURE_BINDING);
-const OBJECT_DEPTH_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT;
+const OBJECT_DEPTH_USAGES: wgpu::TextureUsages =
+    wgpu::TextureUsages::RENDER_ATTACHMENT.union(wgpu::TextureUsages::TEXTURE_BINDING);
 
 /// Physical identity of the object-owned render target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,6 +269,7 @@ struct ObjectPipelines {
     composite: wgpu::RenderPipeline,
     scene_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
+    grid_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
 }
 
@@ -296,6 +298,19 @@ impl ObjectPipelines {
                 bind_group_layouts: &[Some(&scene_layout)],
                 immediate_size: 0,
             });
+        let grid_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vfe grid depth layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("vfe object composite bgl"),
             entries: &[
@@ -440,6 +455,7 @@ impl ObjectPipelines {
             composite,
             scene_layout,
             composite_layout,
+            grid_layout,
             sampler,
         }
     }
@@ -546,6 +562,7 @@ struct ObjectTarget {
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     composite_bind: wgpu::BindGroup,
+    grid_bind: wgpu::BindGroup,
 }
 
 fn create_target(
@@ -591,6 +608,14 @@ fn create_target(
         view_formats: &[],
     });
     let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+    let grid_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("vfe grid depth bind"),
+        layout: &pipelines.grid_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&depth_view),
+        }],
+    });
     let composite_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("vfe object composite bind"),
         layout: &pipelines.composite_layout,
@@ -612,6 +637,7 @@ fn create_target(
         _depth: depth,
         depth_view,
         composite_bind,
+        grid_bind,
     })
 }
 
@@ -696,6 +722,20 @@ impl ObjectPass {
     #[must_use]
     pub fn texture_view(&self) -> Option<&wgpu::TextureView> {
         self.target.as_ref().map(|target| &target.color_view)
+    }
+
+    pub(crate) fn grid_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.pipelines.grid_layout
+    }
+
+    pub(crate) fn grid_depth(&self) -> Option<&wgpu::BindGroup> {
+        self.prepared?;
+        if self.globals_cache.params[0] > 0.5 {
+            return None;
+        }
+        // All mapped bodies have unit opacity. Attenuated slice fragments
+        // never write this depth attachment; neither should hide a grid line.
+        self.target.as_ref().map(|target| &target.grid_bind)
     }
 
     /// Allocate/reuse the target, upload changed instances and uniforms, then

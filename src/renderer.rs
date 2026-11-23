@@ -121,9 +121,14 @@ pub struct ArrowInstanceGPU {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct LineInstanceGPU {
-    pub a: [f32; 4],     // start.xyz, 1.0
-    pub b: [f32; 4],     // end.xyz, line width
+    pub a: [f32; 4], // start.xyz, role (GRID_TAG for reference grid; otherwise painter line)
+    pub b: [f32; 4], // end.xyz, line width
     pub color: [f32; 4], // rgba 0..1
+}
+
+impl LineInstanceGPU {
+    /// Storage ABI with shaders.line.wgsl: start.w is metadata, never a coordinate.
+    pub(crate) const GRID_TAG: f32 = -1.0;
 }
 
 /// The largest heatmap texture side accepted by the #92 contract.
@@ -854,6 +859,7 @@ pub struct DrawState {
     scene_pipeline: wgpu::RenderPipeline,
     arrow2d_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    grid_depth_pipeline: wgpu::RenderPipeline,
     dot_pipeline: wgpu::RenderPipeline,
     heatmap_pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
@@ -1041,36 +1047,46 @@ impl DrawState {
             cache: None,
         });
 
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("vfe line pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_line,
-                entry_point: Some("vs_line"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_line,
-                entry_point: Some("fs_line"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(LINE_BLEND),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
+        let object_pass = ObjectPass::new(device, format);
+        let grid_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vfe object-aware line layout"),
+            bind_group_layouts: &[Some(&bind_layout), Some(object_pass.grid_layout())],
+            immediate_size: 0,
         });
+        let make_line_pipeline = |layout, entry| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("vfe line pipeline"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &shader_line,
+                    entry_point: Some("vs_line"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader_line,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(LINE_BLEND),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
 
+        let line_pipeline = make_line_pipeline(&pipeline_layout, "fs_line");
+        let grid_depth_pipeline = make_line_pipeline(&grid_layout, "fs_object_aware_line");
         let dot_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("vfe dot pipeline"),
             layout: Some(&pipeline_layout),
@@ -1299,6 +1315,7 @@ impl DrawState {
             scene_pipeline,
             arrow2d_pipeline,
             line_pipeline,
+            grid_depth_pipeline,
             dot_pipeline,
             heatmap_pipeline,
             globals_buf,
@@ -1315,7 +1332,7 @@ impl DrawState {
             _heatmap_texture: heatmap_texture,
             heatmap_identity: None,
             light_dir: LIGHT_DIR,
-            object_pass: ObjectPass::new(device, format),
+            object_pass,
             object_scene: ObjectSceneState::new(),
             object_style: ObjectStyle::default(),
             format,
@@ -1562,12 +1579,12 @@ impl DrawState {
         for stage in paint_stages(scene, object_count) {
             match stage {
                 DrawStage::Objects => self.object_pass.paint(pass, composite_guard_rect),
-                DrawStage::Vector(draw) => self.record_draw(pass, draw),
+                DrawStage::Vector(draw) => self.record_draw(pass, draw, object_count != 0),
             }
         }
     }
 
-    fn record_draw(&self, pass: &mut wgpu::RenderPass<'_>, draw: DrawPass) {
+    fn record_draw(&self, pass: &mut wgpu::RenderPass<'_>, draw: DrawPass, with_objects: bool) {
         match draw {
             DrawPass::Heatmap { vertices } => {
                 pass.set_pipeline(&self.heatmap_pipeline);
@@ -1576,7 +1593,15 @@ impl DrawState {
                 pass.draw(0..vertices as u32, 0..1);
             }
             DrawPass::Lines { instances } => {
-                pass.set_pipeline(&self.line_pipeline);
+                if let Some(depth) = with_objects
+                    .then(|| self.object_pass.grid_depth())
+                    .flatten()
+                {
+                    pass.set_pipeline(&self.grid_depth_pipeline);
+                    pass.set_bind_group(1, depth, &[]);
+                } else {
+                    pass.set_pipeline(&self.line_pipeline);
+                }
                 pass.set_bind_group(0, &self.line_bind, &[]);
                 pass.draw(0..(instances as u32) * 6, 0..1);
             }
