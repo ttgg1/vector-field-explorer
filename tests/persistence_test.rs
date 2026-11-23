@@ -506,6 +506,7 @@ fn sample_settings() -> AppSettings {
             rounding: 4.0,
             spacing: 9.0,
             font_size: 14.0,
+            reduced_motion: false,
         },
         layout: LayoutState {
             controls_expanded: false,
@@ -627,6 +628,7 @@ fn corrupt_object_style_falls_back_to_solid_without_losing_the_envelope() {
             rounding: 5.0,
             spacing: 8.0,
             font_size: 13.0,
+            reduced_motion: false,
         },
         object_style: ObjectStyle::Wireframe,
         ..AppSettings::default()
@@ -651,6 +653,7 @@ fn non_string_object_style_is_repaired_without_losing_the_envelope() {
             rounding: 6.0,
             spacing: 9.0,
             font_size: 14.0,
+            reduced_motion: false,
         },
         object_style: ObjectStyle::Wireframe,
         ..AppSettings::default()
@@ -1156,6 +1159,7 @@ fn a_ticket_07_style_only_record_still_loads_its_style() {
         rounding: 3.0,
         spacing: 7.0,
         font_size: 12.0,
+        reduced_motion: false,
     };
     let mut storage = MemoryStorage::default();
     eframe::set_value(&mut storage, eframe::APP_KEY, &style);
@@ -1527,6 +1531,7 @@ fn an_unknown_left_click_action_loads_as_seed_streamline() {
         rounding: 4.0,
         spacing: 9.0,
         font_size: 14.0,
+        reduced_motion: false,
     };
     let mut storage = MemoryStorage::default();
     eframe::set_value(

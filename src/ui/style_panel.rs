@@ -96,6 +96,10 @@ pub struct AppStyle {
     pub spacing: f32,
     /// Base text size in points (Body/Button/Monospace).
     pub font_size: f32,
+    /// Disable motion: transitions jump to their end state on the first frame.
+    /// Defaulted for pre-#289 records; the platform preference is a separate
+    /// automatic gate resolved at paint time via `motion::effective_mode`.
+    pub reduced_motion: bool,
 }
 
 impl Default for AppStyle {
@@ -109,6 +113,7 @@ impl Default for AppStyle {
             rounding: 6.0,
             spacing: 8.0,
             font_size: 13.0,
+            reduced_motion: false,
         }
     }
 }
@@ -391,6 +396,9 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
         .changed();
     changed |= ui
         .add(egui::Slider::new(&mut style.font_size, MIN_FONT_SIZE..=MAX_FONT_SIZE).text("Font size"))
+        .changed();
+    changed |= ui
+        .checkbox(&mut style.reduced_motion, "Reduced motion")
         .changed();
     StyleControls {
         changed,

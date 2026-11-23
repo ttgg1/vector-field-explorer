@@ -17,7 +17,55 @@ fn sample_style() -> AppStyle {
         rounding: 9.0,
         spacing: 11.0,
         font_size: 15.0,
+        reduced_motion: false,
     }
+}
+
+#[test]
+fn reduced_motion_defaults_to_false_and_round_trips() {
+    assert!(!AppStyle::default().reduced_motion);
+    let mut style = AppStyle::default();
+    style.reduced_motion = true;
+    let json = serde_json::to_string(&style).expect("serialize AppStyle");
+    let back: AppStyle = serde_json::from_str(&json).expect("deserialize AppStyle");
+    assert!(back.reduced_motion);
+}
+
+#[test]
+fn legacy_style_without_reduced_motion_loads_as_motion_on() {
+    // A pre-#289 record has no `reduced_motion` key; `#[serde(default)]` must
+    // keep it loadable with motion enabled.
+    let legacy = r#"{"theme_dark":true,"accent":[76,201,240,255],"rounding":6.0,"spacing":8.0,"font_size":13.0}"#;
+    let style: AppStyle = serde_json::from_str(legacy).expect("legacy record still loads");
+    assert!(!style.reduced_motion);
+}
+
+#[test]
+fn settings_controls_expose_a_reduced_motion_toggle() {
+    let mut panel = Panel::new(AppStyle::default());
+    let out = panel.idle();
+    let labels: Vec<_> = nodes(&out)
+        .into_iter()
+        .filter_map(|node| node.label)
+        .collect();
+    assert!(
+        labels.iter().any(|label| label == "Reduced motion"),
+        "the Settings controls must expose a `Reduced motion` toggle, got {labels:?}"
+    );
+}
+
+#[test]
+fn clicking_reduced_motion_toggles_the_field() {
+    let mut panel = Panel::new(AppStyle::default());
+    panel.idle();
+    let out = panel.idle();
+    let node = nodes(&out)
+        .into_iter()
+        .find(|node| node.label.as_deref() == Some("Reduced motion"))
+        .expect("Reduced motion toggle is exposed");
+    assert!(!panel.style.reduced_motion);
+    assert!(panel.click(node.rect.center()));
+    assert!(panel.style.reduced_motion, "the checkbox writes through to the field");
 }
 
 #[test]
