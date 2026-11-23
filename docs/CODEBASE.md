@@ -399,16 +399,20 @@ when that stop became current; an unavailable value never satisfies it. The
 card has a title and body and uses a `UiKind::Modal` stack kind for an
 accessible dialog role without blocking viewport pointer input. There is no
 pulsing, timer or auto-advance. `VfApp::tour` is the only new state: it is
-session-only, never in `ViewRecord`/`AppSettings`, and start/advance/back/
-dismiss/finish never touch `dirty`, the document or the edit history. Session
-progress and the document are separate contracts: the flux stop's adapter
-switch is a real undoable document edit through `State::set_field_mode`, not a
-tour-only mutation. Collapsed
+session-only, never in `ViewRecord`/`AppSettings`. Start/advance/back/dismiss/
+finish only change tour progress and never record history on their own. The one
+exception is entering the Field probes/flux stop: when a Formula/Ode adapter
+cannot supply a probe field, the tour switches to Sources through the shared
+`State::set_field_mode` seam, which changes the document like an ordinary
+field-mode edit and is recorded as one undoable history entry by the frame's
+history driver rather than being a tour-only mutation. `set_field_mode` itself
+only mutates the state; normal document history records the switch the same way
+it records any other field-mode change, and is unaffected. Collapsed
 targets open through `LayoutState::toggle_*` in wide layout and the existing
 compact sheet in compact layout; a second layout path does not exist.
 
 **Pinned by.** [tests/tour_overlay_test.rs](../tests/tour_overlay_test.rs):
-`starting_the_tour_records_no_document_or_history_change`,
+`starting_the_tour_changes_only_the_probe_adapter_and_records_one_undoable_switch`,
 `next_and_back_follow_the_stop_table`,
 `escape_dismisses_and_the_menu_restarts_at_the_first_stop`,
 `changed_rule_advances_only_after_the_control_changes`,
