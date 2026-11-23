@@ -6224,12 +6224,37 @@ uncover field details; the body has a keyboard-focusable **Reset position** butt
 in both directions, Both, collapse/compact, drag and keyboard reset, and the
 #219 locked-range invariance under a changed probe radius.
 
+#### `src/ui/motion.rs` — central motion tokens (issue #289, bounded slice)
+
+**Purpose.** Pure, testable motion vocabulary shared by every animated surface:
+bounded duration tokens (`MotionTokens`: open/slide ~140 ms, hover/press ~80 ms,
+a 12 pt peak slide distance),
+one clamped ease-out sampler (`progress`), and reduced-motion resolution
+(`MotionMode`, `effective_mode`). No egui, scene or renderer dependency.
+
+**Public API.** `MotionTokens`, `progress(elapsed_ms, duration_ms) -> f32`,
+`MotionMode { Full, Reduced }`, `effective_mode(setting_reduced, platform_reduced)`,
+`MotionTransition` (`new`, `start`, `tick`, `progress`, `is_active`) and
+`needs_repaint(&MotionTransition) -> bool`.
+
+**Invariants.** `progress` clamps to `0..=1` and never returns `NaN` for zero,
+negative or non-finite durations. Either reduced-motion signal makes every
+transition jump to its end state on the first tick. `needs_repaint` is true only
+while progress is strictly between the endpoints, so a settled transition never
+requests an idle frame. Callers use `MotionTokens` rather than ad-hoc timings.
+
+**Pinned by.** `tests/motion_test.rs`: token clamping/sampling, zero/non-finite
+durations, reduced-motion resolution, transition settle/immediacy and the
+no-idle-repaint assertion.
+
 #### `src/ui/viewport_panel.rs` — movable viewport overlays (#295)
 
 **Purpose.** Hosts egui foreground panels that own their drag gestures while
 leaving child controls interactive. The shared helper takes the vector viewport
 rect, clamps the panel's top-left, and keeps its last painted position in
-session-only UI state. The legend is its first consumer.
+session-only UI state. The legend is its first consumer. `show_slide` adds a
+purely visual slide offset for the issue #289 open transition: the stored
+placement, panel size, hit target and accessible labels stay identical to rest.
 
 #### `src/ui/appearance_panel.rs` — the Appearance panel
 
@@ -7680,6 +7705,8 @@ persist the `AppStyle`.
 **Public API.** `SPACING_Y_RATIO`, slider bounds, `AccentPreset`,
 `ACCENT_PRESETS`, `selected_preset`, `AppStyle` (+ `sanitized`),
 `selection_text_color`, `apply`, `StyleControls`, `show_controls`.
+`AppStyle.reduced_motion` (default `false`, `#[serde(default)]` for legacy
+records) is the persisted motion toggle shown in Settings.
 
 **Invariants.**
 - Defaults: dark theme, brand cyan `#4cc9f0`, rounding 6, spacing 8, font 13.
