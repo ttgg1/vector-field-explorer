@@ -4270,6 +4270,34 @@ fn corrupt_or_unavailable_probe_family_sanitises_to_electric_without_dirtying() 
     );
 }
 
+#[test]
+fn hollow_sphere_without_a_valid_wave_rejects_magnetic_probe_on_restore() {
+    use glam::Vec3;
+    use vector_field_explorer::maxwell_wave::WaveSpec;
+
+    let invalid = WaveSpec {
+        amplitude: 1.0,
+        wavelength: 0.0,
+        direction: Vec3::X,
+        polarization: Vec3::Y,
+        phase: 0.0,
+    };
+    for wave in [None, Some(invalid)] {
+        let record = ViewRecord {
+            field_mode: FieldMode::Maxwell,
+            maxwell_case: "hollow_sphere".into(),
+            probe_family: "magnetic".into(),
+            maxwell_wave: wave,
+            ..ViewRecord::capture(&State::new(false))
+        };
+        let mut state = State::new(false);
+        record.restore(&mut state, &mut Controls::new());
+        assert_eq!(state.field_mode, FieldMode::Maxwell);
+        assert!(state.maxwell_wave().is_none());
+        assert_eq!(state.probe_family(), FieldFamily::Electric);
+    }
+}
+
 fn density_support() -> DensitySupport {
     DensitySupport {
         kind: SupportKind::Box,

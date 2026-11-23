@@ -508,8 +508,8 @@ fn probe_family_from_label(label: &str) -> Option<FieldFamily> {
 /// Whether the restored mode can supply a probe field for this family. Sources
 /// supply both families even when one has no enabled sources (its zero is
 /// exact); Induction supplies only the induced electric field; Materials and
-/// Maxwell supply the family of their active case. Formula and Ode supply no
-/// probe field at all.
+/// ordinary Maxwell scenes supply the family of their active case. A restored
+/// Maxwell plane wave supplies both fields. Formula and Ode supply neither.
 fn probe_family_available(state: &State, family: FieldFamily) -> bool {
     match state.field_mode {
         FieldMode::Sources => true,
@@ -521,6 +521,7 @@ fn probe_family_available(state: &State, family: FieldFamily) -> bool {
                     | (MaterialFamily::Magnetic, FieldFamily::Magnetic)
             )
         }
+        FieldMode::Maxwell if state.maxwell_wave().is_some() => true,
         FieldMode::Maxwell => {
             matches!(
                 (maxwell_family(state.maxwell.case), family),

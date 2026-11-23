@@ -386,6 +386,61 @@ fn maxwell_app() -> VfApp {
     app
 }
 
+#[test]
+fn notebook_restores_magnetic_wave_probe_over_hollow_sphere() {
+    use glam::Vec3;
+    use vector_field_explorer::field_probe::{
+        CirculationLoop, IntegralStatus, LoopKind, ProbeField, circulation,
+    };
+    use vector_field_explorer::maxwell_wave::{WaveSpec, sample_wave};
+
+    struct MagneticWave(WaveSpec);
+    impl ProbeField for MagneticWave {
+        fn eval(&self, point: Vec3, time: f64) -> Option<Vec3> {
+            Some(sample_wave(&self.0, point, time)?.b)
+        }
+    }
+    let mut app = maxwell_app();
+    let wave = WaveSpec {
+        amplitude: 1.5,
+        wavelength: 4.0,
+        direction: Vec3::X,
+        polarization: Vec3::Y,
+        phase: 0.0,
+    };
+    // B varies along x and points along z, giving nonzero circulation here.
+    // Wave E is perpendicular to the loop; the hidden electrostatic shell
+    // cannot produce this magnetic reading either.
+    let path = CirculationLoop {
+        kind: LoopKind::Circle,
+        center: Vec3::X,
+        axis: Vec3::Y,
+        size: Vec3::splat(0.5),
+        segments: 32,
+    };
+    assert!(app.state.set_maxwell_wave(Some(wave)));
+    assert!(app.state.set_probe_family(FieldFamily::Magnetic));
+    app.state.add_probe_loop(path).unwrap();
+    assert!(app.test_capture_notebook_entry());
+    let id = app.maxwell.notebook.entries[0].id.clone();
+    assert!(app.state.set_maxwell_wave(None));
+    app.state.set_probe_family(FieldFamily::Electric);
+    assert!(app.test_load_notebook_entry(&id));
+    assert_eq!(app.state.probe_family(), FieldFamily::Magnetic);
+    app.state.refresh_probe_reports(true);
+    let expected = circulation(
+        &MagneticWave(wave),
+        &path,
+        FieldFamily::Magnetic,
+        f64::from(app.state.time),
+    );
+    assert!(matches!(expected.status, IntegralStatus::Estimate { value, .. } if value.abs() > 0.1));
+    assert_eq!(
+        app.state.probe_loop_report(0).unwrap().status,
+        expected.status
+    );
+}
+
 fn assert_invalid_import_leaves_experiment_unchanged(radius: &str, value: f64, error: &str) {
     let mut app = maxwell_app();
     assert!(app.test_capture_notebook_entry());
