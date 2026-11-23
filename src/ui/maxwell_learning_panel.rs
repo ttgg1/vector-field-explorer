@@ -22,6 +22,7 @@ use crate::maxwell::{
 };
 use crate::maxwell_learning::{EquationForm, EquationSpec, MaxwellEquation, spec};
 use crate::maxwell_residual::{FieldTerms, Residual, TermStatus, residual};
+use crate::maxwell_wave::WaveSpec;
 use crate::sources::FieldFamily;
 use crate::ui::maxwell_panel::case_label;
 
@@ -244,6 +245,17 @@ impl MaxwellLearningPanel {
         scene: &MaxwellScene,
         bem: Option<&BemSolution>,
     ) -> Option<MeasurementRequest> {
+        self.show_with_wave(ui, scene, None, bem)
+    }
+
+    /// Draw the learning section with the committed display override, if any.
+    pub(crate) fn show_with_wave(
+        &mut self,
+        ui: &mut egui::Ui,
+        scene: &MaxwellScene,
+        wave: Option<&WaveSpec>,
+        bem: Option<&BemSolution>,
+    ) -> Option<MeasurementRequest> {
         ui.label("Maxwell equations (learning and diagnostics)");
         ui.label("Normalized teaching units; this is a teaching aid, not a solver.");
 
@@ -288,6 +300,9 @@ impl MaxwellLearningPanel {
 
         ui.label(MAXWELL_LEARNING_LIMITATION);
 
+        if wave.is_some() {
+            ui.label("Pointwise residual checks use the selected Maxwell case, not the displayed plane wave.");
+        }
         if let Some(warning) = conductor_blocker(scene, bem) {
             ui.colored_label(ui.visuals().warn_fg_color, warning);
         }
@@ -327,7 +342,11 @@ impl MaxwellLearningPanel {
                 measurement = Some(request);
             }
         } else {
-            if let Some(explanation) = self.measurement_explanation(scene) {
+            // A displayed plane wave supplies both families, independently
+            // of the selected case used for the pointwise residual checks.
+            if wave.is_none()
+                && let Some(explanation) = self.measurement_explanation(scene)
+            {
                 ui.colored_label(ui.visuals().warn_fg_color, explanation);
             }
             if ui

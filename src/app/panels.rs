@@ -2084,15 +2084,10 @@ impl VfApp {
             crate::maxwell::MaxwellFamily::Electric => FieldFamily::Electric,
             crate::maxwell::MaxwellFamily::Magnetic => FieldFamily::Magnetic,
         };
-        if active != request.family {
-            let explanation = self
-                .maxwell
-                .learning
-                .measurement_explanation(&self.state.maxwell)
-                .unwrap_or_else(|| {
-                    "This Maxwell case cannot supply the selected integral.".to_owned()
-                });
-            self.maxwell.learning.message = Some(explanation);
+        if self.state.maxwell_wave().is_none() && active != request.family {
+            // The learning panel already paints the current family refusal.
+            // Do not store it: enabling a wave makes both families available.
+            self.maxwell.learning.message = None;
             return;
         }
 

@@ -8,13 +8,16 @@ use vector_field_explorer::VfApp;
 use vector_field_explorer::domain::Domain;
 use vector_field_explorer::export_provenance::{
     ExportProvenance, MAXWELL_DISPLAY_UNITS_LINE, MAXWELL_MODEL_LINE, MAXWELL_NO_SAMPLING_LINE,
-    maxwell_export_provenance, provenance_lines, provenance_metadata,
+    MAXWELL_WAVE_MODEL_LINE, MAXWELL_WAVE_NO_SAMPLING_LINE, MAXWELL_WAVE_UNITS_LINE,
+    maxwell_export_provenance, maxwell_wave_export_provenance, provenance_lines,
+    provenance_metadata,
 };
 use vector_field_explorer::maxwell::{
     ConductorOutline, MAXWELL_ACCURACY_NOT_MET_WARNING, MAXWELL_BEM_NOTE,
     MAXWELL_BEM_PENDING_WARNING, MAXWELL_SWITCH_2D_WARNING, MaxwellCase, MaxwellScene, MaxwellStop,
     maxwell_assumptions, sample_maxwell, sample_maxwell_with_bem, solve_bem,
 };
+use vector_field_explorer::maxwell_wave::WaveSpec;
 use vector_field_explorer::plane::{PlaneAxis, PlaneFrame, PlaneView};
 use vector_field_explorer::renderer::SceneGPU;
 use vector_field_explorer::source_scene::FieldMode;
@@ -437,4 +440,243 @@ fn maxwell_sampling_arrows_are_finite_for_every_export_path() {
         arrow.position.is_finite() && arrow.dir.is_finite() && arrow.mag.is_finite()
     }));
     assert!(sampling.arrows.iter().all(|arrow| arrow.mag > 0.0));
+}
+
+fn wave_spec() -> WaveSpec {
+    WaveSpec {
+        amplitude: 1.5,
+        wavelength: 2.0,
+        direction: glam::Vec3::X,
+        polarization: glam::Vec3::Y,
+        phase: 0.25,
+    }
+}
+
+#[test]
+fn post_simulation_wave_edits_defer_both_captures_until_geometry_is_rebuilt() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Maxwell);
+    app.state.set_mode(false);
+    app.state.set_arrows(true);
+    app.state.set_maxwell_scene(MaxwellScene {
+        case: MaxwellCase::CoaxialElectric,
+        ..Default::default()
+    });
+    app.test_harness().advance_simulation();
+    for wave in [
+        Some(WaveSpec {
+            amplitude: 0.0,
+            ..wave_spec()
+        }),
+        Some(wave_spec()),
+        None,
+    ] {
+        app.test_harness().request_svg_export();
+        app.test_harness().request_png_export();
+        let rebuilt_wave = app.state.maxwell_wave();
+        assert!(app.state.set_maxwell_wave(wave));
+        let early = app.test_take_vector_captures(rebuilt_wave);
+        assert_eq!(early.map(|p| p.is_some()), [false, false]);
+        app.test_harness().advance_simulation();
+        for dispatch in app.test_take_vector_captures(app.state.maxwell_wave()) {
+            let (scene, capture) = dispatch.expect("queued export");
+            assert_eq!(
+                scene.arrows.is_empty(),
+                wave.is_some_and(|w| w.amplitude == 0.0),
+                "wave: {wave:?}"
+            );
+            let provenance = capture.expect("request survived until the next rebuild");
+            assert_eq!(
+                metadata_value(&provenance, "vfe.maxwell_sampling"),
+                wave.map(|_| "sampled")
+            );
+            assert_eq!(
+                provenance.warning_lines[0],
+                if wave.is_some() {
+                    MAXWELL_WAVE_MODEL_LINE
+                } else {
+                    MAXWELL_MODEL_LINE
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn vector_dispatch_uses_the_rebuilt_maxwell_frame() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Maxwell);
+    app.state.set_mode(false);
+    let zero = WaveSpec {
+        amplitude: 0.0,
+        ..wave_spec()
+    };
+    for (wave, time, sampled) in [
+        (Some(zero), 0.0, Some("sampled")),
+        (Some(zero), f32::NAN, Some("unavailable")),
+        (None, 0.0, None),
+    ] {
+        app.test_harness().request_svg_export();
+        app.test_harness().request_png_export();
+        app.state.set_maxwell_wave(wave);
+        app.state.time = time;
+        app.state.dirty = true;
+        app.test_harness().advance_simulation();
+        for dispatch in app.test_take_vector_captures(app.state.maxwell_wave()) {
+            let (_, provenance) = dispatch.expect("queued vector export");
+            let provenance = provenance.expect("Maxwell export provenance");
+            assert_eq!(metadata_value(&provenance, "vfe.maxwell_sampling"), sampled);
+            if wave.is_some() {
+                assert_eq!(provenance.warning_lines[0], MAXWELL_WAVE_MODEL_LINE);
+            } else {
+                assert_eq!(provenance.warning_lines[0], MAXWELL_MODEL_LINE);
+                assert_eq!(
+                    metadata_value(&provenance, "vfe.maxwell_case"),
+                    Some("parallel_plates")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn wave_provenance_names_the_wave_display_and_reports_sampling_status() {
+    let provenance =
+        maxwell_wave_export_provenance(FieldMode::Maxwell, &wave_spec(), true).unwrap();
+    assert!(provenance.maxwell_mode);
+    assert_eq!(provenance_lines(&provenance)[0], MAXWELL_WAVE_MODEL_LINE);
+    assert_eq!(
+        provenance_lines(&provenance).last().map(String::as_str),
+        Some(MAXWELL_WAVE_UNITS_LINE)
+    );
+    assert!(
+        !provenance_lines(&provenance)
+            .iter()
+            .any(|line| line == MAXWELL_WAVE_NO_SAMPLING_LINE),
+        "a sampled wave must not claim sampling is unavailable: {:?}",
+        provenance_lines(&provenance)
+    );
+    for (key, value) in [
+        ("vfe.model", "maxwell-plane-wave-teaching"),
+        ("vfe.maxwell_display", "plane_wave"),
+        ("vfe.maxwell_family", "electric+magnetic"),
+        ("vfe.maxwell_units", "normalized-teaching"),
+        ("vfe.maxwell_sampling", "sampled"),
+    ] {
+        assert_eq!(metadata_value(&provenance, key), Some(value), "{key}");
+    }
+    let assumptions = metadata_value(&provenance, "vfe.maxwell_assumptions").unwrap();
+    assert!(assumptions.contains("source-free"), "{assumptions}");
+    assert!(assumptions.contains("plane wave"), "{assumptions}");
+    assert!(
+        metadata_value(&provenance, "vfe.maxwell_case").is_none(),
+        "the wave display must not inherit the hidden case's label"
+    );
+
+    let unsampled =
+        maxwell_wave_export_provenance(FieldMode::Maxwell, &wave_spec(), false).unwrap();
+    assert!(
+        provenance_lines(&unsampled)
+            .iter()
+            .any(|line| line == MAXWELL_WAVE_NO_SAMPLING_LINE),
+        "an unsampled wave names its missing sampling: {:?}",
+        provenance_lines(&unsampled)
+    );
+    assert_eq!(
+        metadata_value(&unsampled, "vfe.maxwell_sampling"),
+        Some("unavailable")
+    );
+
+    for mode in [
+        FieldMode::Formula,
+        FieldMode::Sources,
+        FieldMode::Induction,
+        FieldMode::Materials,
+        FieldMode::Ode,
+    ] {
+        assert!(
+            maxwell_wave_export_provenance(mode, &wave_spec(), true).is_none(),
+            "{mode:?}"
+        );
+    }
+}
+
+#[test]
+fn wave_export_distinguishes_rejection_from_a_sampled_zero_field() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Maxwell);
+    let mut wave = wave_spec();
+    wave.amplitude = 0.0;
+    assert!(app.state.set_maxwell_wave(Some(wave)));
+    for (time, expected) in [(0.0, "sampled"), (f32::NAN, "unavailable")] {
+        app.state.time = time;
+        app.state.refresh_maxwell_sampling();
+        assert!(app.state.maxwell_wave_sampling.as_ref().unwrap().is_empty());
+        app.test_harness().request_png_export();
+        let provenance = app.test_harness().export_png_provenance().unwrap();
+        assert_eq!(
+            metadata_value(&provenance, "vfe.maxwell_sampling"),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn app_requests_wave_provenance_while_the_wave_is_the_displayed_field() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Maxwell);
+    app.state.set_mode(false);
+    // A magnetic canonical case whose family differs from the wave display.
+    assert!(app.state.set_maxwell_scene(MaxwellScene {
+        case: MaxwellCase::Solenoid,
+        ..MaxwellScene::default()
+    }));
+    assert!(app.state.set_maxwell_wave(Some(wave_spec())));
+    app.state.refresh_maxwell_sampling();
+
+    app.test_harness().request_png_export();
+    let provenance = app
+        .test_harness()
+        .export_png_provenance()
+        .expect("Maxwell export provenance");
+    assert_eq!(provenance_lines(&provenance)[0], MAXWELL_WAVE_MODEL_LINE);
+    assert_eq!(
+        metadata_value(&provenance, "vfe.maxwell_display"),
+        Some("plane_wave")
+    );
+    assert_eq!(
+        metadata_value(&provenance, "vfe.maxwell_family"),
+        Some("electric+magnetic"),
+        "the wave display supplies both families, not the hidden case's"
+    );
+    assert_eq!(
+        metadata_value(&provenance, "vfe.maxwell_sampling"),
+        Some("sampled")
+    );
+    assert!(
+        !provenance
+            .warning_lines
+            .iter()
+            .any(|line| line == MAXWELL_NO_SAMPLING_LINE || line == MAXWELL_WAVE_NO_SAMPLING_LINE),
+        "the sampled wave does not inherit the case's unavailable line: {:?}",
+        provenance.warning_lines
+    );
+
+    // Disabling the wave returns the ordinary case provenance exactly.
+    assert!(app.state.set_maxwell_wave(None));
+    app.state.refresh_maxwell_sampling();
+    app.test_harness().request_png_export();
+    let case_provenance = app
+        .test_harness()
+        .export_png_provenance()
+        .expect("case provenance");
+    assert_eq!(case_provenance.warning_lines[0], MAXWELL_MODEL_LINE);
+    assert_eq!(
+        metadata_value(&case_provenance, "vfe.maxwell_case"),
+        Some("solenoid")
+    );
+    assert_eq!(
+        metadata_value(&case_provenance, "vfe.maxwell_family"),
+        Some("magnetic")
+    );
 }

@@ -51,7 +51,7 @@ use crate::maxwell::{
     MaxwellError, MaxwellFamily, MaxwellSampling, MaxwellScene, maxwell_family,
     maxwell_field_with_bem, maxwell_outline, sample_maxwell_with_bem, solve_bem, validate_maxwell,
 };
-use crate::maxwell_wave::{WaveSpec, sample_wave_grid};
+use crate::maxwell_wave::{WaveSpec, sample_wave, sample_wave_grid};
 use crate::object_scene::ObjectStyle;
 use crate::ode::{OdeChart, OdeError, OdeScene, OdeSolution, prepare_ode, solve_ode};
 use crate::parameters::ParameterSet;
@@ -326,6 +326,7 @@ struct ProbeFieldIdentity {
     induction: InductionScene,
     material: MaterialScene,
     maxwell: MaxwellScene,
+    maxwell_wave: Option<WaveSpec>,
     maxwell_bem_solves: u64,
     domain: Domain,
     family: FieldFamily,
@@ -361,6 +362,8 @@ struct ProbeReportsCache {
 /// sampler never adds them or routes either through the #83 colour mapping.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WaveArrowSets {
+    /// Accepted grid samples before projection and degenerate-arrow culling.
+    pub sampled_points: usize,
     pub electric: Vec<ArrowData>,
     pub magnetic: Vec<ArrowData>,
 }
@@ -420,10 +423,11 @@ enum ProbeAdapterKind {
         bem: Option<Arc<BemSolution>>,
     },
     Materials(Box<MaterialScene>),
+    Wave(WaveSpec),
 }
 
 impl ProbeField for ProbeAdapter {
-    fn eval(&self, point: Vec3, _time: f64) -> Option<Vec3> {
+    fn eval(&self, point: Vec3, time: f64) -> Option<Vec3> {
         match &self.kind {
             ProbeAdapterKind::Sources(evaluator) => {
                 let sample = evaluator.borrow_mut().evaluate(point.as_dvec3(), &|| false);
@@ -460,6 +464,13 @@ impl ProbeField for ProbeAdapter {
                 maxwell_field_with_bem(scene, point, bem.as_deref()).ok()
             }
             ProbeAdapterKind::Materials(scene) => material_field(scene, point).ok(),
+            ProbeAdapterKind::Wave(spec) => {
+                let sample = sample_wave(spec, point, time)?;
+                Some(match self.family {
+                    FieldFamily::Electric => sample.e,
+                    FieldFamily::Magnetic => sample.b,
+                })
+            }
         }
     }
 }
@@ -2281,7 +2292,10 @@ impl State {
                 plane.as_ref(),
                 f64::from(self.time),
             );
-            let mut arrows = WaveArrowSets::default();
+            let mut arrows = WaveArrowSets {
+                sampled_points: samples.len(),
+                ..Default::default()
+            };
             for (position, sample) in samples {
                 let (electric, magnetic) = match plane.as_ref() {
                     Some(frame) => (frame.project(sample.e), frame.project(sample.b)),
@@ -3626,7 +3640,8 @@ impl State {
     /// A collapsed section performs no sampling and keeps its last reports. A
     /// visible refresh reuses each probe whose geometry and shared field
     /// identity (mode, case or formula, parameters, family, domain and the
-    /// 100 ms-quantised clock) are unchanged. Unsupported or refused checks
+    /// clock) are unchanged. Waves use the exact displayed time; other fields
+    /// retain the 100 ms clock bucket. Unsupported or refused checks
     /// store honest status text instead of a number. Reports never dirty the
     /// scene: only the document geometry and family do.
     pub fn refresh_probe_reports(self: &mut State, visible: bool) {
@@ -3711,7 +3726,9 @@ impl State {
 
     /// Build the shared identity for the current probe report cache.
     fn probe_field_identity(self: &State) -> ProbeFieldIdentity {
-        let clock = if self.time.is_finite() {
+        let clock = if self.field_mode == FieldMode::Maxwell && self.maxwell_wave.is_some() {
+            i64::from(self.time.to_bits())
+        } else if self.time.is_finite() {
             (f64::from(self.time) / REPORT_REFRESH_SECONDS).floor() as i64
         } else {
             0
@@ -3724,6 +3741,7 @@ impl State {
             induction: self.induction.clone(),
             material: self.material.clone(),
             maxwell: self.maxwell.clone(),
+            maxwell_wave: self.maxwell_wave,
             maxwell_bem_solves: self.maxwell_bem_solves,
             domain: self.scene_domain(),
             family: self.probe_family,
@@ -3804,6 +3822,18 @@ impl State {
                 })
             }
             FieldMode::Maxwell => {
+                if let Some(spec) = self.maxwell_wave {
+                    // The wave arrows replace the case field, so a probe must
+                    // sample the displayed wave and its two families instead
+                    // of silently falling through to the hidden case.
+                    let mut spec = spec;
+                    spec.validate()
+                        .map_err(|error| format!("Plane wave is invalid: {error}"))?;
+                    return Ok(ProbeAdapter {
+                        family: self.probe_family,
+                        kind: ProbeAdapterKind::Wave(spec),
+                    });
+                }
                 let family = match maxwell_family(self.maxwell.case) {
                     MaxwellFamily::Electric => FieldFamily::Electric,
                     MaxwellFamily::Magnetic => FieldFamily::Magnetic,
