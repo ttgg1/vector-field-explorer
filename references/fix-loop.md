@@ -4,7 +4,9 @@ Read before fixing review findings. [Workflow](workflow.md) owns seat choice,
 gates, the simple-task re-review exception, and integration authority.
 
 1. **Brief:** name every open finding, file:line, severity and closure bar in
-   `task-N-findings.md` / the round brief. Keep minor fixes cheap and in scope.
+    `task-N-findings.md` / the round brief. Keep minor fixes cheap and in scope.
+    Pass the reviewed HEAD and owned paths with the actionable fix briefs,
+    not the review transcript or non-blocking suggestions.
 2. **Fix:** one implementer in the task's isolated worktree, reading the brief
    and findings, not the whole plan. For behavior fixes, observe a regression
    fail against the pre-fix production path and pass with the change. A copied

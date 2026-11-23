@@ -107,10 +107,49 @@ routine review, and scoped fixes. GPT-6.2 Astra uses its lowest supported
 variant (`low`) for complex implementation and release-blocking/high-risk fixes,
 because the 6.2 family exposes no `none`. The explicit `reviewer-openai-release`
 role uses GPT-6.2 Sol high for the owner-authorized release/high-risk review
-gate; every other review starts at low. OpenCode Go: DeepSeek V4.1 Flash low for
+gate; every other review starts at its profile's lowest configured effort.
+OpenCode Go: DeepSeek V4.1 Flash low for
 orchestration, implementation, and fixes; GLM 5.3 Flash low for independent
 review. MiMo V2.6 Flash is an explicit alternative reviewer; the current catalog
 exposes no variant for it.
+
+### Free-first lanes (opt-in)
+
+Select an entry point and record the lane before dispatch. Existing OpenAI and
+OpenCode Go modes are unchanged.
+
+| Lane | Controller | Implementer, fixer, routine reviewer |
+| --- | --- | --- |
+| `/develop-opencode-go-free` | HY4 Flash Free `none` | HY4 Flash Free `none` |
+| `/develop-opencode-go-mixed` | GPT-6.2 Sol `low` | HY4 Flash Free `none` |
+
+Use Free when the acceptance criteria, owned paths, and checks are clear. If
+design or task decomposition is the only hard part, use a bounded Sol planning
+pass and hand the approved brief to Free. Use Mixed when substantive design or
+sequencing decisions are expected between rounds. In Mixed, workers run routine
+checks; bring back decisions, blockers, and integration evidence, not progress
+recaps.
+
+Choose the reviewer before dispatching a review, after inspecting the actual
+diff and deterministic gate results. Use a fresh, read-only HY4 reviewer for
+bounded, well-tested diffs. Ask the owner to select `/review-openai` (Sol low)
+instead for material cross-module contract or persistence changes, or when
+tests leave a material behavior question unresolved. For the required
+release/high-risk gate, use `/review-openai-release` (Sol high) instead. Do not
+run a routine review before a selected Sol review. Beam Free `low` is an
+explicit optional second opinion, not a fallback or substitute for a required
+gate. Check data eligibility before sending a review package; in particular,
+[OpenCode Go lists 30-day retention for Beam Free](https://opencode.ai/docs/console/go/#privacy).
+
+Both lane controllers can dispatch only the three HY4 roles. The operator
+invokes any alternate reviewer or approved escalation in a separate session and returns
+its report to the lane controller. Escalate only the blocked role: record the
+failure, exact HEAD, expected deliverable, and owner authorization; then resume
+the chosen lane. Existing effort rules, stop conditions, verification, and
+[finding closure](fix-loop.md) still apply.
+
+### Catalog and stop conditions
+
 Catalog discovery confirms model IDs/capabilities, not internal checkpoints,
 actual billing, or subscription allowance consumption.
 

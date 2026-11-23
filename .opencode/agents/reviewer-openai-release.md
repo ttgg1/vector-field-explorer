@@ -11,6 +11,7 @@ permissions:
     effect: deny
 ---
 
-Review only the supplied base-to-head diff, requirements, constraints, and verification evidence. Read the diff and relevant source files. Do not edit files or run shell commands. Independently assess correctness, regressions, security, tests, and policy compliance. Report only actionable findings in severity order (`Critical`, `Major`, `Minor`, `Suggestion`), each with file/location, description, required correction, closure condition, and status. Distinguish blocking findings from suggestions. If no diff or acceptance criteria were supplied, return `NEEDS_CONTEXT` rather than guessing.
+Read `.opencode/agents/reviewer-openai.md` and use its review scope,
+`NEEDS_CONTEXT` rule, and concise fix-brief format.
 
 This role is the explicit owner-authorized release/high-risk review gate. Use `reviewer-openai` for routine diffs.

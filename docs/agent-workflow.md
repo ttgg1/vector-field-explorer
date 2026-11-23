@@ -9,17 +9,27 @@ deterministic orchestration service.
 
 - `/develop-openai <request>` explicitly selects the OpenAI orchestrator.
 - `/develop-opencode-go <request>` explicitly selects the OpenCode Go orchestrator.
+- `/develop-opencode-go-free <request>` uses HY4 Flash Free for coordination and workers.
+- `/develop-opencode-go-mixed <request>` uses Sol low for coordination and the same free workers.
+- `/review-opencode-go-beam-free <diff-package> <acceptance-criteria>` explicitly requests a read-only Beam second opinion.
 - `/review-openai <diff-package> <acceptance-criteria>` uses a fresh read-only GPT-6.2 Sol reviewer at low effort for routine diffs.
 - `/review-openai-release <diff-package> <acceptance-criteria>` uses the explicit release/high-risk GPT-6.2 Sol reviewer at high effort.
 - `/review-opencode-go <diff-package> <acceptance-criteria>` uses a fresh read-only GLM 5.3 Flash reviewer.
 - `/review-opencode-go-mimo ...` explicitly chooses MiMo V2.6 Flash instead; it is not an automatic fallback.
+
+Use [the Free-first lane policy](../references/workflow.md#free-first-lanes-opt-in)
+to select a controller and review gate. To hand off a Sol planning pass, start
+the Free command with the approved brief and its acceptance checks. To hand
+back an alternate review run in a separate session, provide the report and
+reviewed HEAD to the controller.
 
 The configured OpenAI roles use GPT-6.2 Sol low for orchestration,
 simple/standard implementation, routine review, and scoped fixes; GPT-6.2 Astra
 `low` (its catalog's lowest variant) for complex implementation and
 release-blocking/high-risk fixes; and the explicit `reviewer-openai-release`
 role at GPT-6.2 Sol high for release/high-risk review. The release reviewer is
-the owner-authorized exception to beginning every review at low effort. The Go
+the owner-authorized exception to starting at the profile's lowest configured
+effort. The Go
 roles use DeepSeek V4.1 Flash low for orchestration, implementation, and fixes,
 and GLM 5.3 Flash low for review. MiMo V2.6 Flash currently exposes no effort
 variant. Verify the enabled catalog when changing profiles. These model IDs do
@@ -52,10 +62,11 @@ to a more expensive model requires explicit owner authorization.
    exit status, HEAD, and limitations.
 6. Prepare the actual base-to-head diff package inside the authorized worktree
    (for example: `git diff --no-ext-diff --binary BASE..HEAD > .review/round-1.diff`).
-   Invoke the matching `/review-*` command with the diff path,
-   acceptance criteria, constraints, and verification evidence. Reviewer agents
-   deny edit and shell tools and use a fresh context. If the package is missing
-   or incomplete, review must return `NEEDS_CONTEXT`.
+    For routine Free and Mixed reviews, dispatch the HY4 reviewer directly.
+    For other reviews, use the matching `/review-*` command. Supply the diff
+    path, acceptance criteria, constraints, and verification evidence.
+    Reviewer agents deny edit and shell tools and use a fresh context. If the
+    package is missing or incomplete, review must return `NEEDS_CONTEXT`.
 7. Fix blocking findings in scope with regression evidence; re-review only the
    changed findings/diff when policy requires it. Preserve the five-round ceiling.
 8. The controller serializes integration. Verify reviewed HEAD, commit identity,
@@ -86,6 +97,10 @@ command, run trusted checks, and prove integration identity. If those checks
 cannot be established, stop; never report runtime-equivalent enforcement.
 
 ## Metrics
+
+Before changing the default lane, compare Free, Sol planning → Free, and
+Mixed on comparable tasks. Track OpenAI calls, fix/review rounds, human
+interventions per accepted task, and material defects missed in review.
 
 Export each relevant session (including reviewer/implementer child sessions)
 as sanitized JSON, then pass the export files to the metrics-only script:
