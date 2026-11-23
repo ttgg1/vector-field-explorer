@@ -550,6 +550,7 @@ pub fn apply_action(action: MenuAction, ui: &mut UiState<'_>) -> SideEffect {
         }
         MenuAction::ResetLayout => {
             ui.layout.reset();
+            ui.controls.legend_panel.reset();
             SideEffect::ResetLayout
         }
         MenuAction::ResetCamera => SideEffect::ResetScope(EditScope::Camera),

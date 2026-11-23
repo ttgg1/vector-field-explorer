@@ -590,6 +590,35 @@ fn legend_background_drag_stays_put_until_keyboard_reset() {
 }
 
 #[test]
+fn reset_layout_menu_restores_the_legend_to_its_default_corner() {
+    use vector_field_explorer::ui::menu::{MenuAction, SideEffect, apply_action};
+
+    let mut legend = Legend::new(false);
+    let default = legend.idle().1.rect;
+    assert!(default.right() > legend.viewport.right() - 25.0);
+    assert!(default.top() < legend.viewport.top() + 25.0);
+    let start = default.right_top() + egui::vec2(-3.0, 3.0);
+    let end = start + egui::vec2(-100.0, 75.0);
+    legend.frame(pointer(start, true));
+    legend.frame(vec![egui::Event::PointerMoved(end)]);
+    legend.frame(pointer(end, false));
+    let moved = legend.idle().1.rect;
+    assert!(moved.left() < default.left() - 50.0);
+    assert!(moved.top() > default.top() + 40.0);
+    assert_eq!(legend.idle().1.rect, moved);
+
+    let mut fixture = support::menu_fixture::MenuFixture::new();
+    let mut ui = fixture.ui();
+    ui.controls = &mut legend.controls;
+    ui.state = &mut legend.state;
+    assert_eq!(
+        apply_action(MenuAction::ResetLayout, &mut ui),
+        SideEffect::ResetLayout
+    );
+    assert_eq!(legend.idle().1.rect.min, default.min);
+}
+
+#[test]
 fn legend_position_is_retained_or_clamped_when_layout_changes() {
     let mut legend = Legend::new(false);
     let default = legend.idle().1.rect;
