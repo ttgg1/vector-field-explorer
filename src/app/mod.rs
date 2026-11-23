@@ -39,6 +39,7 @@ use crate::tour::{PanelId, TourProgress};
 use crate::ui::animation_dialog::{self, AnimationDialogAction, AnimationDialogState};
 use crate::ui::appearance_panel::AppearancePanelState;
 use crate::ui::formula_bar::FormulaBarState;
+use crate::ui::formula_typeset_panel::FormulaTypesetPanelState;
 use crate::ui::griffiths::{GriffithsCheckpoint, GriffithsRoute, GriffithsState};
 use crate::ui::induction_panel::InductionPanelState;
 use crate::ui::interaction_panel::InteractionPanel;
@@ -169,6 +170,8 @@ const MAX_CLICK_SEEDS: usize = 6;
 pub struct VfApp {
     pub state: State,
     pub bar: FormulaBarState,
+    /// Session-only state for the floating typeset-formula panel (issue #287).
+    pub formula_typeset: FormulaTypesetPanelState,
     pub controls: Controls,
     /// Panel-local drafts for the Sources rail/sheet; invalid text survives
     /// frames without touching the committed scene.
@@ -611,6 +614,7 @@ impl VfApp {
         Self {
             state,
             bar: FormulaBarState::new(),
+            formula_typeset: FormulaTypesetPanelState::default(),
             controls,
             sources: SourcesPanelState::default(),
             induction: InductionPanelState::default(),

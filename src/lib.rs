@@ -11,7 +11,6 @@ pub mod cas;
 pub mod cas_actions;
 pub mod cas_backend;
 pub mod cas_intent;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod cas_tex;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;

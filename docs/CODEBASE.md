@@ -6166,7 +6166,7 @@ thread.
 Declares `appearance_panel`, `branding`, `cas_preview` (compiled on both
 targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`
 and `math_view`, `field_compare`, `formula_bar`, `gauss_shell`, `griffiths`,
-`help_overlay`, `induction_panel`,
+`formula_typeset_panel`, `help_overlay`, `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,
 `object_style_control`, `ode_panel`, `panel_rails`, `plane_lesson`, `plot_panel`, `presets`,
@@ -7076,6 +7076,24 @@ RestoreFormula, CompareVisibilityChanged { enabled }}`, `ode_help_rows`,
 `ode_chart_switch_commits_state`,
 `ode_mode_disables_features_and_cas`,
 `open_ode_reaches_the_wide_rail_or_compact_sheet`).
+
+#### `src/ui/formula_typeset_panel.rs` — floating typeset formula (#287)
+
+**Purpose / API.** A session-only overlay over the vector viewport. The app owns
+`VfApp::formula_typeset` (`{ open, placement }`), but neither field is persisted.
+`toggle_area` paints the keyboard-reachable open/close control in a viewport
+`Area`; `show` paints the panel through `ui::viewport_panel::show`, which owns
+dragging, viewport clamping and session placement. `composed_formula(text, state)`
+splits the active formula bar text into components and substitutes committed
+parameter values and clock time; no second parser is involved. Each component
+goes through `cas_tex::linear_to_tex` and `math_view::paint_tex_or_linear`, so an
+unsupported or clipped expression gets the shipped labelled linear fallback.
+
+**Invariants.** The formula bar remains the only editor. Panel header, close and
+`Reset position` controls are reachable in wide and compact layouts; a header
+drag does not reach the field's click-and-drag widget.
+
+**Pinned by.** `tests/formula_typeset_panel_test.rs`.
 
 #### `src/ui/formula_bar.rs` — formula text and mode toggles
 

@@ -3019,6 +3019,27 @@ impl VfApp {
     /// Frame phase: the help overlay and the two help windows, painted last
     /// so they sit over the viewport.
     pub(super) fn frame_overlays(&mut self, ui: &mut egui::Ui) {
+        // Issue #287: a viewport-anchored toggle strip. As an Area it does not
+        // change any bar/sheet row count, so neither layout mode shifts.
+        if let Some(viewport) = self.last_viewport_rect {
+            let mut panel = std::mem::take(&mut self.formula_typeset);
+            crate::ui::formula_typeset_panel::toggle_area(ui.ctx(), viewport, &mut panel);
+            self.formula_typeset = panel;
+        }
+        // Issue #287: floating typeset formula, over the viewport but below
+        // the help/guided tour. Editing stays in the formula bar; this panel
+        // only reflects the active text, committed parameters and clock time.
+        if self.formula_typeset.open
+            && self.state.is_vector_mode()
+            && let Some(viewport) = self.last_viewport_rect
+        {
+            let formula = self.bar.text.clone();
+            let state = &self.state;
+            let mut panel = std::mem::take(&mut self.formula_typeset);
+            crate::ui::formula_typeset_panel::show(ui.ctx(), viewport, &mut panel, &formula, state);
+            self.formula_typeset = panel;
+        }
+
         // Help overlay last, so it paints over the viewport (and the field
         // callback). Anchored at the viewport's bottom-left corner; the ×
         // persists the hidden state through the layout record.
