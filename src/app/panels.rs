@@ -1991,7 +1991,8 @@ impl VfApp {
             GriffithsAction::Dismiss => self.griffiths.close(),
             GriffithsAction::None => {}
         }
-        match crate::ui::ring_lesson::show(ctx, &mut self.griffiths.lesson) {
+        match crate::ui::ring_lesson::show(ctx, self.last_viewport_rect, &mut self.griffiths.lesson)
+        {
             RingLessonAction::Back => self.exit_griffiths_lesson(),
             RingLessonAction::KeepExploring => self.keep_griffiths_scene(),
             RingLessonAction::ExploreFromHere => self.explore_from_griffiths(),
@@ -2000,6 +2001,7 @@ impl VfApp {
         }
         match crate::ui::shell_lesson::show(
             ctx,
+            self.last_viewport_rect,
             &mut self.griffiths.shell,
             &self.state.maxwell,
             FieldFamily::Electric,

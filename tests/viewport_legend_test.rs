@@ -123,6 +123,7 @@ struct Legend {
     viewport: egui::Rect,
     compact: bool,
     time: f64,
+    viewport_dragged: bool,
 }
 
 impl Legend {
@@ -137,6 +138,7 @@ impl Legend {
             viewport: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(640.0, 480.0)),
             compact,
             time: 0.0,
+            viewport_dragged: false,
         };
         // AccessKit publishes the Area skeleton on the first pass; one warm-up
         // frame gives the widget tree its layout and bounds.
@@ -162,6 +164,14 @@ impl Legend {
         let compact = self.compact;
         let mut legend = None;
         let mut output = self.ctx.run_ui(input, |ui| {
+            // The camera listens to a background click-and-drag response.
+            self.viewport_dragged = ui
+                .interact(
+                    viewport,
+                    egui::Id::unique("field"),
+                    egui::Sense::click_and_drag(),
+                )
+                .dragged();
             legend = Some(viewport_legend::show(
                 ui.ctx(),
                 viewport,
@@ -430,6 +440,7 @@ fn overlay_edit_updates_state_and_the_sidebar() {
     let end = start + egui::vec2(40.0, 0.0);
     legend.frame(pointer(start, true));
     legend.frame(vec![egui::Event::PointerMoved(end)]);
+    assert!(!legend.viewport_dragged, "the field must not own the drag");
     legend.frame(pointer(end, false));
     legend.idle();
 
@@ -525,6 +536,114 @@ fn legend_collapses_and_compact_stays_narrow() {
         "compact width leaves most of the viewport uncovered"
     );
     assert!(frame.rect.width() <= compact.viewport.width() * 0.7);
+}
+
+#[test]
+fn legend_background_drag_stays_put_until_keyboard_reset() {
+    let mut legend = Legend::new(false);
+    let default = legend.idle().1.rect;
+    assert!(
+        default.right() > legend.viewport.right() - 25.0,
+        "{default:?}"
+    );
+    let start = default.right_top() + egui::vec2(-3.0, 3.0);
+    let end = start + egui::vec2(-100.0, 75.0);
+    legend.frame(pointer(start, true));
+    legend.frame(vec![egui::Event::PointerMoved(end)]);
+    assert!(!legend.viewport_dragged, "the field must not own the drag");
+    legend.frame(pointer(end, false));
+    let (out, moved) = legend.idle();
+    assert!(
+        moved.rect.left() < default.left() - 50.0,
+        "default={default:?}, moved={:?}",
+        moved.rect
+    );
+    assert!(moved.rect.top() > default.top() + 40.0);
+    assert_eq!(legend.idle().1.rect, moved.rect);
+
+    let reset = out
+        .platform_output
+        .accesskit_update
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find(|(_, node)| node.label() == Some("Reset position"))
+        .expect("reset button")
+        .0;
+    let key = |key, pressed| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let reached = (0..10).any(|_| {
+        let (out, _) = legend.frame(vec![key(egui::Key::Tab, true), key(egui::Key::Tab, false)]);
+        out.platform_output.accesskit_update.unwrap().focus == reset
+    });
+    assert!(reached, "Tab reaches Reset position");
+    legend.frame(vec![
+        key(egui::Key::Enter, true),
+        key(egui::Key::Enter, false),
+    ]);
+    assert_eq!(legend.idle().1.rect.min, default.min);
+}
+
+#[test]
+fn reset_layout_menu_restores_the_legend_to_its_default_corner() {
+    use vector_field_explorer::ui::menu::{MenuAction, SideEffect, apply_action};
+
+    let mut legend = Legend::new(false);
+    let default = legend.idle().1.rect;
+    assert!(default.right() > legend.viewport.right() - 25.0);
+    assert!(default.top() < legend.viewport.top() + 25.0);
+    let start = default.right_top() + egui::vec2(-3.0, 3.0);
+    let end = start + egui::vec2(-100.0, 75.0);
+    legend.frame(pointer(start, true));
+    legend.frame(vec![egui::Event::PointerMoved(end)]);
+    legend.frame(pointer(end, false));
+    let moved = legend.idle().1.rect;
+    assert!(moved.left() < default.left() - 50.0);
+    assert!(moved.top() > default.top() + 40.0);
+    assert_eq!(legend.idle().1.rect, moved);
+
+    let mut fixture = support::menu_fixture::MenuFixture::new();
+    let mut ui = fixture.ui();
+    ui.controls = &mut legend.controls;
+    ui.state = &mut legend.state;
+    assert_eq!(
+        apply_action(MenuAction::ResetLayout, &mut ui),
+        SideEffect::ResetLayout
+    );
+    assert_eq!(legend.idle().1.rect.min, default.min);
+}
+
+#[test]
+fn legend_position_is_retained_or_clamped_when_layout_changes() {
+    let mut legend = Legend::new(false);
+    let default = legend.idle().1.rect;
+    let start = default.right_top() + egui::vec2(-3.0, 3.0);
+    let end = start + egui::vec2(-150.0, 90.0);
+    legend.frame(pointer(start, true));
+    legend.frame(vec![egui::Event::PointerMoved(end)]);
+    legend.frame(pointer(end, false));
+    let moved = legend.idle().1.rect;
+    legend.compact = true;
+    assert_eq!(legend.idle().1.rect.min, moved.min);
+
+    legend.viewport = egui::Rect::from_min_max(egui::pos2(30.0, 35.0), egui::pos2(280.0, 150.0));
+    legend.idle();
+    let (out, frame) = legend.idle();
+    let clamped = frame.rect;
+    // Area positions are rounded to physical pixels.
+    assert!(
+        legend.viewport.expand(0.5).contains_rect(clamped),
+        "{clamped:?}"
+    );
+    assert!(clamped.left() < moved.left());
+    let rows = nodes(&out);
+    let reset = labelled(&rows, egui::Role::Button, "Reset position").expect("reset button");
+    assert!(legend.viewport.contains_rect(reset.rect));
 }
 
 #[test]

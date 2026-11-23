@@ -643,19 +643,111 @@ fn frame_with_size(
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
     let mut native = eframe::Frame::_new_kittest();
+    frame_with_native(ctx, app, &mut native, egui::vec2(width, height), events)
+}
+
+fn frame_with_native(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    native: &mut eframe::Frame,
+    size: egui::Vec2,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
     let mut output = ctx.run_ui(
         egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(width, height),
-            )),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         },
-        |ui| eframe::App::ui(app, ui, &mut native),
+        |ui| eframe::App::ui(app, ui, native),
     );
     output.textures_delta.clear();
     output
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dragging_the_app_legend_does_not_orbit_or_place_an_armed_seed() {
+    use eframe::{egui_wgpu, wgpu};
+
+    if std::env::var_os("VFE_VIEWPORT_GPU_PROBE").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        eprintln!("GPU not requested; set VFE_VIEWPORT_GPU_PROBE=1 on a GPU host");
+        return;
+    }
+
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    descriptor.backends.remove(wgpu::Backends::NOOP);
+    let instance = wgpu::Instance::new(descriptor);
+    let mut native = eframe::Frame::_new_kittest();
+    native.wgpu_render_state = Some(
+        pollster::block_on(egui_wgpu::RenderState::create(
+            &egui_wgpu::WgpuConfiguration::default(),
+            &instance,
+            None,
+            egui_wgpu::RendererOptions::default(),
+        ))
+        .expect("real headless wgpu render state"),
+    );
+
+    let ctx = support::context();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    app.controls.viewport_sticky = false;
+    let frame = |app: &mut VfApp, native: &mut eframe::Frame, events| {
+        frame_with_native(&ctx, app, native, egui::vec2(1200.0, 900.0), events);
+    };
+    let legend_rect = || {
+        ctx.memory(|memory| memory.area_rect(egui::Id::unique("viewport_color_legend")))
+            .expect("production legend area")
+    };
+    for _ in 0..3 {
+        frame(&mut app, &mut native, vec![]);
+    }
+    assert_eq!(
+        viewport_tool::derive_for(&app.state, &app.controls).selected,
+        ViewportTool::SeedStreamline
+    );
+    let before = legend_rect();
+    let pose = app.orbit;
+    let seeds = app.test_harness().click_seed_count();
+    let start = before.right_top() + egui::vec2(-3.0, 3.0);
+    let end = start + egui::vec2(-100.0, 75.0);
+    for events in [
+        pointer(start, true),
+        vec![egui::Event::PointerMoved(end)],
+        pointer(end, false),
+        vec![],
+    ] {
+        frame(&mut app, &mut native, events);
+        assert_eq!(app.orbit, pose);
+        assert_eq!(app.test_harness().click_seed_count(), seeds);
+        assert_eq!(
+            viewport_tool::derive_for(&app.state, &app.controls).selected,
+            ViewportTool::SeedStreamline
+        );
+    }
+    assert!(legend_rect().left() < before.left() - 50.0);
+
+    // The same production viewport must still accept camera and placement input
+    // off the legend; a frame that took the renderer fallback would fail here.
+    let field = egui::pos2(450.0, 450.0);
+    let pan_end = field + egui::vec2(35.0, 15.0);
+    frame(&mut app, &mut native, pointer(field, true));
+    frame(
+        &mut app,
+        &mut native,
+        vec![egui::Event::PointerMoved(pan_end)],
+    );
+    frame(&mut app, &mut native, pointer(pan_end, false));
+    assert_ne!(
+        app.orbit, pose,
+        "an unobstructed viewport drag moves the camera"
+    );
+    assert_eq!(app.test_harness().click_seed_count(), seeds);
+    frame(&mut app, &mut native, pointer(field, true));
+    frame(&mut app, &mut native, pointer(field, false));
+    assert_eq!(app.test_harness().click_seed_count(), seeds + 1);
+    assert!(app.controls.viewport_inspect, "one-shot placement disarms");
 }
 
 #[test]

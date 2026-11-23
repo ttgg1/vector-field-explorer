@@ -320,6 +320,7 @@ impl ShellLessonState {
 /// applies the returned action.
 pub fn show(
     ctx: &egui::Context,
+    viewport: Option<egui::Rect>,
     state: &mut ShellLessonState,
     scene: &MaxwellScene,
     family: FieldFamily,
@@ -361,7 +362,9 @@ pub fn show(
                 ui.separator();
                 draw_result(ui, state, scene, family, time);
                 ui.separator();
-                draw_sweep(ui.ctx(), state, scene);
+                if let Some(viewport) = viewport.filter(|r| r.is_positive()) {
+                    draw_sweep(ui.ctx(), viewport, state, scene);
+                }
             }
 
             ui.separator();
@@ -385,9 +388,14 @@ pub fn show(
     action
 }
 
-fn draw_sweep(ctx: &egui::Context, state: &mut ShellLessonState, scene: &MaxwellScene) {
+fn draw_sweep(
+    ctx: &egui::Context,
+    viewport: egui::Rect,
+    state: &mut ShellLessonState,
+    scene: &MaxwellScene,
+) {
     let current = state.probe_radius();
-    let action = sweep::show(ctx, &mut state.sweep, scene, true, current);
+    let action = sweep::show(ctx, viewport, &mut state.sweep, scene, true, current);
     match action {
         SweepUiAction::None => {}
         SweepUiAction::Preview(radius) => {

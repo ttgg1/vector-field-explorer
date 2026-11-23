@@ -39,5 +39,6 @@ pub mod tour_overlay;
 pub mod transport;
 pub mod uniform_flux;
 pub mod viewport_legend;
+pub mod viewport_panel;
 pub mod viewport_tool;
 pub mod wire_lesson;

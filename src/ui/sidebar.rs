@@ -1003,6 +1003,8 @@ pub struct Controls {
     pub auto_fit: bool,
     pub color_min: f32,
     pub color_max: f32,
+    /// Session-only viewport colour legend placement.
+    pub legend_panel: super::viewport_panel::ViewportPanelState,
     /// Session-only custom palette draft (issue #83 slice C2). `None` until
     /// the user starts editing the current effective ramp.
     pub palette_working: Option<ColorRamp>,
@@ -1126,6 +1128,7 @@ impl Controls {
             color_stats: ColorStats::default(),
             color_clips: ClipCounts::default(),
             freeze_requested: false,
+            legend_panel: Default::default(),
             auto_fit: true,
             color_min: 0.0,
             color_max: 1.0,
