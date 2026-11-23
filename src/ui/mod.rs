@@ -6,6 +6,7 @@ pub mod cas_panel;
 pub mod cas_preview;
 pub mod field_compare;
 pub mod formula_bar;
+pub mod formula_typeset_panel;
 pub mod gauss_shell;
 pub mod griffiths;
 pub mod help_overlay;
