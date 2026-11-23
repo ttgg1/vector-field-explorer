@@ -3064,7 +3064,12 @@ impl VfApp {
             let state = &self.state;
             let mut panel = std::mem::take(&mut self.formula_typeset);
             crate::ui::formula_typeset_panel::show_slide(
-                ui.ctx(), viewport, &mut panel, &formula, state, slide,
+                ui.ctx(),
+                viewport,
+                &mut panel,
+                &formula,
+                state,
+                slide,
             );
             self.formula_typeset = panel;
         }

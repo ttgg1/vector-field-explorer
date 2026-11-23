@@ -67,7 +67,10 @@ fn clicking_reduced_motion_toggles_the_field() {
         .expect("Reduced motion toggle is exposed");
     assert!(!panel.style.reduced_motion);
     assert!(panel.click(node.rect.center()));
-    assert!(panel.style.reduced_motion, "the checkbox writes through to the field");
+    assert!(
+        panel.style.reduced_motion,
+        "the checkbox writes through to the field"
+    );
 }
 
 #[test]
@@ -120,9 +123,18 @@ fn apply_sets_distinct_hover_and_press_feedback_from_the_shared_token() {
         let inactive = visuals.widgets.inactive.weak_bg_fill;
         let hovered = visuals.widgets.hovered.weak_bg_fill;
         let active = visuals.widgets.active.weak_bg_fill;
-        assert_ne!(hovered, inactive, "hover feedback must be visible in {theme:?}");
-        assert_ne!(active, inactive, "press feedback must be visible in {theme:?}");
-        assert_ne!(active, hovered, "press must read stronger than hover in {theme:?}");
+        assert_ne!(
+            hovered, inactive,
+            "hover feedback must be visible in {theme:?}"
+        );
+        assert_ne!(
+            active, inactive,
+            "press feedback must be visible in {theme:?}"
+        );
+        assert_ne!(
+            active, hovered,
+            "press must read stronger than hover in {theme:?}"
+        );
     }
     // The hover/press token is the single source of the egui animation time.
     assert_eq!(
@@ -142,8 +154,14 @@ fn reduced_motion_applies_the_final_feedback_immediately() {
     // The end-state colours are still present; only the eased intermediate is
     // removed, so controls remain distinguishable without any motion.
     let visuals = &ctx.global_style().visuals;
-    assert_ne!(visuals.widgets.hovered.weak_bg_fill, visuals.widgets.inactive.weak_bg_fill);
-    assert_ne!(visuals.widgets.active.weak_bg_fill, visuals.widgets.inactive.weak_bg_fill);
+    assert_ne!(
+        visuals.widgets.hovered.weak_bg_fill,
+        visuals.widgets.inactive.weak_bg_fill
+    );
+    assert_ne!(
+        visuals.widgets.active.weak_bg_fill,
+        visuals.widgets.inactive.weak_bg_fill
+    );
 }
 
 #[test]

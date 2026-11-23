@@ -1,5 +1,4 @@
-use eframe::egui::{Rect, pos2, vec2};
-use eframe::egui;
+use eframe::egui::{self, Rect, pos2, vec2};
 use vector_field_explorer::ui::viewport_panel::{
     ViewportPanelState, clamp_position, show_slide, slide_pos, slide_rect,
 };

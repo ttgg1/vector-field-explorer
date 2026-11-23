@@ -51,7 +51,15 @@ pub fn show<R>(
     state: &mut ViewportPanelState,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> InnerResponse<R> {
-    show_slide(ctx, viewport, id, default_pos, state, Vec2::ZERO, add_contents)
+    show_slide(
+        ctx,
+        viewport,
+        id,
+        default_pos,
+        state,
+        Vec2::ZERO,
+        add_contents,
+    )
 }
 
 /// As [`show`], but paints the panel at `rest + slide` while keeping the stored

@@ -267,7 +267,9 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
 /// than a saturated accent block.
 fn feedback_tint(base: egui::Color32, accent: egui::Color32, strength: f32) -> egui::Color32 {
     let mix = |a: u8, b: u8| {
-        (a as f32 * (1.0 - strength) + b as f32 * strength).round().clamp(0.0, 255.0) as u8
+        (a as f32 * (1.0 - strength) + b as f32 * strength)
+            .round()
+            .clamp(0.0, 255.0) as u8
     };
     egui::Color32::from_rgba_premultiplied(
         mix(base.r(), accent.r()),

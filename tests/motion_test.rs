@@ -42,7 +42,10 @@ fn transition_starts_at_zero_settles_at_one_and_requests_no_idle_repaint() {
     let duration = MotionTokens::default().open_slide_ms;
     let mut transition = MotionTransition::new(duration);
     assert!(!transition.is_active());
-    assert!(!needs_repaint(&transition), "a fresh, idle transition is inert");
+    assert!(
+        !needs_repaint(&transition),
+        "a fresh, idle transition is inert"
+    );
 
     transition.start();
     assert_eq!(transition.tick(0.0, MotionMode::Full), 0.0);
@@ -59,7 +62,10 @@ fn transition_starts_at_zero_settles_at_one_and_requests_no_idle_repaint() {
     assert_eq!(end, 1.0);
     assert_eq!(transition.progress(), 1.0);
     assert!(!transition.is_active());
-    assert!(!needs_repaint(&transition), "settled transitions never request idle frames");
+    assert!(
+        !needs_repaint(&transition),
+        "settled transitions never request idle frames"
+    );
 
     // Extra ticks past the end stay settled and stay inert.
     assert_eq!(transition.tick(1000.0, MotionMode::Full), 1.0);

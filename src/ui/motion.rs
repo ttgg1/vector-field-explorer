@@ -103,7 +103,11 @@ impl MotionTransition {
             self.elapsed_ms = self.duration_ms;
             return 1.0;
         }
-        let dt = if dt_ms.is_finite() && dt_ms > 0.0 { dt_ms } else { 0.0 };
+        let dt = if dt_ms.is_finite() && dt_ms > 0.0 {
+            dt_ms
+        } else {
+            0.0
+        };
         self.elapsed_ms = (self.elapsed_ms + dt).min(self.duration_ms);
         progress(self.elapsed_ms, self.duration_ms)
     }

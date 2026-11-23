@@ -184,7 +184,15 @@ pub fn show(
     stats: &ColorStats,
     compact: bool,
 ) -> LegendFrame {
-    show_slide(ctx, viewport, state, controls, stats, compact, egui::Vec2::ZERO)
+    show_slide(
+        ctx,
+        viewport,
+        state,
+        controls,
+        stats,
+        compact,
+        egui::Vec2::ZERO,
+    )
 }
 
 /// As [`show`], with a purely visual slide offset for the open transition.
