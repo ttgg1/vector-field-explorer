@@ -24,8 +24,10 @@ fn sample_style() -> AppStyle {
 #[test]
 fn reduced_motion_defaults_to_false_and_round_trips() {
     assert!(!AppStyle::default().reduced_motion);
-    let mut style = AppStyle::default();
-    style.reduced_motion = true;
+    let style = AppStyle {
+        reduced_motion: true,
+        ..AppStyle::default()
+    };
     let json = serde_json::to_string(&style).expect("serialize AppStyle");
     let back: AppStyle = serde_json::from_str(&json).expect("deserialize AppStyle");
     assert!(back.reduced_motion);
