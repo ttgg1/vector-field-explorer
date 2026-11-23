@@ -403,9 +403,11 @@ session-only, never in `ViewRecord`/`AppSettings`. Start/advance/back/dismiss/
 finish only change tour progress and never record history on their own. The one
 exception is entering the Field probes/flux stop: when a Formula/Ode adapter
 cannot supply a probe field, the tour switches to Sources through the shared
-`State::set_field_mode` seam, which is a real undoable document edit (one
-history entry) rather than a tour-only mutation. Ordinary edits still record
-history through that same seam and are unaffected. Collapsed
+`State::set_field_mode` seam, which changes the document like an ordinary
+field-mode edit and is recorded as one undoable history entry by the frame's
+history driver rather than being a tour-only mutation. `set_field_mode` itself
+only mutates the state; normal document history records the switch the same way
+it records any other field-mode change, and is unaffected. Collapsed
 targets open through `LayoutState::toggle_*` in wide layout and the existing
 compact sheet in compact layout; a second layout path does not exist.
 
