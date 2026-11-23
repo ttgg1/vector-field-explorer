@@ -1,0 +1,150 @@
+//! Central motion vocabulary for restrained UI motion (issue #289, bounded slice).
+//!
+//! One small, pure module: bounded duration tokens, a deterministic clamped
+//! ease-out sampler, and reduced-motion resolution. Nothing here touches egui,
+//! the scene or the renderer, so every branch is directly unit-testable. No
+//! ad-hoc timing values belong in callers — they all read [`MotionTokens`].
+
+/// Bounded durations (milliseconds) and the single easing curve shared by every
+/// transition. Values are constants in disguise: callers use [`Default`] rather
+/// than inventing their own timings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionTokens {
+    /// Open/slide transition for the compact sheet and floating panels.
+    pub open_slide_ms: f32,
+    /// Hover/press feedback for buttons and toggles.
+    pub hover_press_ms: f32,
+    /// Peak slide distance in points for an open transition. Small enough to
+    /// stay restrained and never clip a panel.
+    pub slide_distance_pt: f32,
+}
+
+impl Default for MotionTokens {
+    fn default() -> Self {
+        Self {
+            open_slide_ms: 140.0,
+            hover_press_ms: 80.0,
+            slide_distance_pt: 12.0,
+        }
+    }
+}
+
+/// Resolve a transition's normalized progress (0..=1) at `elapsed_ms` using one
+/// quadratic ease-out. Pure and deterministic.
+///
+/// Non-positive or non-finite durations resolve to the settled end (1.0) and a
+/// non-finite elapsed resolves to the start (0.0): a corrupt or degenerate
+/// timing must never produce `NaN` or leak an invalid offset into layout.
+/// Negative elapsed clamps to 0.
+pub fn progress(elapsed_ms: f32, duration_ms: f32) -> f32 {
+    if !duration_ms.is_finite() || duration_ms <= 0.0 || !elapsed_ms.is_finite() {
+        // A non-finite elapsed means "no usable clock sample" -> pinned to the
+        // start state (0.0); a degenerate duration -> the settled end (1.0).
+        return if !elapsed_ms.is_finite() { 0.0 } else { 1.0 };
+    }
+    let t = elapsed_ms.clamp(0.0, duration_ms) / duration_ms;
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
+/// How a transition behaves this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionMode {
+    /// Animate over the token duration.
+    Full,
+    /// Jump straight to the end state on the first frame.
+    Reduced,
+}
+
+/// Resolve the effective mode from the persisted user setting and the platform
+/// reduced-motion preference. Either signal disables motion; the platform
+/// preference is an additional automatic gate, not an override of the setting.
+pub fn effective_mode(setting_reduced: bool, platform_reduced: bool) -> MotionMode {
+    if setting_reduced || platform_reduced {
+        MotionMode::Reduced
+    } else {
+        MotionMode::Full
+    }
+}
+
+/// Per-frame state of one open/slide transition. Session-only and carry-free:
+/// one instance per animated surface, started when the surface opens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionTransition {
+    duration_ms: f32,
+    elapsed_ms: f32,
+    /// `false` before the first `start` and while idle at rest; `true` once a
+    /// transition has been started (including when it has settled at 1.0).
+    started: bool,
+}
+
+impl MotionTransition {
+    /// New idle transition with the given duration. Not started yet.
+    pub fn new(duration_ms: f32) -> Self {
+        Self {
+            duration_ms,
+            elapsed_ms: 0.0,
+            started: false,
+        }
+    }
+
+    /// Begin (or restart) a transition from progress 0.
+    pub fn start(&mut self) {
+        self.elapsed_ms = 0.0;
+        self.started = true;
+    }
+
+    /// Settle the transition immediately, returning it to the idle state.
+    ///
+    /// Used when an animated surface disappears mid-flight: the slide is no
+    /// longer visible, so it must not keep reporting in-flight progress or
+    /// requesting repaint frames. After this call [`Self::progress`] reports
+    /// the idle 0, [`Self::is_active`] is false and the transition is inert.
+    pub fn finish(&mut self) {
+        self.elapsed_ms = 0.0;
+        self.started = false;
+    }
+
+    /// Advance the transition by `dt_ms` and return the new eased progress.
+    /// Under [`MotionMode::Reduced`] the end state is reached on this tick with
+    /// no eased intermediate, regardless of how little time has elapsed.
+    pub fn tick(&mut self, dt_ms: f32, mode: MotionMode) -> f32 {
+        if !self.started {
+            return 0.0;
+        }
+        if mode == MotionMode::Reduced {
+            self.elapsed_ms = self.duration_ms;
+            return 1.0;
+        }
+        let dt = if dt_ms.is_finite() && dt_ms > 0.0 {
+            dt_ms
+        } else {
+            0.0
+        };
+        self.elapsed_ms = (self.elapsed_ms + dt).min(self.duration_ms);
+        progress(self.elapsed_ms, self.duration_ms)
+    }
+
+    /// The last sampled progress (0 before start, 1 once settled).
+    pub fn progress(&self) -> f32 {
+        if !self.started {
+            0.0
+        } else {
+            progress(self.elapsed_ms, self.duration_ms)
+        }
+    }
+
+    /// Whether a frame is currently in flight (strictly between the endpoints).
+    pub fn is_active(&self) -> bool {
+        if !self.started {
+            return false;
+        }
+        let p = self.progress();
+        p > 0.0 && p < 1.0
+    }
+}
+
+/// The single decision point for repaint requests: only an in-flight transition
+/// needs another frame. Callers must not request repaints once this is false.
+pub fn needs_repaint(transition: &MotionTransition) -> bool {
+    transition.is_active()
+}

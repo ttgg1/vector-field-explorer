@@ -96,6 +96,10 @@ pub struct AppStyle {
     pub spacing: f32,
     /// Base text size in points (Body/Button/Monospace).
     pub font_size: f32,
+    /// Disable motion: transitions jump to their end state on the first frame.
+    /// Defaulted for pre-#289 records; the platform preference is a separate
+    /// automatic gate resolved at paint time via `motion::effective_mode`.
+    pub reduced_motion: bool,
 }
 
 impl Default for AppStyle {
@@ -109,6 +113,7 @@ impl Default for AppStyle {
             rounding: 6.0,
             spacing: 8.0,
             font_size: 13.0,
+            reduced_motion: false,
         }
     }
 }
@@ -199,6 +204,15 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
         // default (pale blue / dark blue) is unreadable on several accents.
         visuals.selection.stroke = egui::Stroke::new(1.0, selection_text_color(style.accent));
         visuals.hyperlink_color = style.accent;
+
+        // Restrained, accent-derived hover/press feedback. Only widget colours
+        // change — no padding, spacing or size — so layout geometry is stable.
+        // Hover gets a light tint of the accent, press a stronger one; both stay
+        // distinguishable from the resting fill in dark and light themes.
+        let base = visuals.widgets.inactive.weak_bg_fill;
+        visuals.widgets.hovered.weak_bg_fill = feedback_tint(base, style.accent, 0.18);
+        visuals.widgets.active.weak_bg_fill = feedback_tint(base, style.accent, 0.34);
+
         visuals.window_corner_radius = rounding;
         visuals.menu_corner_radius = rounding;
         visuals.widgets.noninteractive.corner_radius = rounding;
@@ -207,6 +221,15 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
         visuals.widgets.active.corner_radius = rounding;
         visuals.widgets.open.corner_radius = rounding;
         style_ctx.visuals = visuals;
+
+        // One shared token drives egui's own widget-state easing. Under reduced
+        // motion the easing time is zero, so hover/press states land on their
+        // final colour on the very first frame with no eased intermediate.
+        style_ctx.animation_time = if style.reduced_motion {
+            0.0
+        } else {
+            crate::ui::motion::MotionTokens::default().hover_press_ms / 1000.0
+        };
 
         style_ctx.spacing.item_spacing =
             egui::vec2(style.spacing, style.spacing * SPACING_Y_RATIO);
@@ -237,6 +260,23 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
             egui::FontId::proportional(font_size * 0.85),
         );
     });
+}
+
+/// Blend a resting widget fill toward the accent by `strength` (0..=1). Used
+/// only for hover/press colours, so the result stays a restrained tint rather
+/// than a saturated accent block.
+fn feedback_tint(base: egui::Color32, accent: egui::Color32, strength: f32) -> egui::Color32 {
+    let mix = |a: u8, b: u8| {
+        (a as f32 * (1.0 - strength) + b as f32 * strength)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    egui::Color32::from_rgba_premultiplied(
+        mix(base.r(), accent.r()),
+        mix(base.g(), accent.g()),
+        mix(base.b(), accent.b()),
+        base.a(),
+    )
 }
 
 fn button_padding(font_size: f32) -> egui::Vec2 {
@@ -391,6 +431,9 @@ pub fn show_controls(ui: &mut egui::Ui, style: &mut AppStyle) -> StyleControls {
         .changed();
     changed |= ui
         .add(egui::Slider::new(&mut style.font_size, MIN_FONT_SIZE..=MAX_FONT_SIZE).text("Font size"))
+        .changed();
+    changed |= ui
+        .checkbox(&mut style.reduced_motion, "Reduced motion")
         .changed();
     StyleControls {
         changed,

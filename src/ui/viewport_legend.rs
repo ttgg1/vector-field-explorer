@@ -184,6 +184,27 @@ pub fn show(
     stats: &ColorStats,
     compact: bool,
 ) -> LegendFrame {
+    show_slide(
+        ctx,
+        viewport,
+        state,
+        controls,
+        stats,
+        compact,
+        egui::Vec2::ZERO,
+    )
+}
+
+/// As [`show`], with a purely visual slide offset for the open transition.
+pub fn show_slide(
+    ctx: &egui::Context,
+    viewport: egui::Rect,
+    state: &mut State,
+    controls: &mut Controls,
+    stats: &ColorStats,
+    compact: bool,
+    slide: egui::Vec2,
+) -> LegendFrame {
     let snapshot = LegendSnapshot::new(state, stats);
     let width = panel_width(viewport, compact);
     let default_pos = egui::pos2(viewport.right() - 12.0 - width, viewport.top() + 12.0);
@@ -191,12 +212,13 @@ pub fn show(
     let mut reset = false;
     let mut panel = controls.legend_panel;
 
-    let response = super::viewport_panel::show(
+    let response = super::viewport_panel::show_slide(
         ctx,
         viewport,
         egui::Id::unique("viewport_color_legend"),
         default_pos,
         &mut panel,
+        slide,
         |ui| {
             ui.set_width(width);
             let popup = egui::Frame::popup(ui.style());

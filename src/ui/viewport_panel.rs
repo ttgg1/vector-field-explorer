@@ -23,6 +23,23 @@ pub fn clamp_position(viewport: Rect, pos: Pos2, size: Vec2) -> Pos2 {
     pos.clamp(viewport.min, (viewport.max - size).max(viewport.min))
 }
 
+/// Pure slide-in position for a panel: at `progress = 0` the panel is `distance`
+/// points below its resting spot, at `progress = 1` exactly at rest. Only the
+/// painted position changes; callers keep the unshifted rect for layout and
+/// interaction so hit targets and accessible bounds never move.
+#[doc(hidden)]
+pub fn slide_pos(rest: Pos2, progress: f32, distance: f32) -> Pos2 {
+    let p = progress.clamp(0.0, 1.0);
+    rest - Vec2::new(0.0, distance * (1.0 - p))
+}
+
+/// The painted rectangle for a slide-in; same size as `rest`, translated only
+/// by the slide offset. Interaction continues to use the original rect.
+#[doc(hidden)]
+pub fn slide_rect(rest: Rect, progress: f32, distance: f32) -> Rect {
+    rest.translate(slide_pos(rest.min, progress, distance) - rest.min)
+}
+
 /// Show an interactive foreground panel. The caller supplies a default
 /// top-left and lays out contents to fit the viewport, using scrolling where
 /// necessary. Child widgets retain their ordinary egui interaction senses.
@@ -34,7 +51,32 @@ pub fn show<R>(
     state: &mut ViewportPanelState,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> InnerResponse<R> {
-    let pos = clamp_position(viewport, state.pos.unwrap_or(default_pos), state.size);
+    show_slide(
+        ctx,
+        viewport,
+        id,
+        default_pos,
+        state,
+        Vec2::ZERO,
+        add_contents,
+    )
+}
+
+/// As [`show`], but paints the panel at `rest + slide` while keeping the stored
+/// placement at `rest`. The slide is a purely visual offset: hit targets, the
+/// stored position and the panel size are the same as at rest, so accessibility
+/// bounds and layout geometry never move. Callers request a repaint only while
+/// their transition is active.
+pub fn show_slide<R>(
+    ctx: &Context,
+    viewport: Rect,
+    id: Id,
+    default_pos: Pos2,
+    state: &mut ViewportPanelState,
+    slide: Vec2,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> InnerResponse<R> {
+    let rest = clamp_position(viewport, state.pos.unwrap_or(default_pos), state.size);
     let frame = Area::new(id)
         .order(Order::Foreground)
         .pivot(Align2::LEFT_TOP)
@@ -42,12 +84,15 @@ pub fn show<R>(
         // Ignore egui's 600×400 sizing-pass estimate when placing the panel.
         .default_size(Vec2::ZERO)
         .constrain_to(viewport)
-        .current_pos(pos)
+        .current_pos(rest + slide)
         .show(ctx, add_contents);
     let rect = frame.response.rect;
-    state.pos = Some(rect.min);
+    // Persist the resting position, not the transient slid one, so dragging
+    // still writes the user's placement while the visual slide settles.
+    state.pos = Some(rect.min - slide);
     state.size = rect.size();
-    if clamp_position(viewport, rect.min, state.size).distance(rect.min) > 0.5 {
+    let rest_now = clamp_position(viewport, state.pos.unwrap_or(default_pos), state.size);
+    if rest_now.distance(state.pos.unwrap_or(default_pos)) > 0.5 {
         // egui constrains before laying out the contents, using the last size.
         ctx.request_repaint();
     }

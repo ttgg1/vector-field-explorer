@@ -2819,7 +2819,13 @@ impl VfApp {
                     egui::Sense::click_and_drag(),
                 );
                 let weak = ui.visuals().weak_text_color();
-                let bar = egui::Rect::from_center_size(rect.center(), egui::vec2(36.0, 4.0));
+                // Issue #289: the sheet's open transition slides its grip a few
+                // points into place. The handle's allocated rect is unchanged,
+                // so the sheet's layout geometry and hit target size stay fixed.
+                let distance = crate::ui::motion::MotionTokens::default().slide_distance_pt;
+                let slide = distance * (1.0 - self.sheet_transition.progress());
+                let bar_center = rect.center() + egui::vec2(0.0, slide);
+                let bar = egui::Rect::from_center_size(bar_center, egui::vec2(36.0, 4.0));
                 ui.painter().rect_filled(bar, 2.0, weak);
                 let swiped_down = handle.dragged()
                     && handle
@@ -3038,14 +3044,33 @@ impl VfApp {
         // always holds the real committed vector formula, and `show()` picks a
         // neutral label for non-Formula modes so the panel stays useful without
         // claiming the bar is the live editor there.
-        if self.formula_typeset.open
-            && self.state.is_vector_mode()
-            && let Some(viewport) = self.last_viewport_rect
-        {
+        let typeset_visible = self.formula_typeset.open && self.state.is_vector_mode();
+        let dt_ms = ui.ctx().input(|input| input.stable_dt) * 1000.0;
+        let typeset_mode = self.motion_mode();
+        let typeset_progress = Self::advance_transition(
+            &mut self.typeset_transition,
+            typeset_visible,
+            &mut self.typeset_was_open,
+            dt_ms,
+            typeset_mode,
+        );
+        if typeset_visible && crate::ui::motion::needs_repaint(&self.typeset_transition) {
+            ui.ctx().request_repaint();
+        }
+        if typeset_visible && let Some(viewport) = self.last_viewport_rect {
+            let distance = crate::ui::motion::MotionTokens::default().slide_distance_pt;
+            let slide = egui::vec2(0.0, distance * (1.0 - typeset_progress));
             let formula = self.state.active_source().to_string();
             let state = &self.state;
             let mut panel = std::mem::take(&mut self.formula_typeset);
-            crate::ui::formula_typeset_panel::show(ui.ctx(), viewport, &mut panel, &formula, state);
+            crate::ui::formula_typeset_panel::show_slide(
+                ui.ctx(),
+                viewport,
+                &mut panel,
+                &formula,
+                state,
+                slide,
+            );
             self.formula_typeset = panel;
         }
 
@@ -3157,15 +3182,29 @@ impl VfApp {
                 self.state.field_mode,
                 FieldMode::Ode | FieldMode::Materials | FieldMode::Maxwell
             );
+        let legend_mode = self.motion_mode();
+        let legend_progress = Self::advance_transition(
+            &mut self.legend_transition,
+            legend_visible,
+            &mut self.legend_was_visible,
+            dt_ms,
+            legend_mode,
+        );
+        if legend_visible && crate::ui::motion::needs_repaint(&self.legend_transition) {
+            ui.ctx().request_repaint();
+        }
         if legend_visible && let Some(rect) = self.last_viewport_rect {
             let stats = self.color_facts.stats;
-            crate::ui::viewport_legend::show(
+            let distance = crate::ui::motion::MotionTokens::default().slide_distance_pt;
+            let slide = egui::vec2(0.0, distance * (1.0 - legend_progress));
+            crate::ui::viewport_legend::show_slide(
                 ui.ctx(),
                 rect,
                 &mut self.state,
                 &mut self.controls,
                 &stats,
                 self.layout_mode == LayoutMode::Compact,
+                slide,
             );
         }
 

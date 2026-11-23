@@ -33,6 +33,23 @@ impl eframe::App for VfApp {
             self.sheet.close();
         }
 
+        // Issue #289: open/slide motion for the compact sheet. A change of the
+        // open sheet starts a fresh transition; the tick runs once per frame
+        // and repaints are requested only while the transition is in flight.
+        if self.sheet != self.last_sheet {
+            if self.sheet.is_open() {
+                self.sheet_transition.start();
+            }
+            self.last_sheet = self.sheet;
+        }
+        let dt_ms = ui.ctx().input(|input| input.stable_dt) * 1000.0;
+        if self.sheet.is_open() {
+            self.sheet_transition.tick(dt_ms, self.motion_mode());
+            if crate::ui::motion::needs_repaint(&self.sheet_transition) {
+                ui.ctx().request_repaint();
+            }
+        }
+
         // Input, chrome, simulation, status, viewport, then the overlays on
         // top: the same statement order as the pre-split `ui` body.
         let ctx = ui.ctx().clone();

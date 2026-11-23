@@ -17,7 +17,60 @@ fn sample_style() -> AppStyle {
         rounding: 9.0,
         spacing: 11.0,
         font_size: 15.0,
+        reduced_motion: false,
     }
+}
+
+#[test]
+fn reduced_motion_defaults_to_false_and_round_trips() {
+    assert!(!AppStyle::default().reduced_motion);
+    let style = AppStyle {
+        reduced_motion: true,
+        ..AppStyle::default()
+    };
+    let json = serde_json::to_string(&style).expect("serialize AppStyle");
+    let back: AppStyle = serde_json::from_str(&json).expect("deserialize AppStyle");
+    assert!(back.reduced_motion);
+}
+
+#[test]
+fn legacy_style_without_reduced_motion_loads_as_motion_on() {
+    // A pre-#289 record has no `reduced_motion` key; `#[serde(default)]` must
+    // keep it loadable with motion enabled.
+    let legacy = r#"{"theme_dark":true,"accent":[76,201,240,255],"rounding":6.0,"spacing":8.0,"font_size":13.0}"#;
+    let style: AppStyle = serde_json::from_str(legacy).expect("legacy record still loads");
+    assert!(!style.reduced_motion);
+}
+
+#[test]
+fn settings_controls_expose_a_reduced_motion_toggle() {
+    let mut panel = Panel::new(AppStyle::default());
+    let out = panel.idle();
+    let labels: Vec<_> = nodes(&out)
+        .into_iter()
+        .filter_map(|node| node.label)
+        .collect();
+    assert!(
+        labels.iter().any(|label| label == "Reduced motion"),
+        "the Settings controls must expose a `Reduced motion` toggle, got {labels:?}"
+    );
+}
+
+#[test]
+fn clicking_reduced_motion_toggles_the_field() {
+    let mut panel = Panel::new(AppStyle::default());
+    panel.idle();
+    let out = panel.idle();
+    let node = nodes(&out)
+        .into_iter()
+        .find(|node| node.label.as_deref() == Some("Reduced motion"))
+        .expect("Reduced motion toggle is exposed");
+    assert!(!panel.style.reduced_motion);
+    assert!(panel.click(node.rect.center()));
+    assert!(
+        panel.style.reduced_motion,
+        "the checkbox writes through to the field"
+    );
 }
 
 #[test]
@@ -57,6 +110,58 @@ fn apply_maps_light_style_onto_the_context() {
     // The dark theme is configured too, and stays a dark theme.
     let dark = ctx.style_of(egui::Theme::Dark);
     assert!(dark.visuals.dark_mode);
+}
+
+#[test]
+fn apply_sets_distinct_hover_and_press_feedback_from_the_shared_token() {
+    use vector_field_explorer::ui::motion::MotionTokens;
+
+    let ctx = egui::Context::default();
+    apply(&ctx, &sample_style());
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let visuals = &ctx.style_of(theme).visuals;
+        let inactive = visuals.widgets.inactive.weak_bg_fill;
+        let hovered = visuals.widgets.hovered.weak_bg_fill;
+        let active = visuals.widgets.active.weak_bg_fill;
+        assert_ne!(
+            hovered, inactive,
+            "hover feedback must be visible in {theme:?}"
+        );
+        assert_ne!(
+            active, inactive,
+            "press feedback must be visible in {theme:?}"
+        );
+        assert_ne!(
+            active, hovered,
+            "press must read stronger than hover in {theme:?}"
+        );
+    }
+    // The hover/press token is the single source of the egui animation time.
+    assert_eq!(
+        ctx.global_style().animation_time,
+        MotionTokens::default().hover_press_ms / 1000.0
+    );
+}
+
+#[test]
+fn reduced_motion_applies_the_final_feedback_immediately() {
+    let ctx = egui::Context::default();
+    let mut style = sample_style();
+    style.reduced_motion = true;
+    apply(&ctx, &style);
+
+    assert_eq!(ctx.global_style().animation_time, 0.0);
+    // The end-state colours are still present; only the eased intermediate is
+    // removed, so controls remain distinguishable without any motion.
+    let visuals = &ctx.global_style().visuals;
+    assert_ne!(
+        visuals.widgets.hovered.weak_bg_fill,
+        visuals.widgets.inactive.weak_bg_fill
+    );
+    assert_ne!(
+        visuals.widgets.active.weak_bg_fill,
+        visuals.widgets.inactive.weak_bg_fill
+    );
 }
 
 #[test]

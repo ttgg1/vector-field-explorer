@@ -13,7 +13,7 @@
 use eframe::egui::{self, Context, InnerResponse, Pos2, Rect, Ui};
 
 use crate::source_scene::FieldMode;
-use crate::ui::viewport_panel::{ViewportPanelState, show as show_viewport_panel};
+use crate::ui::viewport_panel::ViewportPanelState;
 use crate::viewmodel::State;
 
 /// Accessible label of the control that opens the panel.
@@ -175,15 +175,28 @@ pub fn show(
     formula: &str,
     state: &State,
 ) -> InnerResponse<()> {
+    show_slide(ctx, viewport, panel, formula, state, egui::Vec2::ZERO)
+}
+
+/// As [`show`], with a purely visual slide offset for the open transition.
+pub fn show_slide(
+    ctx: &Context,
+    viewport: Rect,
+    panel: &mut FormulaTypesetPanelState,
+    formula: &str,
+    state: &State,
+    slide: egui::Vec2,
+) -> InnerResponse<()> {
     let default = panel.default_position(viewport);
     let mut close = false;
     let mut reset = false;
-    let response = show_viewport_panel(
+    let response = super::viewport_panel::show_slide(
         ctx,
         viewport,
         egui::Id::unique(PANEL_TITLE),
         default,
         &mut panel.placement,
+        slide,
         |ui| {
             // The Area measures with a zero-size estimate; pin the width like
             // the shared legend overlay so text and KaTeX shapes get real space.
