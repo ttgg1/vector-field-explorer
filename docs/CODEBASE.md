@@ -6234,7 +6234,7 @@ one clamped ease-out sampler (`progress`), and reduced-motion resolution
 
 **Public API.** `MotionTokens`, `progress(elapsed_ms, duration_ms) -> f32`,
 `MotionMode { Full, Reduced }`, `effective_mode(setting_reduced, platform_reduced)`,
-`MotionTransition` (`new`, `start`, `tick`, `progress`, `is_active`) and
+`MotionTransition` (`new`, `start`, `tick`, `finish`, `progress`, `is_active`) and
 `needs_repaint(&MotionTransition) -> bool`.
 
 **Invariants.** `progress` clamps to `0..=1` and never returns `NaN` for zero,
