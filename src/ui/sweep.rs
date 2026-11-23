@@ -82,6 +82,7 @@ pub fn sample_index_at(
 /// Draw the sweep window. Returns the one-shot request the lesson should apply.
 pub fn show(
     ctx: &egui::Context,
+    viewport: egui::Rect,
     session: &mut SweepSession,
     scene: &MaxwellScene,
     revealed: bool,
@@ -90,22 +91,40 @@ pub fn show(
     if !revealed {
         return SweepUiAction::None;
     }
-    let content = ctx.content_rect();
-    let width = 340.0_f32.min((content.width() - 24.0).max(280.0));
-    let position = egui::pos2(
-        (content.right() - width - 12.0).max(content.left() + 12.0),
-        12.0,
+    let width = (viewport.width() - 24.0).clamp(1.0, 340.0);
+    let position = super::viewport_panel::clamp_position(
+        viewport,
+        egui::pos2(viewport.right() - width - 24.0, viewport.top() + 12.0),
+        egui::vec2(width, 32.0),
     );
+    let reset = egui::Id::unique("reset_sweep_window_position");
     let mut action = SweepUiAction::None;
-    egui::Window::new(SWEEP_TITLE)
+    let mut window = egui::Window::new(SWEEP_TITLE)
         .collapsible(false)
         .resizable(false)
         .default_pos(position)
+        .constrain_to(viewport)
+        .min_width(1.0)
+        .default_height((viewport.height() - 48.0).max(1.0))
+        .max_height((viewport.height() - 48.0).max(1.0))
+        .vscroll(true)
         .default_width(width)
-        .max_width(width)
-        .show(ctx, |ui| {
-            action = show_contents(ui, session, scene, current_probe);
-        });
+        .max_width(width);
+    if ctx
+        .data_mut(|d| d.remove_temp::<bool>(reset))
+        .unwrap_or(false)
+    {
+        // A movable Window restores its title-drag pivot after Area::begin.
+        // Pin only the reset frame, then let the title own dragging again.
+        window = window.fixed_pos(position);
+    }
+    window.show(ctx, |ui| {
+        if ui.button("Reset sweep position").clicked() {
+            ctx.data_mut(|d| d.insert_temp(reset, true));
+            ctx.request_repaint();
+        }
+        action = show_contents(ui, session, scene, current_probe);
+    });
     action
 }
 

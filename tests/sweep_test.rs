@@ -341,7 +341,22 @@ impl RingHarness {
                 ..Default::default()
             },
             |ctx| {
-                vector_field_explorer::ui::ring_lesson::show(ctx, &mut self.state);
+                let viewport = egui::Rect::from_min_max(
+                    egui::pos2(12.0, 72.0),
+                    egui::pos2(self.width - 24.0, self.height),
+                );
+                egui::Area::new(egui::Id::unique("vector view test surface"))
+                    .order(egui::Order::Background)
+                    .fixed_pos(viewport.min)
+                    .show(ctx, |ui| {
+                        let (_, field) =
+                            ui.allocate_exact_size(viewport.size(), egui::Sense::click_and_drag());
+                        assert!(
+                            !field.dragged() && !field.clicked(),
+                            "sweep input reached the field"
+                        );
+                    });
+                vector_field_explorer::ui::ring_lesson::show(ctx, Some(viewport), &mut self.state);
             },
         );
         out.textures_delta.clear();
@@ -390,6 +405,85 @@ impl RingHarness {
 fn reveal_ring(h: &mut RingHarness) {
     h.state.select_prediction(RingPrediction::PartwayOut);
     assert!(h.state.reveal());
+}
+
+#[test]
+fn sweep_header_stays_inside_the_vector_view_after_resize() {
+    let mut h = RingHarness::new(1200.0, 800.0);
+    reveal_ring(&mut h);
+    let title = |out: &egui::FullOutput| {
+        out.shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(text) if text.galley.text() == SWEEP_TITLE => {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .expect("painted sweep title")
+    };
+    for width in [1200.0, 390.0] {
+        h.width = width;
+        let rect = title(&h.idle());
+        assert!(
+            rect.top() >= 72.0 && rect.right() <= width - 24.0,
+            "{rect:?}"
+        );
+        let start = rect.center();
+        let end = start + egui::vec2(if width > 400.0 { -100.0 } else { 0.0 }, 64.0);
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        h.frame(vec![egui::Event::PointerMoved(start), pointer(start, true)]);
+        h.frame(vec![egui::Event::PointerMoved(end)]);
+        h.frame(vec![pointer(end, false)]);
+        let out = h.idle();
+        let moved = title(&out);
+        assert!(
+            moved.center().distance(start) > 32.0,
+            "{rect:?} -> {moved:?}"
+        );
+        assert_eq!(title(&h.idle()), moved);
+        let reset = out
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .find(|(_, n)| n.label() == Some("Reset sweep position"))
+            .unwrap()
+            .0;
+        let key = |key, pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        assert!((0..48).any(|_| {
+            h.frame(vec![key(egui::Key::Tab, true), key(egui::Key::Tab, false)])
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .focus
+                == reset
+        }));
+        h.frame(vec![
+            key(egui::Key::Enter, true),
+            key(egui::Key::Enter, false),
+        ]);
+        let restored = title(&h.idle());
+        assert!(
+            (restored.top() - rect.top()).abs() <= 1.0,
+            "{rect:?} -> {restored:?}"
+        );
+        if width > 400.0 {
+            assert_eq!(rect, restored);
+        }
+    }
 }
 
 #[test]
@@ -613,6 +707,7 @@ impl ShellHarness {
             |ctx| {
                 vector_field_explorer::ui::shell_lesson::show(
                     ctx,
+                    Some(ctx.content_rect()),
                     &mut self.state,
                     &self.scene,
                     vector_field_explorer::sources::FieldFamily::Electric,

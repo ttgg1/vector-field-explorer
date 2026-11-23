@@ -307,7 +307,11 @@ pub enum RingLessonAction {
 
 /// Draw the activity window. The app restores or adopts the scene after it
 /// applies the returned action.
-pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonAction {
+pub fn show(
+    ctx: &egui::Context,
+    viewport: Option<egui::Rect>,
+    state: &mut RingLessonState,
+) -> RingLessonAction {
     if !state.active() {
         return RingLessonAction::None;
     }
@@ -413,7 +417,9 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
                 }
                 ui.label(RING_SOFTENED_NOTE);
                 ui.separator();
-                draw_sweep(ui.ctx(), state);
+                if let Some(viewport) = viewport.filter(|r| r.is_positive()) {
+                    draw_sweep(ui.ctx(), viewport, state);
+                }
             }
 
             ui.separator();
@@ -437,10 +443,11 @@ pub fn show(ctx: &egui::Context, state: &mut RingLessonState) -> RingLessonActio
     action
 }
 
-fn draw_sweep(ctx: &egui::Context, state: &mut RingLessonState) {
+fn draw_sweep(ctx: &egui::Context, viewport: egui::Rect, state: &mut RingLessonState) {
     let current = state.probe_z();
     let action = sweep::show(
         ctx,
+        viewport,
         &mut state.sweep,
         &crate::maxwell::MaxwellScene::default(),
         true,
