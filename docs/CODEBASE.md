@@ -6172,7 +6172,7 @@ and `math_view`, `field_compare`, `formula_bar`, `gauss_shell`, `griffiths`,
 `object_style_control`, `ode_panel`, `panel_rails`, `plane_lesson`, `plot_panel`, `presets`,
 `prompt_help`, `prompt_model`, `ring_lesson`, `shell_lesson`, `sidebar`,
 `sources_panel`,
-`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`,
+`status_bar`, `style_panel`, `top_bar`, `transport`, `viewport_legend`, `viewport_panel`,
 `viewport_tool`, `wire_lesson`.
 **Important:** `src/ui/arrows.rs` is present on disk but is *not* declared here,
 so it is not compiled. Do not add UI code to it expecting it to run.
@@ -6207,7 +6207,7 @@ layout widths.
 
 #### `src/ui/viewport_legend.rs` — viewport colour legend overlay (#230)
 
-**Purpose.** A collapsible top-right overlay repeats the sidebar's colour
+**Purpose.** A movable, collapsible overlay starts at the top right and repeats the sidebar's colour
 mapping next to the picture: honest quantity label (`F`, `E`, `B`), normalized
 teaching units, effective numeric range, Auto/Locked state, and the active arrow
 length mode with its meaning. It reuses `State::color_mapping()`/`ColorStats`
@@ -6217,9 +6217,18 @@ the `Controls` mirrors in the same frame, so the sidebar and overlay agree
 without a reload. The `Sources`/`Both` display shows the live E/B family colours
 from the committed Appearance overrides instead of claiming one numeric ramp.
 The header is a normal collapsing widget and compact defaults it shut with a
-width that leaves most of the viewport visible. `tests/viewport_legend_test.rs` covers the snapshot,
-lock/edit/unlock round trips in both directions, Both, collapse/compact, and the
+width that leaves most of the viewport visible. Drag the panel background to
+uncover field details; the body has a keyboard-focusable **Reset position** button.
+`tests/viewport_legend_test.rs` covers the snapshot, lock/edit/unlock round trips
+in both directions, Both, collapse/compact, drag and keyboard reset, and the
 #219 locked-range invariance under a changed probe radius.
+
+#### `src/ui/viewport_panel.rs` — movable viewport overlays (#295)
+
+**Purpose.** Hosts egui foreground panels that own their drag gestures while
+leaving child controls interactive. The shared helper takes the vector viewport
+rect, clamps the panel's top-left, and keeps its last painted position in
+session-only UI state. The legend is its first consumer.
 
 #### `src/ui/appearance_panel.rs` — the Appearance panel
 

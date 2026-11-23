@@ -171,7 +171,7 @@ pub struct LegendFrame {
     pub body_visible: bool,
 }
 
-/// Paint the legend at the viewport's top-right.
+/// Paint the movable legend, initially at the viewport's top-right.
 ///
 /// All controls are ordinary egui widgets (collapsing header, buttons and
 /// `DragValue` rows), so tab focus and activation follow the app's normal
@@ -186,25 +186,50 @@ pub fn show(
 ) -> LegendFrame {
     let snapshot = LegendSnapshot::new(state, stats);
     let width = panel_width(viewport, compact);
-    let anchor = egui::pos2(viewport.right() - 12.0, viewport.top() + 12.0);
+    let default_pos = egui::pos2(viewport.right() - 12.0 - width, viewport.top() + 12.0);
     let mut body_visible = false;
+    let mut reset = false;
+    let mut panel = controls.legend_panel;
 
-    let response = egui::Area::new(egui::Id::unique("viewport_color_legend"))
-        .order(egui::Order::Foreground)
-        .pivot(egui::Align2::RIGHT_TOP)
-        .fixed_pos(anchor)
-        .show(ctx, |ui| {
+    let response = super::viewport_panel::show(
+        ctx,
+        viewport,
+        egui::Id::unique("viewport_color_legend"),
+        default_pos,
+        &mut panel,
+        |ui| {
             ui.set_width(width);
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let popup = egui::Frame::popup(ui.style());
+            let row_height = ui.spacing().interact_size.y;
+            let spacing = ui.spacing().item_spacing.y;
+            let body_height =
+                viewport.height() - popup.total_margin().sum().y - 2.0 * (row_height + spacing);
+            popup.show(ui, |ui| {
                 egui::CollapsingHeader::new(LEGEND_TITLE)
                     .id_salt("viewport_color_legend_body")
                     .default_open(!compact)
                     .show(ui, |ui| {
                         body_visible = true;
-                        legend_body(ui, state, controls, stats, &snapshot);
+                        reset = ui.button("Reset position").clicked();
+                        if body_height > 0.0 {
+                            use egui::scroll_area::ScrollSource;
+                            egui::ScrollArea::vertical()
+                                .max_height(body_height)
+                                // The Area initially measures with a zero size.
+                                // Don't let that estimate cap the scroll viewport.
+                                .min_scrolled_height(body_height)
+                                .scroll_source(ScrollSource::SCROLL_BAR | ScrollSource::MOUSE_WHEEL)
+                                .show(ui, |ui| legend_body(ui, state, controls, stats, &snapshot));
+                        }
                     });
             });
-        });
+        },
+    );
+    if reset {
+        panel.reset();
+        ctx.request_repaint();
+    }
+    controls.legend_panel = panel;
 
     LegendFrame {
         rect: response.response.rect,
