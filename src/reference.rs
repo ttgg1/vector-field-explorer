@@ -82,8 +82,11 @@ pub(crate) fn reference_lines_visible_with(
     let mut lines = Vec::new();
     if sampling_3d {
         if show_grid {
-            cube_grid_and_box(domain, &mut lines, style);
-            mark_grid(&mut lines);
+            // Only the face-grid prefix is object-occluded. The 12 domain-box
+            // edges and the axes that follow are scene decoration and keep the
+            // painter-only behaviour (issue #300).
+            let face_grid_len = cube_grid_and_box(domain, &mut lines, style);
+            mark_grid(&mut lines[..face_grid_len]);
         }
         if show_coordinate_system {
             cube_axes(domain, &mut lines, style);
@@ -251,7 +254,14 @@ fn lerp(lo: f32, hi: f32, k: u32) -> f32 {
     lo + (hi - lo) * (k as f32 / REFERENCE_DIVISIONS as f32)
 }
 
-fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &ViewportStyle) {
+/// Emit the three subdivided far-face grids followed by the 12 domain-box
+/// edges. Returns the number of leading face-grid lines, which are the only
+/// ones the caller tags as object-occluded reference grid (issue #300).
+fn cube_grid_and_box(
+    domain: &Domain,
+    lines: &mut Vec<LineInstanceGPU>,
+    style: &ViewportStyle,
+) -> usize {
     let min = domain.min;
     let max = domain.max;
 
@@ -311,6 +321,10 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &
         );
     }
 
+    // Face-grid lines are the leading prefix; everything after them is scene
+    // boundary decoration, not reference grid.
+    let face_grid_len = lines.len();
+
     // 12 box edges, after the face grid so they overdraw the thinner grid
     // lines they share.
     for y in [min.y, max.y] {
@@ -346,6 +360,7 @@ fn cube_grid_and_box(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &
             );
         }
     }
+    face_grid_len
 }
 
 fn cube_axes(domain: &Domain, lines: &mut Vec<LineInstanceGPU>, style: &ViewportStyle) {

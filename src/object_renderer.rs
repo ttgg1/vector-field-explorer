@@ -271,6 +271,7 @@ struct ObjectPipelines {
     composite_layout: wgpu::BindGroupLayout,
     grid_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    grid_sampler: wgpu::Sampler,
 }
 
 impl ObjectPipelines {
@@ -300,16 +301,27 @@ impl ObjectPipelines {
             });
         let grid_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("vfe grid depth layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // Depth textures must be read with a non-filtering sampler;
+                // this also works on GLES/WebGL2 where depth textureLoad does
+                // not (gfx-rs/wgpu#10878).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
         });
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("vfe object composite bgl"),
@@ -448,6 +460,16 @@ impl ObjectPipelines {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let grid_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("vfe grid depth sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
 
         Self {
             object,
@@ -457,6 +479,7 @@ impl ObjectPipelines {
             composite_layout,
             grid_layout,
             sampler,
+            grid_sampler,
         }
     }
 }
@@ -611,10 +634,16 @@ fn create_target(
     let grid_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("vfe grid depth bind"),
         layout: &pipelines.grid_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(&depth_view),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&depth_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&pipelines.grid_sampler),
+            },
+        ],
     });
     let composite_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("vfe object composite bind"),

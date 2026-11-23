@@ -1395,6 +1395,26 @@ fn probe_grid_depth(gpu: &Gpu) -> Result<(), String> {
                 ink,
                 "identically styled axis"
             );
+            // Issue #300: a domain-box edge is scene decoration, not face
+            // grid. At the same (behind-the-sphere) position it must stay a
+            // painter line, unlike the identically placed GRID_TAG line above.
+            let mut edge = vector_field_explorer::reference::reference_lines(&domain, true)
+                .into_iter()
+                .find(|candidate| candidate.color == vector_field_explorer::reference::EDGE_COLOR)
+                .expect("3D reference emits domain-box edges");
+            edge.a[..3].copy_from_slice(&line.a[..3]);
+            edge.b = line.b;
+            edge.color = line.color;
+            let boundary = SceneGPU {
+                lines: Arc::new(vec![edge]),
+                ..Default::default()
+            };
+            let edge_over = capture(&boundary, Some(&objects), solid)?;
+            assert_eq!(
+                pixel(&edge_over, 128, 64, 64),
+                ink,
+                "domain-box edge is not occluded by the object depth test"
+            );
 
             let domain = Domain::new(Vec3::splat(-2.), Vec3::splat(2.));
             let plane = PlaneFrame::new(

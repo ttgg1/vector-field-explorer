@@ -70,6 +70,7 @@ fn fs_line(v: VertexOut) -> @location(0) vec4<f32> {
 }
 
 @group(1) @binding(0) var body_depth: texture_depth_2d;
+@group(1) @binding(1) var body_depth_sampler: sampler;
 
 @fragment
 fn fs_object_aware_line(v: VertexOut) -> @location(0) vec4<f32> {
@@ -77,9 +78,11 @@ fn fs_object_aware_line(v: VertexOut) -> @location(0) vec4<f32> {
         // Same viewport-local NDC as the object composite, independent of
         // screen offset, scissor, DPI and capture size.
         let uv = v.projected.xy / v.projected.w * vec2(0.5, -0.5) + 0.5;
-        let size = vec2<i32>(textureDimensions(body_depth));
-        let texel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2(0), size - 1);
-        if v.pos.z > textureLoad(body_depth, texel, 0) { discard; }
+        // Sample, never textureLoad: wgpu 30's GLES/WebGL2 backend returns 0
+        // from textureLoad on a depth texture (gfx-rs/wgpu#10878). A NEAREST
+        // non-comparison sampler reads the true depth on every backend, and
+        // ClampToEdge keeps out-of-range UVs inside the attachment.
+        if v.pos.z > textureSampleLevel(body_depth, body_depth_sampler, uv, 0) { discard; }
     }
     return v.color;
 }

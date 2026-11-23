@@ -6,6 +6,13 @@
 //! plane in 2D. These tests pin the counts, bounds, axis colours and the plane
 //! the flat grid sits on.
 
+/// Issue #300: the object-aware line shader reads body depth through this role
+/// tag in `LineInstanceGPU::a.w`. It is `pub(crate)` in the renderer, so the
+/// integration test pins the packed ABI value directly (see shaders.line.wgsl).
+const GRID_ROLE_TAG: f32 = -1.0;
+
+const LINE_SHADER: &str = include_str!("../src/shaders.line.wgsl");
+
 use glam::{UVec3, Vec3};
 use vector_field_explorer::app::{
     compose_lines, compose_lines_with_frame, compose_lines_with_frame_style,
@@ -681,4 +688,88 @@ fn reference_width_and_opacity_apply() {
     for line in &neutral {
         assert_eq!(line.color[3], 1.0, "the legacy default stays opaque");
     }
+}
+
+// --- Issue #300: only face-grid lines are object-occluded -------------------
+
+fn tagged(line: &LineInstanceGPU) -> bool {
+    line.a[3] == GRID_ROLE_TAG
+}
+
+#[test]
+fn only_face_grid_lines_carry_the_grid_role_tag() {
+    // The object-aware line pipeline depth-tests every GRID_TAG line against
+    // the solid-body depth attachment. Scene-boundary edges are not face grid:
+    // tagging them would hide the domain box behind solid bodies.
+    let domain = Domain::default();
+    let lines = reference_lines(&domain, true);
+    let face_grid: Vec<_> = lines
+        .iter()
+        .filter(|line| same_color(line.color, GRID_COLOR))
+        .collect();
+    let box_edges: Vec<_> = lines
+        .iter()
+        .filter(|line| same_color(line.color, EDGE_COLOR))
+        .collect();
+    let axes: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            same_color(line.color, AXIS_X_COLOR)
+                || same_color(line.color, AXIS_Y_COLOR)
+                || same_color(line.color, AXIS_Z_COLOR)
+        })
+        .collect();
+
+    assert_eq!(face_grid.len(), 6 * (REFERENCE_DIVISIONS as usize + 1));
+    assert_eq!(box_edges.len(), 12);
+    assert_eq!(axes.len(), 3);
+    assert!(
+        face_grid.iter().all(|line| tagged(line)),
+        "face-grid lines are depth-tested against objects"
+    );
+    assert!(
+        box_edges.iter().all(|line| !tagged(line)),
+        "domain-box edges keep the visible painter behaviour"
+    );
+    assert!(
+        axes.iter().all(|line| !tagged(line)),
+        "axes are never object-occluded grid lines"
+    );
+}
+
+#[test]
+fn flat_reference_grid_keeps_its_role_tag_and_axes_stay_painter_lines() {
+    let domain = Domain::default();
+    let lines = reference_lines(&domain, false);
+    let grid: Vec<_> = lines
+        .iter()
+        .filter(|line| same_color(line.color, GRID_COLOR))
+        .collect();
+    let axes: Vec<_> = lines
+        .iter()
+        .filter(|line| same_color(line.color, AXIS_X_COLOR) || same_color(line.color, AXIS_Y_COLOR))
+        .collect();
+    assert_eq!(grid.len(), 2 * (REFERENCE_DIVISIONS as usize + 1));
+    assert_eq!(axes.len(), 2);
+    assert!(grid.iter().all(|line| tagged(line)));
+    assert!(axes.iter().all(|line| !tagged(line)));
+}
+
+/// Object depth must be read with a NEAREST non-comparison sampler. wgpu 30's
+/// GLES/WebGL2 backend returns 0 from `textureLoad` on a depth texture (issue
+/// gfx-rs/wgpu#10878), so the packed role tag must be sampled portably instead.
+#[test]
+fn grid_depth_is_read_with_a_portable_nearest_sampler() {
+    assert!(
+        !LINE_SHADER.contains("textureLoad(body_depth"),
+        "depth-texture textureLoad is unsupported on GLES/WebGL2"
+    );
+    assert!(
+        LINE_SHADER.contains("textureSampleLevel(body_depth"),
+        "grid depth must be read through a NEAREST non-comparison sampler"
+    );
+    assert!(
+        LINE_SHADER.contains("@group(1) @binding(1) var body_depth_sampler: sampler;"),
+        "the grid depth bind group needs a separate non-comparison sampler binding"
+    );
 }
