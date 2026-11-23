@@ -12,6 +12,7 @@ use crate::support;
 
 use vector_field_explorer::VfApp;
 use vector_field_explorer::parameters::{Parameter, ParameterSet};
+use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::formula_typeset_panel::{
     FormulaTypesetPanelState, TOGGLE_HIDE, TOGGLE_SHOW, composed_formula, toggle_button,
 };
@@ -565,5 +566,70 @@ fn app_wire_control_opens_and_closes_the_panel() {
     assert!(
         !nodes(&out).iter().any(|(_, t)| t == "Typeset formula"),
         "the dismissed panel is gone"
+    );
+}
+
+/// F1 regression: in a non-Formula vector mode the formula bar short-circuits
+/// before its mirror, so `bar.text` stays empty/stale. The panel must never
+/// present that as the active formula; it must show the authoritative committed
+/// source with a label making clear the bar is not the live editor here.
+#[test]
+fn non_formula_vector_mode_never_shows_empty_or_stale_formula_as_active() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    // A distinct committed formula so a stale bar can be detected.
+    app.state.set_formula("(-y, x, 0)".into());
+    // The bar mirror never ran in this mode: leave it at its empty default.
+    app.bar.text.clear();
+    assert!(app.state.set_field_mode(FieldMode::Sources));
+    assert!(app.state.is_vector_mode());
+    app.formula_typeset.open = true;
+    app_idle(&ctx, &mut app, vec2(1280.0, 1000.0), 3);
+
+    let out = app_output(&ctx, &mut app, vec2(1280.0, 1000.0), Vec::new());
+    let shown = texts(&out).join("\n");
+    // The committed formula is present, not an empty or stale bar string.
+    assert!(
+        shown.contains("-y") && shown.contains(" x") || shown.contains("-y, x"),
+        "the authoritative committed formula is shown in Sources mode: {shown}"
+    );
+    // A neutral label makes clear this is not the live editable bar.
+    assert!(
+        shown.contains("not the live editor") || shown.contains("not the active input"),
+        "a non-Formula mode labels the committed formula honestly: {shown}"
+    );
+    // The bar editor itself still holds the empty draft; it is untouched.
+    assert!(
+        app.bar.text.is_empty(),
+        "the formula bar draft is not overwritten by the panel"
+    );
+}
+
+/// F2 regression: a committed value smaller than 0.00005 must not be rendered
+/// as `0`. Full-precision formatting, matching the field evaluator's
+/// `format!("{value}")` substitution seam, keeps it non-zero and consistent.
+#[test]
+fn tiny_substituted_value_matches_field_evaluator_precision() {
+    let mut params = ParameterSet::default();
+    params.entries.push(Parameter {
+        name: "k".into(),
+        value: 0.00003,
+        ..Parameter::default()
+    });
+    let formula = "(k*x, 0, 0)";
+    let mut state = State::new(false);
+    state.parameters = params.clone();
+    state.set_formula(formula.into());
+    let composed = composed_formula(formula, &state);
+    let field_literal = format!("{}", 0.00003_f64);
+    assert!(
+        composed.iter().any(|line| line.contains(&field_literal)),
+        "the panel uses the same full precision as the field evaluator ({field_literal}): {composed:?}"
+    );
+    assert!(
+        !composed
+            .iter()
+            .any(|line| line.trim_start_matches("(").starts_with("0,")),
+        "a sub-0.00005 value is not collapsed to zero: {composed:?}"
     );
 }

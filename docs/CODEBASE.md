@@ -6164,8 +6164,9 @@ thread.
 #### `src/ui/mod.rs` — UI module list
 
 Declares `appearance_panel`, `branding`, `cas_preview` (compiled on both
-targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`
-and `math_view`, `field_compare`, `formula_bar`, `gauss_shell`, `griffiths`,
+targets; its tests are ungated in `tests/suite.rs`), native-only `cas_panel`,
+and `math_view` (shared with web since the typeset seam was made
+target-independent), `field_compare`, `formula_bar`, `gauss_shell`, `griffiths`,
 `formula_typeset_panel`, `help_overlay`, `induction_panel`,
 `interaction_panel`, `layout`, `material_panel`, `maxwell_learning_panel`,
 `maxwell_panel`, `menu`,

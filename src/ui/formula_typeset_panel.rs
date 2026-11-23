@@ -1,15 +1,18 @@
 //! Issue #287: a floating, movable typeset view of the active vector formula.
 //!
-//! This module owns no physics and no second parser. The displayed text comes
-//! from [`crate::ui::formula_bar::FormulaBarState::text`], committed parameter
-//! values and the shared clock time are substituted into that text, each vector
-//! component is translated by [`crate::cas_tex::linear_to_tex`], and display is
-//! delegated to [`crate::ui::math_view::paint_tex_or_linear`]. Dragging,
-//! viewport clamping and session-only placement use
-//! [`crate::ui::viewport_panel`].
+//! This module owns no physics and no second parser. The displayed text is the
+//! authoritative committed formula from [`crate::viewmodel::State::formula`]
+//! (the formula bar is the editor, but its draft is intentionally not read
+//! here: in non-Formula vector modes the bar short-circuits before mirroring
+//! and its text would be empty/stale). Committed parameter values and the
+//! shared clock time are substituted into that text, each vector component is
+//! translated by [`crate::cas_tex::linear_to_tex`], and display is delegated to
+//! [`crate::ui::math_view::paint_tex_or_linear`]. Dragging, viewport clamping
+//! and session-only placement use [`crate::ui::viewport_panel`].
 
 use eframe::egui::{self, Context, InnerResponse, Pos2, Rect, Ui};
 
+use crate::source_scene::FieldMode;
 use crate::ui::viewport_panel::{ViewportPanelState, show as show_viewport_panel};
 use crate::viewmodel::State;
 
@@ -22,6 +25,10 @@ pub const PANEL_TITLE: &str = "Typeset formula";
 const CLOSE_LABEL: &str = "Close typeset formula";
 const RESET_LABEL: &str = "Reset position";
 const NOTE: &str = "Active formula - committed values substituted";
+/// Finding F1: in a non-Formula vector mode the bar is not the live editor, so
+/// the panel labels the committed formula neutrally instead of claiming it is
+/// the active input the user is editing.
+pub const NOTE_NON_FORMULA: &str = "Committed vector formula - not the live editor in this mode";
 const FALLBACK_LABEL: &str = "linear fallback";
 
 /// Session-only panel state: nothing here enters the scene or settings envelope.
@@ -70,7 +77,10 @@ pub fn toggle_area(ctx: &Context, viewport: Rect, panel: &mut FormulaTypesetPane
         // the top interactive layer keeps this control clickable in every mode.
         .order(egui::Order::Tooltip)
         .pivot(egui::Align2::LEFT_TOP)
-        .fixed_pos(viewport.left_top() + egui::vec2(12.0, 12.0))
+        // O2: the Materials/Sources status lines paint at `left_top+(12,12)`
+        // and `+(12,34)`. Anchor just below them so the strip never overpaints
+        // that text, while keeping the same interactive layer and layout cost.
+        .fixed_pos(viewport.left_top() + egui::vec2(12.0, 56.0))
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| toggle_button(ui, panel));
         });
@@ -145,15 +155,15 @@ fn substitute(text: &str, names: &[(String, String)]) -> String {
     out
 }
 
-/// A short, legible representation of a committed value in the formula.
+/// A committed value rendered exactly as the field evaluator substitutes it.
+///
+/// Finding F2: the previous `format!("{value:.4}")` collapsed small non-zero
+/// values (|value| < 0.00005) to `0` and disagreed with `field.rs`'s
+/// `format!("{value}")` at the substitution seam. The NOTE claims committed
+/// values are substituted, so we must use the same full-precision rendering as
+/// the evaluator rather than assert an exactness that is not there.
 fn format_number(value: f64) -> String {
-    if value == 0.0 {
-        return "0".into();
-    }
-    // Fixed-point avoids exponent notation that a trailing-zero trim would
-    // corrupt (e.g. `1e20` → `1e2`).
-    let text = format!("{value:.4}");
-    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    format!("{value}")
 }
 
 /// Draw the panel. Callers do the `open` check; the viewport rect is the one
@@ -190,7 +200,16 @@ pub fn show(
                         }
                     });
                 });
-                ui.label(NOTE);
+                // Finding F1: only claim "active formula" where the bar is the
+                // live editor. Other vector modes get a neutral label so the
+                // committed formula stays visible without being mistaken for
+                // the editable input.
+                let note = if state.field_mode == FieldMode::Formula {
+                    NOTE
+                } else {
+                    NOTE_NON_FORMULA
+                };
+                ui.label(note);
                 let components = composed_formula(formula, state);
                 let mut any_fallback = false;
                 let body_height = (viewport.height() * 0.45).max(48.0);
