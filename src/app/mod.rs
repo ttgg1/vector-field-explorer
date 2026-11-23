@@ -271,6 +271,14 @@ pub struct VfApp {
     pub sheet: SheetState,
     /// Transient height state of the compact sheet (ticket 71). Never persisted.
     pub sheet_expanded: SheetSize,
+    /// Restrained open/slide transition state for the compact sheet and the
+    /// floating viewport panels (issue #289). Session-only, never persisted.
+    pub sheet_transition: crate::ui::motion::MotionTransition,
+    last_sheet: SheetState,
+    pub legend_transition: crate::ui::motion::MotionTransition,
+    legend_was_visible: bool,
+    pub typeset_transition: crate::ui::motion::MotionTransition,
+    typeset_was_open: bool,
     /// Bumped by "Reset layout" so the panels get fresh egui ids and therefore
     /// forget their last dragged size, letting the default widths apply.
     panel_generation: u32,
@@ -650,6 +658,18 @@ impl VfApp {
             layout_mode: LayoutMode::Wide,
             sheet: SheetState::None,
             sheet_expanded: SheetSize::Default,
+            sheet_transition: crate::ui::motion::MotionTransition::new(
+                crate::ui::motion::MotionTokens::default().open_slide_ms,
+            ),
+            last_sheet: SheetState::None,
+            legend_transition: crate::ui::motion::MotionTransition::new(
+                crate::ui::motion::MotionTokens::default().open_slide_ms,
+            ),
+            legend_was_visible: false,
+            typeset_transition: crate::ui::motion::MotionTransition::new(
+                crate::ui::motion::MotionTokens::default().open_slide_ms,
+            ),
+            typeset_was_open: false,
             panel_generation: 0,
             appearance_open: false,
             about_open: false,
@@ -726,6 +746,42 @@ impl Default for VfApp {
 }
 
 impl VfApp {
+    /// Resolve the motion mode from the persisted setting plus the platform
+    /// reduced-motion preference (issue #289). No egui API exposes that
+    /// preference in this version, so the platform signal is plumbed through
+    /// the optional `platform_reduced_motion` hook below; default off.
+    pub fn motion_mode(&self) -> crate::ui::motion::MotionMode {
+        crate::ui::motion::effective_mode(self.style.reduced_motion, self.platform_reduced_motion())
+    }
+
+    /// Platform reduced-motion preference hook. Overridable by embedders; the
+    /// native and wasm defaults are "no signal", so the user setting alone
+    /// decides unless a platform integration supplies `true`.
+    fn platform_reduced_motion(&self) -> bool {
+        false
+    }
+
+    /// Advance one transition, starting it on a visibility rising edge.
+    /// Returns the eased progress. The caller only requests a repaint while
+    /// `motion::needs_repaint` reports the transition still in flight.
+    pub(super) fn advance_transition(
+        transition: &mut crate::ui::motion::MotionTransition,
+        visible: bool,
+        was_visible: &mut bool,
+        dt_ms: f32,
+        mode: crate::ui::motion::MotionMode,
+    ) -> f32 {
+        if visible && !*was_visible {
+            transition.start();
+        }
+        *was_visible = visible;
+        if visible {
+            transition.tick(dt_ms, mode)
+        } else {
+            0.0
+        }
+    }
+
     /// Start the guided tour, or return a running/finished tour to its first
     /// stop. Session-only: no settings, document or history record is touched.
     pub fn start_or_restart_tour(&mut self) {

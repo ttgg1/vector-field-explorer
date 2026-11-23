@@ -14,6 +14,9 @@ pub struct MotionTokens {
     pub open_slide_ms: f32,
     /// Hover/press feedback for buttons and toggles.
     pub hover_press_ms: f32,
+    /// Peak slide distance in points for an open transition. Small enough to
+    /// stay restrained and never clip a panel.
+    pub slide_distance_pt: f32,
 }
 
 impl Default for MotionTokens {
@@ -21,6 +24,7 @@ impl Default for MotionTokens {
         Self {
             open_slide_ms: 140.0,
             hover_press_ms: 80.0,
+            slide_distance_pt: 12.0,
         }
     }
 }
@@ -59,4 +63,72 @@ pub fn effective_mode(setting_reduced: bool, platform_reduced: bool) -> MotionMo
     } else {
         MotionMode::Full
     }
+}
+
+/// Per-frame state of one open/slide transition. Session-only and carry-free:
+/// one instance per animated surface, started when the surface opens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionTransition {
+    duration_ms: f32,
+    elapsed_ms: f32,
+    /// `false` before the first `start` and while idle at rest; `true` once a
+    /// transition has been started (including when it has settled at 1.0).
+    started: bool,
+}
+
+impl MotionTransition {
+    /// New idle transition with the given duration. Not started yet.
+    pub fn new(duration_ms: f32) -> Self {
+        Self {
+            duration_ms,
+            elapsed_ms: 0.0,
+            started: false,
+        }
+    }
+
+    /// Begin (or restart) a transition from progress 0.
+    pub fn start(&mut self) {
+        self.elapsed_ms = 0.0;
+        self.started = true;
+    }
+
+    /// Advance the transition by `dt_ms` and return the new eased progress.
+    /// Under [`MotionMode::Reduced`] the end state is reached on this tick with
+    /// no eased intermediate, regardless of how little time has elapsed.
+    pub fn tick(&mut self, dt_ms: f32, mode: MotionMode) -> f32 {
+        if !self.started {
+            return 0.0;
+        }
+        if mode == MotionMode::Reduced {
+            self.elapsed_ms = self.duration_ms;
+            return 1.0;
+        }
+        let dt = if dt_ms.is_finite() && dt_ms > 0.0 { dt_ms } else { 0.0 };
+        self.elapsed_ms = (self.elapsed_ms + dt).min(self.duration_ms);
+        progress(self.elapsed_ms, self.duration_ms)
+    }
+
+    /// The last sampled progress (0 before start, 1 once settled).
+    pub fn progress(&self) -> f32 {
+        if !self.started {
+            0.0
+        } else {
+            progress(self.elapsed_ms, self.duration_ms)
+        }
+    }
+
+    /// Whether a frame is currently in flight (strictly between the endpoints).
+    pub fn is_active(&self) -> bool {
+        if !self.started {
+            return false;
+        }
+        let p = self.progress();
+        p > 0.0 && p < 1.0
+    }
+}
+
+/// The single decision point for repaint requests: only an in-flight transition
+/// needs another frame. Callers must not request repaints once this is false.
+pub fn needs_repaint(transition: &MotionTransition) -> bool {
+    transition.is_active()
 }
