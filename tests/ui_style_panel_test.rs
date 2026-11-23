@@ -108,6 +108,43 @@ fn apply_maps_light_style_onto_the_context() {
 }
 
 #[test]
+fn apply_sets_distinct_hover_and_press_feedback_from_the_shared_token() {
+    use vector_field_explorer::ui::motion::MotionTokens;
+
+    let ctx = egui::Context::default();
+    apply(&ctx, &sample_style());
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let visuals = &ctx.style_of(theme).visuals;
+        let inactive = visuals.widgets.inactive.weak_bg_fill;
+        let hovered = visuals.widgets.hovered.weak_bg_fill;
+        let active = visuals.widgets.active.weak_bg_fill;
+        assert_ne!(hovered, inactive, "hover feedback must be visible in {theme:?}");
+        assert_ne!(active, inactive, "press feedback must be visible in {theme:?}");
+        assert_ne!(active, hovered, "press must read stronger than hover in {theme:?}");
+    }
+    // The hover/press token is the single source of the egui animation time.
+    assert_eq!(
+        ctx.global_style().animation_time,
+        MotionTokens::default().hover_press_ms / 1000.0
+    );
+}
+
+#[test]
+fn reduced_motion_applies_the_final_feedback_immediately() {
+    let ctx = egui::Context::default();
+    let mut style = sample_style();
+    style.reduced_motion = true;
+    apply(&ctx, &style);
+
+    assert_eq!(ctx.global_style().animation_time, 0.0);
+    // The end-state colours are still present; only the eased intermediate is
+    // removed, so controls remain distinguishable without any motion.
+    let visuals = &ctx.global_style().visuals;
+    assert_ne!(visuals.widgets.hovered.weak_bg_fill, visuals.widgets.inactive.weak_bg_fill);
+    assert_ne!(visuals.widgets.active.weak_bg_fill, visuals.widgets.inactive.weak_bg_fill);
+}
+
+#[test]
 fn apply_is_idempotent() {
     let ctx = egui::Context::default();
     let style = AppStyle::default();
