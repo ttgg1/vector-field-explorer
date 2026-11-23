@@ -89,7 +89,14 @@ pub fn show_slide<R>(
     let rect = frame.response.rect;
     // Persist the resting position, not the transient slid one, so dragging
     // still writes the user's placement while the visual slide settles.
-    state.pos = Some(rect.min - slide);
+    //
+    // `constrain_to` clamps the *painted* position (`rest + slide`) to the
+    // viewport. At a bottom edge that shortens the effective slide; subtracting
+    // the unchanged `slide` would then shift the saved rest upward on reopen.
+    // Recover the slide egui actually applied and subtract that instead.
+    let applied_pos = clamp_position(viewport, rest + slide, rect.size());
+    let applied_slide = applied_pos - rest;
+    state.pos = Some(rect.min - applied_slide);
     state.size = rect.size();
     let rest_now = clamp_position(viewport, state.pos.unwrap_or(default_pos), state.size);
     if rest_now.distance(state.pos.unwrap_or(default_pos)) > 0.5 {
