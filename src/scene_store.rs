@@ -368,8 +368,20 @@ fn write_store_atomically(dir: &std::path::Path, text: &str) -> Result<(), Strin
 fn replace_staged(temporary: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
+        use std::io::{Error, ErrorKind};
+
+        let had_previous = match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => {
+                return Err(Error::new(
+                    ErrorKind::IsADirectory,
+                    "scene store destination is a directory",
+                ));
+            }
+            Ok(_) => true,
+            Err(error) if error.kind() == ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
         let backup = backup_path(path);
-        let had_previous = path.exists();
         if had_previous {
             let _ = std::fs::remove_file(&backup);
             std::fs::rename(path, &backup)?;

@@ -9,6 +9,7 @@ use crate::color_ramp::ScaleMode;
 use crate::colormap::Colormap;
 use crate::field::FieldExpr;
 use crate::field_probe::{CirculationLoop, GaussianSurface, LoopKind, SurfaceKind};
+use crate::notebook::{MeasurementSnapshot, NotebookGeometry};
 use crate::plane::{PlaneAxis, PlaneView};
 use crate::scalar::{ScalarContext, ScalarExpr};
 use crate::scalar_view::MAX_PROBES;
@@ -17,6 +18,7 @@ use crate::sources::FieldFamily;
 use crate::tour::{ControlId, TourTarget};
 use crate::ui::griffiths::{GriffithsAction, GriffithsExplorationAction, GriffithsRoute};
 use crate::ui::maxwell_learning_panel::{MeasurementKind, MeasurementRequest};
+use crate::ui::notebook::NotebookAction;
 use crate::ui::pins::{self, PinAction, PinSnapshot};
 use crate::ui::plane_lesson::{
     PlaneBoundaryReading, PlaneFieldReading, PlaneImageLocationPrediction,
@@ -1219,7 +1221,132 @@ impl VfApp {
             crate::ui::maxwell_panel::MaxwellPanelAction::FreeExploreGaussShell => {
                 self.open_gauss_shell(false);
             }
+            crate::ui::maxwell_panel::MaxwellPanelAction::Notebook(action) => {
+                self.apply_notebook_action(action);
+            }
         }
+    }
+
+    /// Apply the notebook's one-shot capture or scene restore. Both reuse the
+    /// shipped Gauss reading and the ordinary scene-load path.
+    fn apply_notebook_action(&mut self, action: NotebookAction) {
+        match action {
+            NotebookAction::Capture => {
+                self.capture_notebook_entry();
+            }
+            NotebookAction::Load(id) => {
+                self.load_notebook_entry(&id);
+            }
+        }
+    }
+
+    /// Pin the current Gauss-shell reading with the committed scene. The
+    /// snapshot clones every live input, so later edits cannot change it.
+    fn capture_notebook_entry(&mut self) -> bool {
+        if !self.maxwell.gauss.active {
+            self.maxwell.notebook_ui.error =
+                Some("Activate the Gauss-shell investigation before pinning a reading.".to_owned());
+            return false;
+        }
+        let family = match crate::maxwell::maxwell_family(self.state.maxwell.case) {
+            crate::maxwell::MaxwellFamily::Electric => FieldFamily::Electric,
+            crate::maxwell::MaxwellFamily::Magnetic => FieldFamily::Magnetic,
+        };
+        let time = f64::from(self.state.time);
+        let report = self
+            .maxwell
+            .gauss
+            .report_for(&self.state.maxwell, family, time)
+            .clone();
+        let probe_radius = self.maxwell.gauss.probe_radius;
+        let snapshot = MeasurementSnapshot::shell(
+            &self.state.maxwell,
+            probe_radius,
+            family,
+            time,
+            self.state.parameters.clone(),
+            &report.at_radius,
+        );
+        let prediction = self.maxwell.notebook_ui.prediction.clone();
+        let note = self.maxwell.notebook_ui.note.clone();
+        let name = format!("Notebook shell {}", self.maxwell.notebook.entries.len() + 1);
+        let scene = SceneDocument::capture(
+            name,
+            ViewRecord::capture(&self.state),
+            self.state.parameters.clone(),
+            self.scene_camera(),
+        )
+        .with_overlays(self.state.overlays().clone());
+        match self.maxwell.notebook.pin(prediction, note, snapshot, scene) {
+            Ok(id) => {
+                self.maxwell.notebook_ui.message =
+                    Some(format!("Pinned {id} with the current reading."));
+                self.maxwell.notebook_ui.error = None;
+                true
+            }
+            Err(error) => {
+                self.maxwell.notebook_ui.error = Some(error);
+                self.maxwell.notebook_ui.message = None;
+                false
+            }
+        }
+    }
+
+    /// Restore the captured scene and both radii together. A rejected geometry
+    /// leaves the live experiment and saved-scene binding untouched.
+    fn load_notebook_entry(&mut self, id: &str) -> bool {
+        let Some(entry) = self.maxwell.notebook.get(id).cloned() else {
+            self.maxwell.notebook_ui.error = Some(format!("Notebook entry {id:?} is missing."));
+            self.maxwell.notebook_ui.message = None;
+            return false;
+        };
+        let (mut next_state, next_controls) = match self.prepare_scene_document(&entry.scene) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                self.maxwell.notebook_ui.error = Some(format!(
+                    "Notebook entry {id:?} could not be restored: {error}"
+                ));
+                self.maxwell.notebook_ui.message = None;
+                return false;
+            }
+        };
+        let NotebookGeometry::Shell {
+            shell_radius,
+            probe_radius,
+        } = entry.snapshot.geometry;
+        if next_state.maxwell.radius.to_bits() != shell_radius.to_bits() {
+            let mut scene = next_state.maxwell.clone();
+            scene.radius = shell_radius;
+            if !next_state.set_maxwell_scene(scene) {
+                let error = next_state
+                    .maxwell_error
+                    .clone()
+                    .unwrap_or_else(|| "The captured shell radius was rejected.".to_owned());
+                self.maxwell.notebook_ui.error = Some(format!("Notebook entry {id:?}: {error}"));
+                self.maxwell.notebook_ui.message = None;
+                return false;
+            }
+        }
+        let mut next_gauss = crate::ui::gauss_shell::GaussShellState::default();
+        next_gauss.activate(&next_state.maxwell);
+        if !next_gauss.set_probe_radius(probe_radius) {
+            self.maxwell.notebook_ui.error = Some(format!(
+                "Notebook entry {id:?}: the captured probe radius is outside the supported range."
+            ));
+            self.maxwell.notebook_ui.message = None;
+            return false;
+        }
+        next_state.refresh_maxwell_sampling();
+        self.install_scene_document(next_state, next_controls, &entry.scene.camera);
+        self.maxwell.sync_from(&self.state);
+        self.maxwell.gauss = next_gauss;
+        // Later live edits must not overwrite the previously bound saved scene.
+        self.presets.clear_active_scene();
+        self.maxwell.notebook_ui.message = Some(format!(
+            "Restored {id} with shell R = {shell_radius:.3} and probe r = {probe_radius:.3}."
+        ));
+        self.maxwell.notebook_ui.error = None;
+        true
     }
 
     /// Issue #229: consume the guided Gauss-shell activity's pending shell
@@ -2188,42 +2315,16 @@ impl VfApp {
                 .set_scene_message(Some(format!("Scene {name:?} is no longer available.")));
             return;
         };
-        if let Err(error) = document.validate() {
+        if let Err(error) = self.commit_scene_document(&document) {
+            let prefix = if document.validate().is_err() {
+                "is invalid"
+            } else {
+                "could not be restored"
+            };
             self.presets
-                .set_scene_message(Some(format!("Scene {name:?} is invalid: {error}")));
+                .set_scene_message(Some(format!("Scene {name:?} {prefix}: {error}")));
             return;
         }
-        // Install the saved parameters first in a candidate state. The view
-        // restore validates parameter-dependent entries (custom densities) and
-        // prepares the Current Field ODE against the committed set; using the
-        // previous experiment's parameters would silently drop them.
-        let mut next_state = self.state.clone();
-        let mut next_controls = self.controls.clone();
-        if let Err(error) = next_state.commit_parameters(document.parameters.clone()) {
-            self.presets.set_scene_message(Some(format!(
-                "Scene {name:?} parameters are invalid: {error}"
-            )));
-            return;
-        }
-        document.view.restore(&mut next_state, &mut next_controls);
-        if let Err(error) = next_state.set_overlays(document.overlays.clone()) {
-            self.presets.set_scene_message(Some(format!(
-                "Scene {name:?} overlays are invalid: {error}"
-            )));
-            return;
-        }
-        self.state = next_state;
-        self.controls = next_controls;
-        self.apply_scene_camera(&document.camera);
-        // The load replaced the durable model; rebind any same-mode panel draft
-        // before the next interaction can submit the stale one.
-        self.sync_panel_drafts_from_state();
-        // The loaded pose is explicit. Drop any scalar-plot return pose so the
-        // pending plot transition cannot replace the saved camera.
-        self.saved_vector_orbit = None;
-        // Bind the live document to the loaded scene, using the post-clamp live
-        // capture as the unchanged baseline so merely visiting a scene writes
-        // nothing back.
         self.presets.bind_active_scene(
             SceneDocument::capture(
                 name,
@@ -2235,6 +2336,53 @@ impl VfApp {
         );
         self.presets
             .set_scene_message(Some(format!("Loaded scene {name:?}.")));
+    }
+
+    /// Install a validated scene document through the ordinary load path:
+    /// parameters first, then the view record, overlays and camera. The caller
+    /// owns any active-scene binding and user-facing message.
+    fn commit_scene_document(&mut self, document: &SceneDocument) -> Result<(), String> {
+        let (next_state, next_controls) = self.prepare_scene_document(document)?;
+        self.install_scene_document(next_state, next_controls, &document.camera);
+        Ok(())
+    }
+
+    fn prepare_scene_document(
+        &self,
+        document: &SceneDocument,
+    ) -> Result<(State, Controls), String> {
+        document.validate()?;
+        // Install the saved parameters first in a candidate state. The view
+        // restore validates parameter-dependent entries (custom densities) and
+        // prepares the Current Field ODE against the committed set; using the
+        // previous experiment's parameters would silently drop them.
+        let mut next_state = self.state.clone();
+        let mut next_controls = self.controls.clone();
+        next_state
+            .commit_parameters(document.parameters.clone())
+            .map_err(|error| format!("parameters: {error}"))?;
+        document.view.restore(&mut next_state, &mut next_controls);
+        next_state
+            .set_overlays(document.overlays.clone())
+            .map_err(|error| format!("overlays: {error}"))?;
+        Ok((next_state, next_controls))
+    }
+
+    fn install_scene_document(
+        &mut self,
+        next_state: State,
+        next_controls: Controls,
+        camera: &SceneCamera,
+    ) {
+        self.state = next_state;
+        self.controls = next_controls;
+        self.apply_scene_camera(camera);
+        // The load replaced the durable model; rebind any same-mode panel draft
+        // before the next interaction can submit the stale one.
+        self.sync_panel_drafts_from_state();
+        // The loaded pose is explicit. Drop any scalar-plot return pose so the
+        // pending plot transition cannot replace the saved camera.
+        self.saved_vector_orbit = None;
     }
 
     /// Apply a saved pose to the live cameras, clamping to the orbit camera's
@@ -3324,6 +3472,17 @@ impl VfApp {
     /// does after the Maxwell panel draws.
     pub fn test_apply_gauss_shell_pending(&mut self) {
         self.apply_gauss_shell_pending();
+    }
+
+    /// Test seam: capture the current Gauss reading exactly as the panel
+    /// notebook's Pin button does.
+    pub fn test_capture_notebook_entry(&mut self) -> bool {
+        self.capture_notebook_entry()
+    }
+
+    /// Test seam: restore a notebook entry through the ordinary scene path.
+    pub fn test_load_notebook_entry(&mut self, id: &str) -> bool {
+        self.load_notebook_entry(id)
     }
 
     /// Test seam: install an already-built animation job through the same

@@ -20,10 +20,12 @@ use crate::maxwell::{
 use crate::maxwell_learning::MaxwellEquation;
 use crate::maxwell_residual::{TermStatus, residual};
 use crate::maxwell_wave::{MAX_AMPLITUDE, MIN_WAVELENGTH, WaveSpec, equation_terms};
+use crate::notebook::Notebook;
 use crate::sources::FieldFamily;
 use crate::ui::gauss_shell::{GaussShellAction, GaussShellState};
 use crate::ui::help_overlay::HelpRow;
 use crate::ui::maxwell_learning_panel::{MaxwellLearningPanel, MeasurementRequest};
+use crate::ui::notebook::{NotebookAction, NotebookUiState};
 use crate::viewmodel::State;
 
 /// The exact arrows-only note shared by the panel and the Features section.
@@ -54,7 +56,7 @@ pub const WAVE_SVG_NOTE: &str = "PNG and GUI screenshots include the wave arrows
 pub const WAVE_ANIMATION_NOTE: &str = "Animation export is unavailable in Maxwell mode, so the wave arrows cannot be exported as video or GIF.";
 
 /// A one-shot request from the panel to the app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaxwellPanelAction {
     /// Frame the whole domain through the shared view-command seam.
     Fit,
@@ -68,6 +70,8 @@ pub enum MaxwellPanelAction {
     InvestigateGaussShell,
     /// Load the hollow sphere without forcing the guided investigation.
     FreeExploreGaussShell,
+    /// A notebook capture or scene restore request.
+    Notebook(NotebookAction),
 }
 
 /// Panel-local state: the draft scene, the last rejected edit and the Advanced
@@ -92,6 +96,10 @@ pub struct MaxwellPanelState {
     /// Session-only guided Gauss-law investigation; it never enters
     /// persistence and never adds a durable probe surface.
     pub gauss: GaussShellState,
+    /// The persisted experiment notebook (issue #222).
+    pub notebook: Notebook,
+    /// Session-only notebook draft, selection and import/export text.
+    pub notebook_ui: NotebookUiState,
 }
 
 impl MaxwellPanelState {
@@ -422,6 +430,18 @@ pub fn show(
     }
     panel.advanced = advanced;
 
+    // Issue #222: the notebook follows the existing Maxwell controls so it
+    // never moves a long-standing action out of reach. It captures the Gauss
+    // reading shown above.
+    let gauss_active = panel.gauss.active;
+    let notebook_action = crate::ui::notebook::show(
+        ui,
+        &mut panel.notebook,
+        &mut panel.notebook_ui,
+        gauss_active,
+        compact,
+    );
+
     if let Some(request) = measurement {
         action = Some(MaxwellPanelAction::Measurement(request));
     }
@@ -430,6 +450,9 @@ pub fn show(
             GaussShellAction::Investigate => MaxwellPanelAction::InvestigateGaussShell,
             GaussShellAction::FreeExplore => MaxwellPanelAction::FreeExploreGaussShell,
         });
+    }
+    if let Some(notebook) = notebook_action {
+        action = Some(MaxwellPanelAction::Notebook(notebook));
     }
     if commit_now && action.is_none() {
         panel.commit(state);
