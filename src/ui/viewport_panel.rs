@@ -86,23 +86,29 @@ pub fn show_slide<R>(
         .constrain_to(viewport)
         .current_pos(rest + slide)
         .show(ctx, add_contents);
+    // Only a real drag writes the resting position. On an animated (non-drag)
+    // frame the painted rect is a transient: egui rounds it to whole physical
+    // pixels (`round_area_position`) after constraining, while the slide offset
+    // we asked for is unrounded. Feeding that rounded rect back — even with a
+    // size-matched inverse — shifts the saved rest by a fraction of a pixel per
+    // frame, which accumulates over a fractional ease at any pixels-per-point.
+    // Keeping the already-clamped `rest` preserves resize/content reconciliation
+    // without ever quantizing the saved position through the animation.
+    if frame.response.dragged() {
+        let rect = frame.response.rect;
+        // `constrain_to` clamps the painted position (`rest + slide`), so a
+        // bottom edge shortens the effective slide; subtracting the raw `slide`
+        // would shift the saved rest. Recover the applied slide from the entry
+        // size, which is what egui's `Area::begin` constrained with (`Area::end`
+        // replaces it with the freshly measured content size before returning
+        // `rect`). This is a one-shot user action, so a sub-pixel rounding
+        // difference here cannot accumulate across later non-drag frames.
+        let applied_pos = clamp_position(viewport, rest + slide, state.size);
+        state.pos = Some(rect.min - (applied_pos - rest));
+    } else {
+        state.pos = Some(rest);
+    }
     let rect = frame.response.rect;
-    // Persist the resting position, not the transient slid one, so dragging
-    // still writes the user's placement while the visual slide settles.
-    //
-    // `constrain_to` clamps the *painted* position (`rest + slide`) to the
-    // viewport. At a bottom edge that shortens the effective slide; subtracting
-    // the unchanged `slide` would then shift the saved rest upward on reopen.
-    // Recover the slide egui actually applied and subtract that instead.
-    //
-    // egui's `Area::begin` constrains using the size measured on the *previous*
-    // frame, while `Area::end` replaces it with the freshly measured content
-    // size before returning `rect`. Use the entry size (`state.size`, still
-    // untouched here) for the inverse; using `rect.size()` would invert the
-    // wrong constraint whenever the contents reflow mid-slide.
-    let applied_pos = clamp_position(viewport, rest + slide, state.size);
-    let applied_slide = applied_pos - rest;
-    state.pos = Some(rect.min - applied_slide);
     state.size = rect.size();
     let rest_now = clamp_position(viewport, state.pos.unwrap_or(default_pos), state.size);
     if rest_now.distance(state.pos.unwrap_or(default_pos)) > 0.5 {

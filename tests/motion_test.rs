@@ -271,6 +271,79 @@ fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
     ]
 }
 
+/// Move a shared-seam panel with a real pointer drag. `from` and `to` are the
+/// grab and release points; the caller chooses them for an edge pin or a free
+/// reposition. Returns the frame at the final position.
+fn drag_panel(
+    frame: &mut impl FnMut(egui::Vec2, Vec<egui::Event>) -> egui::Rect,
+    from: egui::Pos2,
+    to: egui::Pos2,
+) -> egui::Rect {
+    frame(egui::Vec2::ZERO, pointer(from, true));
+    frame(egui::Vec2::ZERO, vec![egui::Event::PointerMoved(to)]);
+    frame(egui::Vec2::ZERO, pointer(to, false));
+    frame(egui::Vec2::ZERO, vec![])
+}
+
+/// Fractional-offset regression: egui rounds the painted Area position to
+/// whole pixels (`round_area_position`), but a reconstructed slide offset is
+/// unrounded. Near — but not against — the bottom edge, consecutive mid-flight
+/// frames with fractional offsets can therefore quantize the painted top and
+/// then subtract the raw offset, accumulating error in the saved rest. This
+/// uses real eased timing (fractional elapsed samples) and no dragging.
+#[test]
+fn fractional_animated_reopen_does_not_shift_saved_rest() {
+    let ctx = support::context();
+    ctx.set_pixels_per_point(1.25);
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
+    let id = egui::Id::unique("issue310_fractional_panel");
+    let mut placement = ViewportPanelState::default();
+    let distance = MotionTokens::default().slide_distance_pt;
+    let duration = MotionTokens::default().open_slide_ms;
+
+    // Warm up, then drag to a spot 10pt short of the fully clamped bottom.
+    let mut frame = |slide, events| slide_frame(&ctx, viewport, id, &mut placement, slide, events);
+    frame(egui::Vec2::ZERO, vec![]);
+    let resting = frame(egui::Vec2::ZERO, vec![]);
+    let gap = 10.0_f32;
+    let start = resting.center_top();
+    let end = start + egui::vec2(0.0, viewport.max.y - resting.bottom() - gap);
+    let saved = drag_panel(&mut frame, start, end);
+    assert!(
+        saved.bottom() < viewport.max.y - 2.0 && saved.bottom() > viewport.max.y - gap - 4.0,
+        "panel sits near but off the bottom clamp: {saved:?}"
+    );
+
+    // A persistent fractional slide (no settle frame) is the purest form of
+    // the feedback risk: each frame quantizes the painted top, then subtracts
+    // the raw offset from the stored rest.
+    let tiny = egui::vec2(0.0, 0.4_f32);
+    for _ in 0..20 {
+        frame(tiny, vec![]);
+    }
+    let after_hold = frame(egui::Vec2::ZERO, vec![]);
+    assert_eq!(
+        after_hold.min, saved.min,
+        "a persistent fractional slide must not shift the saved rest: \
+         saved={saved:?}, after={after_hold:?}"
+    );
+
+    for cycle in 0..4 {
+        // Real eased progress at fractional elapsed times produces fractional
+        // offsets (e.g. 0.4, 0.7) rather than the integral 12/6 offsets.
+        for elapsed in [0.15, 0.35, 0.6, 0.85].map(|f| f * duration) {
+            let p = progress(elapsed, duration);
+            frame(egui::vec2(0.0, distance * (1.0 - p)), vec![]);
+        }
+        let settled = frame(egui::Vec2::ZERO, vec![]);
+        assert_eq!(
+            settled.min, saved.min,
+            "fractional reopen cycle {cycle} shifted the saved rest: \
+             saved={saved:?}, settled={settled:?}"
+        );
+    }
+}
+
 /// B5 regression (issue #310): a panel dragged to the bottom edge and reopened
 /// with motion must settle at exactly its saved position. The painted slide is
 /// constrained to the viewport; subtracting that shortened slide from the
@@ -283,38 +356,13 @@ fn bottom_edge_reopen_keeps_the_saved_resting_position() {
     let id = egui::Id::unique("issue310_bottom_panel");
     let mut placement = ViewportPanelState::default();
 
-    // Two warm-up frames give the Area a measured size.
-    slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
-    let resting = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
-
-    // Move the panel to the bottom edge through its normal header drag.
+    // Two warm-up frames give the Area a measured size, then drag to the edge.
+    let mut frame = |slide, events| slide_frame(&ctx, viewport, id, &mut placement, slide, events);
+    frame(egui::Vec2::ZERO, vec![]);
+    let resting = frame(egui::Vec2::ZERO, vec![]);
     let start = resting.center_top();
     let end = start + egui::vec2(0.0, viewport.max.y - resting.bottom() + 4.0);
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        pointer(start, true),
-    );
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        vec![egui::Event::PointerMoved(end)],
-    );
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        pointer(end, false),
-    );
-    let saved = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
+    let saved = drag_panel(&mut frame, start, end);
     assert_eq!(
         saved.bottom() as f64,
         viewport.max.y as f64,
@@ -322,23 +370,9 @@ fn bottom_edge_reopen_keeps_the_saved_resting_position() {
     );
 
     // A full open/reopen cycle: slide in from below, then settle at rest.
-    let _ = slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::vec2(0.0, distance),
-        vec![],
-    );
-    let _ = slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::vec2(0.0, distance * 0.5),
-        vec![],
-    );
-    let settled = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
+    frame(egui::vec2(0.0, distance), vec![]);
+    frame(egui::vec2(0.0, distance * 0.5), vec![]);
+    let settled = frame(egui::Vec2::ZERO, vec![]);
     assert_eq!(
         settled.min, saved.min,
         "the reopened panel must settle at its saved position: saved={saved:?}, settled={settled:?}"
@@ -355,54 +389,17 @@ fn repeated_reopen_has_no_drift_but_dragging_still_repositions() {
     let id = egui::Id::unique("issue310_repeat_panel");
     let mut placement = ViewportPanelState::default();
 
-    slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
-    let resting = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
+    let mut frame = |slide, events| slide_frame(&ctx, viewport, id, &mut placement, slide, events);
+    frame(egui::Vec2::ZERO, vec![]);
+    let resting = frame(egui::Vec2::ZERO, vec![]);
     let start = resting.center_top();
     let end = start + egui::vec2(0.0, viewport.max.y - resting.bottom() + 4.0);
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        pointer(start, true),
-    );
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        vec![egui::Event::PointerMoved(end)],
-    );
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        pointer(end, false),
-    );
-    let saved = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
+    let saved = drag_panel(&mut frame, start, end);
 
     for cycle in 0..4 {
-        let _ = slide_frame(
-            &ctx,
-            viewport,
-            id,
-            &mut placement,
-            egui::vec2(0.0, distance),
-            vec![],
-        );
-        let _ = slide_frame(
-            &ctx,
-            viewport,
-            id,
-            &mut placement,
-            egui::vec2(0.0, distance * 0.5),
-            vec![],
-        );
-        let settled = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
+        frame(egui::vec2(0.0, distance), vec![]);
+        frame(egui::vec2(0.0, distance * 0.5), vec![]);
+        let settled = frame(egui::Vec2::ZERO, vec![]);
         assert_eq!(
             settled.min, saved.min,
             "reopen cycle {cycle} drifted: saved={saved:?}, settled={settled:?}"
@@ -412,31 +409,7 @@ fn repeated_reopen_has_no_drift_but_dragging_still_repositions() {
     // A real drag still moves the panel; the position is not frozen.
     let start = saved.center_top();
     let end = start + egui::vec2(-40.0, -60.0);
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        pointer(start, true),
-    );
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        vec![egui::Event::PointerMoved(end)],
-    );
-    slide_frame(
-        &ctx,
-        viewport,
-        id,
-        &mut placement,
-        egui::Vec2::ZERO,
-        pointer(end, false),
-    );
-    let moved = slide_frame(&ctx, viewport, id, &mut placement, egui::Vec2::ZERO, vec![]);
+    let moved = drag_panel(&mut frame, start, end);
     assert_ne!(
         moved.min, saved.min,
         "intentional dragging must still reposition the panel"
@@ -470,15 +443,11 @@ fn reflow_during_slide_keeps_the_saved_rest_and_post_resize_drag_works() {
     let resting = frame(viewport, egui::Vec2::ZERO, vec![], tall);
     let start = resting.center_top();
     let end = start + egui::vec2(0.0, viewport.max.y - resting.bottom() + 4.0);
-    frame(viewport, egui::Vec2::ZERO, pointer(start, true), tall);
-    frame(
-        viewport,
-        egui::Vec2::ZERO,
-        vec![egui::Event::PointerMoved(end)],
-        tall,
+    let saved = drag_panel(
+        &mut |slide, events| frame(viewport, slide, events, tall),
+        start,
+        end,
     );
-    frame(viewport, egui::Vec2::ZERO, pointer(end, false), tall);
-    let saved = frame(viewport, egui::Vec2::ZERO, vec![], tall);
     assert_eq!(
         saved.bottom() as f64,
         viewport.max.y as f64,
@@ -507,15 +476,11 @@ fn reflow_during_slide_keeps_the_saved_rest_and_post_resize_drag_works() {
     // A real drag after the resize still repositions and the new spot holds.
     let start = rest_after_resize.center_top();
     let end = start + egui::vec2(-30.0, -80.0);
-    frame(small, egui::Vec2::ZERO, pointer(start, true), short);
-    frame(
-        small,
-        egui::Vec2::ZERO,
-        vec![egui::Event::PointerMoved(end)],
-        short,
+    let moved = drag_panel(
+        &mut |slide, events| frame(small, slide, events, short),
+        start,
+        end,
     );
-    frame(small, egui::Vec2::ZERO, pointer(end, false), short);
-    let moved = frame(small, egui::Vec2::ZERO, vec![], short);
     assert!(
         moved.top() < rest_after_resize.top() - 40.0,
         "post-resize drag moved the panel: {moved:?}"
