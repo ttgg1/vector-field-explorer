@@ -2,10 +2,38 @@
 //!
 //! `progress` is the one clamped ease-out sampler every transition shares.
 //! `effective_mode` resolves the persisted setting against the platform signal.
+//! The final tests drive the real app frame so a hidden surface cannot keep a
+//! mid-flight transition requesting paint forever (AC4).
 
+use eframe::egui::{self, vec2};
+
+use crate::support;
+
+use vector_field_explorer::VfApp;
+use vector_field_explorer::source_scene::FieldMode;
 use vector_field_explorer::ui::motion::{
     MotionMode, MotionTokens, MotionTransition, effective_mode, needs_repaint, progress,
 };
+
+const VIEWPORT: egui::Vec2 = vec2(1280.0, 1000.0);
+
+/// Drive one real app frame with a known frame time so `stable_dt` produces a
+/// deterministic transition tick through `advance_transition`. Both `time` and
+/// `predicted_dt` are supplied so `stable_dt` is the requested delta whether or
+/// not egui believes the previous frame requested an immediate repaint.
+fn app_frame(ctx: &egui::Context, app: &mut VfApp, time_s: f64, dt_s: f32) {
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT)),
+            time: Some(time_s),
+            predicted_dt: dt_s,
+            ..Default::default()
+        },
+        |ui| eframe::App::ui(app, ui, &mut frame),
+    );
+    out.textures_delta.clear();
+}
 
 #[test]
 fn progress_samples_the_ease_out_curve_and_clamps() {
@@ -106,4 +134,64 @@ fn effective_mode_is_reduced_when_either_signal_is_set() {
     assert_eq!(effective_mode(true, false), MotionMode::Reduced);
     assert_eq!(effective_mode(false, true), MotionMode::Reduced);
     assert_eq!(effective_mode(true, true), MotionMode::Reduced);
+}
+
+/// B1 regression: hiding a surface mid-flight must settle its transition so a
+/// closed panel never keeps requesting repaint (AC4). Drives the real app frame
+/// rather than the pure tick-to-settle path, which cannot catch a caller that
+/// forgets to settle on the invisible path.
+#[test]
+fn hiding_typeset_mid_flight_settles_and_stops_repaint() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    let half_s = (MotionTokens::default().open_slide_ms / 1000.0 / 2.0) as f64;
+
+    // Rising edge: opening the panel starts its slide.
+    app.formula_typeset.open = true;
+    app_frame(&ctx, &mut app, half_s, half_s as f32);
+    assert!(
+        app.typeset_transition.is_active(),
+        "the visible panel is mid-flight after a half-duration tick"
+    );
+    assert!(needs_repaint(&app.typeset_transition));
+
+    // Falling edge: hiding the panel mid-flight must settle the transition.
+    app.formula_typeset.open = false;
+    app_frame(&ctx, &mut app, half_s * 2.0, half_s as f32);
+    assert!(
+        !app.typeset_transition.is_active(),
+        "a hidden panel's transition must not stay in flight"
+    );
+    assert!(
+        !needs_repaint(&app.typeset_transition),
+        "a hidden panel must never request another frame"
+    );
+}
+
+/// B1 regression for the legend: switching to a non-vector field mode mid-slide
+/// must settle the legend transition and stop repaint requests.
+#[test]
+fn hiding_legend_mid_flight_settles_and_stops_repaint() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    let half_s = (MotionTokens::default().open_slide_ms / 1000.0 / 2.0) as f64;
+
+    // The legend is visible by default in vector mode. Drive a half-duration
+    // frame so its transition is in flight.
+    assert!(app.state.is_vector_mode());
+    app_frame(&ctx, &mut app, half_s, half_s as f32);
+    assert!(app.legend_transition.is_active());
+    assert!(needs_repaint(&app.legend_transition));
+
+    // Switching to ODE hides the legend mid-flight; it must settle.
+    assert!(app.state.set_field_mode(FieldMode::Ode));
+    app_frame(&ctx, &mut app, half_s * 2.0, half_s as f32);
+    assert!(
+        !app.legend_transition.is_active(),
+        "a hidden legend's transition must not stay in flight"
+    );
+    assert!(
+        !needs_repaint(&app.legend_transition),
+        "a hidden legend must never request another frame"
+    );
 }

@@ -746,10 +746,11 @@ impl Default for VfApp {
 }
 
 impl VfApp {
-    /// Resolve the motion mode from the persisted setting plus the platform
-    /// reduced-motion preference (issue #289). No egui API exposes that
-    /// preference in this version, so the platform signal is plumbed through
-    /// the optional `platform_reduced_motion` hook below; default off.
+    /// Resolve the slide-transition mode from the persisted setting plus the
+    /// optional platform reduced-motion signal (issue #289). Hover/press easing
+    /// is driven separately by the persisted setting alone (via egui's
+    /// `animation_time`); the platform hook below gates only the slide
+    /// transitions and defaults to "no signal".
     pub fn motion_mode(&self) -> crate::ui::motion::MotionMode {
         crate::ui::motion::effective_mode(self.style.reduced_motion, self.platform_reduced_motion())
     }
@@ -773,6 +774,12 @@ impl VfApp {
     ) -> f32 {
         if visible && !*was_visible {
             transition.start();
+        }
+        // A surface that disappears mid-flight has no visible slide left to
+        // advance. Settle it so it stops requesting repaint frames (AC4);
+        // without this the hidden transition stays active forever.
+        if !visible && *was_visible {
+            transition.finish();
         }
         *was_visible = visible;
         if visible {

@@ -32,13 +32,14 @@ impl Default for MotionTokens {
 /// Resolve a transition's normalized progress (0..=1) at `elapsed_ms` using one
 /// quadratic ease-out. Pure and deterministic.
 ///
-/// Non-finite or non-positive durations and non-finite elapsed values settle
-/// immediately rather than producing `NaN`: a corrupt or degenerate timing must
-/// never leak an invalid offset into layout. Negative elapsed clamps to 0.
+/// Non-positive or non-finite durations resolve to the settled end (1.0) and a
+/// non-finite elapsed resolves to the start (0.0): a corrupt or degenerate
+/// timing must never produce `NaN` or leak an invalid offset into layout.
+/// Negative elapsed clamps to 0.
 pub fn progress(elapsed_ms: f32, duration_ms: f32) -> f32 {
     if !duration_ms.is_finite() || duration_ms <= 0.0 || !elapsed_ms.is_finite() {
-        // A non-finite elapsed means "no usable clock sample": treat it as the
-        // immediate end state so a transition never sticks part-way.
+        // A non-finite elapsed means "no usable clock sample" -> pinned to the
+        // start state (0.0); a degenerate duration -> the settled end (1.0).
         return if !elapsed_ms.is_finite() { 0.0 } else { 1.0 };
     }
     let t = elapsed_ms.clamp(0.0, duration_ms) / duration_ms;
@@ -90,6 +91,17 @@ impl MotionTransition {
     pub fn start(&mut self) {
         self.elapsed_ms = 0.0;
         self.started = true;
+    }
+
+    /// Settle the transition immediately, returning it to the idle state.
+    ///
+    /// Used when an animated surface disappears mid-flight: the slide is no
+    /// longer visible, so it must not keep reporting in-flight progress or
+    /// requesting repaint frames. After this call [`Self::progress`] reports
+    /// the idle 0, [`Self::is_active`] is false and the transition is inert.
+    pub fn finish(&mut self) {
+        self.elapsed_ms = 0.0;
+        self.started = false;
     }
 
     /// Advance the transition by `dt_ms` and return the new eased progress.

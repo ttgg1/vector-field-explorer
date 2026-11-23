@@ -3054,7 +3054,7 @@ impl VfApp {
             dt_ms,
             typeset_mode,
         );
-        if crate::ui::motion::needs_repaint(&self.typeset_transition) {
+        if typeset_visible && crate::ui::motion::needs_repaint(&self.typeset_transition) {
             ui.ctx().request_repaint();
         }
         if typeset_visible && let Some(viewport) = self.last_viewport_rect {
@@ -3190,7 +3190,7 @@ impl VfApp {
             dt_ms,
             legend_mode,
         );
-        if crate::ui::motion::needs_repaint(&self.legend_transition) {
+        if legend_visible && crate::ui::motion::needs_repaint(&self.legend_transition) {
             ui.ctx().request_repaint();
         }
         if legend_visible && let Some(rect) = self.last_viewport_rect {
