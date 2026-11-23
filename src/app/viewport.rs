@@ -22,14 +22,7 @@ impl VfApp {
     }
 
     /// Exercise both vector dispatches without opening a save dialog or requiring a GPU.
-    #[doc(hidden)]
-    pub fn test_take_vector_capture_provenances(
-        &mut self,
-    ) -> [Option<crate::export_provenance::ExportProvenance>; 2] {
-        self.test_take_vector_captures(self.displayed_wave())
-            .map(|capture| capture.and_then(|(_, p)| p))
-    }
-
+    /// Returns SVG then PNG, with geometry and provenance from each dispatch.
     #[doc(hidden)]
     pub fn test_take_vector_captures(
         &mut self,

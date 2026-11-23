@@ -522,8 +522,9 @@ fn vector_dispatch_uses_the_rebuilt_maxwell_frame() {
         app.state.time = time;
         app.state.dirty = true;
         app.test_harness().advance_simulation();
-        for capture in app.test_take_vector_capture_provenances() {
-            let provenance = capture.expect("queued vector export");
+        for dispatch in app.test_take_vector_captures(app.state.maxwell_wave()) {
+            let (_, provenance) = dispatch.expect("queued vector export");
+            let provenance = provenance.expect("Maxwell export provenance");
             assert_eq!(metadata_value(&provenance, "vfe.maxwell_sampling"), sampled);
             if wave.is_some() {
                 assert_eq!(provenance.warning_lines[0], MAXWELL_WAVE_MODEL_LINE);
