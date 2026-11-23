@@ -4,19 +4,60 @@
 use glam::Mat4;
 
 use crate::layer_style::LayerStyles;
+use crate::maxwell_wave::WaveSpec;
 
 use super::*;
 
+type VectorCapture = (SceneGPU, Option<crate::export_provenance::ExportProvenance>);
+
 impl VfApp {
+    pub(super) fn displayed_wave(&self) -> Option<WaveSpec> {
+        self.state
+            .maxwell_wave()
+            .filter(|_| self.state.field_mode == FieldMode::Maxwell)
+    }
+
+    fn wave_rebuild_pending(&self, rebuilt_wave: Option<WaveSpec>) -> bool {
+        self.displayed_wave() != rebuilt_wave || (rebuilt_wave.is_some() && self.state.dirty)
+    }
+
     /// Exercise both vector dispatches without opening a save dialog or requiring a GPU.
     #[doc(hidden)]
     pub fn test_take_vector_capture_provenances(
         &mut self,
     ) -> [Option<crate::export_provenance::ExportProvenance>; 2] {
-        let svg = (self.take_svg_export_route() == super::plot::SvgExportRoute::Allowed)
-            .then(|| self.vector_svg_capture_provenance())
-            .flatten();
-        [svg, self.take_vector_png_capture().flatten()]
+        self.test_take_vector_captures(self.displayed_wave())
+            .map(|capture| capture.and_then(|(_, p)| p))
+    }
+
+    #[doc(hidden)]
+    pub fn test_take_vector_captures(
+        &mut self,
+        rebuilt_wave: Option<WaveSpec>,
+    ) -> [Option<VectorCapture>; 2] {
+        let view = self.orbit.view();
+        let scene = self.assemble_viewport_scene(&view);
+        [
+            self.take_vector_svg_capture(&view, rebuilt_wave),
+            self.take_vector_png_capture(rebuilt_wave)
+                .map(|p| (scene, p)),
+        ]
+    }
+
+    fn take_vector_svg_capture(
+        &mut self,
+        view: &Mat4,
+        rebuilt_wave: Option<WaveSpec>,
+    ) -> Option<VectorCapture> {
+        if self.wave_rebuild_pending(rebuilt_wave)
+            || self.take_svg_export_route() != super::plot::SvgExportRoute::Allowed
+        {
+            return None;
+        }
+        let mut scene =
+            self.assemble_viewport_scene_with_styles(view, &LayerStyles::default(), true);
+        scene.heatmap = None;
+        Some((scene, self.vector_svg_capture_provenance()))
     }
 
     fn vector_capture_provenance(
@@ -48,14 +89,23 @@ impl VfApp {
 
     fn take_vector_png_capture(
         &mut self,
+        rebuilt_wave: Option<WaveSpec>,
     ) -> Option<Option<crate::export_provenance::ExportProvenance>> {
+        if self.wave_rebuild_pending(rebuilt_wave) {
+            return None;
+        }
         let queued = self.screenshot.take_request_with_provenance()?;
         Some(self.vector_capture_provenance(queued))
     }
 
     /// Frame phase: the wgpu field viewport, its camera input, click-to-seed,
     /// screenshot capture and the captured-pointer crosshair.
-    pub(super) fn frame_viewport(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    pub(super) fn frame_viewport(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        rebuilt_wave: Option<WaveSpec>,
+    ) {
         // Issue #208: keep the orbit basis in step with the display-only
         // orientation. A same-frame Appearance-panel change applies before the
         // view, picking and screenshot paths read the camera.
@@ -405,14 +455,12 @@ impl VfApp {
             // synchronously on the frame thread. Task 6 guards execution here
             // as well as in the menu: scalar kinds never fall through to the
             // vector exporter.
-            if self.take_svg_export_route() == super::plot::SvgExportRoute::Allowed {
-                // SVG keeps the unstyled line blueprint (issue #84 contract):
-                // layer overrides belong to the live viewport and raster output.
-                let mut scene =
-                    self.assemble_viewport_scene_with_styles(&view, &LayerStyles::default(), true);
-                // Vector output is the line blueprint: the scalar heatmap fill
-                // is raster-only (issue #92 contract).
-                scene.heatmap = None;
+            // Compact controls can edit the wave after simulation. Leave both
+            // requests queued for the next normal rebuild in that case.
+            if self.wave_rebuild_pending(rebuilt_wave) {
+                ui.ctx().request_repaint();
+            }
+            if let Some((scene, provenance)) = self.take_vector_svg_capture(&view, rebuilt_wave) {
                 #[cfg(not(target_arch = "wasm32"))]
                 let over_cap = screenshot::exceeds_svg_element_cap(&scene);
                 let element_count = screenshot::svg_element_count(&scene);
@@ -430,7 +478,6 @@ impl VfApp {
                     f64::from(clear[2]),
                     f64::from(clear[3]),
                 ];
-                let provenance = self.vector_svg_capture_provenance();
                 let svg = screenshot::scene_to_svg_with_provenance(
                     &scene,
                     view_proj,
@@ -476,7 +523,7 @@ impl VfApp {
             // hand the pixels to a worker thread that shows the native save
             // dialog and writes the PNG. Nothing here touches the live
             // surface textures, and the readback is RGBA by contract.
-            if let Some(provenance) = self.take_vector_png_capture() {
+            if let Some(provenance) = self.take_vector_png_capture(rebuilt_wave) {
                 // `rect` is in logical points; a capture must have the viewport's
                 // *physical* pixels, so scale by the display's pixels-per-point
                 // before rounding (HiDPI fix round 1). The cap applies after that.

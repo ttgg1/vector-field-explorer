@@ -453,6 +453,56 @@ fn wave_spec() -> WaveSpec {
 }
 
 #[test]
+fn post_simulation_wave_edits_defer_both_captures_until_geometry_is_rebuilt() {
+    let mut app = VfApp::new();
+    app.state.set_field_mode(FieldMode::Maxwell);
+    app.state.set_mode(false);
+    app.state.set_arrows(true);
+    app.state.set_maxwell_scene(MaxwellScene {
+        case: MaxwellCase::CoaxialElectric,
+        ..Default::default()
+    });
+    app.test_harness().advance_simulation();
+    for wave in [
+        Some(WaveSpec {
+            amplitude: 0.0,
+            ..wave_spec()
+        }),
+        Some(wave_spec()),
+        None,
+    ] {
+        app.test_harness().request_svg_export();
+        app.test_harness().request_png_export();
+        let rebuilt_wave = app.state.maxwell_wave();
+        assert!(app.state.set_maxwell_wave(wave));
+        let early = app.test_take_vector_captures(rebuilt_wave);
+        assert_eq!(early.map(|p| p.is_some()), [false, false]);
+        app.test_harness().advance_simulation();
+        for dispatch in app.test_take_vector_captures(app.state.maxwell_wave()) {
+            let (scene, capture) = dispatch.expect("queued export");
+            assert_eq!(
+                scene.arrows.is_empty(),
+                wave.is_some_and(|w| w.amplitude == 0.0),
+                "wave: {wave:?}"
+            );
+            let provenance = capture.expect("request survived until the next rebuild");
+            assert_eq!(
+                metadata_value(&provenance, "vfe.maxwell_sampling"),
+                wave.map(|_| "sampled")
+            );
+            assert_eq!(
+                provenance.warning_lines[0],
+                if wave.is_some() {
+                    MAXWELL_WAVE_MODEL_LINE
+                } else {
+                    MAXWELL_MODEL_LINE
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn vector_dispatch_uses_the_rebuilt_maxwell_frame() {
     let mut app = VfApp::new();
     app.state.set_field_mode(FieldMode::Maxwell);
@@ -470,7 +520,8 @@ fn vector_dispatch_uses_the_rebuilt_maxwell_frame() {
         app.test_harness().request_png_export();
         app.state.set_maxwell_wave(wave);
         app.state.time = time;
-        app.state.refresh_maxwell_sampling();
+        app.state.dirty = true;
+        app.test_harness().advance_simulation();
         for capture in app.test_take_vector_capture_provenances() {
             let provenance = capture.expect("queued vector export");
             assert_eq!(metadata_value(&provenance, "vfe.maxwell_sampling"), sampled);

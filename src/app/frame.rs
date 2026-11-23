@@ -51,8 +51,9 @@ impl eframe::App for VfApp {
         self.state.sync_linked_overlay_layers();
         self.state.refresh_linked_overlay_layers();
         self.frame_simulation(&ctx);
+        let rebuilt_wave = self.displayed_wave();
         self.frame_status_bar(ui);
-        self.frame_viewport(ui, frame);
+        self.frame_viewport(ui, frame, rebuilt_wave);
         self.frame_overlays(ui);
         // Sync the live document to its bound saved scene after every layout's
         // chrome has run, not only when the Presets panel/sheet happened to
