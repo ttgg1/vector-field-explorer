@@ -627,6 +627,15 @@ fn composite_frame(
     screen: [u32; 2],
     rect: egui::Rect,
 ) -> Result<Vec<u8>, String> {
+    incoming_frame(gpu, format, screen, |rp| pass.paint(rp, rect))
+}
+
+fn incoming_frame(
+    gpu: &Gpu,
+    format: wgpu::TextureFormat,
+    screen: [u32; 2],
+    paint: impl FnOnce(&mut wgpu::RenderPass<'static>),
+) -> Result<Vec<u8>, String> {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("vfe probe incoming no-depth target"),
         size: wgpu::Extent3d {
@@ -678,7 +687,7 @@ fn composite_frame(
                 multiview_mask: None,
             })
             .forget_lifetime();
-        pass.paint(&mut render_pass, rect);
+        paint(&mut render_pass);
     }
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
@@ -1316,7 +1325,8 @@ fn probe_stale_slice_clip_cache(gpu: &Gpu, format: wgpu::TextureFormat) -> Resul
 fn run_probe() -> Result<(), String> {
     let gpu = request_device()?;
     let scopes = gpu.begin_scopes("object pass");
-    let result = probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb)
+    let result = probe_grid_depth(&gpu)
+        .and_then(|()| probe_object_pass(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
         .and_then(|()| probe_offscreen_capture(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
         .and_then(|()| probe_capture_object_style(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
         .and_then(|()| probe_slice_attenuated_far_side(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb))
@@ -1324,6 +1334,198 @@ fn run_probe() -> Result<(), String> {
         .and_then(|()| probe_stale_slice_clip_cache(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
     gpu.end_scopes(scopes)?;
     result
+}
+
+fn probe_grid_depth(gpu: &Gpu) -> Result<(), String> {
+    let mut draw = DrawState::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let objects = Arc::new(sphere_scene());
+    let view = probe_view([128, 128]);
+    let mut capture = |scene: &SceneGPU, bodies: Option<&Arc<MeshScene>>, style| {
+        draw.set_object_style(style);
+        draw.render_offscreen_with_objects(
+            &gpu.device,
+            &gpu.queue,
+            scene,
+            bodies,
+            Mat4::from_cols_array_2d(&view.view_proj),
+            Vec3::from_array(view.eye),
+            128,
+            128,
+            PROBE_CLEAR,
+        )
+        .map_err(|e| e.to_string())
+    };
+    let solid = ObjectStyle::Solid;
+    let body = capture(&SceneGPU::default(), Some(&objects), solid)?;
+    for (label, z) in [("behind", -1.25), ("front", 1.25)] {
+        let domain = Domain::new(Vec3::new(-3., 0., z - 0.1), Vec3::new(3., 1., z + 0.1));
+        let mut line = vector_field_explorer::reference::reference_lines(&domain, false)[0];
+        line.color = [1., 0., 1., 1.];
+        line.b[3] = 0.12;
+        let scene = SceneGPU {
+            lines: Arc::new(vec![line]),
+            ..Default::default()
+        };
+        let bare = capture(&scene, None, solid)?;
+        let over = capture(&scene, Some(&objects), solid)?;
+        let ink = pixel(&bare, 128, 64, 64);
+        assert_eq!(ink, [255, 0, 255, 255]);
+        if label == "behind" {
+            let wire = capture(&scene, Some(&objects), ObjectStyle::Wireframe)?;
+            assert_eq!(
+                pixel(&wire, 128, 64, 64),
+                ink,
+                "wireframe remains painter-only"
+            );
+            let mut axis = vector_field_explorer::reference::reference_lines(&domain, false)
+                .into_iter()
+                .rev()
+                .nth(1)
+                .unwrap();
+            axis.a[..3].copy_from_slice(&line.a[..3]);
+            axis.b = line.b;
+            axis.color = line.color;
+            let painter = SceneGPU {
+                lines: Arc::new(vec![axis]),
+                ..Default::default()
+            };
+            let axis_over = capture(&painter, Some(&objects), solid)?;
+            assert_eq!(
+                pixel(&axis_over, 128, 64, 64),
+                ink,
+                "identically styled axis"
+            );
+            // Issue #300: a domain-box edge is scene decoration, not face
+            // grid. At the same (behind-the-sphere) position it must stay a
+            // painter line, unlike the identically placed GRID_TAG line above.
+            let mut edge = vector_field_explorer::reference::reference_lines(&domain, true)
+                .into_iter()
+                .find(|candidate| candidate.color == vector_field_explorer::reference::EDGE_COLOR)
+                .expect("3D reference emits domain-box edges");
+            edge.a[..3].copy_from_slice(&line.a[..3]);
+            edge.b = line.b;
+            edge.color = line.color;
+            let boundary = SceneGPU {
+                lines: Arc::new(vec![edge]),
+                ..Default::default()
+            };
+            let edge_over = capture(&boundary, Some(&objects), solid)?;
+            assert_eq!(
+                pixel(&edge_over, 128, 64, 64),
+                ink,
+                "domain-box edge is not occluded by the object depth test"
+            );
+
+            let domain = Domain::new(Vec3::splat(-2.), Vec3::splat(2.));
+            let plane = PlaneFrame::new(
+                &domain,
+                PlaneView {
+                    enabled: true,
+                    axis: PlaneAxis::Y,
+                    index: 2,
+                },
+                UVec3::splat(5),
+            );
+            let clipped = Arc::new(disc_scene(&domain, Some(&plane)));
+            line.a[1] = -0.3;
+            line.b[1] = -0.3;
+            let shifted = SceneGPU {
+                lines: Arc::new(vec![line]),
+                ..Default::default()
+            };
+            let translucent = capture(&shifted, Some(&clipped), solid)?;
+            assert_eq!(
+                pixel(&translucent, 128, 64, 75),
+                ink,
+                "attenuated slice half"
+            );
+        }
+        assert_eq!(pixel(&over, 128, 1, 64), ink, "{label} unobstructed");
+        assert_eq!(
+            pixel(&over, 128, 64, 64),
+            if label == "behind" {
+                pixel(&body, 128, 64, 64)
+            } else {
+                ink
+            },
+            "{label} grid over sphere"
+        );
+        let live = clipped_callback(gpu, scene, objects.clone(), &view)?;
+        for x in 16..128 {
+            assert_eq!(
+                pixel(&live, 160, 16 + x, 72),
+                pixel(&over, 128, x, 64),
+                "{label} clipped scanline at {x}"
+            );
+        }
+        assert_eq!(
+            pixel(&live, 160, 80, 72),
+            pixel(&over, 128, 64, 64),
+            "{label} live"
+        );
+        assert_eq!(
+            pixel(&live, 160, 140, 72),
+            ink,
+            "{label} live background grid"
+        );
+        assert_eq!(
+            pixel(&live, 160, 20, 72),
+            pixel(&live, 160, 0, 0),
+            "scissor"
+        );
+    }
+    Ok(())
+}
+
+fn clipped_callback(
+    gpu: &Gpu,
+    scene: SceneGPU,
+    objects: Arc<MeshScene>,
+    view: &ObjectView,
+) -> Result<Vec<u8>, String> {
+    use eframe::egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut resources = CallbackResources::default();
+    resources.insert(DrawState::new(&gpu.device, format));
+    let screen = egui::Rect::from_min_size(egui::pos2(8., 4.), egui::vec2(64., 64.));
+    let callback = renderer::DrawCallback {
+        scene,
+        objects,
+        object_style: ObjectStyle::Solid,
+        screen,
+        object_viewport: [128, 128],
+        object_clear: PROBE_CLEAR,
+        view_proj: Mat4::from_cols_array_2d(&view.view_proj),
+        camera_pos: Vec3::from_array(view.eye),
+    };
+    let descriptor = ScreenDescriptor {
+        size_in_pixels: [160, 144],
+        pixels_per_point: 2.,
+    };
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    let buffers = callback.prepare(
+        &gpu.device,
+        &gpu.queue,
+        &descriptor,
+        &mut encoder,
+        &mut resources,
+    );
+    gpu.queue
+        .submit(buffers.into_iter().chain([encoder.finish()]));
+    incoming_frame(gpu, format, descriptor.size_in_pixels, |pass| {
+        pass.set_viewport(16., 8., 128., 128., 0., 1.);
+        pass.set_scissor_rect(32, 8, 112, 128);
+        callback.paint(
+            egui::PaintCallbackInfo {
+                viewport: screen,
+                clip_rect: egui::Rect::from_min_max(egui::pos2(16., 4.), screen.max),
+                pixels_per_point: 2.,
+                screen_size_px: descriptor.size_in_pixels,
+            },
+            pass,
+            &resources,
+        );
+    })
 }
 
 // ---------------------------------------------------------------------------
