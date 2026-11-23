@@ -9,10 +9,19 @@ deterministic orchestration service.
 
 - `/develop-openai <request>` explicitly selects the OpenAI orchestrator.
 - `/develop-opencode-go <request>` explicitly selects the OpenCode Go orchestrator.
+- `/develop-opencode-go-free <request>` uses HY4 Flash Free for coordination and workers.
+- `/develop-opencode-go-mixed <request>` uses Sol low for coordination and the same free workers.
+- `/review-opencode-go-beam-free <diff-package> <acceptance-criteria>` explicitly requests a read-only Beam second opinion.
 - `/review-openai <diff-package> <acceptance-criteria>` uses a fresh read-only GPT-6.2 Sol reviewer at low effort for routine diffs.
 - `/review-openai-release <diff-package> <acceptance-criteria>` uses the explicit release/high-risk GPT-6.2 Sol reviewer at high effort.
 - `/review-opencode-go <diff-package> <acceptance-criteria>` uses a fresh read-only GLM 5.3 Flash reviewer.
 - `/review-opencode-go-mimo ...` explicitly chooses MiMo V2.6 Flash instead; it is not an automatic fallback.
+
+Use [the Free-first lane policy](../references/workflow.md#free-first-lanes-opt-in)
+to select a controller and review gate. To hand off a Sol planning pass, start
+the Free command with the approved brief and its acceptance checks. To hand
+back an operator-invoked review, provide the report and reviewed HEAD to the
+controller.
 
 The configured OpenAI roles use GPT-6.2 Sol low for orchestration,
 simple/standard implementation, routine review, and scoped fixes; GPT-6.2 Astra
@@ -86,6 +95,10 @@ command, run trusted checks, and prove integration identity. If those checks
 cannot be established, stop; never report runtime-equivalent enforcement.
 
 ## Metrics
+
+Before changing the default lane, compare Free, Sol planning → Free, and
+Mixed on comparable tasks. Track OpenAI calls, fix/review rounds, human
+interventions per accepted task, and material defects missed in review.
 
 Export each relevant session (including reviewer/implementer child sessions)
 as sanitized JSON, then pass the export files to the metrics-only script:

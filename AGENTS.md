@@ -44,9 +44,9 @@ Help physics students and enthusiasts turn a question into an editable model, a 
   skill use, model policy, tests, review, quota stops, and integration. It is the
   single policy authority; the [agent workflow guide](docs/agent-workflow.md)
   explains native OpenCode entry points and metrics.
-- Select `/develop-openai` or `/develop-opencode-go` explicitly; never silently
-  change workflow mode or provider. New task roles start at configured lowest
-  effort.
+- Select an explicit development lane from the [agent workflow guide](docs/agent-workflow.md);
+  never silently change lane or provider. New task roles start at configured
+  lowest effort, subject to the documented release-review exception.
 - Index every fresh worktree with `codegraph init` (each worktree has its own
   `.codegraph/`) before dispatching subagents, so they can use codegraph.
 - Load only applicable skills and task-relevant references. Use
