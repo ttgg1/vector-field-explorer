@@ -94,7 +94,13 @@ pub fn show_slide<R>(
     // viewport. At a bottom edge that shortens the effective slide; subtracting
     // the unchanged `slide` would then shift the saved rest upward on reopen.
     // Recover the slide egui actually applied and subtract that instead.
-    let applied_pos = clamp_position(viewport, rest + slide, rect.size());
+    //
+    // egui's `Area::begin` constrains using the size measured on the *previous*
+    // frame, while `Area::end` replaces it with the freshly measured content
+    // size before returning `rect`. Use the entry size (`state.size`, still
+    // untouched here) for the inverse; using `rect.size()` would invert the
+    // wrong constraint whenever the contents reflow mid-slide.
+    let applied_pos = clamp_position(viewport, rest + slide, state.size);
     let applied_slide = applied_pos - rest;
     state.pos = Some(rect.min - applied_slide);
     state.size = rect.size();

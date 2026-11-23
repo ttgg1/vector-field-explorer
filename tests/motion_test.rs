@@ -212,6 +212,25 @@ fn slide_frame(
     slide: egui::Vec2,
     events: Vec<egui::Event>,
 ) -> egui::Rect {
+    slide_frame_sized(ctx, viewport, id, placement, slide, events, NO_EXTRA_HEIGHT)
+}
+
+/// No extra content: the fixed-content regressions use the same widget tree as
+/// the reflow test so a measured-size change is the only difference.
+const NO_EXTRA_HEIGHT: f32 = 0.0;
+
+/// Like [`slide_frame`], but the contents can reflow between frames by changing
+/// `content_height`. This models a panel whose measured size changes while the
+/// open slide is in flight (viewport resize, collapsing header, text rewrap).
+fn slide_frame_sized(
+    ctx: &egui::Context,
+    viewport: egui::Rect,
+    id: egui::Id,
+    placement: &mut ViewportPanelState,
+    slide: egui::Vec2,
+    events: Vec<egui::Event>,
+    content_height: f32,
+) -> egui::Rect {
     let mut rect = egui::Rect::NOTHING;
     let mut out = ctx.run_ui(
         egui::RawInput {
@@ -229,6 +248,7 @@ fn slide_frame(
                 slide,
                 |ui| {
                     let _ = ui.button("Measure field");
+                    ui.add_space(content_height);
                 },
             )
             .response
@@ -427,6 +447,89 @@ fn repeated_reopen_has_no_drift_but_dragging_still_repositions() {
     );
 }
 
+/// B5 follow-up: egui's `Area::begin` constrains the painted position using the
+/// *previous* frame's measured size, while `Area::end` replaces that size with
+/// the newly measured content size. When contents reflow mid-slide, recovering
+/// the applied slide with the new size inverts the wrong constraint and drags
+/// the saved rest off the bottom edge. The inverse must use the size egui used.
+#[test]
+fn reflow_during_slide_keeps_the_saved_rest_and_post_resize_drag_works() {
+    let ctx = support::context();
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
+    let distance = MotionTokens::default().slide_distance_pt;
+    let id = egui::Id::unique("issue310_reflow_panel");
+    let mut placement = ViewportPanelState::default();
+    let tall = 160.0_f32; // total measured height ~= 184 with the button
+    let short = 40.0_f32;
+
+    let mut frame =
+        |vp, slide, events, h| slide_frame_sized(&ctx, vp, id, &mut placement, slide, events, h);
+
+    // Warm up with tall content, then drag to the bottom edge.
+    frame(viewport, egui::Vec2::ZERO, vec![], tall);
+    let resting = frame(viewport, egui::Vec2::ZERO, vec![], tall);
+    let start = resting.center_top();
+    let end = start + egui::vec2(0.0, viewport.max.y - resting.bottom() + 4.0);
+    frame(viewport, egui::Vec2::ZERO, pointer(start, true), tall);
+    frame(
+        viewport,
+        egui::Vec2::ZERO,
+        vec![egui::Event::PointerMoved(end)],
+        tall,
+    );
+    frame(viewport, egui::Vec2::ZERO, pointer(end, false), tall);
+    let saved = frame(viewport, egui::Vec2::ZERO, vec![], tall);
+    assert_eq!(
+        saved.bottom() as f64,
+        viewport.max.y as f64,
+        "tall panel pinned to bottom"
+    );
+
+    // Reopen with a mid-flight slide, then reflow to short content before it
+    // settles. egui constrained with the tall size, so the saved rest must stay.
+    let _ = frame(viewport, egui::vec2(0.0, distance), vec![], tall);
+    let _ = frame(viewport, egui::vec2(0.0, distance * 0.5), vec![], short);
+    let settled = frame(viewport, egui::Vec2::ZERO, vec![], short);
+    assert_eq!(
+        settled.min, saved.min,
+        "reflow mid-slide must not shift the saved rest: saved={saved:?}, settled={settled:?}"
+    );
+
+    // Shrink the viewport so the short panel is re-clamped to a new bottom.
+    let small = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(VIEWPORT.x, 600.0));
+    let resized = frame(small, egui::Vec2::ZERO, vec![], short);
+    assert!(
+        resized.bottom() <= small.max.y + 1.0,
+        "panel fits the shrunk viewport: {resized:?}"
+    );
+    let rest_after_resize = frame(small, egui::Vec2::ZERO, vec![], short);
+
+    // A real drag after the resize still repositions and the new spot holds.
+    let start = rest_after_resize.center_top();
+    let end = start + egui::vec2(-30.0, -80.0);
+    frame(small, egui::Vec2::ZERO, pointer(start, true), short);
+    frame(
+        small,
+        egui::Vec2::ZERO,
+        vec![egui::Event::PointerMoved(end)],
+        short,
+    );
+    frame(small, egui::Vec2::ZERO, pointer(end, false), short);
+    let moved = frame(small, egui::Vec2::ZERO, vec![], short);
+    assert!(
+        moved.top() < rest_after_resize.top() - 40.0,
+        "post-resize drag moved the panel: {moved:?}"
+    );
+
+    // A reopen after the drag must settle on the dragged position, not drift.
+    let _ = frame(small, egui::vec2(0.0, distance), vec![], short);
+    let settled = frame(small, egui::Vec2::ZERO, vec![], short);
+    assert!(
+        settled.min.distance(moved.min) <= 1.0,
+        "reopen after resize+drag drifted: moved={moved:?}, settled={settled:?}"
+    );
+}
+
 /// One real app frame with caller-supplied pointer events and a known clock.
 fn app_frame_events(
     ctx: &egui::Context,
@@ -434,7 +537,7 @@ fn app_frame_events(
     time_s: f64,
     dt_s: f32,
     events: Vec<egui::Event>,
-) {
+) -> egui::FullOutput {
     let mut frame = eframe::Frame::_new_kittest();
     let mut out = ctx.run_ui(
         egui::RawInput {
@@ -447,6 +550,75 @@ fn app_frame_events(
         |ui| eframe::App::ui(app, ui, &mut frame),
     );
     out.textures_delta.clear();
+    out
+}
+
+/// Locate a labelled control in a real app frame, then click it through real
+/// pointer events. This is the normal entry point users take, not a direct
+/// mutation of the underlying app state.
+fn click_app_control(ctx: &egui::Context, app: &mut VfApp, time_s: &mut f64, label: &str) {
+    let dt = 1.0_f32 / 60.0;
+    let dts = dt as f64;
+    *time_s += dts;
+    let out = app_frame_events(ctx, app, *time_s, dt, vec![]);
+    let rect = out
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .expect("accesskit enabled")
+        .nodes
+        .iter()
+        .find_map(|(_, node)| {
+            (node.label() == Some(label)).then(|| {
+                let b = node.bounds().expect("control bounds");
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            })
+        })
+        .unwrap_or_else(|| panic!("real control {label:?} is not in the app frame"));
+    let center = rect.center();
+    // A move frame first matches the real control path and settles hover state.
+    *time_s += dts;
+    app_frame_events(
+        ctx,
+        app,
+        *time_s,
+        dt,
+        vec![egui::Event::PointerMoved(center)],
+    );
+    *time_s += dts;
+    app_frame_events(ctx, app, *time_s, dt, pointer(center, true));
+    *time_s += dts;
+    app_frame_events(ctx, app, *time_s, dt, pointer(center, false));
+}
+
+/// Drag a floating panel's Area down to the bottom of the constrained viewport
+/// through real pointer events. `grab` selects a point inside the panel that is
+/// draggable (the legend header vs. the typeset panel's left edge).
+fn drag_to_bottom(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    time_s: &mut f64,
+    area_id: egui::Id,
+    grab: impl Fn(egui::Rect) -> egui::Pos2,
+) {
+    let dt = 1.0_f32 / 60.0;
+    let dts = dt as f64;
+    let rect = || {
+        ctx.memory(|memory| memory.area_rect(area_id))
+            .expect("production panel area")
+    };
+    let before = rect();
+    let start = grab(before);
+    let end = start + egui::vec2(0.0, VIEWPORT.y - before.bottom() + 4.0);
+    *time_s += dts;
+    app_frame_events(ctx, app, *time_s, dt, pointer(start, true));
+    *time_s += dts;
+    app_frame_events(ctx, app, *time_s, dt, vec![egui::Event::PointerMoved(end)]);
+    *time_s += dts;
+    app_frame_events(ctx, app, *time_s, dt, pointer(end, false));
 }
 
 /// Settle a transition with a few full-duration frames so the slide reaches
@@ -475,39 +647,27 @@ fn reopen_with_motion(ctx: &egui::Context, app: &mut VfApp, mut time_s: f64) -> 
 }
 
 /// AC: move the quantitative legend to the bottom edge through its normal
-/// drag control, hide and reopen with motion enabled, and confirm it settles
-/// at the saved location on every reopen without accumulating drift.
+/// drag control, then hide and reopen it by clicking the real Formula/ODE
+/// field-mode labels. Each motion reopen must settle at the saved location
+/// without accumulating drift.
 #[test]
 fn legend_reopen_from_bottom_edge_settles_at_saved_location() {
     let ctx = support::context();
+    ctx.enable_accesskit();
     let mut app = VfApp::new();
     app.layout.help_visible = false;
     let mut time_s = 0.0_f64;
+    let legend_id = egui::Id::unique("viewport_color_legend");
     let legend_rect = || {
-        ctx.memory(|memory| memory.area_rect(egui::Id::unique("viewport_color_legend")))
+        ctx.memory(|memory| memory.area_rect(legend_id))
             .expect("production legend area")
     };
 
-    // Warm up, then drag the legend down to the bottom edge via its header.
     for _ in 0..3 {
         time_s += 1.0 / 60.0;
         app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, vec![]);
     }
-    let before = legend_rect();
-    let start = before.center_top();
-    let end = start + egui::vec2(0.0, VIEWPORT.y - before.bottom() + 4.0);
-    time_s += 1.0 / 60.0;
-    app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, pointer(start, true));
-    time_s += 1.0 / 60.0;
-    app_frame_events(
-        &ctx,
-        &mut app,
-        time_s,
-        1.0 / 60.0,
-        vec![egui::Event::PointerMoved(end)],
-    );
-    time_s += 1.0 / 60.0;
-    app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, pointer(end, false));
+    drag_to_bottom(&ctx, &mut app, &mut time_s, legend_id, |r| r.center_top());
     time_s = settle_app(&ctx, &mut app, time_s);
     let saved = legend_rect();
     assert!(
@@ -516,11 +676,21 @@ fn legend_reopen_from_bottom_edge_settles_at_saved_location() {
     );
 
     for cycle in 0..3 {
-        // Hide via the normal field-mode control, then reopen with motion.
-        assert!(app.state.set_field_mode(FieldMode::Ode));
+        // Normal controls: click the real ODE selector to hide the legend.
+        click_app_control(&ctx, &mut app, &mut time_s, "ODE");
+        assert_eq!(
+            app.state.field_mode,
+            FieldMode::Ode,
+            "ODE label click hid the legend"
+        );
         time_s = settle_app(&ctx, &mut app, time_s);
-        assert!(app.state.set_field_mode(FieldMode::Formula));
-        // Drive the slide-in with real mid-flight frames, then settle.
+        // Click the real Formula selector to reopen it with motion.
+        click_app_control(&ctx, &mut app, &mut time_s, "Formula");
+        assert_eq!(
+            app.state.field_mode,
+            FieldMode::Formula,
+            "Formula label click reopened the legend"
+        );
         time_s = reopen_with_motion(&ctx, &mut app, time_s);
         let settled = legend_rect();
         assert!(
@@ -531,38 +701,36 @@ fn legend_reopen_from_bottom_edge_settles_at_saved_location() {
 }
 
 /// AC: same hide/reopen path for the typeset formula panel through its own
-/// open/close control, with motion enabled.
+/// real toggle control, with motion enabled. The panel is opened, moved to the
+/// bottom edge, closed and reopened again using only pointer clicks.
 #[test]
 fn typeset_reopen_from_bottom_edge_settles_at_saved_location() {
     let ctx = support::context();
+    ctx.enable_accesskit();
     let mut app = VfApp::new();
+    app.layout.help_visible = false;
     let mut time_s = 0.0_f64;
+    let typeset_id = egui::Id::unique("Typeset formula");
     let typeset_rect = || {
-        ctx.memory(|memory| memory.area_rect(egui::Id::unique("Typeset formula")))
+        ctx.memory(|memory| memory.area_rect(typeset_id))
             .expect("production typeset area")
     };
 
-    app.formula_typeset.open = true;
-    app.layout.help_visible = false;
-    for _ in 0..4 {
+    // Open through the real floating toggle strip control. Give the overlay
+    // Area a few frames to publish its button before clicking it.
+    for _ in 0..3 {
         time_s += 1.0 / 60.0;
         app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, vec![]);
     }
-    let before = typeset_rect();
-    let start = egui::pos2(before.left() + 4.0, before.center().y);
-    let end = start + egui::vec2(0.0, VIEWPORT.y - before.bottom() + 4.0);
-    time_s += 1.0 / 60.0;
-    app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, pointer(start, true));
-    time_s += 1.0 / 60.0;
-    app_frame_events(
-        &ctx,
-        &mut app,
-        time_s,
-        1.0 / 60.0,
-        vec![egui::Event::PointerMoved(end)],
-    );
-    time_s += 1.0 / 60.0;
-    app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, pointer(end, false));
+    click_app_control(&ctx, &mut app, &mut time_s, "Show typeset formula");
+    assert!(app.formula_typeset.open, "toggle click opened the panel");
+    for _ in 0..3 {
+        time_s += 1.0 / 60.0;
+        app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, vec![]);
+    }
+    drag_to_bottom(&ctx, &mut app, &mut time_s, typeset_id, |r| {
+        egui::pos2(r.left() + 4.0, r.center().y)
+    });
     time_s = settle_app(&ctx, &mut app, time_s);
     let saved = typeset_rect();
     assert!(
@@ -571,9 +739,12 @@ fn typeset_reopen_from_bottom_edge_settles_at_saved_location() {
     );
 
     for cycle in 0..3 {
-        app.formula_typeset.open = false;
+        // Normal controls: the toggle button hides, then reopens the panel.
+        click_app_control(&ctx, &mut app, &mut time_s, "Hide typeset formula");
+        assert!(!app.formula_typeset.open, "toggle click hid the panel");
         time_s = settle_app(&ctx, &mut app, time_s);
-        app.formula_typeset.open = true;
+        click_app_control(&ctx, &mut app, &mut time_s, "Show typeset formula");
+        assert!(app.formula_typeset.open, "toggle click reopened the panel");
         time_s = reopen_with_motion(&ctx, &mut app, time_s);
         let settled = typeset_rect();
         assert!(
