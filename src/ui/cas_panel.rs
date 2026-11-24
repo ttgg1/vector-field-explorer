@@ -12,9 +12,7 @@ use crate::scalar_overlay::{
 };
 use crate::scalar_view::{sampled_layer_label, scalar_view_expr, slice_label, slice_valid_region};
 use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage};
-use crate::{
-    cas, field::FieldExpr, scalar::ScalarContext, source_scene::FieldMode, viewmodel::State,
-};
+use crate::{cas, field::FieldExpr, source_scene::FieldMode, viewmodel::State};
 
 /// Where a scalar CAS result is plotted in the active scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,13 +360,6 @@ impl CasPanelState {
         let bindings = bindings_summary(&state.parameters);
         match target {
             SceneTarget::Contours => {
-                state.set_scalar_source(ScalarContext::Surface, formula.clone());
-                if state.scalar_contour_levels() == 0 {
-                    state
-                        .set_scalar_contour_levels(8)
-                        .map_err(|error| error.to_string())?;
-                }
-                state.refresh_scalar_view(true);
                 self.scene_message = Some(format!(
                     "Plotting analytic contours of {formula} on the {slice}; values are \
                      sampled with the committed parameters at t = {time:.3}. {region} \
@@ -380,9 +371,7 @@ impl CasPanelState {
             SceneTarget::PotentialField => {
                 if !state.scalar_view_applicable() {
                     return Err(
-                        "the scalar overlay needs a valid surface source; plot the result as \
-                         contours first or fix the current scalar source"
-                            .to_owned(),
+                        "the potential-field overlay needs a valid manual scalar source".to_owned(),
                     );
                 }
                 let spec = potential_field_spec(formula.clone(), frame)?;
@@ -751,7 +740,9 @@ fn show_overlays(ui: &mut egui::Ui, state: &mut State) {
                 overlay.dependency.label(),
                 overlay.label
             ));
-            if Some(overlay.id) == drawn {
+            if overlay.active_contour {
+                ui.small("Active contour");
+            } else if Some(overlay.id) == drawn {
                 ui.small("Drawn now");
             }
             ui.small(format!("({})", overlay.layer.label()));
@@ -805,16 +796,10 @@ fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
     let Some(removed) = state.remove_overlay(id) else {
         return;
     };
-    let was_contours = removed.dependency == OverlayDependency::Linked
-        && removed.layer == OverlayLayer::Contours
-        && state.plot.surface.source == removed.formula;
     let was_drawn = state
         .gradient
         .as_ref()
         .is_some_and(|spec| overlay_is_drawn(&removed, spec));
-    if !was_contours && !was_drawn {
-        return;
-    }
     if was_drawn {
         let still_drawn = state.gradient.as_ref().is_some_and(|spec| {
             state
@@ -824,16 +809,6 @@ fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
         });
         if !still_drawn && state.set_gradient(None).is_ok() {
             state.refresh_scalar_analysis(true);
-        }
-    }
-    if was_contours {
-        let still_owned = state.overlays().iter().any(|overlay| {
-            overlay.dependency == OverlayDependency::Linked
-                && overlay.layer == OverlayLayer::Contours
-                && overlay.formula == removed.formula
-        });
-        if !still_owned && state.scalar_contour_levels() > 0 {
-            let _ = state.set_scalar_contour_levels(0);
         }
     }
 }

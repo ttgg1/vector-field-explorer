@@ -308,6 +308,7 @@ fn the_overlay_set_is_bounded_and_stored_data_is_sanitized() {
         label: "no capture".to_owned(),
         formula: "x".to_owned(),
         layer: OverlayLayer::PotentialField,
+        active_contour: false,
         dependency: OverlayDependency::Frozen,
         capture: None,
     };
@@ -1074,8 +1075,8 @@ fn removing_a_contour_overlay_removes_its_drawing() {
     assert!(state.overlays().is_empty());
     assert_eq!(
         state.scalar_contour_levels(),
-        0,
-        "removing the contour layer hides the drawing, not just the row"
+        8,
+        "removing the CAS layer leaves manual contour levels unchanged"
     );
     assert!(
         state.scalar_overlay_lines().is_empty(),

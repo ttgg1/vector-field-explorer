@@ -3,7 +3,7 @@
 //!
 //! The tests drive the shipped CAS result seam and the ordinary scalar-view and
 //! gradient setters. No second physics model, grammar or sampler is introduced:
-//! contours reuse the scalar-view source layer and arrows reuse the #93
+//! contours reuse the scalar-view sampler and arrows reuse the #93
 //! potential-gradient layer, both bound to the current parameters, time and
 //! slice.
 
@@ -216,8 +216,10 @@ fn cas_scalar_result_plots_contours_without_touching_the_cas_input() {
     let message = panel
         .apply_scene(&mut state, 2, SceneTarget::Contours)
         .expect("the scalar result applies");
-    assert_eq!(state.plot.surface.source, result);
-    assert_ne!(state.plot.surface.source, before_source);
+    assert_eq!(state.plot.surface.source, before_source);
+    let contour = &state.overlays().as_slice()[0];
+    assert_eq!(contour.formula, result);
+    assert!(contour.active_contour);
     assert_eq!(
         state.formula, before_formula,
         "the vector source is untouched"
@@ -226,7 +228,11 @@ fn cas_scalar_result_plots_contours_without_touching_the_cas_input() {
         state.parameters, before_parameters,
         "plotting does not edit parameters"
     );
-    assert!(state.scalar_contour_levels() > 0, "contours are visible");
+    assert_eq!(state.scalar_contour_levels(), 0);
+    assert!(
+        !state.scalar_overlay_lines().is_empty(),
+        "CAS contours are visible"
+    );
     assert_eq!(panel.input, "x*y", "the CAS scratch input survives");
     assert!(panel.preview.is_some(), "the CAS result survives");
     assert!(
@@ -348,6 +354,66 @@ fn a_vector_result_is_refused_by_the_scalar_scene_route() {
 }
 
 #[test]
+fn cas_contour_plot_and_remove_keep_an_identical_manual_layer() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.controls_width = 460.0;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
+    app.state.set_formula("(0, 0)".into());
+    app.cas = scalar_panel("x*y", Operation::Differentiate, Variable::X);
+    let expression = app.cas.preview.as_ref().unwrap().formula.clone();
+    app.state
+        .set_scalar_source(ScalarContext::Surface, expression.clone());
+    app.controls.scalar_contour_levels = 3;
+    app.controls.scalar_grid_side = 24;
+    for _ in 0..4 {
+        idle(&ctx, &mut app);
+    }
+    app.state.refresh_scalar_view(true);
+
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+    let manual_lines = app.state.scalar_overlay_lines().len();
+    assert!(manual_lines > 0);
+    click_app_button(&ctx, &mut app, "Plot contours");
+    let id = app.state.overlays().as_slice()[0].id;
+    let together = app.state.scalar_overlay_lines().len();
+    assert!(
+        together > manual_lines,
+        "both contour layers should be drawn"
+    );
+    assert_eq!(app.state.plot.surface.source, expression);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+
+    click_app_button(&ctx, &mut app, &format!("Remove {id}"));
+    assert!(app.state.overlays().is_empty());
+    assert_eq!(app.state.plot.surface.source, expression);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+    assert_eq!(app.state.scalar_overlay_lines().len(), manual_lines);
+
+    assert!(app.undo_document(&ctx));
+    idle(&ctx, &mut app);
+    app.state.refresh_scalar_view(true);
+    assert_eq!(app.state.overlays().as_slice()[0].id, id);
+    assert_eq!(app.state.scalar_overlay_lines().len(), together);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+    assert!(app.redo_document(&ctx));
+    idle(&ctx, &mut app);
+    app.state.refresh_scalar_view(true);
+    assert!(app.state.overlays().is_empty());
+    assert_eq!(app.state.scalar_overlay_lines().len(), manual_lines);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+}
+
+#[test]
 fn each_cas_scene_action_is_one_undo_entry() {
     let ctx = support::context();
     ctx.enable_accesskit();
@@ -371,7 +437,10 @@ fn each_cas_scene_action_is_one_undo_entry() {
 
     // Drive the shipped expanded CAS body: one click per scene action.
     click_app_button(&ctx, &mut app, "Plot contours");
-    assert_eq!(app.state.plot.surface.source, "y");
+    assert_eq!(app.state.plot.surface.source, before_source);
+    let contour = &app.state.overlays().as_slice()[0];
+    assert_eq!(contour.formula, "y");
+    assert!(contour.active_contour);
     assert_eq!(app.state.gradient, before_gradient);
     assert_eq!(
         app.history_len(),
@@ -381,7 +450,8 @@ fn each_cas_scene_action_is_one_undo_entry() {
 
     click_app_button(&ctx, &mut app, "Add linked overlay");
     assert!(app.state.gradient.is_some(), "the overlay is installed");
-    assert_eq!(app.state.plot.surface.source, "y", "contours stay put");
+    assert_eq!(app.state.plot.surface.source, before_source);
+    assert!(app.state.overlays().as_slice()[0].active_contour);
     assert_eq!(
         app.history_len(),
         base + 2,
@@ -392,16 +462,18 @@ fn each_cas_scene_action_is_one_undo_entry() {
     assert!(app.undo_document(&ctx), "one undo is available");
     assert_eq!(app.state.gradient, before_gradient);
     assert_eq!(
-        app.state.plot.surface.source, "y",
-        "undoing the overlay leaves the contours it did not change"
+        app.state.plot.surface.source, before_source,
+        "undoing the overlay does not edit the manual source"
     );
     assert_eq!(app.history_len(), base + 1);
+    assert!(app.state.overlays().as_slice()[0].active_contour);
 
     assert!(
         app.undo_document(&ctx),
         "the contour action is still undoable"
     );
     assert_eq!(app.state.plot.surface.source, before_source);
+    assert!(app.state.overlays().is_empty());
     assert_eq!(app.history_len(), base);
 }
 
