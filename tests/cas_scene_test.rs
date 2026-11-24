@@ -11,6 +11,7 @@ use eframe::egui::{self, vec2};
 use glam::Vec3;
 
 use crate::support;
+use crate::support::storage::MemoryStorage;
 
 use vector_field_explorer::VfApp;
 use vector_field_explorer::colormap::Colormap;
@@ -654,4 +655,83 @@ fn the_result_provenance_is_labelled_analytic_with_its_valid_region() {
         region.contains("slice") || region.contains("XY") || region.contains("slice"),
         "valid region names the slice: {region}"
     );
+}
+
+#[test]
+fn workspace_round_trip_preserves_manual_settings_and_explicit_cas_ownership() {
+    let mut app = VfApp::new();
+    app.state.set_formula("(0, 0)".into());
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "y".into());
+    app.state.set_scalar_contour_levels(3).unwrap();
+    app.state.set_scalar_grid_side(24).unwrap();
+    app.state.refresh_scalar_view(true);
+    let manual_lines = app.state.scalar_overlay_lines().len();
+    let mut panel = scalar_panel("x*y", Operation::Differentiate, Variable::X);
+    panel
+        .apply_scene(&mut app.state, 2, SceneTarget::Contours)
+        .unwrap();
+    let cas_id = app.state.overlays().as_slice()[0].id;
+    let together = app.state.scalar_overlay_lines().len();
+    assert!(manual_lines > 0 && together > manual_lines);
+
+    let mut storage = MemoryStorage::default();
+    eframe::App::save(&mut app, &mut storage);
+    let mut reopened = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(reopened.state.plot.surface.source, "y");
+    assert_eq!(reopened.state.scalar_contour_levels(), 3);
+    assert_eq!(reopened.state.scalar_grid_side(), 24);
+    assert_eq!(reopened.controls.scalar_contour_levels, 3);
+    assert_eq!(reopened.controls.scalar_grid_side, 24);
+    assert_eq!(reopened.state.overlays().as_slice()[0].id, cas_id);
+    reopened.state.refresh_scalar_view(true);
+    assert_eq!(reopened.state.scalar_overlay_lines().len(), together);
+
+    let stored = storage.values.get_mut(eframe::APP_KEY).unwrap();
+    assert!(stored.contains("active_contour:true,"));
+    let current = stored.clone();
+    *stored = stored
+        .replace("active_contour:true,", "")
+        .replace("scalar_grid_side:24,", "")
+        .replace("scalar_contour_levels:3,", "");
+    let mut legacy = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(legacy.state.plot.surface.source, "y");
+    assert_eq!(
+        legacy.state.scalar_contour_levels(),
+        State::new(false).scalar_contour_levels()
+    );
+    assert_eq!(
+        legacy.state.scalar_grid_side(),
+        State::new(false).scalar_grid_side()
+    );
+    assert_eq!(legacy.state.overlays().as_slice()[0].id, cas_id);
+    assert!(legacy.state.scalar_overlay_lines().is_empty());
+    legacy.state.refresh_scalar_view(true);
+    let legacy_manual_lines = legacy.state.scalar_overlay_lines().len();
+    assert!(legacy_manual_lines > 0);
+    assert!(legacy.state.remove_overlay(cas_id).is_some());
+    assert_eq!(
+        legacy.state.scalar_overlay_lines().len(),
+        legacy_manual_lines
+    );
+
+    // Out-of-range stored numbers are bounded by the same limits as the live
+    // controls while the valid overlay record still restores.
+    storage.values.insert(
+        eframe::APP_KEY.into(),
+        current
+            .replace("scalar_grid_side:24,", "scalar_grid_side:0,")
+            .replace("scalar_contour_levels:3,", "scalar_contour_levels:999,"),
+    );
+    let repaired = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        repaired.state.scalar_grid_side(),
+        vector_field_explorer::viewmodel::MIN_SCALAR_GRID_SIDE,
+    );
+    assert_eq!(
+        repaired.state.scalar_contour_levels(),
+        vector_field_explorer::scalar_view::MAX_CONTOUR_LEVELS as u32,
+    );
+    assert_eq!(repaired.state.overlays().as_slice()[0].id, cas_id);
+    assert!(!repaired.state.scalar_overlay_lines().is_empty());
 }

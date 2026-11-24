@@ -53,6 +53,7 @@ use crate::profile_library::MAX_USER_PROFILES;
 use crate::scalar_analysis::{ComparisonSet, GradientSpec};
 use crate::scalar_overlay::ScalarOverlaySet;
 use crate::scalar_view::ProbeSet;
+use crate::scalar_view::{MAX_CONTOUR_LEVELS, MAX_GRID_SIDE};
 use crate::seed_layout::SeedLayout;
 use crate::seed_layout_library::{DEFAULT_LAYOUT_NAME, MAX_USER_LAYOUTS, SeedLayoutProfile};
 use crate::source_scene::{
@@ -64,7 +65,8 @@ use crate::ui::sidebar::{self, Controls};
 use crate::ui::style_panel::AppStyle;
 use crate::view_orientation::UpAxis;
 use crate::viewmodel::{
-    ArrowLengthMode, LeftClickAction, MAX_DENSITIES, State, StreamlineSeedMode,
+    ArrowLengthMode, LeftClickAction, MAX_DENSITIES, MIN_SCALAR_GRID_SIDE, State,
+    StreamlineSeedMode,
 };
 use crate::viewport_style::ViewportStyle;
 use glam::{DVec3, Vec3};
@@ -834,6 +836,9 @@ pub struct ViewRecord {
     /// records/scenes, which restore hidden without dirtying.
     #[serde(default)]
     pub show_scalar_heatmap: bool,
+    /// Manual scalar sampling controls. Older records use the current defaults.
+    pub scalar_grid_side: u32,
+    pub scalar_contour_levels: u32,
     /// Display-only comparison series (issue #93 slice A). Missing on older
     /// records, which restore as no series with no extra dirtying.
     #[serde(default)]
@@ -1099,6 +1104,8 @@ impl ViewRecord {
                 .collect(),
             probe_family: probe_family_label(state.probe_family()).to_string(),
             show_scalar_heatmap: state.show_scalar_heatmap(),
+            scalar_grid_side: state.scalar_grid_side(),
+            scalar_contour_levels: state.scalar_contour_levels(),
             comparison_series: state.comparison_series.clone(),
             gradient: state.gradient.clone(),
             overlays: state.overlays().clone(),
@@ -1243,6 +1250,10 @@ impl ViewRecord {
         // extents, swaps a reversed pair and keeps the previous value for NaN.
         controls.domain_min = Vec3::from_array(self.domain_min);
         controls.domain_max = Vec3::from_array(self.domain_max);
+        controls.scalar_grid_side = self
+            .scalar_grid_side
+            .clamp(MIN_SCALAR_GRID_SIDE, MAX_GRID_SIDE);
+        controls.scalar_contour_levels = self.scalar_contour_levels.min(MAX_CONTOUR_LEVELS as u32);
         sidebar::apply(state, controls);
         // Explicit seeds are document state (issue #87 slice S1). Assign them
         // directly so startup does not go through the dirtying commit seam; a
