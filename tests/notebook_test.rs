@@ -421,11 +421,11 @@ fn notebook_restores_magnetic_wave_probe_over_hollow_sphere() {
     assert!(app.state.set_maxwell_wave(Some(wave)));
     assert!(app.state.set_probe_family(FieldFamily::Magnetic));
     app.state.add_probe_loop(path).unwrap();
-    assert!(app.test_capture_notebook_entry());
+    assert!(app.test_notebook_action(None));
     let id = app.maxwell.notebook.entries[0].id.clone();
     assert!(app.state.set_maxwell_wave(None));
     app.state.set_probe_family(FieldFamily::Electric);
-    assert!(app.test_load_notebook_entry(&id));
+    assert!(app.test_notebook_action(Some(&id)));
     assert_eq!(app.state.probe_family(), FieldFamily::Magnetic);
     app.state.refresh_probe_reports(true);
     let expected = circulation(
@@ -443,7 +443,7 @@ fn notebook_restores_magnetic_wave_probe_over_hollow_sphere() {
 
 fn assert_invalid_import_leaves_experiment_unchanged(radius: &str, value: f64, error: &str) {
     let mut app = maxwell_app();
-    assert!(app.test_capture_notebook_entry());
+    assert!(app.test_notebook_action(None));
     let mut json = serde_json::to_value(&app.maxwell.notebook).expect("capture serializes");
     json["entries"][0]["snapshot"]["geometry"][radius] = serde_json::json!(value);
     let imported = Notebook::from_json(&json.to_string()).expect("JSON imports");
@@ -463,7 +463,7 @@ fn assert_invalid_import_leaves_experiment_unchanged(radius: &str, value: f64, e
     let orbit = app.orbit;
     app.presets.bind_active_scene(scene_doc("Previously saved"));
 
-    assert!(!app.test_load_notebook_entry(&id));
+    assert!(!app.test_notebook_action(Some(&id)));
     assert!(
         app.maxwell
             .notebook_ui
@@ -501,7 +501,7 @@ fn loading_entries_restores_each_scene_and_radius_and_keeps_the_notebook() {
     app.orbit.yaw = 0.25;
     app.maxwell.notebook_ui.prediction = "first".to_owned();
     app.maxwell.notebook_ui.note = "note first".to_owned();
-    assert!(app.test_capture_notebook_entry());
+    assert!(app.test_notebook_action(None));
     let first_id = app.maxwell.notebook.entries[0].id.clone();
     assert_eq!(
         app.maxwell.notebook.entries[0].snapshot.method,
@@ -515,7 +515,7 @@ fn loading_entries_restores_each_scene_and_radius_and_keeps_the_notebook() {
     assert!(app.maxwell.gauss.set_probe_radius(3.0));
     app.orbit.yaw = 1.25;
     app.maxwell.notebook_ui.prediction = "second".to_owned();
-    assert!(app.test_capture_notebook_entry());
+    assert!(app.test_notebook_action(None));
     let second_id = app.maxwell.notebook.entries[1].id.clone();
     assert_ne!(first_id, second_id);
 
@@ -535,14 +535,14 @@ fn loading_entries_restores_each_scene_and_radius_and_keeps_the_notebook() {
     );
 
     app.presets.bind_active_scene(scene_doc("Previously saved"));
-    assert!(app.test_load_notebook_entry(&first_id));
+    assert!(app.test_notebook_action(Some(&first_id)));
     assert_eq!(app.presets.active_scene(), None);
     assert_eq!(app.state.maxwell.radius, 1.0);
     assert_eq!(app.maxwell.gauss.probe_radius, 1.5);
     assert!((app.orbit.yaw - 0.25).abs() < 1e-6);
     assert_eq!(app.maxwell.notebook.entries.len(), 2);
 
-    assert!(app.test_load_notebook_entry(&second_id));
+    assert!(app.test_notebook_action(Some(&second_id)));
     assert_eq!(app.state.maxwell.radius, 1.5);
     assert_eq!(app.maxwell.gauss.probe_radius, 3.0);
     assert!((app.orbit.yaw - 1.25).abs() < 1e-6);
@@ -553,7 +553,7 @@ fn loading_entries_restores_each_scene_and_radius_and_keeps_the_notebook() {
 fn notebook_reopens_from_the_settings_envelope_without_applying_a_scene() {
     let mut app = maxwell_app();
     app.maxwell.notebook_ui.prediction = "saved prediction".to_owned();
-    assert!(app.test_capture_notebook_entry());
+    assert!(app.test_notebook_action(None));
     let expected = app.maxwell.notebook.clone();
     let mut storage = MemoryStorage::default();
     persistence::save(
