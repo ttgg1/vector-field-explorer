@@ -3351,12 +3351,7 @@ impl State {
         let Some(spec) = self.gradient.as_ref() else {
             return;
         };
-        let owned = self.overlays.iter().any(|overlay| {
-            overlay.dependency == OverlayDependency::Linked
-                && overlay.layer == OverlayLayer::PotentialField
-                && overlay.formula == spec.expr
-        });
-        if !owned || spec.frame == frame {
+        if spec.frame == frame || !self.overlays.has_linked_potential_gradient(spec) {
             return;
         }
         let mut next = spec.clone();
@@ -3830,8 +3825,11 @@ impl State {
         }
         let color = self.scalar_text_color;
         let width = crate::reference::EDGE_WIDTH;
-        let analysis_current =
-            self.scalar_analysis.key.as_ref() == Some(&ScalarAnalysisKey::new(self));
+        let analysis_current = self
+            .scalar_analysis
+            .key
+            .as_ref()
+            .is_some_and(|key| *key == ScalarAnalysisKey::new(self));
         let mut lines = Vec::new();
         self.append_cas_contour_lines(&mut lines);
         let manual_current = self.scalar_view_applicable()
@@ -3842,7 +3840,12 @@ impl State {
         if !manual_current {
             // A CAS potential owns its gradient samples independently of
             // any manual scalar surface or contour cache.
-            if analysis_current {
+            if analysis_current
+                && self
+                    .gradient
+                    .as_ref()
+                    .is_some_and(|spec| self.overlays.has_linked_potential_gradient(spec))
+            {
                 lines.extend_from_slice(&self.scalar_analysis.gradient);
             }
             return lines;

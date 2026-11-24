@@ -415,6 +415,24 @@ fn cas_contour_plot_and_remove_keep_an_identical_manual_layer() {
 }
 
 #[test]
+fn a_manual_gradient_stays_hidden_when_the_manual_scalar_source_is_unavailable() {
+    let mut state = State::new(false);
+    state.set_formula("(0, 0)".into());
+    state.set_scalar_source(ScalarContext::Surface, "x".into());
+    let frame = state.scalar_view_frame();
+    let gradient =
+        vector_field_explorer::scalar_analysis::potential_field_spec("x".into(), frame).unwrap();
+    state.set_gradient(Some(gradient)).unwrap();
+    state.refresh_scalar_analysis(true);
+    assert!(state.overlays().is_empty());
+    assert!(!state.scalar_overlay_lines().is_empty());
+
+    state.set_scalar_source(ScalarContext::Surface, "z".into());
+    assert!(!state.scalar_view_applicable());
+    assert!(state.scalar_overlay_lines().is_empty());
+}
+
+#[test]
 fn cas_potential_draws_with_an_unavailable_manual_scalar_source() {
     let ctx = support::context();
     ctx.enable_accesskit();

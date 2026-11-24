@@ -3,12 +3,11 @@ use eframe::egui;
 
 use crate::cas_actions::{self, CasAction, CasActionError};
 use crate::scalar_analysis::{
-    ANALYTIC_DIPOLE_ROUTE_NOTE, GradientSpec, NATIVE_SYMBOLIC_NOTE, SeriesRole,
-    potential_field_spec,
+    ANALYTIC_DIPOLE_ROUTE_NOTE, NATIVE_SYMBOLIC_NOTE, potential_field_spec,
 };
 use crate::scalar_overlay::{
     FROZEN_RENDER_NOTE, MAX_OVERLAYS, OVERLAY_ASSUMPTIONS, OverlayDependency, OverlayLayer,
-    OverlayLive, ScalarOverlay, bindings_summary,
+    OverlayLive, bindings_summary,
 };
 use crate::scalar_view::{sampled_layer_label, scalar_view_expr, slice_label, slice_valid_region};
 use crate::ui::cas_preview::{self, PREVIEW_MAX_EDGE, PreviewCache, PreviewImage};
@@ -717,7 +716,7 @@ fn show_overlays(ui: &mut egui::Ui, state: &mut State) {
             state
                 .gradient
                 .as_ref()
-                .is_some_and(|spec| overlay_is_drawn(overlay, spec))
+                .is_some_and(|spec| overlay.matches_potential_gradient(spec))
         })
         .map(|overlay| overlay.id);
     let mut remove = None;
@@ -775,14 +774,6 @@ fn show_overlays(ui: &mut egui::Ui, state: &mut State) {
     }
 }
 
-/// Whether `overlay` is the linked potential-field request behind `spec`.
-fn overlay_is_drawn(overlay: &ScalarOverlay, spec: &GradientSpec) -> bool {
-    overlay.dependency == OverlayDependency::Linked
-        && overlay.layer == OverlayLayer::PotentialField
-        && spec.role == SeriesRole::ElectricPotential
-        && spec.expr == overlay.formula
-}
-
 /// Remove one overlay and drop the drawn gradient when no remaining linked
 /// potential overlay still owns it, so the list and the scene stay consistent.
 fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
@@ -792,14 +783,12 @@ fn remove_overlay(state: &mut State, id: crate::scalar_overlay::OverlayId) {
     let was_drawn = state
         .gradient
         .as_ref()
-        .is_some_and(|spec| overlay_is_drawn(&removed, spec));
+        .is_some_and(|spec| removed.matches_potential_gradient(spec));
     if was_drawn {
-        let still_drawn = state.gradient.as_ref().is_some_and(|spec| {
-            state
-                .overlays()
-                .iter()
-                .any(|overlay| overlay_is_drawn(overlay, spec))
-        });
+        let still_drawn = state
+            .gradient
+            .as_ref()
+            .is_some_and(|spec| state.overlays().has_linked_potential_gradient(spec));
         if !still_drawn && state.set_gradient(None).is_ok() {
             state.refresh_scalar_analysis(true);
         }

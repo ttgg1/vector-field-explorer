@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::parameters::ParameterSet;
 use crate::plane::PlaneFrame;
-use crate::scalar_analysis::validate_plane_frame;
+use crate::scalar_analysis::{GradientSpec, SeriesRole, validate_plane_frame};
 use crate::scalar_view::{scalar_view_expr, slice_label};
 
 /// Most overlays one scene may hold.
@@ -244,6 +244,14 @@ impl ScalarOverlay {
         })
     }
 
+    /// Whether this linked potential describes the installed gradient.
+    pub(crate) fn matches_potential_gradient(&self, spec: &GradientSpec) -> bool {
+        self.dependency == OverlayDependency::Linked
+            && self.layer == OverlayLayer::PotentialField
+            && spec.role == SeriesRole::ElectricPotential
+            && spec.expr == self.formula
+    }
+
     /// The captured values a frozen overlay must show; `None` for linked.
     pub fn captured_summary(&self) -> Option<String> {
         let capture = self.capture.as_ref()?;
@@ -350,6 +358,12 @@ impl ScalarOverlaySet {
         for overlay in &mut self.overlays {
             overlay.active_contour = overlay.id == id;
         }
+    }
+
+    /// Whether an installed gradient has a linked CAS potential row.
+    pub(crate) fn has_linked_potential_gradient(&self, spec: &GradientSpec) -> bool {
+        self.iter()
+            .any(|overlay| overlay.matches_potential_gradient(spec))
     }
 
     /// The next free stable id.
