@@ -820,7 +820,9 @@ fn equation_panel_labels_the_previous_typed_rhs_after_a_rejected_edit() {
     );
     assert!(!shown.contains("Live ODE RHS"), "{shown}");
     assert!(!shown.contains("dy/dt = missing_axis"), "{shown}");
-    assert!(!shown.contains("Open in Formula"), "{shown}");
+    click_app_button(&ctx, &mut app, "Open in Formula");
+    assert_eq!(app.state.field_mode, FieldMode::Formula);
+    assert_eq!(app.state.active_source(), "(y, -x)");
 }
 
 #[test]
@@ -997,4 +999,42 @@ fn ode_transfer_does_not_bind_a_formula_parameter_to_the_rhs() {
         "{shown}"
     );
     assert!(!shown.contains("Open in Formula"), "{shown}");
+}
+
+#[test]
+fn committed_ode_rhs_transfers_without_a_solved_trajectory() {
+    for solve_error in [None, Some("trajectory solve failed".to_owned())] {
+        let ctx = context();
+        let mut app = VfApp::new();
+        app.layout.help_visible = false;
+        let mut scene = app.state.ode.clone();
+        scene.equations = ["y+t".into(), "-2*x".into(), "0".into()];
+        app.state.set_ode_scene(scene).expect("valid typed RHS");
+        let size = vec2(1280.0, 1000.0);
+        app_idle(&ctx, &mut app, size, 3);
+        click_app_label(&ctx, &mut app, size, "ODE");
+        app_idle(&ctx, &mut app, size, 3);
+
+        // Fixture: the scene is still committed, but its runtime trajectory
+        // is unavailable. The Equation launcher and transfer are normal clicks.
+        app.state.ode_solution = None;
+        let status = if solve_error.is_some() {
+            "Trajectory unavailable. The ODE workbench reports an error."
+        } else {
+            "No solved trajectory is available."
+        };
+        app.state.ode_error = solve_error;
+        click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+        app_idle(&ctx, &mut app, size, 3);
+        assert!(app.state.ode_solution.is_none());
+
+        let shown = texts(&app_output(&ctx, &mut app, size, Vec::new())).join("\n");
+        assert!(shown.contains("Committed ODE RHS · 2D"), "{shown}");
+        assert!(shown.contains("dx/dt = y+t"), "{shown}");
+        assert!(shown.contains(status), "{shown}");
+        click_app_button(&ctx, &mut app, "Open in Formula");
+        assert_eq!(app.state.field_mode, FieldMode::Formula);
+        assert_eq!(app.state.active_source(), "(y+t, -2*x)");
+        assert!(app.state.parse_error.is_empty());
+    }
 }

@@ -197,17 +197,24 @@ fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) -> Option<Str
         }
         return None;
     }
-    if state.ode_solution.is_none() {
-        ui.label("ODE RHS unavailable until the model has a valid solution.");
-        return None;
-    }
-    if state.ode_error.is_some() {
-        ui.label(format!("Last committed ODE RHS · {}D", scene.dimension));
-        ui.weak("The latest edit failed. The trajectory comes from the last valid solve.");
-    } else {
-        ui.label(format!("Live ODE RHS · {}D", scene.dimension));
-        ui.weak("The solver integrates these derivatives to produce the trajectory.");
-    }
+    let (title, trajectory_status) = match (state.ode_solution.is_some(), state.ode_error.is_some())
+    {
+        (true, false) => (
+            "Live ODE RHS",
+            "The solver integrates these derivatives to produce the trajectory.",
+        ),
+        (true, true) => (
+            "Last committed ODE RHS",
+            "The trajectory comes from the last valid solve.",
+        ),
+        (false, false) => ("Committed ODE RHS", "No solved trajectory is available."),
+        (false, true) => (
+            "Committed ODE RHS",
+            "Trajectory unavailable. The ODE workbench reports an error.",
+        ),
+    };
+    ui.label(format!("{title} · {}D", scene.dimension));
+    ui.weak(trajectory_status);
     ui.weak("Here t is integration time.");
     egui::ScrollArea::vertical()
         .max_height(body_height)
@@ -226,9 +233,6 @@ fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) -> Option<Str
                 );
             }
         });
-    if state.ode_error.is_some() {
-        return None;
-    }
     let equations = scene.equations.get(..scene.dimension)?;
     let formula = format!("({})", equations.join(", "));
     // Typed ODE equations do not bind Formula parameters. Require a RHS that
