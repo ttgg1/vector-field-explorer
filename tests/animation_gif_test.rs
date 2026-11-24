@@ -114,6 +114,26 @@ fn single_play_gif_omits_the_repeat_extension() {
 }
 
 #[test]
+fn gif_publication_preserves_a_populated_destination_directory() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("animation.gif");
+    std::fs::create_dir(&path).unwrap();
+    let existing_file = path.join("keep.txt");
+    std::fs::write(&existing_file, b"keep this file").unwrap();
+    let spec = spec(false);
+
+    let mut sink = gif_sink(&spec, &path).unwrap();
+    sink.push_frame(&frame([255, 0, 0, 255]), spec.width, spec.height)
+        .unwrap();
+    let result = sink.finish();
+
+    assert!(matches!(result, Err(AnimationError::Io(_))), "{result:?}");
+    assert_eq!(std::fs::read(existing_file).unwrap(), b"keep this file");
+    assert_eq!(path.read_dir().unwrap().count(), 1);
+    assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+}
+
+#[test]
 fn gif_frames_must_be_tightly_packed_rgba() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("bad.gif");
