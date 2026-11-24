@@ -139,6 +139,33 @@ fn effective_mode_is_reduced_when_either_signal_is_set() {
     assert_eq!(effective_mode(true, true), MotionMode::Reduced);
 }
 
+#[test]
+fn platform_preference_settles_widget_easing_and_panel_slides_on_the_first_frame() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    assert!(!app.style.reduced_motion);
+    let dt = 0.01;
+
+    app.test_set_platform_reduced_motion(true);
+    app.formula_typeset.open = true;
+    app_frame(&ctx, &mut app, dt, dt as f32);
+    assert_eq!(app.typeset_transition.progress(), 1.0);
+    assert_eq!(app.legend_transition.progress(), 1.0);
+    assert_eq!(ctx.style_of(egui::Theme::Dark).animation_time, 0.0);
+
+    app.test_set_platform_reduced_motion(false);
+    app_frame(&ctx, &mut app, dt * 2.0, dt as f32);
+    assert!(ctx.style_of(egui::Theme::Dark).animation_time > 0.0);
+
+    app.style.reduced_motion = true;
+    app.formula_typeset.open = false;
+    app_frame(&ctx, &mut app, dt * 3.0, dt as f32);
+    app.formula_typeset.open = true;
+    app_frame(&ctx, &mut app, dt * 4.0, dt as f32);
+    assert_eq!(app.typeset_transition.progress(), 1.0);
+    assert_eq!(ctx.style_of(egui::Theme::Dark).animation_time, 0.0);
+}
+
 /// B1 regression: hiding a surface mid-flight must settle its transition so a
 /// closed panel never keeps requesting repaint (AC4). Drives the real app frame
 /// rather than the pure tick-to-settle path, which cannot catch a caller that
