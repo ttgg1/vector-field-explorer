@@ -729,6 +729,79 @@ fn secondary_click_opens_the_vector_viewport_gesture_menu() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn dismissing_the_viewport_menu_does_not_also_seed_or_reset() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    app.controls.viewport_sticky = false;
+    app.orbit.yaw += 0.4;
+    let pose = app.orbit;
+    let mut frame = |app: &mut VfApp, events| {
+        frame_with_native(&ctx, app, &mut native, egui::vec2(1200.0, 900.0), events)
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    let menu_anchor = egui::pos2(600.0, 320.0);
+    let secondary = egui::PointerButton::Secondary;
+    frame(&mut app, pointer_button(menu_anchor, secondary, true));
+    frame(&mut app, pointer_button(menu_anchor, secondary, false));
+    let menu = frame(&mut app, vec![]);
+    assert!(!node_rects(&menu, "Fit view F").is_empty());
+
+    let outside = egui::pos2(450.0, 450.0);
+    frame(&mut app, pointer(outside, true));
+    frame(&mut app, pointer(outside, false));
+    let out = frame(&mut app, vec![]);
+    assert!(node_rects(&out, "Fit view F").is_empty());
+    assert_eq!(app.test_harness().click_seed_count(), 0, "dismissal only");
+    assert_eq!(app.orbit, pose);
+    assert!(!app.controls.viewport_inspect);
+
+    frame(&mut app, pointer(outside, true));
+    frame(&mut app, pointer(outside, false));
+    assert_eq!(app.test_harness().click_seed_count(), 1);
+    assert!(app.controls.viewport_inspect);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn navigating_the_viewport_menu_does_not_apply_camera_keys() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    let mut frame = |app: &mut VfApp, events| {
+        frame_with_native(&ctx, app, &mut native, egui::vec2(1200.0, 900.0), events)
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    let field = egui::pos2(450.0, 450.0);
+    let secondary = egui::PointerButton::Secondary;
+    frame(&mut app, pointer_button(field, secondary, true));
+    frame(&mut app, pointer_button(field, secondary, false));
+    let menu = frame(&mut app, vec![]);
+    assert!(!node_rects(&menu, "Fit view F").is_empty());
+
+    app.orbit.target.x = 0.2;
+    let pose = app.orbit;
+    frame(&mut app, vec![key(egui::Key::ArrowDown)]);
+    assert_eq!(app.orbit, pose, "menu navigation does not pan the field");
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![key(egui::Key::Enter)]);
+    assert_eq!(app.orbit.target.x, 0.0, "Enter selects Fit");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn viewport_gesture_menu_routes_view_and_panel_actions_in_wide_and_compact() {
     use vector_field_explorer::camera::OrbitCamera;
     use vector_field_explorer::ui::layout::SheetState;

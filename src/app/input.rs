@@ -22,6 +22,22 @@ impl VfApp {
         // drag handle through the ordinary Maxwell scene control, before this
         // frame samples or paints with the new radius.
         self.apply_gauss_shell_pending();
+        if Self::viewport_gesture_menu_open(ctx) {
+            // egui has already recorded the focus direction for menu navigation.
+            // Keep those unmodified arrows out of app-level shortcut dispatch.
+            ctx.input_mut(|input| {
+                if !input.modifiers.any() {
+                    for key in [
+                        egui::Key::ArrowUp,
+                        egui::Key::ArrowDown,
+                        egui::Key::ArrowLeft,
+                        egui::Key::ArrowRight,
+                    ] {
+                        input.consume_key(egui::Modifiers::NONE, key);
+                    }
+                }
+            });
+        }
         // #99 slice B: the guided tour owns Enter/Right, Left and Escape before
         // any menu, viewport or camera handler sees them. A focused text field
         // keeps every key, so editing is never interrupted.
