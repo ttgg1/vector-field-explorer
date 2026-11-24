@@ -91,6 +91,37 @@ impl VfApp {
         Some(self.vector_capture_provenance(queued))
     }
 
+    fn show_viewport_gesture_menu(&mut self, viewport: &egui::Response) {
+        use interaction::InteractionAction;
+
+        viewport.context_menu(|ui| {
+            style_panel::restore_menu_button_padding(ui);
+            for (action, command) in [
+                (InteractionAction::FitView, ViewCommand::Fit),
+                (InteractionAction::ResetView, ViewCommand::Reset),
+            ] {
+                let mut button = egui::Button::new(action.label());
+                if let Some(chord) = self.interaction.bindings.chord(action) {
+                    button = button.shortcut_text(menu::chord_shortcut_label(chord));
+                }
+                if ui.add(button).clicked() {
+                    self.apply_view_command(command);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            for (label, panel) in [
+                ("Controls", PanelId::Controls),
+                ("Appearance", PanelId::Appearance),
+            ] {
+                if ui.button(label).clicked() {
+                    self.open_tour_panel(panel);
+                    ui.close();
+                }
+            }
+        });
+    }
+
     /// Frame phase: the wgpu field viewport, its camera input, click-to-seed,
     /// screenshot capture and the captured-pointer crosshair.
     pub(super) fn frame_viewport(
@@ -417,6 +448,12 @@ impl VfApp {
                     }
                     ClickOutcome::None => {}
                 }
+            }
+
+            // Use the viewport's own response so egui distinguishes a
+            // secondary click from a drag and respects foreground widgets.
+            if !self.capture_active && !suppress_camera {
+                self.show_viewport_gesture_menu(&resp);
             }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so
