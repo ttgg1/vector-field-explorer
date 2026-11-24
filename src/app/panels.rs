@@ -3545,15 +3545,14 @@ impl VfApp {
         self.apply_gauss_shell_pending();
     }
 
-    /// Test seam: capture the current Gauss reading exactly as the panel
-    /// notebook's Pin button does.
-    pub fn test_capture_notebook_entry(&mut self) -> bool {
-        self.capture_notebook_entry()
-    }
-
-    /// Test seam: restore a notebook entry through the ordinary scene path.
-    pub fn test_load_notebook_entry(&mut self, id: &str) -> bool {
-        self.load_notebook_entry(id)
+    /// Exercise the notebook's production scene handlers in integration tests.
+    /// Pass `None` to pin the current reading or `Some(id)` to load that entry.
+    #[doc(hidden)]
+    pub fn test_notebook_action(&mut self, load_id: Option<&str>) -> bool {
+        match load_id {
+            Some(id) => self.load_notebook_entry(id),
+            None => self.capture_notebook_entry(),
+        }
     }
 
     /// Test seam: install an already-built animation job through the same
