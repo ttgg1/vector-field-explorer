@@ -392,6 +392,9 @@ pub struct VfApp {
     /// The most recent single click's seed, so a double-click can take it back
     /// (ticket 18: double-click resets the view, it must not seed).
     last_click_seed: Option<LastClickSeed>,
+    /// egui includes a primary click that dismisses the viewport menu in its
+    /// double-click history. Suppress that history on the next viewport click.
+    suppress_next_viewport_double_click: bool,
     /// The grid-seeded streamline segments from the last scene rebuild, kept
     /// separately so a click can recompose the line collection without
     /// re-sampling or re-tracing the grid.
@@ -730,6 +733,7 @@ impl VfApp {
             color_facts: SceneColorFacts::default(),
             click_seeds: Vec::new(),
             last_click_seed: None,
+            suppress_next_viewport_double_click: false,
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             ode_lines: Arc::new(Vec::new()),

@@ -447,8 +447,13 @@ impl VfApp {
                         CapturedClickOutcome::Ignore => {}
                     }
                 }
+            } else if menu_open && ui.ctx().input(|input| input.pointer.primary_clicked()) {
+                self.suppress_next_viewport_double_click = true;
             } else if !menu_open {
-                match click_outcome(resp.clicked(), resp.double_clicked(), resp.dragged()) {
+                let ignore_double_click = resp.clicked()
+                    && std::mem::replace(&mut self.suppress_next_viewport_double_click, false);
+                let double_clicked = resp.double_clicked() && !ignore_double_click;
+                match click_outcome(resp.clicked(), double_clicked, resp.dragged()) {
                     ClickOutcome::ResetView => {
                         self.undo_last_click_seed(now);
                         self.apply_view_command(ViewCommand::Reset);

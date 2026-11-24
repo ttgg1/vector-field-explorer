@@ -670,6 +670,28 @@ fn frame_with_native(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn frame_with_native_at(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    native: &mut eframe::Frame,
+    size: egui::Vec2,
+    time: f64,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            time: Some(time),
+            events,
+            ..Default::default()
+        },
+        |ui| eframe::App::ui(app, ui, native),
+    );
+    output.textures_delta.clear();
+    output
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn gpu_test_frame() -> Option<eframe::Frame> {
     use eframe::{egui_wgpu, wgpu};
 
@@ -766,6 +788,60 @@ fn dismissing_the_viewport_menu_does_not_also_seed_or_reset() {
     frame(&mut app, pointer(outside, false));
     assert_eq!(app.test_harness().click_seed_count(), 1);
     assert!(app.controls.viewport_inspect);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dismissing_menu_does_not_turn_the_next_quick_same_point_click_into_reset() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    app.controls.viewport_sticky = false;
+    let mut frame = |app: &mut VfApp, time, events| {
+        frame_with_native_at(
+            &ctx,
+            app,
+            &mut native,
+            egui::vec2(1200.0, 900.0),
+            time,
+            events,
+        )
+    };
+    for time in [0.0, 0.02, 0.04] {
+        frame(&mut app, time, vec![]);
+    }
+
+    let menu_anchor = egui::pos2(600.0, 320.0);
+    let field = egui::pos2(450.0, 450.0);
+    let secondary = egui::PointerButton::Secondary;
+    frame(&mut app, 0.06, pointer_button(menu_anchor, secondary, true));
+    frame(
+        &mut app,
+        0.08,
+        pointer_button(menu_anchor, secondary, false),
+    );
+    let menu = frame(&mut app, 0.10, vec![]);
+    assert!(!node_rects(&menu, "Fit view F").is_empty());
+
+    // The menu stays open longer than egui's double-click interval before
+    // the primary click dismisses it. The next primary click is intentionally
+    // quick and at the same point, matching normal use after dismissal.
+    frame(&mut app, 0.60, vec![]);
+    frame(&mut app, 0.62, pointer(field, true));
+    frame(&mut app, 0.64, pointer(field, false));
+    assert_eq!(app.test_harness().click_seed_count(), 0);
+
+    frame(&mut app, 0.70, pointer(field, true));
+    frame(&mut app, 0.72, pointer(field, false));
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        1,
+        "the click after dismissing a menu places one seed"
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
