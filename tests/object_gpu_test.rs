@@ -434,6 +434,8 @@ fn native_object_device_worker() {
 // ---------------------------------------------------------------------------
 
 struct Gpu {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     info: wgpu::AdapterInfo,
@@ -519,6 +521,8 @@ fn request_device() -> Result<Gpu, String> {
     });
 
     Ok(Gpu {
+        instance,
+        adapter,
         device,
         queue,
         info,
@@ -636,6 +640,49 @@ fn incoming_frame(
     screen: [u32; 2],
     paint: impl FnOnce(&mut wgpu::RenderPass<'static>),
 ) -> Result<Vec<u8>, String> {
+    readback_frame(gpu, format, screen, |encoder, view| {
+        paint_incoming(encoder, view, paint);
+        Vec::new()
+    })
+}
+
+fn paint_incoming(
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    render: impl FnOnce(&mut wgpu::RenderPass<'static>),
+) {
+    let mut render_pass = encoder
+        .begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("vfe probe incoming no-depth pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: INCOMING_CLEAR[0],
+                        g: INCOMING_CLEAR[1],
+                        b: INCOMING_CLEAR[2],
+                        a: INCOMING_CLEAR[3],
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        })
+        .forget_lifetime();
+    render(&mut render_pass);
+}
+
+fn readback_frame(
+    gpu: &Gpu,
+    format: wgpu::TextureFormat,
+    screen: [u32; 2],
+    render: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView) -> Vec<wgpu::CommandBuffer>,
+) -> Result<Vec<u8>, String> {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("vfe probe incoming no-depth target"),
         size: wgpu::Extent3d {
@@ -663,32 +710,7 @@ fn incoming_frame(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vfe probe composite encoder"),
         });
-    {
-        let mut render_pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("vfe probe incoming no-depth pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: INCOMING_CLEAR[0],
-                            g: INCOMING_CLEAR[1],
-                            b: INCOMING_CLEAR[2],
-                            a: INCOMING_CLEAR[3],
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            })
-            .forget_lifetime();
-        paint(&mut render_pass);
-    }
+    let user_commands = render(&mut encoder, &view);
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &texture,
@@ -710,7 +732,8 @@ fn incoming_frame(
             depth_or_array_layers: 1,
         },
     );
-    gpu.queue.submit(Some(encoder.finish()));
+    gpu.queue
+        .submit(user_commands.into_iter().chain([encoder.finish()]));
 
     let slice = readback.slice(..);
     let (mapped_tx, mapped_rx) = std::sync::mpsc::channel();
@@ -1333,7 +1356,8 @@ fn run_probe() -> Result<(), String> {
         .and_then(|()| probe_opposite_views(&gpu))
         .and_then(|()| probe_stale_slice_clip_cache(&gpu, wgpu::TextureFormat::Rgba8UnormSrgb));
     gpu.end_scopes(scopes)?;
-    result
+    result?;
+    probe_live_3d_sky(&gpu)
 }
 
 fn probe_grid_depth(gpu: &Gpu) -> Result<(), String> {
@@ -1577,4 +1601,288 @@ fn assert_rgb(label: &str, actual: [u8; 4], expected: [u8; 3]) {
             expected[channel]
         );
     }
+}
+
+const LIVE_SCREEN: [u32; 2] = [1280, 800];
+
+fn live_frame(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    native: &mut eframe::Frame,
+    height: f32,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(LIVE_SCREEN[0] as f32, height),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| eframe::App::ui(app, ui, native),
+    )
+}
+
+fn click_live_selector(
+    gpu: &Gpu,
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    native: &mut eframe::Frame,
+    label: &str,
+) {
+    let mut frame = live_frame(ctx, app, native, LIVE_SCREEN[1] as f32, vec![]);
+    let nodes = &frame
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .unwrap()
+        .nodes;
+    let rect = nodes
+        .iter()
+        .find_map(|(_, node)| {
+            if node.label() == Some(label) {
+                node.bounds()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| panic!("missing viewport mode button {label}"));
+    let pos = egui::pos2(
+        ((rect.x0 + rect.x1) * 0.5) as f32,
+        ((rect.y0 + rect.y1) * 0.5) as f32,
+    );
+    for pressed in [true, false] {
+        frame.append(live_frame(
+            ctx,
+            app,
+            native,
+            LIVE_SCREEN[1] as f32,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        ));
+    }
+    let mut renderer = native.wgpu_render_state().unwrap().renderer.write();
+    upload_live_textures(gpu, &mut renderer, &mut frame.textures_delta);
+    for id in frame.textures_delta.free.drain() {
+        renderer.free_texture(&id);
+    }
+}
+
+fn upload_live_textures(
+    gpu: &Gpu,
+    renderer: &mut eframe::egui_wgpu::Renderer,
+    textures: &mut egui::TexturesDelta,
+) {
+    for (id, deltas) in textures.set.drain() {
+        for delta in deltas {
+            renderer.update_texture(&gpu.device, &gpu.queue, id, &delta);
+        }
+    }
+}
+
+fn read_live_viewport(
+    gpu: &Gpu,
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    native: &mut eframe::Frame,
+    height: f32,
+) -> (egui::Rect, Vec<u8>) {
+    let mut out = live_frame(ctx, app, native, height, vec![]);
+    // Carry the font atlas and any textures queued as widgets first appeared.
+    for _ in 0..2 {
+        out.append(live_frame(ctx, app, native, height, vec![]));
+    }
+    let viewport = out
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Callback(callback) => Some(callback.rect),
+            _ => None,
+        })
+        .max_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("live viewport callback");
+    let jobs = ctx.tessellate(out.shapes, out.pixels_per_point);
+    let screen = eframe::egui_wgpu::ScreenDescriptor {
+        size_in_pixels: LIVE_SCREEN,
+        pixels_per_point: out.pixels_per_point,
+    };
+    let state = native.wgpu_render_state().unwrap();
+    let mut renderer = state.renderer.write();
+    upload_live_textures(gpu, &mut renderer, &mut out.textures_delta);
+    let pixels = readback_frame(gpu, state.target_format, LIVE_SCREEN, |encoder, view| {
+        let commands = renderer.update_buffers(&gpu.device, &gpu.queue, encoder, &jobs, &screen);
+        paint_incoming(encoder, view, |pass| renderer.render(pass, &jobs, &screen));
+        commands
+    })
+    .unwrap();
+    for id in out.textures_delta.free.drain() {
+        renderer.free_texture(&id);
+    }
+    (viewport, pixels)
+}
+
+fn live_pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let offset = ((y * LIVE_SCREEN[0] + x) * 4) as usize;
+    bytes[offset..offset + 4].try_into().unwrap()
+}
+
+fn sky_pixel(viewport: egui::Rect, bytes: &[u8]) -> [u8; 4] {
+    live_pixel(
+        bytes,
+        (viewport.left() + viewport.width() * 0.1) as u32,
+        (viewport.top() + viewport.height() * 0.8) as u32,
+    )
+}
+
+fn center_pixels(viewport: egui::Rect, bytes: &[u8]) -> Vec<[u8; 4]> {
+    let x = viewport.center().x as u32;
+    let y = viewport.center().y as u32;
+    (y - 32..y + 32)
+        .flat_map(|row| (x - 32..x + 32).map(move |col| live_pixel(bytes, col, row)))
+        .collect()
+}
+
+fn probe_live_3d_sky(gpu: &Gpu) -> Result<(), String> {
+    use eframe::egui_wgpu::{RenderState, Renderer, RendererOptions};
+    use egui::epaint::mutex::RwLock;
+
+    let scopes = gpu.begin_scopes("live mode switch");
+    let mut mismatches = Vec::new();
+    for format in [
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+    ] {
+        for theme_dark in [true, false] {
+            let mut native = eframe::Frame::_new_kittest();
+            native.wgpu_render_state = Some(RenderState {
+                adapter: gpu.adapter.clone(),
+                #[cfg(not(target_arch = "wasm32"))]
+                available_adapters: vec![gpu.adapter.clone()],
+                instance: gpu.instance.clone(),
+                device: gpu.device.clone(),
+                queue: gpu.queue.clone(),
+                target_format: format,
+                renderer: Arc::new(RwLock::new(Renderer::new(
+                    &gpu.device,
+                    format,
+                    RendererOptions {
+                        dithering: false,
+                        ..RendererOptions::default()
+                    },
+                ))),
+            });
+            let ctx = crate::support::context();
+            ctx.enable_accesskit();
+            let mut app = VfApp::new();
+            app.layout.help_visible = false;
+            app.layout.controls_expanded = false;
+            app.layout.sources_expanded = false;
+            app.style.theme_dark = theme_dark;
+            app.style.reduced_motion = true;
+            app.state.set_formula("1, 0, 0".into());
+            app.state.set_mode(true);
+            app.state.set_source_scene(SourceScene {
+                entries: vec![SourceEntry {
+                    enabled: true,
+                    source: SourceKindTag::SolidSphere.default_source(),
+                }],
+                ..SourceScene::default()
+            });
+            app.controls.show_grid = false;
+            app.controls.show_coordinate_system = false;
+
+            let height = LIVE_SCREEN[1] as f32;
+            let (rect, formula) = read_live_viewport(gpu, &ctx, &mut app, &mut native, height);
+            let orbit = app.orbit;
+            let expected = if theme_dark {
+                egui::Visuals::dark().panel_fill
+            } else {
+                egui::Visuals::light().panel_fill
+            }
+            .to_array();
+            let sky = sky_pixel(rect, &formula);
+            assert!(
+                sky.iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+                "{format:?}/{theme_dark}: Formula panel sky {sky:?} differs from {expected:?}"
+            );
+            let formula_center = center_pixels(rect, &formula);
+            assert!(
+                formula_center.iter().any(|pixel| *pixel != sky),
+                "Formula field renders"
+            );
+
+            click_live_selector(gpu, &ctx, &mut app, &mut native, "Sources");
+            assert_eq!(app.state.field_mode, FieldMode::Sources);
+            assert!(app.state.mode_3d);
+            assert_eq!(app.orbit, orbit);
+            let (initial_sources, _) = read_live_viewport(gpu, &ctx, &mut app, &mut native, height);
+            // Sources omits the editor row. Resize the app input so the live
+            // viewport keeps the same projection aspect with the same orbit.
+            let source_height = height - (initial_sources.height() - rect.height());
+            let (source_rect, sources) =
+                read_live_viewport(gpu, &ctx, &mut app, &mut native, source_height);
+            assert_eq!(
+                source_rect.size(),
+                rect.size(),
+                "keep the viewport projection fixed"
+            );
+            let sources_sky = sky_pixel(source_rect, &sources);
+            let source_center = center_pixels(source_rect, &sources);
+            assert!(
+                source_center.iter().any(|pixel| *pixel != sources_sky),
+                "Sources field and body render"
+            );
+            app.state.set_object_style(ObjectStyle::Wireframe);
+            let (_, wireframe) =
+                read_live_viewport(gpu, &ctx, &mut app, &mut native, source_height);
+            assert_ne!(
+                center_pixels(source_rect, &wireframe),
+                source_center,
+                "solid and wireframe bodies stay distinct"
+            );
+            app.state.set_object_style(ObjectStyle::Solid);
+
+            click_live_selector(gpu, &ctx, &mut app, &mut native, "Formula");
+            assert_eq!(app.state.field_mode, FieldMode::Formula);
+            assert!(app.state.mode_3d);
+            assert_eq!(app.orbit, orbit);
+            let (return_rect, returned) =
+                read_live_viewport(gpu, &ctx, &mut app, &mut native, height);
+            assert_eq!(return_rect, rect);
+            assert_eq!(sky_pixel(rect, &returned), sky);
+            assert_eq!(center_pixels(rect, &returned), formula_center);
+            if sources_sky.iter().zip(sky).any(|(a, b)| a.abs_diff(b) > 1) {
+                mismatches.push(format!(
+                    "{format:?}/dark={theme_dark}: Formula {sky:?}, Sources {sources_sky:?}"
+                ));
+            }
+
+            click_live_selector(gpu, &ctx, &mut app, &mut native, "2D view");
+            assert!(!app.state.mode_3d);
+            let (flat_rect, flat) = read_live_viewport(gpu, &ctx, &mut app, &mut native, height);
+            assert_ne!(
+                center_pixels(flat_rect, &flat),
+                formula_center,
+                "2D retains distinct field projection"
+            );
+        }
+    }
+    gpu.end_scopes(scopes)?;
+    assert!(
+        mismatches.is_empty(),
+        "mode changes altered sky pixels:\n{}",
+        mismatches.join("\n")
+    );
+    Ok(())
 }
