@@ -136,7 +136,10 @@ fn click_app_button(ctx: &egui::Context, app: &mut VfApp, label: &str) {
             })
         })
         .unwrap_or_else(|| panic!("`{label}` button reachable: {:?}", texts(&out)));
-    let pos = rect.center();
+    click_app_at(ctx, app, size, rect.center());
+}
+
+fn click_app_at(ctx: &egui::Context, app: &mut VfApp, size: egui::Vec2, pos: egui::Pos2) {
     let _ = app_output(ctx, app, size, vec![egui::Event::PointerMoved(pos)]);
     let _ = app_output(
         ctx,
@@ -698,5 +701,173 @@ fn a_replaced_cas_vector_typesets_in_the_floating_equation_panel() {
     assert!(
         !shown.contains("linear fallback"),
         "the accepted CAS vector should typeset: {shown}"
+    );
+}
+
+#[test]
+fn equation_panel_shows_the_committed_typed_ode_rhs() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state.set_formula("(91*x, 92*y, 93*z)".into());
+    let mut scene = app.state.ode.clone();
+    scene.dimension = 3;
+    scene.equations = ["2*y".into(), "-x".into(), "t-z".into()];
+    app.state
+        .set_ode_scene(scene)
+        .expect("valid typed RHS fixture");
+    let wide = vec2(1280.0, 1000.0);
+    app_idle(&ctx, &mut app, wide, 3);
+    click_app_label(&ctx, &mut app, wide, "ODE");
+    assert_eq!(app.state.field_mode, FieldMode::Ode);
+    click_app_button(&ctx, &mut app, "Open ODE");
+    app_idle(&ctx, &mut app, wide, 3);
+    edit_ode_component(&ctx, &mut app, wide, "-x", "-3*x");
+    assert_eq!(app.state.ode.equations[1], "-3*x");
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, wide, 3);
+    assert!(app.formula_typeset.open);
+    let out = app_output(&ctx, &mut app, wide, Vec::new());
+    let painted = texts(&out);
+    let shown = painted.join("\n");
+    for expected in [
+        "Live ODE RHS · 3D",
+        "produce the trajectory",
+        "integration time",
+        "dx/dt = 2*y",
+        "dy/dt = -3*x",
+        "dz/dt = t-z",
+    ] {
+        assert!(shown.contains(expected), "missing {expected:?}: {shown}");
+    }
+    for dormant in ["91", "92", "93"] {
+        assert!(
+            !painted.iter().any(|text| text == dormant),
+            "dormant Formula coefficient {dormant}: {shown}"
+        );
+    }
+}
+
+fn click_app_label(ctx: &egui::Context, app: &mut VfApp, size: egui::Vec2, label: &str) {
+    let out = app_output(ctx, app, size, Vec::new());
+    let pos = node_rect(&out, label)
+        .unwrap_or_else(|| panic!("{label:?} reachable: {:?}", nodes(&out)))
+        .center();
+    click_app_at(ctx, app, size, pos);
+}
+
+fn edit_ode_component(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    size: egui::Vec2,
+    previous: &str,
+    replacement: &str,
+) {
+    click_app_label(ctx, app, size, previous);
+    let key = |key, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let _ = app_output(
+        ctx,
+        app,
+        size,
+        vec![
+            key(egui::Key::A, egui::Modifiers::COMMAND),
+            egui::Event::Paste(replacement.into()),
+            key(egui::Key::Enter, egui::Modifiers::NONE),
+        ],
+    );
+}
+
+#[test]
+fn equation_panel_labels_the_previous_typed_rhs_after_a_rejected_edit() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let wide = vec2(1280.0, 1000.0);
+    app_idle(&ctx, &mut app, wide, 3);
+    click_app_label(&ctx, &mut app, wide, "ODE");
+    click_app_button(&ctx, &mut app, "Open ODE");
+    app_idle(&ctx, &mut app, wide, 3);
+    let solved = app.state.ode_solution.clone().expect("initial solution");
+    let committed = app.state.ode.clone();
+
+    edit_ode_component(&ctx, &mut app, wide, "-x", "missing_axis(");
+    assert!(
+        app.state.ode_error.is_some(),
+        "the ODE editor rejects the draft"
+    );
+    assert_eq!(app.state.ode, committed);
+    assert!(std::sync::Arc::ptr_eq(
+        app.state.ode_solution.as_ref().unwrap(),
+        &solved
+    ));
+
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, wide, 3);
+    let out = app_output(&ctx, &mut app, wide, Vec::new());
+    let shown = texts(&out).join("\n");
+    assert!(shown.contains("Last committed ODE RHS"), "{shown}");
+    assert!(shown.contains("dy/dt = -x"), "{shown}");
+    assert!(
+        shown.contains("trajectory comes from the last valid solve"),
+        "{shown}"
+    );
+    assert!(!shown.contains("Live ODE RHS"), "{shown}");
+    assert!(!shown.contains("dy/dt = missing_axis"), "{shown}");
+}
+
+#[test]
+fn compact_equation_panel_shows_only_the_two_active_ode_derivatives() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let compact = vec2(640.0, 900.0);
+    app_idle(&ctx, &mut app, compact, 3);
+    assert_eq!(
+        app.layout_mode,
+        vector_field_explorer::ui::layout::LayoutMode::Compact
+    );
+    click_app_label(&ctx, &mut app, compact, "ODE");
+    assert_eq!(app.state.field_mode, FieldMode::Ode);
+    click_app_label(&ctx, &mut app, compact, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, compact, 3);
+    assert!(app.formula_typeset.open);
+    let shown = texts(&app_output(&ctx, &mut app, compact, Vec::new())).join("\n");
+    assert!(shown.contains("Live ODE RHS · 2D"), "{shown}");
+    assert!(
+        shown.contains("dx/dt = y") && shown.contains("dy/dt = -x"),
+        "{shown}"
+    );
+    assert!(!shown.contains("dz/dt"), "{shown}");
+}
+
+#[test]
+fn current_field_ode_keeps_the_neutral_committed_formula_preview() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state.set_formula("(2*y, -3*x, 0)".into());
+    let wide = vec2(1280.0, 1000.0);
+    app_idle(&ctx, &mut app, wide, 3);
+    click_app_label(&ctx, &mut app, wide, "ODE");
+    click_app_button(&ctx, &mut app, "Open ODE");
+    app_idle(&ctx, &mut app, wide, 3);
+    click_app_label(&ctx, &mut app, wide, "Current field");
+    assert_eq!(
+        app.state.ode.source,
+        vector_field_explorer::ode::OdeSource::CurrentField
+    );
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, wide, 3);
+    let shown = texts(&app_output(&ctx, &mut app, wide, Vec::new())).join("\n");
+    assert!(shown.contains("Committed vector formula"), "{shown}");
+    assert!(
+        !shown.contains("Active formula") && !shown.contains("ODE RHS"),
+        "{shown}"
     );
 }
