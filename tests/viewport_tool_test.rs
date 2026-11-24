@@ -793,6 +793,8 @@ fn dismissing_the_viewport_menu_does_not_also_seed_or_reset() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn dismissing_menu_does_not_turn_the_next_quick_same_point_click_into_reset() {
+    use vector_field_explorer::camera::OrbitCamera;
+
     let Some(mut native) = gpu_test_frame() else {
         return;
     };
@@ -801,6 +803,8 @@ fn dismissing_menu_does_not_turn_the_next_quick_same_point_click_into_reset() {
     let mut app = ready_seed_app();
     app.layout.help_visible = false;
     app.controls.viewport_sticky = false;
+    app.orbit.yaw += 0.4;
+    let pose = app.orbit;
     let mut frame = |app: &mut VfApp, time, events| {
         frame_with_native_at(
             &ctx,
@@ -834,6 +838,7 @@ fn dismissing_menu_does_not_turn_the_next_quick_same_point_click_into_reset() {
     frame(&mut app, 0.62, pointer(field, true));
     frame(&mut app, 0.64, pointer(field, false));
     assert_eq!(app.test_harness().click_seed_count(), 0);
+    assert_eq!(app.orbit, pose, "dismissing does not reset the camera");
 
     frame(&mut app, 0.70, pointer(field, true));
     frame(&mut app, 0.72, pointer(field, false));
@@ -842,6 +847,15 @@ fn dismissing_menu_does_not_turn_the_next_quick_same_point_click_into_reset() {
         1,
         "the click after dismissing a menu places one seed"
     );
+
+    frame(&mut app, 0.74, pointer(field, true));
+    frame(&mut app, 0.76, pointer(field, false));
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        0,
+        "an intentional double-click after dismissal rolls back its seed"
+    );
+    assert_eq!(app.orbit.yaw, OrbitCamera::default().yaw);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

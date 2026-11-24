@@ -452,7 +452,34 @@ impl VfApp {
             } else if !menu_open {
                 let ignore_double_click = resp.clicked()
                     && std::mem::replace(&mut self.suppress_next_viewport_double_click, false);
-                let double_clicked = resp.double_clicked() && !ignore_double_click;
+                let rebased_double_click = if resp.clicked() {
+                    self.rebased_viewport_click
+                        .take()
+                        .is_some_and(|(time, position)| {
+                            let (max_delay, max_distance) = ui.ctx().memory(|memory| {
+                                (
+                                    memory.options.input_options.max_double_click_delay,
+                                    memory.options.input_options.max_click_dist,
+                                )
+                            });
+                            let current_position = resp.interact_pointer_pos();
+                            now >= time
+                                && now - time < max_delay
+                                && current_position.is_some_and(|current| {
+                                    position.distance_sq(current) < max_distance * max_distance
+                                })
+                        })
+                } else {
+                    false
+                };
+                let double_clicked =
+                    (resp.double_clicked() && !ignore_double_click) || rebased_double_click;
+                if ignore_double_click
+                    && resp.double_clicked()
+                    && let Some(position) = resp.interact_pointer_pos()
+                {
+                    self.rebased_viewport_click = Some((now, position));
+                }
                 match click_outcome(resp.clicked(), double_clicked, resp.dragged()) {
                     ClickOutcome::ResetView => {
                         self.undo_last_click_seed(now);

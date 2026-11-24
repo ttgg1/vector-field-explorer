@@ -395,6 +395,9 @@ pub struct VfApp {
     /// egui includes a primary click that dismisses the viewport menu in its
     /// double-click history. Suppress that history on the next viewport click.
     suppress_next_viewport_double_click: bool,
+    /// The suppressed egui double may be the first click of an intentional
+    /// double after dismissal. Keep its position and time to recognize click 3.
+    rebased_viewport_click: Option<(f64, egui::Pos2)>,
     /// The grid-seeded streamline segments from the last scene rebuild, kept
     /// separately so a click can recompose the line collection without
     /// re-sampling or re-tracing the grid.
@@ -734,6 +737,7 @@ impl VfApp {
             click_seeds: Vec::new(),
             last_click_seed: None,
             suppress_next_viewport_double_click: false,
+            rebased_viewport_click: None,
             flow_lines: Vec::new(),
             click_lines: Vec::new(),
             ode_lines: Arc::new(Vec::new()),
