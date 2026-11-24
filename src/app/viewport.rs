@@ -727,9 +727,16 @@ impl VfApp {
                 }
             }
 
-            let object_clear = egui::Rgba::from(ui.visuals().panel_fill)
-                .to_array()
-                .map(f64::from);
+            // Match egui's panel fill in the live target's color space. Its
+            // non-sRGB shader writes gamma-encoded values directly.
+            let panel_fill = ui.visuals().panel_fill;
+            let object_clear = if render_state.target_format.is_srgb() {
+                egui::Rgba::from(panel_fill).to_array().map(f64::from)
+            } else {
+                panel_fill
+                    .to_array()
+                    .map(|channel| f64::from(channel) / 255.0)
+            };
             let object_viewport =
                 crate::renderer::object_viewport_pixels(rect, ui.ctx().pixels_per_point());
             let callback = eframe::egui_wgpu::Callback::new_paint_callback(
