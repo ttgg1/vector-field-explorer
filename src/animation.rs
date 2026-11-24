@@ -1116,3 +1116,60 @@ impl FrameSink for VideoFrameSink {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod video_publication_tests {
+    use super::*;
+
+    #[test]
+    fn expired_finish_discards_a_ready_video_and_preserves_the_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("output.mp4");
+        fs::write(&destination, b"old video").unwrap();
+        let stage = VideoStage::create(&destination).unwrap();
+        let stage_path = stage.path.clone();
+        fs::write(&stage.path, b"validated staged video").unwrap();
+
+        let (sender, _commands) = mpsc::sync_channel(1);
+        let (send_result, result) = mpsc::channel();
+        assert!(send_result.send(Ok(stage)).is_ok());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let deadline = Instant::now();
+        let mut sink = VideoFrameSink {
+            spec: AnimationSpec {
+                format: AnimationFormat::Mp4,
+                ..AnimationSpec::default()
+            },
+            destination: destination.clone(),
+            frames: 1,
+            written: 1,
+            worker: Some(VideoWorker {
+                sender,
+                result,
+                cancelled: Arc::clone(&cancelled),
+            }),
+            push_deadline: None,
+            finish_phase: VideoFinishPhase::Waiting(deadline),
+        };
+
+        let Poll::Ready(Err(error)) = sink.poll_video_finish(deadline) else {
+            panic!("a ready result must fail after its deadline");
+        };
+        assert!(error.to_string().contains("did not finish"));
+        assert!(cancelled.load(Ordering::Acquire));
+        assert_eq!(fs::read(&destination).unwrap(), b"old video");
+        assert!(!stage_path.exists());
+
+        // A worker delivering another result after the receiver was abandoned
+        // cannot publish or leave its own sibling stage behind.
+        let late_stage = VideoStage::create(&destination).unwrap();
+        let late_path = late_stage.path.clone();
+        let rejected = send_result
+            .send(Ok(late_stage))
+            .err()
+            .expect("receiver dropped");
+        drop(rejected);
+        assert!(!late_path.exists());
+        assert_eq!(fs::read(destination).unwrap(), b"old video");
+    }
+}

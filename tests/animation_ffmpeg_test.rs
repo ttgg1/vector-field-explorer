@@ -333,6 +333,117 @@ mod unix_fake_ffmpeg {
     }
 
     #[test]
+    fn dropping_video_before_finish_preserves_the_output_and_cleans_its_stage() {
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("out.mp4");
+        fs::write(&output, b"previous video").unwrap();
+        let program = script(
+            dir.path(),
+            "#!/bin/sh\ncat >/dev/null\nfor last; do :; done\nprintf 'unfinished job' > \"$last\"\n",
+        );
+        let spec = spec(AnimationFormat::Mp4);
+        let mut sink = open_video_sink(&spec, &output, &provenance(), &program);
+        sink.push_frame(&frame(&spec), spec.width, spec.height)
+            .unwrap();
+        drop(sink);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !temporary_siblings(dir.path()).is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "abandoned stage was not removed"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(fs::read(output).unwrap(), b"previous video");
+    }
+
+    #[test]
+    fn normal_video_jobs_publish_decodable_mp4_and_webm_with_every_frame() {
+        use std::process::Command;
+        use vector_field_explorer::VfApp;
+        use vector_field_explorer::animation_job::{
+            AnimationJob, AnimationJobState, AnimationRenderer,
+        };
+        use vector_field_explorer::animation_scene::AnimationFrame;
+
+        if std::env::var_os("VFE_ANIMATION_FFMPEG_PROBE").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
+            eprintln!("Set VFE_ANIMATION_FFMPEG_PROBE=1 to exercise installed ffmpeg and ffprobe");
+            return;
+        }
+
+        struct SolidFrames;
+        impl AnimationRenderer for SolidFrames {
+            fn render(
+                &mut self,
+                _: AnimationFrame,
+                width: u32,
+                height: u32,
+                _: [f64; 4],
+            ) -> Result<Vec<u8>, AnimationError> {
+                Ok(vec![100; (width * height * 4) as usize])
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        for (format, extension) in [
+            (AnimationFormat::Mp4, "mp4"),
+            (AnimationFormat::Webm, "webm"),
+        ] {
+            let output = dir.path().join(format!("output.{extension}"));
+            fs::write(&output, b"previous export").unwrap();
+            let spec = AnimationSpec {
+                width: 64,
+                height: 64,
+                ..spec(format)
+            };
+            let scheduled_frames = frame_count(&spec).unwrap();
+            let mut app = VfApp::new();
+            app.state.set_formula("sin(t), 0, 0".into());
+            let sink = open_video_sink(&spec, &output, &provenance(), Path::new("ffmpeg"));
+            let mut job =
+                AnimationJob::new(spec, app.animation_snapshot().unwrap(), sink, None).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !job.state().is_terminal() {
+                job.pump(&mut SolidFrames).unwrap();
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "video job did not finish"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(job.state(), AnimationJobState::Done);
+            assert_eq!(job.frames_done(), scheduled_frames);
+
+            let probe = Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=nb_read_frames",
+                    "-of",
+                    "default=nokey=1:noprint_wrappers=1",
+                ])
+                .arg(&output)
+                .output()
+                .expect("ffprobe must be installed for this probe");
+            assert!(
+                probe.status.success(),
+                "{}",
+                String::from_utf8_lossy(&probe.stderr)
+            );
+            let decoded = String::from_utf8(probe.stdout).unwrap();
+            assert_eq!(decoded.trim().parse(), Ok(scheduled_frames));
+            assert!(temporary_siblings(dir.path()).is_empty());
+        }
+    }
+
+    #[test]
     fn nonzero_ffmpeg_exit_surfaces_stderr_and_removes_the_temp_file() {
         let dir = tempdir().unwrap();
         let output = dir.path().join("out.webm");
