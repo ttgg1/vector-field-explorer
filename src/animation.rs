@@ -1166,8 +1166,7 @@ mod video_publication_tests {
         let late_path = late_stage.path.clone();
         let rejected = send_result
             .send(Ok(late_stage))
-            .err()
-            .expect("receiver dropped");
+            .expect_err("receiver dropped");
         drop(rejected);
         assert!(!late_path.exists());
         assert_eq!(fs::read(destination).unwrap(), b"old video");
