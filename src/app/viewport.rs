@@ -91,6 +91,46 @@ impl VfApp {
         Some(self.vector_capture_provenance(queued))
     }
 
+    fn viewport_gesture_menu_id() -> egui::Id {
+        egui::Id::unique("vector_viewport_gesture_menu")
+    }
+
+    pub(super) fn viewport_gesture_menu_open(ctx: &egui::Context) -> bool {
+        egui::Popup::is_id_open(ctx, Self::viewport_gesture_menu_id())
+    }
+
+    fn show_viewport_gesture_menu(&mut self, viewport: &egui::Response) {
+        use interaction::InteractionAction;
+
+        let popup = egui::Popup::context_menu(viewport).id(Self::viewport_gesture_menu_id());
+        popup.show(|ui| {
+            style_panel::restore_menu_button_padding(ui);
+            for (action, command) in [
+                (InteractionAction::FitView, ViewCommand::Fit),
+                (InteractionAction::ResetView, ViewCommand::Reset),
+            ] {
+                let mut button = egui::Button::new(action.label());
+                if let Some(chord) = self.interaction.bindings.chord(action) {
+                    button = button.shortcut_text(menu::chord_shortcut_label(chord));
+                }
+                if ui.add(button).clicked() {
+                    self.apply_view_command(command);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            for (label, panel) in [
+                ("Controls", PanelId::Controls),
+                ("Appearance", PanelId::Appearance),
+            ] {
+                if ui.button(label).clicked() {
+                    self.open_tour_panel(panel);
+                    ui.close();
+                }
+            }
+        });
+    }
+
     /// Frame phase: the wgpu field viewport, its camera input, click-to-seed,
     /// screenshot capture and the captured-pointer crosshair.
     pub(super) fn frame_viewport(
@@ -246,7 +286,10 @@ impl VfApp {
             let aspect = rect.width().max(1.0) / rect.height().max(1.0);
             // Issue #87 S2: explicit seeds own a press that lands on one. The
             // seed drag is one primary gesture; the camera must not also orbit.
-            let suppress_camera = self.seed_pointer_interaction(&resp, rect, aspect);
+            let menu_open = Self::viewport_gesture_menu_open(ui.ctx());
+            let seed_owns_pointer =
+                !menu_open && self.seed_pointer_interaction(&resp, rect, aspect);
+            let suppress_camera = menu_open || seed_owns_pointer;
             let feel = self.interaction.camera_feel;
             if let Some(fly) = self.fly.as_mut() {
                 let captured = self.capture_active;
@@ -404,8 +447,40 @@ impl VfApp {
                         CapturedClickOutcome::Ignore => {}
                     }
                 }
-            } else {
-                match click_outcome(resp.clicked(), resp.double_clicked(), resp.dragged()) {
+            } else if menu_open && ui.ctx().input(|input| input.pointer.primary_clicked()) {
+                self.suppress_next_viewport_double_click = true;
+            } else if !menu_open {
+                let ignore_double_click = resp.clicked()
+                    && std::mem::replace(&mut self.suppress_next_viewport_double_click, false);
+                let rebased_double_click = if resp.clicked() {
+                    self.rebased_viewport_click
+                        .take()
+                        .is_some_and(|(time, position)| {
+                            let (max_delay, max_distance) = ui.ctx().memory(|memory| {
+                                (
+                                    memory.options.input_options.max_double_click_delay,
+                                    memory.options.input_options.max_click_dist,
+                                )
+                            });
+                            let current_position = resp.interact_pointer_pos();
+                            now >= time
+                                && now - time < max_delay
+                                && current_position.is_some_and(|current| {
+                                    position.distance_sq(current) < max_distance * max_distance
+                                })
+                        })
+                } else {
+                    false
+                };
+                let double_clicked =
+                    (resp.double_clicked() && !ignore_double_click) || rebased_double_click;
+                if ignore_double_click
+                    && resp.double_clicked()
+                    && let Some(position) = resp.interact_pointer_pos()
+                {
+                    self.rebased_viewport_click = Some((now, position));
+                }
+                match click_outcome(resp.clicked(), double_clicked, resp.dragged()) {
                     ClickOutcome::ResetView => {
                         self.undo_last_click_seed(now);
                         self.apply_view_command(ViewCommand::Reset);
@@ -417,6 +492,12 @@ impl VfApp {
                     }
                     ClickOutcome::None => {}
                 }
+            }
+
+            // Use the viewport's own response so egui distinguishes a
+            // secondary click from a drag and respects foreground widgets.
+            if !self.capture_active && !seed_owns_pointer {
+                self.show_viewport_gesture_menu(&resp);
             }
 
             // Painter's algorithm: the wgpu pass has no depth attachment, so

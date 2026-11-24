@@ -615,11 +615,15 @@ fn node_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
 }
 
 fn pointer(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    pointer_button(pos, egui::PointerButton::Primary, pressed)
+}
+
+fn pointer_button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> Vec<egui::Event> {
     vec![
         egui::Event::PointerMoved(pos),
         egui::Event::PointerButton {
             pos,
-            button: egui::PointerButton::Primary,
+            button,
             pressed,
             modifiers: egui::Modifiers::NONE,
         },
@@ -666,13 +670,34 @@ fn frame_with_native(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn dragging_the_app_legend_does_not_orbit_or_place_an_armed_seed() {
+fn frame_with_native_at(
+    ctx: &egui::Context,
+    app: &mut VfApp,
+    native: &mut eframe::Frame,
+    size: egui::Vec2,
+    time: f64,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            time: Some(time),
+            events,
+            ..Default::default()
+        },
+        |ui| eframe::App::ui(app, ui, native),
+    );
+    output.textures_delta.clear();
+    output
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_test_frame() -> Option<eframe::Frame> {
     use eframe::{egui_wgpu, wgpu};
 
     if std::env::var_os("VFE_VIEWPORT_GPU_PROBE").as_deref() != Some(std::ffi::OsStr::new("1")) {
         eprintln!("GPU not requested; set VFE_VIEWPORT_GPU_PROBE=1 on a GPU host");
-        return;
+        return None;
     }
 
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
@@ -688,7 +713,331 @@ fn dragging_the_app_legend_does_not_orbit_or_place_an_armed_seed() {
         ))
         .expect("real headless wgpu render state"),
     );
+    Some(native)
+}
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn secondary_click_opens_the_vector_viewport_gesture_menu() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    let mut frame = |events| {
+        frame_with_native(
+            &ctx,
+            &mut app,
+            &mut native,
+            egui::vec2(1200.0, 900.0),
+            events,
+        )
+    };
+    for _ in 0..3 {
+        frame(vec![]);
+    }
+
+    let field = egui::pos2(450.0, 450.0);
+    frame(pointer_button(field, egui::PointerButton::Secondary, true));
+    frame(pointer_button(field, egui::PointerButton::Secondary, false));
+    let out = frame(vec![]);
+    assert!(
+        !node_rects(&out, "Fit view F").is_empty(),
+        "an unconsumed secondary click opens the viewport menu with its shortcut hint"
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dismissing_the_viewport_menu_does_not_also_seed_or_reset() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    app.controls.viewport_sticky = false;
+    app.orbit.yaw += 0.4;
+    let pose = app.orbit;
+    let mut frame = |app: &mut VfApp, events| {
+        frame_with_native(&ctx, app, &mut native, egui::vec2(1200.0, 900.0), events)
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    let menu_anchor = egui::pos2(600.0, 320.0);
+    let secondary = egui::PointerButton::Secondary;
+    frame(&mut app, pointer_button(menu_anchor, secondary, true));
+    frame(&mut app, pointer_button(menu_anchor, secondary, false));
+    let menu = frame(&mut app, vec![]);
+    assert!(!node_rects(&menu, "Fit view F").is_empty());
+
+    let outside = egui::pos2(450.0, 450.0);
+    frame(&mut app, pointer(outside, true));
+    frame(&mut app, pointer(outside, false));
+    let out = frame(&mut app, vec![]);
+    assert!(node_rects(&out, "Fit view F").is_empty());
+    assert_eq!(app.test_harness().click_seed_count(), 0, "dismissal only");
+    assert_eq!(app.orbit, pose);
+    assert!(!app.controls.viewport_inspect);
+
+    frame(&mut app, pointer(outside, true));
+    frame(&mut app, pointer(outside, false));
+    assert_eq!(app.test_harness().click_seed_count(), 1);
+    assert!(app.controls.viewport_inspect);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dismissing_menu_does_not_turn_the_next_quick_same_point_click_into_reset() {
+    use vector_field_explorer::camera::OrbitCamera;
+
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    app.controls.viewport_sticky = false;
+    app.orbit.yaw += 0.4;
+    let pose = app.orbit;
+    let mut frame = |app: &mut VfApp, time, events| {
+        frame_with_native_at(
+            &ctx,
+            app,
+            &mut native,
+            egui::vec2(1200.0, 900.0),
+            time,
+            events,
+        )
+    };
+    for time in [0.0, 0.02, 0.04] {
+        frame(&mut app, time, vec![]);
+    }
+
+    let menu_anchor = egui::pos2(600.0, 320.0);
+    let field = egui::pos2(450.0, 450.0);
+    let secondary = egui::PointerButton::Secondary;
+    frame(&mut app, 0.06, pointer_button(menu_anchor, secondary, true));
+    frame(
+        &mut app,
+        0.08,
+        pointer_button(menu_anchor, secondary, false),
+    );
+    let menu = frame(&mut app, 0.10, vec![]);
+    assert!(!node_rects(&menu, "Fit view F").is_empty());
+
+    // The menu stays open longer than egui's double-click interval before
+    // the primary click dismisses it. The next primary click is intentionally
+    // quick and at the same point, matching normal use after dismissal.
+    frame(&mut app, 0.60, vec![]);
+    frame(&mut app, 0.62, pointer(field, true));
+    frame(&mut app, 0.64, pointer(field, false));
+    assert_eq!(app.test_harness().click_seed_count(), 0);
+    assert_eq!(app.orbit, pose, "dismissing does not reset the camera");
+
+    frame(&mut app, 0.70, pointer(field, true));
+    frame(&mut app, 0.72, pointer(field, false));
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        1,
+        "the click after dismissing a menu places one seed"
+    );
+
+    frame(&mut app, 0.74, pointer(field, true));
+    frame(&mut app, 0.76, pointer(field, false));
+    assert_eq!(
+        app.test_harness().click_seed_count(),
+        0,
+        "an intentional double-click after dismissal rolls back its seed"
+    );
+    assert_eq!(app.orbit.yaw, OrbitCamera::default().yaw);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn navigating_the_viewport_menu_does_not_apply_camera_keys() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    let mut frame = |app: &mut VfApp, events| {
+        frame_with_native(&ctx, app, &mut native, egui::vec2(1200.0, 900.0), events)
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    let field = egui::pos2(450.0, 450.0);
+    let secondary = egui::PointerButton::Secondary;
+    frame(&mut app, pointer_button(field, secondary, true));
+    frame(&mut app, pointer_button(field, secondary, false));
+    let menu = frame(&mut app, vec![]);
+    assert!(!node_rects(&menu, "Fit view F").is_empty());
+
+    app.orbit.target.x = 0.2;
+    let pose = app.orbit;
+    frame(&mut app, vec![key(egui::Key::ArrowDown)]);
+    assert_eq!(app.orbit, pose, "menu navigation does not pan the field");
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![key(egui::Key::Enter)]);
+    assert_eq!(app.orbit.target.x, 0.0, "Enter selects Fit");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn viewport_gesture_menu_routes_view_and_panel_actions_in_wide_and_compact() {
+    use vector_field_explorer::camera::OrbitCamera;
+    use vector_field_explorer::ui::layout::SheetState;
+
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+
+    for width in [1200.0, 500.0] {
+        let ctx = support::context();
+        ctx.enable_accesskit();
+        let mut app = ready_seed_app();
+        app.layout.help_visible = false;
+        app.layout.controls_expanded = false;
+        app.layout.appearance_expanded = false;
+        app.style.reduced_motion = true;
+        app.state.set_mode(true);
+        app.orbit.yaw += 0.4;
+        app.orbit.distance = 30.0;
+        let tilted = app.orbit.yaw;
+        let field = egui::pos2(width * 0.5, 370.0);
+        let mut frame = |app: &mut VfApp, events| {
+            frame_with_native(&ctx, app, &mut native, egui::vec2(width, 900.0), events)
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+
+        let mut choose = |app: &mut VfApp, label| {
+            frame(
+                app,
+                pointer_button(field, egui::PointerButton::Secondary, true),
+            );
+            frame(
+                app,
+                pointer_button(field, egui::PointerButton::Secondary, false),
+            );
+            let menu = frame(app, vec![]);
+            let entry = node_rects(&menu, label)
+                .into_iter()
+                .min_by(|a, b| {
+                    a.center()
+                        .distance_sq(field)
+                        .total_cmp(&b.center().distance_sq(field))
+                })
+                .unwrap_or_else(|| panic!("width {width}: gesture menu entry {label}"));
+            frame(app, pointer(entry.center(), true));
+            frame(app, pointer(entry.center(), false));
+            let out = frame(app, vec![]);
+            assert!(
+                node_rects(&out, "Fit view F").is_empty(),
+                "selection closes the menu"
+            );
+        };
+        choose(&mut app, "Fit view F");
+        assert!(app.orbit.distance < 30.0, "Fit frames the domain");
+        assert_eq!(app.orbit.yaw, tilted, "Fit keeps the current orbit angle");
+
+        choose(&mut app, "Reset view R");
+        assert_eq!(app.orbit.yaw, OrbitCamera::default().yaw);
+        assert_eq!(app.orbit.distance, OrbitCamera::default().distance);
+
+        choose(&mut app, "Controls");
+        if width == 500.0 {
+            assert_eq!(app.sheet, SheetState::Controls);
+        } else {
+            assert!(app.layout.controls_expanded);
+        }
+
+        choose(&mut app, "Appearance");
+        if width == 500.0 {
+            assert_eq!(app.sheet, SheetState::Appearance);
+        } else {
+            assert!(app.layout.appearance_expanded);
+        }
+        assert_eq!(
+            app.test_harness().click_seed_count(),
+            0,
+            "gesture menu actions do not place the armed streamline seed"
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn viewport_secondary_drag_and_consumed_secondary_clicks_do_not_open_the_gesture_menu() {
+    use vector_field_explorer::fly_camera::FlyCamera;
+    use vector_field_explorer::plot::PlotKind;
+
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    let mut app = ready_seed_app();
+    app.layout.help_visible = false;
+    app.style.reduced_motion = true;
+    app.state.set_mode(true);
+    let field = egui::pos2(450.0, 450.0);
+    let secondary = egui::PointerButton::Secondary;
+    let mut frame = |app: &mut VfApp, events| {
+        frame_with_native(&ctx, app, &mut native, egui::vec2(1200.0, 900.0), events)
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+
+    let orbit = app.orbit;
+    let end = field + egui::vec2(60.0, 30.0);
+    frame(&mut app, pointer_button(field, secondary, true));
+    frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+    frame(&mut app, pointer_button(end, secondary, false));
+    let out = frame(&mut app, vec![]);
+    assert_ne!(app.orbit.yaw, orbit.yaw, "secondary drag still orbits");
+    assert!(node_rects(&out, "Fit view F").is_empty());
+
+    let legend = ctx
+        .memory(|memory| memory.area_rect(egui::Id::unique("viewport_color_legend")))
+        .expect("production legend area");
+    let legend_header = legend.right_top() + egui::vec2(-3.0, 3.0);
+    let mut assert_no_menu = |app: &mut VfApp, pos, reason| {
+        frame(app, pointer_button(pos, secondary, true));
+        frame(app, pointer_button(pos, secondary, false));
+        let out = frame(app, vec![]);
+        assert!(node_rects(&out, "Fit view F").is_empty(), "{reason}");
+    };
+    assert_no_menu(
+        &mut app,
+        legend_header,
+        "the floating legend consumes the gesture",
+    );
+
+    app.fly = Some(FlyCamera::from_orbit(&app.orbit, 1.0));
+    assert_no_menu(&mut app, field, "captured fly input has no viewport menu");
+    assert!(app.fly.is_some(), "the secondary click leaves fly active");
+
+    app.state.set_plot_kind(PlotKind::Curve2D);
+    assert_no_menu(&mut app, field, "scalar plot input has no vector menu");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dragging_the_app_legend_does_not_orbit_or_place_an_armed_seed() {
+    let Some(mut native) = gpu_test_frame() else {
+        return;
+    };
     let ctx = support::context();
     let mut app = ready_seed_app();
     app.layout.help_visible = false;
