@@ -1,14 +1,9 @@
-//! Issue #287: a floating, movable typeset view of the active vector formula.
+//! Floating view of committed vector formulas and typed ODE derivatives.
 //!
-//! This module owns no physics and no second parser. The displayed text is the
-//! authoritative committed formula from [`crate::viewmodel::State::formula`]
-//! (the formula bar is the editor, but its draft is intentionally not read
-//! here: in non-Formula vector modes the bar short-circuits before mirroring
-//! and its text would be empty/stale). Committed parameter values and the
-//! shared clock time are substituted into that text, each vector component is
-//! translated by [`crate::cas_tex::linear_to_tex`], and display is delegated to
-//! [`crate::ui::math_view::paint_tex_or_linear`]. Dragging, viewport clamping
-//! and session-only placement use [`crate::ui::viewport_panel`].
+//! Vector formulas use committed parameters and clock time, and each component
+//! is rendered through [`crate::ui::math_view::paint_tex_or_linear`]. Typed ODE
+//! equations come from the solved scene and retain their integration variables.
+//! Dragging, viewport clamping and placement use [`crate::ui::viewport_panel`].
 
 use eframe::egui::{self, Context, InnerResponse, Pos2, Rect, Ui};
 
@@ -25,10 +20,8 @@ pub const PANEL_TITLE: &str = "Typeset formula";
 const CLOSE_LABEL: &str = "Close typeset formula";
 const RESET_LABEL: &str = "Reset position";
 const NOTE: &str = "Active formula - committed values substituted";
-/// Finding F1: in a non-Formula vector mode the bar is not the live editor, so
-/// the panel labels the committed formula neutrally instead of claiming it is
-/// the active input the user is editing.
-pub const NOTE_NON_FORMULA: &str = "Committed vector formula - not the live editor in this mode";
+/// Caption for a stored Formula shown separately from a non-Formula model.
+pub const NOTE_NON_FORMULA: &str = "Inactive Formula reference";
 const FALLBACK_LABEL: &str = "linear fallback";
 
 /// Session-only panel state: nothing here enters the scene or settings envelope.
@@ -193,6 +186,48 @@ fn format_number(value: f64) -> String {
     format!("{value}")
 }
 
+fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) {
+    let scene = &state.ode;
+    if scene.source == crate::ode::OdeSource::CurrentField {
+        // The Formula preview substitutes playback time; the solver integrates
+        // the field over its own time variable.
+        ui.label("Equation unavailable for ODE using Current field.");
+        if state.ode_error.is_some() && state.ode_solution.is_some() {
+            ui.weak("The trajectory comes from the last valid solve.");
+        }
+        return;
+    }
+    if state.ode_solution.is_none() {
+        ui.label("ODE RHS unavailable until the model has a valid solution.");
+        return;
+    }
+    if state.ode_error.is_some() {
+        ui.label(format!("Last committed ODE RHS · {}D", scene.dimension));
+        ui.weak("The latest edit failed. The trajectory comes from the last valid solve.");
+    } else {
+        ui.label(format!("Live ODE RHS · {}D", scene.dimension));
+        ui.weak("The solver integrates these derivatives to produce the trajectory.");
+    }
+    ui.weak("Here t is integration time.");
+    egui::ScrollArea::vertical()
+        .max_height(body_height)
+        .show(ui, |ui| {
+            for (axis, rhs) in ["x", "y", "z"]
+                .into_iter()
+                .zip(&scene.equations)
+                .take(scene.dimension)
+            {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("d{axis}/dt = {rhs}")).monospace(),
+                    )
+                    .wrap()
+                    .selectable(true),
+                );
+            }
+        });
+}
+
 /// Draw the panel. Callers do the `open` check; the viewport rect is the one
 /// measured by the frame's central panel.
 pub fn show(
@@ -240,19 +275,20 @@ pub fn show_slide(
                         }
                     });
                 });
-                // Finding F1: only claim "active formula" where the bar is the
-                // live editor. Other vector modes get a neutral label so the
-                // committed formula stays visible without being mistaken for
-                // the editable input.
+                let body_height = (viewport.height() * 0.45).max(48.0);
+                if state.field_mode == FieldMode::Ode {
+                    show_ode_equation(ui, state, body_height);
+                    return;
+                }
                 let note = if state.field_mode == FieldMode::Formula {
                     NOTE
                 } else {
+                    ui.label("Active equation unavailable for this mode.");
                     NOTE_NON_FORMULA
                 };
                 ui.label(note);
                 let components = composed_formula(formula, state);
                 let mut any_fallback = false;
-                let body_height = (viewport.height() * 0.45).max(48.0);
                 egui::ScrollArea::vertical()
                     .max_height(body_height)
                     .min_scrolled_height(body_height)
