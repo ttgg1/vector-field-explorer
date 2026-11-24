@@ -114,6 +114,62 @@ fn single_play_gif_omits_the_repeat_extension() {
 }
 
 #[test]
+fn gif_publication_preserves_a_populated_destination_directory() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("animation.gif");
+    std::fs::create_dir(&path).unwrap();
+    let existing_file = path.join("keep.txt");
+    std::fs::write(&existing_file, b"keep this file").unwrap();
+    let spec = spec(false);
+
+    let mut sink = gif_sink(&spec, &path).unwrap();
+    sink.push_frame(&frame([255, 0, 0, 255]), spec.width, spec.height)
+        .unwrap();
+    let result = sink.finish();
+
+    assert!(matches!(result, Err(AnimationError::Io(_))), "{result:?}");
+    assert_eq!(std::fs::read(existing_file).unwrap(), b"keep this file");
+    assert_eq!(path.read_dir().unwrap().count(), 1);
+    assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn gif_publication_preserves_a_locked_destination_and_can_retry() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("animation.gif");
+    let spec = spec(false);
+    let publish = |colour| {
+        let mut sink = gif_sink(&spec, &path)?;
+        sink.push_frame(&frame(colour), spec.width, spec.height)?;
+        sink.finish()
+    };
+
+    publish([255, 0, 0, 255]).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let locked = std::fs::File::options()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    let result = publish([0, 0, 255, 255]);
+    drop(locked);
+
+    assert!(matches!(result, Err(AnimationError::Io(_))), "{result:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+
+    publish([0, 0, 255, 255]).unwrap();
+    assert_ne!(std::fs::read(&path).unwrap(), original);
+    let file = std::fs::File::open(&path).unwrap();
+    let mut decoder = DecodeOptions::new().read_info(file).unwrap();
+    assert!(decoder.read_next_frame().unwrap().is_some());
+    assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+}
+
+#[test]
 fn gif_frames_must_be_tightly_packed_rgba() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("bad.gif");
