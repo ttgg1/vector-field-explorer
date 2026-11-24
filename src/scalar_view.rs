@@ -362,6 +362,44 @@ pub struct ScalarViewKey {
 }
 
 impl ScalarViewRequest {
+    /// Evaluate the bounded preview and build the levels from its finite range.
+    pub(crate) fn automatic_levels(&self, count: usize) -> Vec<f32> {
+        let Ok(expr) = scalar_view_expr(&self.source, &self.parameters) else {
+            return Vec::new();
+        };
+        let side = self.grid_side.min(32);
+        // The preview is part of the cache key through `levels`, so evaluate it
+        // on the same 100 ms-quantised clock the key uses; otherwise an
+        // animated formula would change the levels every frame and defeat the
+        // throttle.
+        let time = self.time;
+        let preview_time = if time.is_finite() {
+            (time / SCALAR_RESAMPLE_INTERVAL).floor() * SCALAR_RESAMPLE_INTERVAL
+        } else {
+            0.0
+        };
+        let Ok(grid) = sample_grid(&expr, self.frame, side, side, preview_time) else {
+            return Vec::new();
+        };
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for sample in &grid.samples {
+            if let Some(value) = sample.value {
+                min = min.min(value);
+                max = max.max(value);
+            }
+        }
+        if !min.is_finite() || !max.is_finite() {
+            return Vec::new();
+        }
+        if min >= max {
+            return Vec::new();
+        }
+        (1..=count)
+            .map(|index| min + (max - min) * index as f32 / (count + 1) as f32)
+            .collect()
+    }
+
     /// The cache key: formula, committed parameters, frame, domain and the
     /// clock quantised to [`SCALAR_RESAMPLE_INTERVAL`]. The grid side and
     /// explicit levels also change the records, so they are part of the key.

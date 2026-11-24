@@ -72,7 +72,7 @@ use crate::scalar_overlay::{
 use crate::scalar_view::{
     MAX_CONTOUR_LEVELS, MAX_GRID_SIDE, MIN_GRID_SIDE, PointProbe, ProbeSet,
     SCALAR_RESAMPLE_INTERVAL, ScalarViewCache, ScalarViewError, ScalarViewIdentity,
-    ScalarViewRecord, ScalarViewRequest, sample_grid, scalar_view_expr,
+    ScalarViewRecord, ScalarViewRequest, sample_scalar_view, scalar_view_expr,
 };
 use crate::seed_layout::{
     MAX_GENERATED_PER_APPLICATION, MAX_SEEDS, SeedAnchor, SeedError, SeedLayout, SeedPoint,
@@ -624,6 +624,8 @@ pub struct State {
     /// slice B1). Keyed by the state identity without level values, so a
     /// visible but idle frame does not re-evaluate the 32² preview.
     scalar_preview_levels: Option<(ScalarViewIdentity, Vec<f32>)>,
+    /// One cached sample, including failures, for the independent CAS contour.
+    cas_contour_cache: RefCell<Option<(ScalarViewIdentity, Option<ScalarViewRecord>)>>,
     /// One-entry comparison-curve and gradient-arrow cache (issue #93 slice B).
     /// Runtime only; [`State::refresh_scalar_analysis`] is its only sampler and
     /// it runs only while the Scalar analysis subsection is open.
@@ -1618,6 +1620,7 @@ impl State {
             scalar_text_color: DEFAULT_SCALAR_TEXT_COLOR,
             scalar_view_cache: ScalarViewCache::default(),
             scalar_preview_levels: None,
+            cas_contour_cache: RefCell::default(),
             scalar_analysis: ScalarAnalysisRuntime::default(),
             left_click_action: LeftClickAction::SeedStreamline,
             particles: false,
@@ -3047,16 +3050,17 @@ impl State {
     /// unsupported formula yields no levels; the cache stores the reason.
     pub fn scalar_view_request(self: &mut State) -> ScalarViewRequest {
         let frame = self.scalar_view_frame();
-        let levels = self.scalar_preview_levels(&frame);
-        ScalarViewRequest {
+        let mut request = ScalarViewRequest {
             source: self.plot.surface.source.clone(),
             parameters: self.parameters.clone(),
             frame,
             domain: frame.local_domain(),
             time: f64::from(self.time),
             grid_side: self.scalar_grid_side.clamp(MIN_GRID_SIDE, MAX_GRID_SIDE),
-            levels,
-        }
+            levels: Vec::new(),
+        };
+        request.levels = self.scalar_preview_levels(&request);
+        request
     }
 
     /// Explicit, strictly increasing contour levels inside the sampled value
@@ -3065,61 +3069,20 @@ impl State {
     ///
     /// The result is memoised under the same non-previewed identity the cache
     /// uses, so a visible but idle section does not re-evaluate the preview.
-    fn scalar_preview_levels(self: &mut State, frame: &PlaneFrame) -> Vec<f32> {
+    fn scalar_preview_levels(self: &mut State, request: &ScalarViewRequest) -> Vec<f32> {
         let count = self.scalar_level_count();
         if count == 0 {
             return Vec::new();
         }
-        let identity = self.scalar_view_identity_for(*frame, count);
+        let identity = self.scalar_view_identity_for(request.frame, count);
         if let Some((cached, levels)) = &self.scalar_preview_levels
             && cached == &identity
         {
             return levels.clone();
         }
-        let levels = self.compute_scalar_preview_levels(frame, count);
+        let levels = request.automatic_levels(count);
         self.scalar_preview_levels = Some((identity, levels.clone()));
         levels
-    }
-
-    /// Evaluate the bounded preview and build the levels from its finite range.
-    fn compute_scalar_preview_levels(self: &State, frame: &PlaneFrame, count: usize) -> Vec<f32> {
-        let Ok(expr) = scalar_view_expr(&self.plot.surface.source, &self.parameters) else {
-            return Vec::new();
-        };
-        let side = self
-            .scalar_grid_side
-            .clamp(MIN_GRID_SIDE, MAX_GRID_SIDE)
-            .min(32);
-        // The preview is part of the cache key through `levels`, so evaluate it
-        // on the same 100 ms-quantised clock the key uses; otherwise an
-        // animated formula would change the levels every frame and defeat the
-        // throttle.
-        let time = f64::from(self.time);
-        let preview_time = if time.is_finite() {
-            (time / SCALAR_RESAMPLE_INTERVAL).floor() * SCALAR_RESAMPLE_INTERVAL
-        } else {
-            0.0
-        };
-        let Ok(grid) = sample_grid(&expr, *frame, side, side, preview_time) else {
-            return Vec::new();
-        };
-        let mut min = f32::INFINITY;
-        let mut max = f32::NEG_INFINITY;
-        for sample in &grid.samples {
-            if let Some(value) = sample.value {
-                min = min.min(value);
-                max = max.max(value);
-            }
-        }
-        if !min.is_finite() || !max.is_finite() {
-            return Vec::new();
-        }
-        if min >= max {
-            return Vec::new();
-        }
-        (1..=count)
-            .map(|index| min + (max - min) * index as f32 / (count + 1) as f32)
-            .collect()
     }
 
     /// The Scalar view section's grid side (issue #92 slice B1).
@@ -3284,19 +3247,21 @@ impl State {
         if next == self.overlays {
             return Ok(());
         }
-        self.overlays = next;
+        self.restore_overlays(next);
         self.mark_dirty();
         Ok(())
     }
 
     /// Install a validated startup overlay set without dirtying the scene.
     pub(crate) fn restore_overlays(self: &mut State, next: ScalarOverlaySet) {
+        *self.cas_contour_cache.get_mut() = None;
         self.overlays = next;
     }
 
     /// Add a linked overlay that will follow the live committed parameters,
     /// frame and time. The record is structural; the panel validates the
-    /// current result before calling this.
+    /// current result before calling this. A contour result becomes the
+    /// active CAS contour layer.
     pub fn add_linked_overlay(
         self: &mut State,
         formula: impl Into<String>,
@@ -3304,6 +3269,9 @@ impl State {
     ) -> Result<OverlayId, String> {
         crate::scalar_analysis::validate_plane_frame(&self.scalar_view_frame())?;
         let id = self.overlays.add_linked(formula, layer, "")?;
+        if layer == OverlayLayer::Contours {
+            self.overlays.activate_contour(id);
+        }
         self.mark_dirty();
         Ok(id)
     }
@@ -3334,7 +3302,10 @@ impl State {
         id: OverlayId,
     ) -> Option<crate::scalar_overlay::ScalarOverlay> {
         let removed = self.overlays.remove(id);
-        if removed.is_some() {
+        if let Some(overlay) = &removed {
+            if overlay.active_contour {
+                *self.cas_contour_cache.get_mut() = None;
+            }
             self.mark_dirty();
         }
         removed
@@ -3359,7 +3330,10 @@ impl State {
     fn linked_overlay_is_time_dependent(self: &State) -> bool {
         self.overlays
             .iter()
-            .filter(|overlay| overlay.dependency == OverlayDependency::Linked)
+            .filter(|overlay| {
+                overlay.dependency == OverlayDependency::Linked
+                    && (overlay.active_contour || overlay.layer == OverlayLayer::PotentialField)
+            })
             .any(|overlay| {
                 scalar_view_expr(&overlay.formula, &self.parameters)
                     .is_ok_and(|expr| expr.is_time_dependent())
@@ -3377,12 +3351,7 @@ impl State {
         let Some(spec) = self.gradient.as_ref() else {
             return;
         };
-        let owned = self.overlays.iter().any(|overlay| {
-            overlay.dependency == OverlayDependency::Linked
-                && overlay.layer == OverlayLayer::PotentialField
-                && overlay.formula == spec.expr
-        });
-        if !owned || spec.frame == frame {
+        if spec.frame == frame || !self.overlays.has_linked_potential_gradient(spec) {
             return;
         }
         let mut next = spec.clone();
@@ -3393,28 +3362,14 @@ impl State {
         }
     }
 
-    /// Sample the installed linked overlays independently of panel visibility.
-    ///
-    /// A contour layer needs its scalar-view cache current, and a potential
-    /// layer needs its analysis geometry current. Both calls hit their existing
-    /// identity caches, so an unchanged frame performs no sampling.
+    /// Sample a linked potential layer independently of panel visibility.
+    /// CAS contours sample when the scene snapshot composes their lines.
     pub fn refresh_linked_overlay_layers(self: &mut State) {
-        let mut potential = false;
-        let mut contours = false;
-        for overlay in self.overlays.iter() {
-            if overlay.dependency != OverlayDependency::Linked {
-                continue;
-            }
-            match overlay.layer {
-                OverlayLayer::PotentialField => potential = true,
-                OverlayLayer::Contours => contours = true,
-            }
-        }
-        if potential {
+        if self.overlays.iter().any(|overlay| {
+            overlay.dependency == OverlayDependency::Linked
+                && overlay.layer == OverlayLayer::PotentialField
+        }) {
             self.refresh_scalar_analysis(true);
-        }
-        if contours {
-            let _ = self.refresh_scalar_view(true);
         }
     }
 
@@ -3865,36 +3820,38 @@ impl State {
     /// plane, domain or clock that has since changed. Non-finite geometry is
     /// skipped.
     pub fn scalar_overlay_lines(self: &State) -> Vec<LineInstanceGPU> {
-        if !self.scalar_view_applicable() {
+        if self.field_mode != FieldMode::Formula || !self.is_vector_mode() {
             return Vec::new();
         }
         let color = self.scalar_text_color;
         let width = crate::reference::EDGE_WIDTH;
-        let stale = self.scalar_view_cache.record().is_some()
-            && !self
-                .scalar_view_cache
-                .record_matches(&self.scalar_view_identity());
-        if stale {
-            return Vec::new();
-        }
+        let analysis_current = self
+            .scalar_analysis
+            .key
+            .as_ref()
+            .is_some_and(|key| *key == ScalarAnalysisKey::new(self));
         let mut lines = Vec::new();
-        if let Some(record) = self.scalar_view_cache.record() {
-            let frame = record.grid.frame;
-            for segment in &record.contours {
-                if !segment.start.is_finite() || !segment.end.is_finite() {
-                    continue;
-                }
-                let a = frame.to_world(Vec3::new(segment.start.x, segment.start.y, 0.0));
-                let b = frame.to_world(Vec3::new(segment.end.x, segment.end.y, 0.0));
-                if !a.is_finite() || !b.is_finite() {
-                    continue;
-                }
-                lines.push(LineInstanceGPU {
-                    a: [a.x, a.y, a.z, 1.0],
-                    b: [b.x, b.y, b.z, width],
-                    color,
-                });
+        self.append_cas_contour_lines(&mut lines);
+        let manual_current = self.scalar_view_applicable()
+            && self.scalar_view_cache.record().is_none_or(|_| {
+                self.scalar_view_cache
+                    .record_matches(&self.scalar_view_identity())
+            });
+        if !manual_current {
+            // A CAS potential owns its gradient samples independently of
+            // any manual scalar surface or contour cache.
+            if analysis_current
+                && self
+                    .gradient
+                    .as_ref()
+                    .is_some_and(|spec| self.overlays.has_linked_potential_gradient(spec))
+            {
+                lines.extend_from_slice(&self.scalar_analysis.gradient);
             }
+            return lines;
+        }
+        if let Some(record) = self.scalar_view_cache.record() {
+            append_contour_lines(&mut lines, record, color);
         }
 
         let frame = self.scalar_view_frame();
@@ -3930,12 +3887,49 @@ impl State {
         // captures include them without a new capture path. The cache is only
         // sampled by the visible panel or an installed linked overlay; stale
         // geometry from an earlier frame is not painted.
-        let analysis_key = ScalarAnalysisKey::new(self);
-        if self.scalar_analysis.key.as_ref() == Some(&analysis_key) {
+        if analysis_current {
             lines.extend_from_slice(&self.scalar_analysis.curves);
             lines.extend_from_slice(&self.scalar_analysis.gradient);
         }
         lines
+    }
+
+    /// Compose the one installed CAS contour from the current committed
+    /// inputs. Snapshot composition is shared by the viewport and captures.
+    fn append_cas_contour_lines(self: &State, lines: &mut Vec<LineInstanceGPU>) {
+        let Some(overlay) = self.overlays.active_contour() else {
+            return;
+        };
+        let frame = self.scalar_view_frame();
+        let domain = frame.local_domain();
+        let time = f64::from(self.time);
+        let level_count = DEFAULT_SCALAR_CONTOUR_LEVELS as usize;
+        let identity = ScalarViewIdentity::new(
+            &overlay.formula,
+            &self.parameters,
+            frame,
+            domain,
+            time,
+            DEFAULT_SCALAR_GRID_SIDE,
+            level_count,
+        );
+        let mut cache = self.cas_contour_cache.borrow_mut();
+        if !cache.as_ref().is_some_and(|(key, _)| key == &identity) {
+            let mut request = ScalarViewRequest {
+                source: overlay.formula.clone(),
+                parameters: self.parameters.clone(),
+                frame,
+                domain,
+                time,
+                grid_side: DEFAULT_SCALAR_GRID_SIDE,
+                levels: Vec::new(),
+            };
+            request.levels = request.automatic_levels(level_count);
+            *cache = Some((identity, sample_scalar_view(&request).ok()));
+        }
+        if let Some((_, Some(record))) = cache.as_ref() {
+            append_contour_lines(lines, record, self.scalar_text_color);
+        }
     }
 
     /// Refresh the scalar-view cache while the panel is visible.
@@ -5060,6 +5054,30 @@ impl State {
         }
         self.dirty = false;
         Some(self.snapshot())
+    }
+}
+
+/// Map cached plane-local contour segments onto the shared scene line layer.
+fn append_contour_lines(
+    lines: &mut Vec<LineInstanceGPU>,
+    record: &ScalarViewRecord,
+    color: [f32; 4],
+) {
+    let frame = record.grid.frame;
+    for segment in &record.contours {
+        if !segment.start.is_finite() || !segment.end.is_finite() {
+            continue;
+        }
+        let a = frame.to_world(Vec3::new(segment.start.x, segment.start.y, 0.0));
+        let b = frame.to_world(Vec3::new(segment.end.x, segment.end.y, 0.0));
+        if !a.is_finite() || !b.is_finite() {
+            continue;
+        }
+        lines.push(LineInstanceGPU {
+            a: [a.x, a.y, a.z, 1.0],
+            b: [b.x, b.y, b.z, crate::reference::EDGE_WIDTH],
+            color,
+        });
     }
 }
 

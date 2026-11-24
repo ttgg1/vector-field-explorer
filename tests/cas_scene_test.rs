@@ -3,7 +3,7 @@
 //!
 //! The tests drive the shipped CAS result seam and the ordinary scalar-view and
 //! gradient setters. No second physics model, grammar or sampler is introduced:
-//! contours reuse the scalar-view source layer and arrows reuse the #93
+//! contours reuse the scalar-view sampler and arrows reuse the #93
 //! potential-gradient layer, both bound to the current parameters, time and
 //! slice.
 
@@ -11,6 +11,7 @@ use eframe::egui::{self, vec2};
 use glam::Vec3;
 
 use crate::support;
+use crate::support::storage::MemoryStorage;
 
 use vector_field_explorer::VfApp;
 use vector_field_explorer::colormap::Colormap;
@@ -216,8 +217,10 @@ fn cas_scalar_result_plots_contours_without_touching_the_cas_input() {
     let message = panel
         .apply_scene(&mut state, 2, SceneTarget::Contours)
         .expect("the scalar result applies");
-    assert_eq!(state.plot.surface.source, result);
-    assert_ne!(state.plot.surface.source, before_source);
+    assert_eq!(state.plot.surface.source, before_source);
+    let contour = &state.overlays().as_slice()[0];
+    assert_eq!(contour.formula, result);
+    assert!(contour.active_contour);
     assert_eq!(
         state.formula, before_formula,
         "the vector source is untouched"
@@ -226,7 +229,11 @@ fn cas_scalar_result_plots_contours_without_touching_the_cas_input() {
         state.parameters, before_parameters,
         "plotting does not edit parameters"
     );
-    assert!(state.scalar_contour_levels() > 0, "contours are visible");
+    assert_eq!(state.scalar_contour_levels(), 0);
+    assert!(
+        !state.scalar_overlay_lines().is_empty(),
+        "CAS contours are visible"
+    );
     assert_eq!(panel.input, "x*y", "the CAS scratch input survives");
     assert!(panel.preview.is_some(), "the CAS result survives");
     assert!(
@@ -348,6 +355,216 @@ fn a_vector_result_is_refused_by_the_scalar_scene_route() {
 }
 
 #[test]
+fn cas_contour_plot_and_remove_keep_an_identical_manual_layer() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.controls_width = 460.0;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
+    app.state.set_formula("(0, 0)".into());
+    app.cas = scalar_panel("x*y", Operation::Differentiate, Variable::X);
+    let expression = app.cas.preview.as_ref().unwrap().formula.clone();
+    app.state
+        .set_scalar_source(ScalarContext::Surface, expression.clone());
+    app.controls.scalar_contour_levels = 3;
+    app.controls.scalar_grid_side = 24;
+    for _ in 0..4 {
+        idle(&ctx, &mut app);
+    }
+    app.state.refresh_scalar_view(true);
+
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+    let manual_lines = app.state.scalar_overlay_lines().len();
+    assert!(manual_lines > 0);
+    click_app_button(&ctx, &mut app, "Plot contours");
+    let id = app.state.overlays().as_slice()[0].id;
+    let together = app.state.scalar_overlay_lines().len();
+    assert!(
+        together > manual_lines,
+        "both contour layers should be drawn"
+    );
+    assert_eq!(app.state.plot.surface.source, expression);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+
+    click_app_button(&ctx, &mut app, &format!("Remove {id}"));
+    assert!(app.state.overlays().is_empty());
+    assert_eq!(app.state.plot.surface.source, expression);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+    assert_eq!(app.state.scalar_overlay_lines().len(), manual_lines);
+
+    assert!(app.undo_document(&ctx));
+    idle(&ctx, &mut app);
+    app.state.refresh_scalar_view(true);
+    assert_eq!(app.state.overlays().as_slice()[0].id, id);
+    assert_eq!(app.state.scalar_overlay_lines().len(), together);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+    assert!(app.redo_document(&ctx));
+    idle(&ctx, &mut app);
+    app.state.refresh_scalar_view(true);
+    assert!(app.state.overlays().is_empty());
+    assert_eq!(app.state.scalar_overlay_lines().len(), manual_lines);
+    assert_eq!(app.state.scalar_contour_levels(), 3);
+    assert_eq!(app.state.scalar_grid_side(), 24);
+}
+
+#[test]
+fn a_manual_gradient_stays_hidden_when_the_manual_scalar_source_is_unavailable() {
+    let mut state = State::new(false);
+    state.set_formula("(0, 0)".into());
+    state.set_scalar_source(ScalarContext::Surface, "x".into());
+    let frame = state.scalar_view_frame();
+    let gradient =
+        vector_field_explorer::scalar_analysis::potential_field_spec("x".into(), frame).unwrap();
+    state.set_gradient(Some(gradient)).unwrap();
+    state.refresh_scalar_analysis(true);
+    assert!(state.overlays().is_empty());
+    assert!(!state.scalar_overlay_lines().is_empty());
+
+    state.set_scalar_source(ScalarContext::Surface, "z".into());
+    assert!(!state.scalar_view_applicable());
+    assert!(state.scalar_overlay_lines().is_empty());
+}
+
+#[test]
+fn cas_potential_draws_with_an_unavailable_manual_scalar_source() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
+    app.state.set_formula("(0, 0)".into());
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "z".into());
+    app.cas = scalar_panel("x*y", Operation::Differentiate, Variable::X);
+    for _ in 0..4 {
+        idle(&ctx, &mut app);
+    }
+
+    assert!(!app.state.scalar_view_applicable());
+    click_app_button(&ctx, &mut app, "Plot contours");
+    let contour = app.state.overlays().as_slice()[0].id;
+    let contour_lines = app.state.scalar_overlay_lines().len();
+    assert!(contour_lines > 0);
+    click_app_button(&ctx, &mut app, "Add linked overlay");
+    assert!(
+        app.state.gradient.is_some(),
+        "the CAS potential is installed"
+    );
+    let combined = app.state.scalar_overlay_lines().len();
+    assert!(combined > contour_lines, "both CAS scene layers are drawn");
+
+    click_app_button(&ctx, &mut app, &format!("Remove {contour}"));
+    assert_eq!(app.state.plot.surface.source, "z");
+    assert!(!app.state.scalar_view_applicable());
+    assert_eq!(
+        app.state.scalar_overlay_lines().len(),
+        combined - contour_lines
+    );
+}
+
+#[test]
+fn closed_cas_panel_contours_follow_committed_inputs_in_scene_snapshots() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.cas_expanded = false;
+    app.layout.controls_expanded = false;
+    app.sheet.close();
+    app.state.set_formula("(0, 0)".into());
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "z".into());
+    app.state
+        .commit_parameters(ParameterSet {
+            entries: vec![Parameter {
+                name: "d".into(),
+                value: 1.0,
+                min: None,
+                max: None,
+                step: 0.1,
+            }],
+            ..ParameterSet::default()
+        })
+        .unwrap();
+    app.clock.playing = false;
+    app.clock.time = 0.25;
+    // Persisted linked rows can bind named parameters even though the
+    // built-in symbolic parser only derives expressions in x, y, z and t.
+    app.state
+        .add_linked_overlay(
+            "x + (d+t)*y",
+            vector_field_explorer::scalar_overlay::OverlayLayer::Contours,
+        )
+        .unwrap();
+    idle(&ctx, &mut app);
+
+    let geometry = |state: &State| {
+        state
+            .snapshot()
+            .lines
+            .iter()
+            .map(|line| (line.a, line.b))
+            .collect::<Vec<_>>()
+    };
+    let initial = geometry(&app.state);
+    assert!(!initial.is_empty());
+    assert!(!app.state.scalar_view_applicable());
+    app.clock.time = 0.26;
+    idle(&ctx, &mut app);
+    assert_eq!(
+        geometry(&app.state),
+        initial,
+        "time within the sample interval reuses geometry"
+    );
+
+    app.clock.time = 0.65;
+    idle(&ctx, &mut app);
+    let later = geometry(&app.state);
+    assert!(!later.is_empty());
+    assert_ne!(
+        later, initial,
+        "the committed clock changes the contour slope"
+    );
+
+    let mut parameters = app.state.parameters.clone();
+    parameters.entries[0].value = 2.0;
+    app.state.commit_parameters(parameters).unwrap();
+    idle(&ctx, &mut app);
+    let edited = geometry(&app.state);
+    assert!(!edited.is_empty());
+    assert_ne!(edited, later, "committing d changes the contour slope");
+
+    let min = Vec3::new(app.state.domain.min.x, app.state.domain.min.y, -1.0);
+    let max = Vec3::new(app.state.domain.max.x, app.state.domain.max.y, 3.0);
+    assert!(app.state.set_domain(min, max));
+    idle(&ctx, &mut app);
+    let moved = geometry(&app.state);
+    assert!(!moved.is_empty());
+    assert_ne!(
+        moved[0].0[2], edited[0].0[2],
+        "the contour follows the moved slice"
+    );
+
+    app.state
+        .commit_parameters(ParameterSet::default())
+        .unwrap();
+    idle(&ctx, &mut app);
+    assert!(
+        geometry(&app.state).is_empty(),
+        "an unavailable binding clears the scene layer"
+    );
+    assert!(app.state.overlays().as_slice()[0].active_contour);
+}
+
+#[test]
 fn each_cas_scene_action_is_one_undo_entry() {
     let ctx = support::context();
     ctx.enable_accesskit();
@@ -371,7 +588,10 @@ fn each_cas_scene_action_is_one_undo_entry() {
 
     // Drive the shipped expanded CAS body: one click per scene action.
     click_app_button(&ctx, &mut app, "Plot contours");
-    assert_eq!(app.state.plot.surface.source, "y");
+    assert_eq!(app.state.plot.surface.source, before_source);
+    let contour = &app.state.overlays().as_slice()[0];
+    assert_eq!(contour.formula, "y");
+    assert!(contour.active_contour);
     assert_eq!(app.state.gradient, before_gradient);
     assert_eq!(
         app.history_len(),
@@ -381,7 +601,8 @@ fn each_cas_scene_action_is_one_undo_entry() {
 
     click_app_button(&ctx, &mut app, "Add linked overlay");
     assert!(app.state.gradient.is_some(), "the overlay is installed");
-    assert_eq!(app.state.plot.surface.source, "y", "contours stay put");
+    assert_eq!(app.state.plot.surface.source, before_source);
+    assert!(app.state.overlays().as_slice()[0].active_contour);
     assert_eq!(
         app.history_len(),
         base + 2,
@@ -392,16 +613,18 @@ fn each_cas_scene_action_is_one_undo_entry() {
     assert!(app.undo_document(&ctx), "one undo is available");
     assert_eq!(app.state.gradient, before_gradient);
     assert_eq!(
-        app.state.plot.surface.source, "y",
-        "undoing the overlay leaves the contours it did not change"
+        app.state.plot.surface.source, before_source,
+        "undoing the overlay does not edit the manual source"
     );
     assert_eq!(app.history_len(), base + 1);
+    assert!(app.state.overlays().as_slice()[0].active_contour);
 
     assert!(
         app.undo_document(&ctx),
         "the contour action is still undoable"
     );
     assert_eq!(app.state.plot.surface.source, before_source);
+    assert!(app.state.overlays().is_empty());
     assert_eq!(app.history_len(), base);
 }
 
@@ -582,4 +805,83 @@ fn the_result_provenance_is_labelled_analytic_with_its_valid_region() {
         region.contains("slice") || region.contains("XY") || region.contains("slice"),
         "valid region names the slice: {region}"
     );
+}
+
+#[test]
+fn workspace_round_trip_preserves_manual_settings_and_explicit_cas_ownership() {
+    let mut app = VfApp::new();
+    app.state.set_formula("(0, 0)".into());
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "y".into());
+    app.state.set_scalar_contour_levels(3).unwrap();
+    app.state.set_scalar_grid_side(24).unwrap();
+    app.state.refresh_scalar_view(true);
+    let manual_lines = app.state.scalar_overlay_lines().len();
+    let mut panel = scalar_panel("x*y", Operation::Differentiate, Variable::X);
+    panel
+        .apply_scene(&mut app.state, 2, SceneTarget::Contours)
+        .unwrap();
+    let cas_id = app.state.overlays().as_slice()[0].id;
+    let together = app.state.scalar_overlay_lines().len();
+    assert!(manual_lines > 0 && together > manual_lines);
+
+    let mut storage = MemoryStorage::default();
+    eframe::App::save(&mut app, &mut storage);
+    let mut reopened = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(reopened.state.plot.surface.source, "y");
+    assert_eq!(reopened.state.scalar_contour_levels(), 3);
+    assert_eq!(reopened.state.scalar_grid_side(), 24);
+    assert_eq!(reopened.controls.scalar_contour_levels, 3);
+    assert_eq!(reopened.controls.scalar_grid_side, 24);
+    assert_eq!(reopened.state.overlays().as_slice()[0].id, cas_id);
+    reopened.state.refresh_scalar_view(true);
+    assert_eq!(reopened.state.scalar_overlay_lines().len(), together);
+
+    let stored = storage.values.get_mut(eframe::APP_KEY).unwrap();
+    assert!(stored.contains("active_contour:true,"));
+    let current = stored.clone();
+    *stored = stored
+        .replace("active_contour:true,", "")
+        .replace("scalar_grid_side:24,", "")
+        .replace("scalar_contour_levels:3,", "");
+    let mut legacy = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(legacy.state.plot.surface.source, "y");
+    assert_eq!(
+        legacy.state.scalar_contour_levels(),
+        State::new(false).scalar_contour_levels()
+    );
+    assert_eq!(
+        legacy.state.scalar_grid_side(),
+        State::new(false).scalar_grid_side()
+    );
+    assert_eq!(legacy.state.overlays().as_slice()[0].id, cas_id);
+    assert!(legacy.state.scalar_overlay_lines().is_empty());
+    legacy.state.refresh_scalar_view(true);
+    let legacy_manual_lines = legacy.state.scalar_overlay_lines().len();
+    assert!(legacy_manual_lines > 0);
+    assert!(legacy.state.remove_overlay(cas_id).is_some());
+    assert_eq!(
+        legacy.state.scalar_overlay_lines().len(),
+        legacy_manual_lines
+    );
+
+    // Out-of-range stored numbers are bounded by the same limits as the live
+    // controls while the valid overlay record still restores.
+    storage.values.insert(
+        eframe::APP_KEY.into(),
+        current
+            .replace("scalar_grid_side:24,", "scalar_grid_side:0,")
+            .replace("scalar_contour_levels:3,", "scalar_contour_levels:999,"),
+    );
+    let repaired = VfApp::new_with_storage(Some(&storage));
+    assert_eq!(
+        repaired.state.scalar_grid_side(),
+        vector_field_explorer::viewmodel::MIN_SCALAR_GRID_SIDE,
+    );
+    assert_eq!(
+        repaired.state.scalar_contour_levels(),
+        vector_field_explorer::scalar_view::MAX_CONTOUR_LEVELS as u32,
+    );
+    assert_eq!(repaired.state.overlays().as_slice()[0].id, cas_id);
+    assert!(!repaired.state.scalar_overlay_lines().is_empty());
 }

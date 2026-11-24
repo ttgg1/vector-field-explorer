@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::parameters::ParameterSet;
 use crate::plane::PlaneFrame;
-use crate::scalar_analysis::validate_plane_frame;
+use crate::scalar_analysis::{GradientSpec, SeriesRole, validate_plane_frame};
 use crate::scalar_view::{scalar_view_expr, slice_label};
 
 /// Most overlays one scene may hold.
@@ -111,6 +111,10 @@ pub struct ScalarOverlay {
     /// What layer the result feeds.
     #[serde(default)]
     pub layer: OverlayLayer,
+    /// This row's linked result is the active CAS contour layer. Older rows
+    /// have no explicit ownership and remain available as records.
+    #[serde(default)]
+    pub active_contour: bool,
     /// Linked or frozen dependency semantics.
     #[serde(default)]
     pub dependency: OverlayDependency,
@@ -132,6 +136,7 @@ impl ScalarOverlay {
             label: label.into(),
             formula: formula.into(),
             layer,
+            active_contour: false,
             dependency: OverlayDependency::Linked,
             capture: None,
         }
@@ -151,6 +156,7 @@ impl ScalarOverlay {
             label: label.into(),
             formula: formula.into(),
             layer,
+            active_contour: false,
             dependency: OverlayDependency::Frozen,
             capture: Some(OverlayCapture {
                 parameters,
@@ -174,6 +180,12 @@ impl ScalarOverlay {
         }
         if self.formula.trim().is_empty() {
             return Err("overlay expression must not be empty".to_owned());
+        }
+        if self.active_contour
+            && (self.layer != OverlayLayer::Contours
+                || self.dependency != OverlayDependency::Linked)
+        {
+            return Err("only a linked contour overlay can own the CAS contour layer".to_owned());
         }
         match (self.dependency, &self.capture) {
             (OverlayDependency::Linked, None) => {}
@@ -230,6 +242,14 @@ impl ScalarOverlay {
             time,
             dependency: self.dependency,
         })
+    }
+
+    /// Whether this linked potential describes the installed gradient.
+    pub(crate) fn matches_potential_gradient(&self, spec: &GradientSpec) -> bool {
+        self.dependency == OverlayDependency::Linked
+            && self.layer == OverlayLayer::PotentialField
+            && spec.role == SeriesRole::ElectricPotential
+            && spec.expr == self.formula
     }
 
     /// The captured values a frozen overlay must show; `None` for linked.
@@ -328,6 +348,24 @@ impl ScalarOverlaySet {
         self.overlays.iter().find(|overlay| overlay.id == id)
     }
 
+    /// The linked row installed as the CAS contour layer, if any.
+    pub(crate) fn active_contour(&self) -> Option<&ScalarOverlay> {
+        self.overlays.iter().find(|overlay| overlay.active_contour)
+    }
+
+    /// Select the newly appended linked contour row by its stable id.
+    pub(crate) fn activate_contour(&mut self, id: OverlayId) {
+        for overlay in &mut self.overlays {
+            overlay.active_contour = overlay.id == id;
+        }
+    }
+
+    /// Whether an installed gradient has a linked CAS potential row.
+    pub(crate) fn has_linked_potential_gradient(&self, spec: &GradientSpec) -> bool {
+        self.iter()
+            .any(|overlay| overlay.matches_potential_gradient(spec))
+    }
+
     /// The next free stable id.
     pub fn next_id(&self) -> OverlayId {
         OverlayId(
@@ -348,10 +386,14 @@ impl ScalarOverlaySet {
             ));
         }
         let mut seen = HashSet::with_capacity(self.overlays.len());
+        let mut active_contour = false;
         for overlay in &self.overlays {
             overlay.validate()?;
             if !seen.insert(overlay.id) {
                 return Err(format!("duplicate overlay id {}", overlay.id.0));
+            }
+            if overlay.active_contour && std::mem::replace(&mut active_contour, true) {
+                return Err("only one CAS contour overlay can be active".to_owned());
             }
         }
         Ok(())
@@ -397,6 +439,9 @@ impl ScalarOverlaySet {
             return Err(format!("at most {MAX_OVERLAYS} overlays are allowed"));
         }
         overlay.validate()?;
+        if overlay.active_contour && self.active_contour().is_some() {
+            return Err("only one CAS contour overlay can be active".to_owned());
+        }
         if self
             .overlays
             .iter()
