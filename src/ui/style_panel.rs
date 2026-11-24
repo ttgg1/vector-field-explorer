@@ -14,6 +14,8 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use super::motion::{MotionMode, MotionTokens, effective_mode};
+
 /// Vertical item spacing as a fraction of the horizontal one, chosen so the
 /// defaults (spacing 8) reproduce egui's own `item_spacing = (8, 3)`.
 pub const SPACING_Y_RATIO: f32 = 3.0 / 8.0;
@@ -176,6 +178,10 @@ pub fn selection_text_color(accent: egui::Color32) -> egui::Color32 {
 /// the start of every frame, so applying the same record twice must leave the
 /// context identical.
 pub fn apply(ctx: &egui::Context, style: &AppStyle) {
+    apply_with_motion(ctx, style, effective_mode(style.reduced_motion, false));
+}
+
+pub(crate) fn apply_with_motion(ctx: &egui::Context, style: &AppStyle, motion: MotionMode) {
     // Defensive: loaded records are sanitized, but `apply` also runs on user
     // edits and must never feed egui a value outside the sliders (review I-3).
     let style = style.clone().sanitized();
@@ -225,10 +231,10 @@ pub fn apply(ctx: &egui::Context, style: &AppStyle) {
         // One shared token drives egui's own widget-state easing. Under reduced
         // motion the easing time is zero, so hover/press states land on their
         // final colour on the very first frame with no eased intermediate.
-        style_ctx.animation_time = if style.reduced_motion {
+        style_ctx.animation_time = if motion == MotionMode::Reduced {
             0.0
         } else {
-            crate::ui::motion::MotionTokens::default().hover_press_ms / 1000.0
+            MotionTokens::default().hover_press_ms / 1000.0
         };
 
         style_ctx.spacing.item_spacing =

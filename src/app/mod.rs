@@ -275,6 +275,10 @@ pub struct VfApp {
     /// floating viewport panels (issue #289). Session-only, never persisted.
     pub sheet_transition: crate::ui::motion::MotionTransition,
     last_sheet: SheetState,
+    /// Platform motion preference sampled at the start of the frame.
+    platform_reduced_motion: bool,
+    #[cfg(target_arch = "wasm32")]
+    browser_motion_query: Option<web_sys::MediaQueryList>,
     pub legend_transition: crate::ui::motion::MotionTransition,
     legend_was_visible: bool,
     pub typeset_transition: crate::ui::motion::MotionTransition,
@@ -662,6 +666,14 @@ impl VfApp {
                 crate::ui::motion::MotionTokens::default().open_slide_ms,
             ),
             last_sheet: SheetState::None,
+            platform_reduced_motion: false,
+            #[cfg(target_arch = "wasm32")]
+            browser_motion_query: web_sys::window().and_then(|window| {
+                window
+                    .match_media("(prefers-reduced-motion: reduce)")
+                    .ok()
+                    .flatten()
+            }),
             legend_transition: crate::ui::motion::MotionTransition::new(
                 crate::ui::motion::MotionTokens::default().open_slide_ms,
             ),
@@ -746,20 +758,20 @@ impl Default for VfApp {
 }
 
 impl VfApp {
-    /// Resolve the slide-transition mode from the persisted setting plus the
-    /// optional platform reduced-motion signal (issue #289). Hover/press easing
-    /// is driven separately by the persisted setting alone (via egui's
-    /// `animation_time`); the platform hook below gates only the slide
-    /// transitions and defaults to "no signal".
+    /// Resolve the effective motion mode for both panel slides and widget easing.
     pub fn motion_mode(&self) -> crate::ui::motion::MotionMode {
-        crate::ui::motion::effective_mode(self.style.reduced_motion, self.platform_reduced_motion())
+        crate::ui::motion::effective_mode(self.style.reduced_motion, self.platform_reduced_motion)
     }
 
-    /// Platform reduced-motion preference hook. Overridable by embedders; the
-    /// native and wasm defaults are "no signal", so the user setting alone
-    /// decides unless a platform integration supplies `true`.
-    fn platform_reduced_motion(&self) -> bool {
-        false
+    fn apply_style(&self, ctx: &egui::Context) {
+        style_panel::apply_with_motion(ctx, &self.style, self.motion_mode());
+    }
+
+    /// Supply the platform preference when exercising real app frames in native tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn test_set_platform_reduced_motion(&mut self, reduced: bool) {
+        self.platform_reduced_motion = reduced;
     }
 
     /// Advance one transition, starting it on a visibility rising edge.

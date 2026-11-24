@@ -11,10 +11,20 @@ impl eframe::App for VfApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Sample once per frame so panel slides and widget easing see the
+        // same browser preference, including changes after startup.
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.platform_reduced_motion = self
+                .browser_motion_query
+                .as_ref()
+                .is_some_and(web_sys::MediaQueryList::matches);
+        }
+
         // Restyle the whole frame from the persisted record before any widget
         // runs. `apply` is idempotent, so doing this every frame is cheap and
         // keeps the UI in sync even if a theme/visual was changed elsewhere.
-        style_panel::apply(ui.ctx(), &self.style);
+        self.apply_style(ui.ctx());
 
         // Ticket 53: one layout decision per frame from the root width, before
         // the top/formula bars or any side panel consume width. The mode is

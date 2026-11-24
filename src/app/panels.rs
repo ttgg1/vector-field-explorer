@@ -148,7 +148,7 @@ impl VfApp {
         });
         self.record_tour_panel(PanelId::TopBar, top_response.response.rect);
         if style_changed {
-            style_panel::apply(ui.ctx(), &self.style);
+            self.apply_style(ui.ctx());
         }
     }
 
@@ -2876,7 +2876,7 @@ impl VfApp {
                             let controls =
                                 crate::ui::style_panel::show_controls(ui, &mut self.style);
                             if controls.changed {
-                                crate::ui::style_panel::apply(ui.ctx(), &self.style);
+                                self.apply_style(ui.ctx());
                             }
                         }
                         SheetState::Presets => {
