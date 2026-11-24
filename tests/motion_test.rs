@@ -588,7 +588,7 @@ fn click_app_control(ctx: &egui::Context, app: &mut VfApp, time_s: &mut f64, lab
 
 /// Drag a floating panel's Area down to the bottom of the constrained viewport
 /// through real pointer events. `grab` selects a point inside the panel that is
-/// draggable (the legend header vs. the typeset panel's left edge).
+/// draggable (outside either panel's interactive controls).
 fn drag_to_bottom(
     ctx: &egui::Context,
     app: &mut VfApp,
@@ -720,8 +720,9 @@ fn typeset_reopen_from_bottom_edge_settles_at_saved_location() {
         time_s += 1.0 / 60.0;
         app_frame_events(&ctx, &mut app, time_s, 1.0 / 60.0, vec![]);
     }
+    // Grab the header above the scroll body, whose height depends on the formula.
     drag_to_bottom(&ctx, &mut app, &mut time_s, typeset_id, |r| {
-        egui::pos2(r.left() + 4.0, r.center().y)
+        r.right_top() + egui::vec2(-3.0, 3.0)
     });
     time_s = settle_app(&ctx, &mut app, time_s);
     let saved = typeset_rect();

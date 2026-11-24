@@ -349,7 +349,7 @@ fn fallback_is_labelled_never_claimed_as_typeset() {
     let out = app_output(&ctx, &mut app, vec2(1280.0, 1000.0), Vec::new());
     let shown = texts(&out).join("\n");
     assert!(
-        shown.contains("linear fallback"),
+        shown.contains("linear fallback") && shown.lines().any(|line| line == "[x]"),
         "a failed conversion states the fallback: {shown}"
     );
 }
@@ -631,5 +631,72 @@ fn tiny_substituted_value_matches_field_evaluator_precision() {
             .iter()
             .any(|line| line.trim_start_matches("(").starts_with("0,")),
         "a sub-0.00005 value is not collapsed to zero: {composed:?}"
+    );
+}
+
+#[test]
+fn wrapped_vector_keeps_nested_component_parentheses() {
+    let state = State::new(false);
+    for formula in ["(sin((x+y)), (x+y), 0)", "sin((x+y)), (x+y), 0"] {
+        assert_eq!(
+            composed_formula(formula, &state),
+            ["sin((x+y))", "(x+y)", "0"]
+        );
+    }
+    assert_eq!(composed_formula("(sin(x))", &state), ["(sin(x))"]);
+    assert_eq!(composed_formula("(x), (y)", &state), ["(x)", "(y)"]);
+}
+
+#[test]
+fn a_fraction_typesets_in_the_scrollable_equation_panel() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    let formula = "(x+1)/(y+2), y, 0";
+    let size = vec2(1280.0, 1000.0);
+    app.bar.text = formula.to_owned();
+    app.state.set_formula(formula.to_owned());
+    assert!(app.state.parse_error.is_empty());
+    assert_eq!(app.state.field.dimension, 3);
+    app_idle(&ctx, &mut app, size, 3);
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, size, 3);
+    let output = app_output(&ctx, &mut app, size, Vec::new());
+    let shown = texts(&output).join("\n");
+    assert!(app.formula_typeset.open && shown.contains("Active formula"));
+    assert!(
+        !shown.contains("linear fallback"),
+        "a supported fraction should typeset: {shown}"
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_replaced_cas_vector_typesets_in_the_floating_equation_panel() {
+    use vector_field_explorer::ui::cas_panel::Operation;
+
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
+    app.state.set_mode(true);
+    app.cas.input = "x*y".to_owned();
+    app.cas.operation = Operation::Gradient;
+    let size = vec2(1280.0, 1000.0);
+    app_idle(&ctx, &mut app, size, 3);
+    assert_eq!(app.cas.copy_text(), Some("(y, x, 0)"));
+
+    click_app_button(&ctx, &mut app, "Replace field");
+    assert_eq!(app.state.active_source(), "(y, x, 0)");
+    assert!(app.state.parse_error.is_empty());
+    assert_eq!(app.state.field.dimension, 3);
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, size, 3);
+    let output = app_output(&ctx, &mut app, size, Vec::new());
+    let shown = texts(&output).join("\n");
+    assert!(app.formula_typeset.open && shown.contains("Active formula"));
+    assert!(
+        !shown.contains("linear fallback"),
+        "the accepted CAS vector should typeset: {shown}"
     );
 }
