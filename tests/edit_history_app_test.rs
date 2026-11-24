@@ -1175,3 +1175,101 @@ fn undo_keeps_a_density_that_binds_a_restored_parameter() {
         "undo restores parameters before validating the density, so it survives"
     );
 }
+
+#[test]
+fn menu_undo_and_redo_restore_the_ode_transfer_in_one_step() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state.set_mode(false);
+    let parameters = ParameterSet {
+        entries: vec![Parameter {
+            name: "k".into(),
+            value: 2.5,
+            step: 0.5,
+            ..Parameter::default()
+        }],
+        ..ParameterSet::default()
+    };
+    app.state
+        .commit_parameters(parameters.clone())
+        .expect("valid Formula parameter");
+    let original = "(k*y, x)";
+    app.state.set_formula(original.into());
+    let mut scene = app.state.ode.clone();
+    scene.dimension = 3;
+    scene.equations = ["y+t".into(), "-2*x".into(), "x-z".into()];
+    scene.duration = 4.0;
+    scene.seeds[0].position = [0.5, 0.25, 0.0];
+    app.state
+        .set_ode_scene(scene.clone())
+        .expect("valid 3D RHS");
+    let out = settle(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        labelled_rect(&out, "ODE")
+            .expect("ODE mode selector")
+            .center(),
+    );
+    assert_eq!(app.state.field_mode, FieldMode::Ode);
+
+    let out = settle(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        labelled_rect(&out, "Show typeset formula")
+            .expect("Equation launcher")
+            .center(),
+    );
+    app.orbit.target = Vec3::new(1.0, 2.0, 3.0);
+    app.orbit.ortho_zoom = 3.5;
+    app.orbit.yaw = 1.1;
+    let out = settle(&ctx, &mut app);
+    let start = app.history_len();
+    let orbit = app.orbit;
+    let solution = app.state.ode_solution.clone().expect("previous solution");
+    let assert_preserved = |app: &VfApp| {
+        assert_eq!(app.orbit, orbit);
+        assert_eq!(app.state.parameters, parameters);
+        assert_eq!(app.state.ode, scene);
+        assert!(std::sync::Arc::ptr_eq(
+            &solution,
+            app.state.ode_solution.as_ref().unwrap()
+        ));
+    };
+    let action = labelled_rect(&out, "Open in Formula")
+        .expect("transfer action")
+        .center();
+    let _ = frame(&ctx, &mut app, vec![moved(action)]);
+    click(&ctx, &mut app, action);
+    settle(&ctx, &mut app);
+    let transferred = "(y+t, -2*x, x-z)";
+    assert_eq!(app.state.field_mode, FieldMode::Formula);
+    assert_eq!(app.state.formula, transferred);
+    assert_eq!(app.state.field.dimension, 3);
+    assert_eq!(app.history_len(), start + 1);
+    assert_preserved(&app);
+    assert_eq!(
+        app.state.field.eval3_at(Vec3::new(2.0, -1.0, 3.0), 0.5),
+        Some(Vec3::new(-0.5, -4.0, -1.0))
+    );
+
+    menu_action(&ctx, &mut app, "Edit", "Undo");
+    settle(&ctx, &mut app);
+    assert_eq!(app.state.field_mode, FieldMode::Ode);
+    assert_eq!(app.state.formula, original);
+    assert_eq!(app.history_len(), start);
+    assert_eq!(app.history_redo_len(), 1);
+    assert_preserved(&app);
+
+    menu_action(&ctx, &mut app, "Edit", "Redo");
+    settle(&ctx, &mut app);
+    assert_eq!(app.state.field_mode, FieldMode::Formula);
+    assert_eq!(app.state.formula, transferred);
+    assert_eq!(app.history_len(), start + 1);
+    assert_eq!(app.history_redo_len(), 0);
+    assert_preserved(&app);
+}

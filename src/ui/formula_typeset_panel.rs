@@ -186,7 +186,7 @@ fn format_number(value: f64) -> String {
     format!("{value}")
 }
 
-fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) {
+fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) -> Option<String> {
     let scene = &state.ode;
     if scene.source == crate::ode::OdeSource::CurrentField {
         // The Formula preview substitutes playback time; the solver integrates
@@ -195,19 +195,26 @@ fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) {
         if state.ode_error.is_some() && state.ode_solution.is_some() {
             ui.weak("The trajectory comes from the last valid solve.");
         }
-        return;
+        return None;
     }
-    if state.ode_solution.is_none() {
-        ui.label("ODE RHS unavailable until the model has a valid solution.");
-        return;
-    }
-    if state.ode_error.is_some() {
-        ui.label(format!("Last committed ODE RHS · {}D", scene.dimension));
-        ui.weak("The latest edit failed. The trajectory comes from the last valid solve.");
-    } else {
-        ui.label(format!("Live ODE RHS · {}D", scene.dimension));
-        ui.weak("The solver integrates these derivatives to produce the trajectory.");
-    }
+    let (title, trajectory_status) = match (state.ode_solution.is_some(), state.ode_error.is_some())
+    {
+        (true, false) => (
+            "Live ODE RHS",
+            "The solver integrates these derivatives to produce the trajectory.",
+        ),
+        (true, true) => (
+            "Last committed ODE RHS",
+            "The trajectory comes from the last valid solve.",
+        ),
+        (false, false) => ("Committed ODE RHS", "No solved trajectory is available."),
+        (false, true) => (
+            "Committed ODE RHS",
+            "Trajectory unavailable. The ODE workbench reports an error.",
+        ),
+    };
+    ui.label(format!("{title} · {}D", scene.dimension));
+    ui.weak(trajectory_status);
     ui.weak("Here t is integration time.");
     egui::ScrollArea::vertical()
         .max_height(body_height)
@@ -226,17 +233,30 @@ fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) {
                 );
             }
         });
+    let equations = scene.equations.get(..scene.dimension)?;
+    let formula = format!("({})", equations.join(", "));
+    // Typed ODE equations do not bind Formula parameters. Require a RHS that
+    // parses independently so a stored parameter cannot change its meaning.
+    if crate::field::FieldExpr::parse_with_parameters(&formula, &Default::default()).is_err() {
+        ui.label("These ODE equations cannot be opened in Formula.");
+        return None;
+    }
+    ui.add(egui::Label::new(egui::RichText::new(
+        "Formula uses shared playback time for t. ODE uses integration time. The trajectory stays in ODE.",
+    ).weak()).wrap());
+    ui.button("Open in Formula").clicked().then_some(formula)
 }
 
 /// Draw the panel. Callers do the `open` check; the viewport rect is the one
-/// measured by the frame's central panel.
+/// measured by the frame's central panel. Returns the Formula source when the
+/// user opens a typed ODE RHS in Formula.
 pub fn show(
     ctx: &Context,
     viewport: Rect,
     panel: &mut FormulaTypesetPanelState,
     formula: &str,
     state: &State,
-) -> InnerResponse<()> {
+) -> InnerResponse<Option<String>> {
     show_slide(ctx, viewport, panel, formula, state, egui::Vec2::ZERO)
 }
 
@@ -248,7 +268,7 @@ pub fn show_slide(
     formula: &str,
     state: &State,
     slide: egui::Vec2,
-) -> InnerResponse<()> {
+) -> InnerResponse<Option<String>> {
     let default = panel.default_position(viewport);
     let mut close = false;
     let mut reset = false;
@@ -264,21 +284,18 @@ pub fn show_slide(
             // the shared legend overlay so text and KaTeX shapes get real space.
             ui.set_width((viewport.width() * 0.42).clamp(180.0, 380.0));
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.heading(PANEL_TITLE);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(CLOSE_LABEL).on_hover_text(CLOSE_LABEL).clicked() {
-                            close = true;
-                        }
-                        if ui.button(RESET_LABEL).on_hover_text(RESET_LABEL).clicked() {
-                            reset = true;
-                        }
-                    });
+                    if ui.button(CLOSE_LABEL).on_hover_text(CLOSE_LABEL).clicked() {
+                        close = true;
+                    }
+                    if ui.button(RESET_LABEL).on_hover_text(RESET_LABEL).clicked() {
+                        reset = true;
+                    }
                 });
                 let body_height = (viewport.height() * 0.45).max(48.0);
                 if state.field_mode == FieldMode::Ode {
-                    show_ode_equation(ui, state, body_height);
-                    return;
+                    return show_ode_equation(ui, state, body_height);
                 }
                 let note = if state.field_mode == FieldMode::Formula {
                     NOTE
@@ -311,7 +328,8 @@ pub fn show_slide(
                 ui.weak(
                     "Parameters and time use their committed values; this is the formula, not a sample.",
                 );
-            });
+                None
+            }).inner
         },
     );
     if close {
