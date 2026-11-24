@@ -31,7 +31,14 @@ impl Harness {
     }
 
     fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
-        let mut frame = eframe::Frame::_new_kittest();
+        self.frame_with_native(events, &mut eframe::Frame::_new_kittest())
+    }
+
+    fn frame_with_native(
+        &mut self,
+        events: Vec<egui::Event>,
+        frame: &mut eframe::Frame,
+    ) -> egui::FullOutput {
         let mut out = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -41,7 +48,7 @@ impl Harness {
                 events,
                 ..Default::default()
             },
-            |ui| eframe::App::ui(&mut self.app, ui, &mut frame),
+            |ui| eframe::App::ui(&mut self.app, ui, frame),
         );
         out.textures_delta.clear();
         out
@@ -367,4 +374,118 @@ fn a_failed_start_is_retryable_but_invalid_fields_still_block() {
         "the validation error is still shown: {:?}",
         h.app.animation.error
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_a_stalled_video_finalizer_keeps_the_existing_file() {
+    use eframe::{egui_wgpu, wgpu};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use vector_field_explorer::animation::{
+        AnimationFormat, AnimationSpec, video_sink_with_program,
+    };
+    use vector_field_explorer::animation_job::AnimationJob;
+    use vector_field_explorer::export_provenance::ExportProvenance;
+
+    if std::env::var_os("VFE_ANIMATION_GPU_PROBE").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        eprintln!("GPU not requested; set VFE_ANIMATION_GPU_PROBE=1 on a GPU host");
+        return;
+    }
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    descriptor.backends.remove(wgpu::Backends::NOOP);
+    let instance = wgpu::Instance::new(descriptor);
+    let mut native = eframe::Frame::_new_kittest();
+    native.wgpu_render_state = Some(
+        pollster::block_on(egui_wgpu::RenderState::create(
+            &egui_wgpu::WgpuConfiguration::default(),
+            &instance,
+            None,
+            egui_wgpu::RendererOptions::default(),
+        ))
+        .expect("real native animation render state"),
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("output.mp4");
+    fs::write(&output, b"previous output").unwrap();
+    let program = dir.path().join("gated-ffmpeg.sh");
+    fs::write(
+        &program,
+        r#"#!/bin/sh
+cat >/dev/null
+for last; do :; done
+printf 'encoded video' > "$last"
+touch "${0%/*}/staged"
+while [ ! -f "${0%/*}/release" ]; do sleep 0.01; done
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    let staged = dir.path().join("staged");
+    let release = dir.path().join("release");
+
+    let mut h = Harness::new(1200.0);
+    h.open_animation_dialog_from_menu();
+    h.app.clock.set_playing(true);
+    let spec = AnimationSpec {
+        duration: 0.1,
+        fps: 1,
+        width: 64,
+        height: 64,
+        format: AnimationFormat::Mp4,
+        ..AnimationSpec::default()
+    };
+    let snapshot = h.app.animation_snapshot().unwrap();
+    let sink =
+        video_sink_with_program(&spec, &output, &ExportProvenance::default(), &program).unwrap();
+    h.app
+        .test_begin_animation_job(AnimationJob::new(spec, snapshot, sink, None).unwrap());
+
+    // If the app update blocks waiting on the encoder, release the gate so
+    // the test fails promptly instead of waiting for the production timeout.
+    let watchdog = thread::spawn({
+        let staged = staged.clone();
+        let release = release.clone();
+        move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !staged.exists() && !release.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(600));
+            if !release.exists() {
+                let _ = fs::write(release, b"watchdog");
+            }
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut out = h.frame_with_native(vec![], &mut native);
+    while !staged.exists() && Instant::now() < deadline {
+        out = h.frame_with_native(vec![], &mut native);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(staged.exists(), "encoder reached its finalization gate");
+    assert!(
+        !release.exists(),
+        "the viewport update waited for encoder completion"
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"previous output");
+    let cancel = bounds(&out, "Cancel")
+        .expect("real dialog Cancel button")
+        .center();
+    h.frame_with_native(pointer(cancel, true), &mut native);
+    h.frame_with_native(pointer(cancel, false), &mut native);
+    h.frame_with_native(vec![], &mut native);
+
+    assert!(h.app.animation_job.is_none());
+    assert!(h.app.clock.playing);
+    assert_eq!(
+        h.app.animation.status.as_deref(),
+        Some("Animation export cancelled.")
+    );
+    fs::write(&release, b"test completed").unwrap();
+    watchdog.join().unwrap();
+    assert_eq!(fs::read(output).unwrap(), b"previous output");
 }
