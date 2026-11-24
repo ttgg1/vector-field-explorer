@@ -89,6 +89,7 @@ pub fn toggle_area(ctx: &Context, viewport: Rect, panel: &mut FormulaTypesetPane
 /// Split a vector formula into components at top-level commas. Nested argument
 /// lists are kept intact; this is grouping, not expression parsing.
 fn components(text: &str) -> Vec<String> {
+    let text = unwrap_vector(text.trim());
     let mut parts = Vec::new();
     let mut start = 0;
     let mut depth = 0i32;
@@ -105,6 +106,32 @@ fn components(text: &str) -> Vec<String> {
     }
     parts.push(text[start..].trim().to_owned());
     parts
+}
+
+/// Remove a single outer pair only when it encloses a vector.
+fn unwrap_vector(text: &str) -> &str {
+    let Some(inner) = text
+        .strip_prefix('(')
+        .and_then(|text| text.strip_suffix(')'))
+    else {
+        return text;
+    };
+    let mut depth = 0;
+    let mut has_separator = false;
+    for ch in inner.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return text,
+            ')' => depth -= 1,
+            ',' if depth == 0 => has_separator = true,
+            _ => {}
+        }
+    }
+    if depth == 0 && has_separator {
+        inner
+    } else {
+        text
+    }
 }
 
 /// Commit the live substitutions into the displayed formula: parameter names
@@ -231,16 +258,15 @@ pub fn show_slide(
                     .min_scrolled_height(body_height)
                     .auto_shrink([true, true])
                     .show(ui, |ui| {
+                        // Use the scroll content directly so tall math can size its row.
                         for component in &components {
-                            ui.horizontal(|ui| {
-                                let tex = crate::cas_tex::linear_to_tex(component);
-                                let typeset = crate::ui::math_view::paint_tex_or_linear(
-                                    ui,
-                                    tex.as_deref(),
-                                    component,
-                                );
-                                any_fallback |= !typeset;
-                            });
+                            let tex = crate::cas_tex::linear_to_tex(component);
+                            let typeset = crate::ui::math_view::paint_tex_or_linear(
+                                ui,
+                                tex.as_deref(),
+                                component,
+                            );
+                            any_fallback |= !typeset;
                         }
                     });
                 if any_fallback {
