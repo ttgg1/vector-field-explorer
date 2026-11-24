@@ -820,6 +820,7 @@ fn equation_panel_labels_the_previous_typed_rhs_after_a_rejected_edit() {
     );
     assert!(!shown.contains("Live ODE RHS"), "{shown}");
     assert!(!shown.contains("dy/dt = missing_axis"), "{shown}");
+    assert!(!shown.contains("Open in Formula"), "{shown}");
 }
 
 #[test]
@@ -927,4 +928,73 @@ fn current_field_ode_reports_an_unavailable_equation_and_the_last_valid_trajecto
         rejected.iter().any(|text| text == last_solve),
         "{rejected:?}"
     );
+}
+
+#[test]
+fn open_in_formula_transfers_the_committed_ode_rhs() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    let mut scene = app.state.ode.clone();
+    scene.equations = ["y+t".into(), "-2*x".into(), "z".into()];
+    app.state.set_ode_scene(scene).expect("valid typed RHS");
+    let size = vec2(1280.0, 1000.0);
+    app_idle(&ctx, &mut app, size, 3);
+    click_app_label(&ctx, &mut app, size, "ODE");
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, size, 3);
+    app.clock.set_playing(false);
+    app.clock.seek(0.75);
+    let shown = texts(&app_output(&ctx, &mut app, size, Vec::new())).join("\n");
+    assert!(shown.contains("shared playback time for t"), "{shown}");
+    assert!(shown.contains("The trajectory stays in ODE"), "{shown}");
+    click_app_button(&ctx, &mut app, "Open in Formula");
+    assert_eq!(app.state.field_mode, FieldMode::Formula);
+    assert_eq!(app.state.active_source(), "(y+t, -2*x)");
+    assert_eq!(app.state.field.dimension, 2);
+    assert!(app.state.parse_error.is_empty());
+    assert_eq!(app.state.time, 0.75);
+    for (point, time) in [
+        (glam::Vec3::new(2.0, 3.0, 9.0), app.state.time),
+        (glam::Vec3::new(-1.0, 4.0, 9.0), 1.25),
+    ] {
+        let expected = glam::Vec3::new(point.y + time, -2.0 * point.x, 0.0);
+        assert_eq!(app.state.field.eval3_at(point, time), Some(expected));
+    }
+}
+
+#[test]
+fn ode_transfer_does_not_bind_a_formula_parameter_to_the_rhs() {
+    let ctx = context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.state
+        .commit_parameters(ParameterSet {
+            entries: vec![Parameter {
+                name: "gain".into(),
+                value: 2.0,
+                step: 1.0,
+                ..Parameter::default()
+            }],
+            ..ParameterSet::default()
+        })
+        .expect("valid Formula parameters");
+    let mut scene = app.state.ode.clone();
+    scene.equations[0] = "gain*x".into();
+    // The solver may retain the finite seed when an RHS cannot be evaluated.
+    // Formula could bind gain, which would make this a different model.
+    app.state
+        .set_ode_scene(scene)
+        .expect("ODE retains the finite seed");
+    let size = vec2(1280.0, 1000.0);
+    app_idle(&ctx, &mut app, size, 3);
+    click_app_label(&ctx, &mut app, size, "ODE");
+    click_app_button(&ctx, &mut app, TOGGLE_SHOW);
+    app_idle(&ctx, &mut app, size, 3);
+    let shown = texts(&app_output(&ctx, &mut app, size, Vec::new())).join("\n");
+    assert!(
+        shown.contains("These ODE equations cannot be opened in Formula."),
+        "{shown}"
+    );
+    assert!(!shown.contains("Open in Formula"), "{shown}");
 }
