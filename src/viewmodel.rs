@@ -3825,20 +3825,29 @@ impl State {
     /// plane, domain or clock that has since changed. Non-finite geometry is
     /// skipped.
     pub fn scalar_overlay_lines(self: &State) -> Vec<LineInstanceGPU> {
+        if self.field_mode != FieldMode::Formula || !self.is_vector_mode() {
+            return Vec::new();
+        }
         let color = self.scalar_text_color;
         let width = crate::reference::EDGE_WIDTH;
+        let analysis_current =
+            self.scalar_analysis.key.as_ref() == Some(&ScalarAnalysisKey::new(self));
         let mut lines = Vec::new();
         self.append_cas_contour_lines(&mut lines);
-        if !self.scalar_view_applicable() {
+        let manual_current = self.scalar_view_applicable()
+            && self.scalar_view_cache.record().is_none_or(|_| {
+                self.scalar_view_cache
+                    .record_matches(&self.scalar_view_identity())
+            });
+        if !manual_current {
+            // A CAS potential owns its gradient samples independently of
+            // any manual scalar surface or contour cache.
+            if analysis_current {
+                lines.extend_from_slice(&self.scalar_analysis.gradient);
+            }
             return lines;
         }
         if let Some(record) = self.scalar_view_cache.record() {
-            if !self
-                .scalar_view_cache
-                .record_matches(&self.scalar_view_identity())
-            {
-                return lines;
-            }
             append_contour_lines(&mut lines, record, color);
         }
 
@@ -3875,8 +3884,7 @@ impl State {
         // captures include them without a new capture path. The cache is only
         // sampled by the visible panel or an installed linked overlay; stale
         // geometry from an earlier frame is not painted.
-        let analysis_key = ScalarAnalysisKey::new(self);
-        if self.scalar_analysis.key.as_ref() == Some(&analysis_key) {
+        if analysis_current {
             lines.extend_from_slice(&self.scalar_analysis.curves);
             lines.extend_from_slice(&self.scalar_analysis.gradient);
         }
@@ -3886,9 +3894,6 @@ impl State {
     /// Compose the one installed CAS contour from the current committed
     /// inputs. Snapshot composition is shared by the viewport and captures.
     fn append_cas_contour_lines(self: &State, lines: &mut Vec<LineInstanceGPU>) {
-        if self.field_mode != FieldMode::Formula || !self.is_vector_mode() {
-            return;
-        }
         let Some(overlay) = self.overlays.active_contour() else {
             return;
         };

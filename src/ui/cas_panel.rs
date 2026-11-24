@@ -363,17 +363,12 @@ impl CasPanelState {
                 self.scene_message = Some(format!(
                     "Plotting analytic contours of {formula} on the {slice}; values are \
                      sampled with the committed parameters at t = {time:.3}. {region} \
-                     The CAS input and the physics model source are unchanged. \
+                     The manual scalar view and CAS input are unchanged. \
                      Linked overlay follows the live parameters ({bindings}). \
                      {OVERLAY_ASSUMPTIONS}"
                 ));
             }
             SceneTarget::PotentialField => {
-                if !state.scalar_view_applicable() {
-                    return Err(
-                        "the potential-field overlay needs a valid manual scalar source".to_owned(),
-                    );
-                }
                 let spec = potential_field_spec(formula.clone(), frame)?;
                 state
                     .set_gradient(Some(spec))
@@ -985,7 +980,7 @@ fn show_enabled(
                     )
                     .on_hover_text(
                         "Plot this analytic result as contours on the active slice; the CAS \
-                         input and the physics model source stay unchanged",
+                         input and manual scalar view stay unchanged",
                     );
                 let contours = if scene_ready {
                     contours

@@ -415,6 +415,138 @@ fn cas_contour_plot_and_remove_keep_an_identical_manual_layer() {
 }
 
 #[test]
+fn cas_potential_draws_with_an_unavailable_manual_scalar_source() {
+    let ctx = support::context();
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.cas_expanded = true;
+    app.layout.cas_width = 460.0;
+    app.state.set_formula("(0, 0)".into());
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "z".into());
+    app.cas = scalar_panel("x*y", Operation::Differentiate, Variable::X);
+    for _ in 0..4 {
+        idle(&ctx, &mut app);
+    }
+
+    assert!(!app.state.scalar_view_applicable());
+    click_app_button(&ctx, &mut app, "Plot contours");
+    let contour = app.state.overlays().as_slice()[0].id;
+    let contour_lines = app.state.scalar_overlay_lines().len();
+    assert!(contour_lines > 0);
+    click_app_button(&ctx, &mut app, "Add linked overlay");
+    assert!(
+        app.state.gradient.is_some(),
+        "the CAS potential is installed"
+    );
+    let combined = app.state.scalar_overlay_lines().len();
+    assert!(combined > contour_lines, "both CAS scene layers are drawn");
+
+    click_app_button(&ctx, &mut app, &format!("Remove {contour}"));
+    assert_eq!(app.state.plot.surface.source, "z");
+    assert!(!app.state.scalar_view_applicable());
+    assert_eq!(
+        app.state.scalar_overlay_lines().len(),
+        combined - contour_lines
+    );
+}
+
+#[test]
+fn closed_cas_panel_contours_follow_committed_inputs_in_scene_snapshots() {
+    let ctx = support::context();
+    let mut app = VfApp::new();
+    app.layout.help_visible = false;
+    app.layout.cas_expanded = false;
+    app.layout.controls_expanded = false;
+    app.sheet.close();
+    app.state.set_formula("(0, 0)".into());
+    app.state
+        .set_scalar_source(ScalarContext::Surface, "z".into());
+    app.state
+        .commit_parameters(ParameterSet {
+            entries: vec![Parameter {
+                name: "d".into(),
+                value: 1.0,
+                min: None,
+                max: None,
+                step: 0.1,
+            }],
+            ..ParameterSet::default()
+        })
+        .unwrap();
+    app.clock.playing = false;
+    app.clock.time = 0.25;
+    // Persisted linked rows can bind named parameters even though the
+    // built-in symbolic parser only derives expressions in x, y, z and t.
+    app.state
+        .add_linked_overlay(
+            "x + (d+t)*y",
+            vector_field_explorer::scalar_overlay::OverlayLayer::Contours,
+        )
+        .unwrap();
+    idle(&ctx, &mut app);
+
+    let geometry = |state: &State| {
+        state
+            .snapshot()
+            .lines
+            .iter()
+            .map(|line| (line.a, line.b))
+            .collect::<Vec<_>>()
+    };
+    let initial = geometry(&app.state);
+    assert!(!initial.is_empty());
+    assert!(!app.state.scalar_view_applicable());
+    app.clock.time = 0.26;
+    idle(&ctx, &mut app);
+    assert_eq!(
+        geometry(&app.state),
+        initial,
+        "time within the sample interval reuses geometry"
+    );
+
+    app.clock.time = 0.65;
+    idle(&ctx, &mut app);
+    let later = geometry(&app.state);
+    assert!(!later.is_empty());
+    assert_ne!(
+        later, initial,
+        "the committed clock changes the contour slope"
+    );
+
+    let mut parameters = app.state.parameters.clone();
+    parameters.entries[0].value = 2.0;
+    app.state.commit_parameters(parameters).unwrap();
+    idle(&ctx, &mut app);
+    let edited = geometry(&app.state);
+    assert!(!edited.is_empty());
+    assert_ne!(edited, later, "committing d changes the contour slope");
+
+    let min = Vec3::new(app.state.domain.min.x, app.state.domain.min.y, -1.0);
+    let max = Vec3::new(app.state.domain.max.x, app.state.domain.max.y, 3.0);
+    assert!(app.state.set_domain(min, max));
+    idle(&ctx, &mut app);
+    let moved = geometry(&app.state);
+    assert!(!moved.is_empty());
+    assert_ne!(
+        moved[0].0[2], edited[0].0[2],
+        "the contour follows the moved slice"
+    );
+
+    app.state
+        .commit_parameters(ParameterSet::default())
+        .unwrap();
+    idle(&ctx, &mut app);
+    assert!(
+        geometry(&app.state).is_empty(),
+        "an unavailable binding clears the scene layer"
+    );
+    assert!(app.state.overlays().as_slice()[0].active_contour);
+}
+
+#[test]
 fn each_cas_scene_action_is_one_undo_entry() {
     let ctx = support::context();
     ctx.enable_accesskit();
