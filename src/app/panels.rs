@@ -3243,6 +3243,20 @@ impl VfApp {
             screenshot_busy,
         );
         self.apply_animation_dialog_action(action, ui.ctx());
+
+        // A native result can become ready between the press and release of
+        // Cancel. Accept it only after this frame's dialog action is known,
+        // and after the viewport has released its renderer lock.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(job) = self.animation_job.as_mut()
+            && matches!(
+                job.state(),
+                AnimationJobState::Encoding | AnimationJobState::Writing
+            )
+        {
+            let _ = job.take_next_frame();
+            ui.ctx().request_repaint();
+        }
     }
 }
 

@@ -158,7 +158,11 @@ impl VfApp {
             // offscreen draw itself needs access to the callback resources.
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(job) = self.animation_job.as_mut() {
-                if let Ok(Some(request)) = job.take_next_frame() {
+                if !matches!(
+                    job.state(),
+                    AnimationJobState::Encoding | AnimationJobState::Writing
+                ) && let Ok(Some(request)) = job.take_next_frame()
+                {
                     let result = {
                         let mut renderer = render_state.renderer.write();
                         if renderer.callback_resources.get_mut::<DrawState>().is_none() {

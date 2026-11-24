@@ -507,9 +507,9 @@ touch "${0%/*}/completed"
         }
     });
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut out = h.frame_with_native(vec![], &mut native);
+    h.frame_with_native(vec![], &mut native);
     while !staged.exists() && Instant::now() < deadline {
-        out = h.frame_with_native(vec![], &mut native);
+        h.frame_with_native(vec![], &mut native);
         thread::sleep(Duration::from_millis(5));
     }
     assert!(staged.exists(), "encoder reached its finalization gate");
@@ -518,6 +518,7 @@ touch "${0%/*}/completed"
         "the viewport update waited for encoder completion"
     );
     assert_eq!(fs::read(&output).unwrap(), b"previous output");
+    let out = h.frame_with_native(vec![], &mut native);
     let cancel = bounds(&out, "Cancel")
         .expect("real dialog Cancel button")
         .center();
@@ -631,4 +632,89 @@ printf 'should not publish' > "$last"
     fs::write(dir.path().join("accept-input"), b"test completed").unwrap();
     wait_for_video(|| no_video_stages(dir.path()));
     assert_eq!(fs::read(output).unwrap(), b"previous output");
+}
+
+#[cfg(unix)]
+#[test]
+fn cancel_click_beats_a_video_result_ready_on_the_same_frame() {
+    use std::{cell::Cell, fs, path::PathBuf, rc::Rc, task::Poll};
+    use vector_field_explorer::animation::{
+        AnimationError, AnimationFormat, AnimationSpec, FrameSink,
+    };
+    use vector_field_explorer::animation_job::{AnimationJob, AnimationJobState};
+
+    struct ReadyOnRelease {
+        ready: Rc<Cell<bool>>,
+        destination: PathBuf,
+    }
+    impl FrameSink for ReadyOnRelease {
+        fn push_frame(&mut self, _: &[u8], _: u32, _: u32) -> Result<(), AnimationError> {
+            Ok(())
+        }
+
+        fn bytes_written(&self) -> u64 {
+            0
+        }
+
+        fn poll_finish(&mut self) -> Option<Poll<Result<(), AnimationError>>> {
+            if !self.ready.get() {
+                return Some(Poll::Pending);
+            }
+            fs::write(&self.destination, b"finished video").unwrap();
+            Some(Poll::Ready(Ok(())))
+        }
+
+        fn finish(self: Box<Self>) -> Result<(), AnimationError> {
+            panic!("the GUI must poll this encoder");
+        }
+    }
+
+    let Some(mut native) = animation_gpu_frame() else {
+        return;
+    };
+    let mut h = Harness::new(1200.0);
+    h.open_animation_dialog_from_menu();
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("output.mp4");
+    fs::write(&destination, b"previous video").unwrap();
+    let ready = Rc::new(Cell::new(false));
+    let spec = AnimationSpec {
+        duration: 0.1,
+        fps: 1,
+        width: 64,
+        height: 64,
+        format: AnimationFormat::Mp4,
+        ..AnimationSpec::default()
+    };
+    let job = AnimationJob::new(
+        spec,
+        h.app.animation_snapshot().unwrap(),
+        Box::new(ReadyOnRelease {
+            ready: Rc::clone(&ready),
+            destination: destination.clone(),
+        }),
+        None,
+    )
+    .unwrap();
+    h.app.test_begin_animation_job(job);
+
+    h.frame_with_native(vec![], &mut native);
+    let out = h.frame_with_native(vec![], &mut native);
+    assert_eq!(
+        h.app.animation_job.as_ref().unwrap().state(),
+        AnimationJobState::Writing
+    );
+    let cancel = bounds(&out, "Cancel")
+        .expect("real dialog Cancel button")
+        .center();
+    h.frame_with_native(pointer(cancel, true), &mut native);
+    ready.set(true);
+    h.frame_with_native(pointer(cancel, false), &mut native);
+    h.frame_with_native(vec![], &mut native);
+
+    assert_eq!(fs::read(destination).unwrap(), b"previous video");
+    assert_eq!(
+        h.app.animation.status.as_deref(),
+        Some("Animation export cancelled.")
+    );
 }
