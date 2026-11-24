@@ -3,6 +3,8 @@
 
 use glam::Mat4;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::animation_job::AnimationRenderer;
 use crate::layer_style::LayerStyles;
 use crate::maxwell_wave::WaveSpec;
 
@@ -152,35 +154,46 @@ impl VfApp {
                 return;
             };
 
-            // Animation export: render at most one detached frame per app
-            // update, before the live paint. The job owns its snapshot, so this
-            // never steps live state or the shared clock.
+            // Advance encoder I/O outside the renderer lock. Only the
+            // offscreen draw itself needs access to the callback resources.
             #[cfg(not(target_arch = "wasm32"))]
-            if self.animation_job.is_some() {
-                let mut renderer = render_state.renderer.write();
-                if renderer.callback_resources.get_mut::<DrawState>().is_none() {
-                    renderer.callback_resources.insert(DrawState::new(
-                        &render_state.device,
-                        render_state.target_format,
-                    ));
-                    self.renderer_ready = true;
-                }
-                if let Some(draw) = renderer.callback_resources.get_mut::<DrawState>()
-                    && let Some(job) = self.animation_job.as_mut()
+            if let Some(job) = self.animation_job.as_mut() {
+                if !matches!(
+                    job.state(),
+                    AnimationJobState::Encoding | AnimationJobState::Writing
+                ) && let Ok(Some(request)) = job.take_next_frame()
                 {
-                    let mut bridge = NativeAnimationRenderer {
-                        draw,
-                        device: &render_state.device,
-                        queue: &render_state.queue,
+                    let result = {
+                        let mut renderer = render_state.renderer.write();
+                        if renderer.callback_resources.get_mut::<DrawState>().is_none() {
+                            renderer.callback_resources.insert(DrawState::new(
+                                &render_state.device,
+                                render_state.target_format,
+                            ));
+                            self.renderer_ready = true;
+                        }
+                        match renderer.callback_resources.get_mut::<DrawState>() {
+                            Some(draw) => {
+                                let mut bridge = NativeAnimationRenderer {
+                                    draw,
+                                    device: &render_state.device,
+                                    queue: &render_state.queue,
+                                };
+                                bridge.render(
+                                    request.frame,
+                                    request.width,
+                                    request.height,
+                                    request.clear,
+                                )
+                            }
+                            None => Err(AnimationError::Encoder(
+                                "animation renderer resources are missing".into(),
+                            )),
+                        }
                     };
-                    let _ = job.pump(&mut bridge);
+                    let _ = job.complete_frame(result);
                 }
-                drop(renderer);
-                if self
-                    .animation_job
-                    .as_ref()
-                    .is_some_and(|job| !job.state().is_terminal())
-                {
+                if !job.state().is_terminal() {
                     ui.ctx().request_repaint();
                 }
             }

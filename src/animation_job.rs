@@ -10,6 +10,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
 use crate::animation::{AnimationError, AnimationSpec, FrameSink, frame_count};
 use crate::animation_scene::{AnimationFrame, AnimationSnapshot};
@@ -141,6 +142,8 @@ pub struct AnimationJob {
     /// The frame index handed to an asynchronous renderer. At most one
     /// readback is in flight at a time.
     pending_index: Option<usize>,
+    /// At most one rendered frame waiting for encoder queue capacity.
+    pending_frame: Option<Vec<u8>>,
 }
 
 impl AnimationJob {
@@ -164,6 +167,7 @@ impl AnimationJob {
             error: None,
             fake: None,
             pending_index: None,
+            pending_frame: None,
         })
     }
 
@@ -225,6 +229,7 @@ impl AnimationJob {
                 renderer_error_at,
             }),
             pending_index: None,
+            pending_frame: None,
         }
     }
 
@@ -266,50 +271,13 @@ impl AnimationJob {
         }
     }
 
-    /// Render, push and finish at most one step: one frame, or the final sink
-    /// flush. Cancellation between frames drains without finishing the sink.
+    /// Render, submit, or finalize one step of the job.
     pub fn pump(&mut self, renderer: &mut dyn AnimationRenderer) -> Result<(), AnimationError> {
-        if self.state.is_terminal() {
+        let Some(request) = self.take_next_frame()? else {
             return Ok(());
-        }
-        if self.cancel_requested {
-            self.sink = None;
-            self.pending_index = None;
-            self.state = AnimationJobState::Cancelled;
-            self.error = None;
-            return Ok(());
-        }
-
-        if self.state == AnimationJobState::Encoding {
-            return self.finish_sink();
-        }
-
-        let index = self.frames_done;
-        if index >= self.frames_total {
-            self.state = AnimationJobState::Encoding;
-            return Ok(());
-        }
-        self.state = AnimationJobState::RenderingFrame(index);
-
-        let time = self.spec.start_time + index as f32 / self.spec.fps as f32;
-        let dt = 1.0 / self.spec.fps.max(1) as f32;
-        let aspect = self.spec.width as f32 / self.spec.height.max(1) as f32;
-        let frame = match self.snapshot.frame_at(time, dt, aspect, index == 0) {
-            Ok(frame) => frame,
-            Err(error) => {
-                self.fail_after(error.clone());
-                return Err(error);
-            }
         };
-        let clear = self.snapshot.clear;
-        let rgba = match renderer.render(frame, self.spec.width, self.spec.height, clear) {
-            Ok(rgba) => rgba,
-            Err(error) => {
-                self.fail_after(error.clone());
-                return Err(error);
-            }
-        };
-        self.apply_and_push_frame(index, rgba)
+        let result = renderer.render(request.frame, request.width, request.height, request.clear);
+        self.complete_frame(result)
     }
 
     /// Build the next detached frame for an asynchronous renderer. At most one
@@ -322,6 +290,7 @@ impl AnimationJob {
         if self.cancel_requested {
             self.sink = None;
             self.pending_index = None;
+            self.pending_frame = None;
             self.state = AnimationJobState::Cancelled;
             self.error = None;
             return Ok(None);
@@ -329,7 +298,14 @@ impl AnimationJob {
         if self.pending_index.is_some() {
             return Ok(None);
         }
-        if self.state == AnimationJobState::Encoding {
+        if let Some(rgba) = self.pending_frame.take() {
+            self.submit_frame(self.frames_done, rgba)?;
+            return Ok(None);
+        }
+        if matches!(
+            self.state,
+            AnimationJobState::Encoding | AnimationJobState::Writing
+        ) {
             self.finish_sink()?;
             return Ok(None);
         }
@@ -364,6 +340,13 @@ impl AnimationJob {
         &mut self,
         result: Result<Vec<u8>, String>,
     ) -> Result<(), AnimationError> {
+        self.complete_frame(result.map_err(AnimationError::Encoder))
+    }
+
+    pub(crate) fn complete_frame(
+        &mut self,
+        result: Result<Vec<u8>, AnimationError>,
+    ) -> Result<(), AnimationError> {
         let Some(index) = self.pending_index.take() else {
             return Err(AnimationError::InvalidSpec(
                 "no animation frame was requested".into(),
@@ -371,8 +354,7 @@ impl AnimationJob {
         };
         let rgba = match result {
             Ok(rgba) => rgba,
-            Err(message) => {
-                let error = AnimationError::Encoder(message);
+            Err(error) => {
                 self.fail_after(error.clone());
                 return Err(error);
             }
@@ -394,13 +376,21 @@ impl AnimationJob {
             return Err(error);
         }
 
+        self.submit_frame(index, rgba)
+    }
+
+    fn submit_frame(&mut self, index: usize, rgba: Vec<u8>) -> Result<(), AnimationError> {
         let Some(sink) = self.sink.as_mut() else {
             let error = AnimationError::InvalidSpec("animation sink was lost".into());
             self.fail_after(error.clone());
             return Err(error);
         };
-        match sink.push_frame(&rgba, self.spec.width, self.spec.height) {
-            Ok(()) => {
+        match sink.try_push_frame(rgba, self.spec.width, self.spec.height) {
+            Ok(Some(pending)) => {
+                self.pending_frame = Some(pending);
+                Ok(())
+            }
+            Ok(None) => {
                 self.frames_done = index + 1;
                 self.state = if self.frames_done < self.frames_total {
                     AnimationJobState::RenderingFrame(self.frames_done)
@@ -418,12 +408,18 @@ impl AnimationJob {
 
     fn finish_sink(&mut self) -> Result<(), AnimationError> {
         self.state = AnimationJobState::Writing;
-        let Some(sink) = self.sink.take() else {
+        let Some(sink) = self.sink.as_mut() else {
             let error = AnimationError::InvalidSpec("animation sink was lost".into());
             self.fail_after(error.clone());
             return Err(error);
         };
-        match sink.finish() {
+        let result = match sink.poll_finish() {
+            Some(Poll::Pending) => return Ok(()),
+            Some(Poll::Ready(result)) => result,
+            None => self.sink.take().expect("the sink is present").finish(),
+        };
+        self.sink = None;
+        match result {
             Ok(()) => {
                 self.state = AnimationJobState::Done;
                 Ok(())
@@ -468,6 +464,7 @@ impl AnimationJob {
         self.state = AnimationJobState::Failed;
         // Dropping the sink abandons its temporary output.
         self.sink = None;
+        self.pending_frame = None;
     }
 }
 

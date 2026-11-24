@@ -167,6 +167,24 @@ impl std::error::Error for AnimationError {}
 pub trait FrameSink {
     /// Push one tightly packed non-premultiplied RGBA8 frame.
     fn push_frame(&mut self, rgba: &[u8], width: u32, height: u32) -> Result<(), AnimationError>;
+    /// Try to submit an owned frame. A full queue returns the unchanged frame
+    /// for a later update. Synchronous sinks accept it immediately.
+    #[doc(hidden)]
+    fn try_push_frame(
+        &mut self,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, AnimationError> {
+        self.push_frame(&rgba, width, height)?;
+        Ok(None)
+    }
+    /// Poll a sink with asynchronous finalization. Synchronous sinks use
+    /// `finish` instead.
+    #[doc(hidden)]
+    fn poll_finish(&mut self) -> Option<std::task::Poll<Result<(), AnimationError>>> {
+        None
+    }
     /// Number of output bytes written so far, including container headers.
     fn bytes_written(&self) -> u64;
     /// Flush, enforce the output budget and atomically replace the destination.
@@ -641,8 +659,8 @@ pub fn video_sink_with_program(
             "video_sink requires AnimationFormat::Mp4 or Webm".to_string(),
         ));
     }
-    let temporary = temporary_path(path)?;
-    let arguments = ffmpeg_args(spec, &temporary, provenance);
+    let stage = VideoStage::create(path)?;
+    let arguments = ffmpeg_args(spec, &stage.path, provenance);
     let mut child = Command::new(program)
         .args(&arguments)
         .stdin(Stdio::piped())
@@ -656,111 +674,156 @@ pub fn video_sink_with_program(
             ))
         })?;
     let stdin = child.stdin.take();
-    // A background writer owns stdin: a stalled encoder can only fill the
-    // bounded queue, never block the paint closure that calls `push_frame`.
-    let stderr = child
-        .stderr
-        .take()
-        .map(|stderr| std::thread::spawn(move || read_bounded_stderr(stderr)));
-    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    let (sender, receiver) = std::sync::mpsc::sync_channel(VIDEO_FRAME_QUEUE);
-    let (result_sender, result) = std::sync::mpsc::channel();
-    let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let worker_child = std::sync::Arc::clone(&child);
-    let worker_failure = std::sync::Arc::clone(&failure);
-    let worker_temporary = temporary.clone();
-    let worker_destination = path.to_path_buf();
-    let handle = std::thread::spawn(move || {
-        run_video_worker(
-            receiver,
-            stdin,
-            worker_child,
-            stderr,
-            worker_temporary,
-            worker_destination,
-            result_sender,
-            worker_failure,
-        );
+    let stderr = child.stderr.take().map(|stderr| {
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = send.send(read_bounded_stderr(stderr));
+        });
+        receive
+    });
+
+    // The watchdog owns the process even while the writer blocks in write_all.
+    // The app can cancel with a flag and never needs to lock or join a thread.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let (send_status, status) = mpsc::channel();
+    let child_cancelled = Arc::clone(&cancelled);
+    thread::spawn(move || {
+        let _ = send_status.send(wait_for_video_child(child, &child_cancelled));
+    });
+
+    let (sender, receiver) = mpsc::sync_channel(VIDEO_FRAME_QUEUE);
+    let (send_result, result) = mpsc::channel();
+    let writer_cancelled = Arc::clone(&cancelled);
+    thread::spawn(move || {
+        let outcome = run_video_worker(&receiver, stdin, status, stderr, stage, &writer_cancelled);
+        let _ = send_result.send(outcome);
     });
     Ok(Box::new(VideoFrameSink {
         spec: spec.clone(),
+        destination: path.to_path_buf(),
         frames: 0,
         written: 0,
-        finished: false,
         worker: Some(VideoWorker {
             sender,
-            child,
             result,
-            failure,
-            handle: Some(handle),
+            cancelled,
         }),
+        push_deadline: None,
+        finish_phase: VideoFinishPhase::Idle,
     }))
 }
 
-/// Frames the background encoder may have queued before a stalled writer is a
-/// visible failure rather than unbounded memory growth.
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    process::{Child, ChildStdin, ExitStatus},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
+    },
+    task::Poll,
+    thread,
+    time::{Duration, Instant},
+};
+
+/// Number of frames that can wait for the writer.
 #[cfg(not(target_arch = "wasm32"))]
 const VIDEO_FRAME_QUEUE: usize = 4;
-/// Kept encoder diagnostics; the reader still drains the pipe.
+/// Retained encoder diagnostics. The reader continues to drain beyond the cap.
 #[cfg(not(target_arch = "wasm32"))]
 const VIDEO_STDERR_LIMIT: usize = 8 * 1024;
-/// Bound on waiting for queue space so a busy encoder does not fail a normal
-/// export, while a stalled one cannot freeze the paint closure.
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO_PUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
-/// Bound on the final encoder flush so Cancel cannot become unreachable.
+const VIDEO_PUSH_TIMEOUT: Duration = Duration::from_millis(250);
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO_FINISH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const VIDEO_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(not(target_arch = "wasm32"))]
+const VIDEO_FINISH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A unique sibling of the destination. Only the accepting sink can publish
+/// this file, and abandoned results remove only their own staging path.
+#[cfg(not(target_arch = "wasm32"))]
+struct VideoStage {
+    path: PathBuf,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl VideoStage {
+    fn create(destination: &Path) -> Result<Self, AnimationError> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        if destination.file_name().is_none() {
+            return Err(AnimationError::InvalidSpec(format!(
+                "{} has no file name",
+                destination.display(),
+            )));
+        }
+        for _ in 0..64 {
+            let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = destination.with_file_name(format!(
+                ".vfe-animation-{}-{sequence}.tmp",
+                std::process::id(),
+            ));
+            match File::create_new(&path) {
+                Ok(_) => return Ok(Self { path }),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(AnimationError::Io(format!(
+                        "could not stage video beside {}: {error}",
+                        destination.display(),
+                    )));
+                }
+            }
+        }
+        Err(AnimationError::Io(format!(
+            "could not reserve a video stage beside {}",
+            destination.display(),
+        )))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for VideoStage {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+enum VideoFinishPhase {
+    Idle,
+    Sending(Instant),
+    Waiting(Instant),
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 struct VideoFrameSink {
     spec: AnimationSpec,
+    destination: PathBuf,
     frames: usize,
     written: u64,
-    finished: bool,
     worker: Option<VideoWorker>,
+    push_deadline: Option<Instant>,
+    finish_phase: VideoFinishPhase,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 struct VideoWorker {
-    sender: std::sync::mpsc::SyncSender<VideoWorkerMessage>,
-    child: std::sync::Arc<std::sync::Mutex<std::process::Child>>,
-    result: std::sync::mpsc::Receiver<Result<(), AnimationError>>,
-    failure: std::sync::Arc<std::sync::Mutex<Option<AnimationError>>>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    sender: mpsc::SyncSender<VideoWorkerMessage>,
+    result: mpsc::Receiver<Result<VideoStage, AnimationError>>,
+    cancelled: Arc<AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 enum VideoWorkerMessage {
     Frame(Vec<u8>),
     Finish,
-    Cancel,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl VideoWorker {
-    fn cancel(&mut self) {
-        let _ = self.sender.try_send(VideoWorkerMessage::Cancel);
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-        }
-        // Do not join here: this runs on the paint/drop path and must stay
-        // bounded. The killed child releases the pipe and the writer exits.
-        self.handle.take();
-    }
-
-    fn failure_text(&self) -> Option<String> {
-        self.failure
-            .lock()
-            .ok()
-            .and_then(|failure| failure.as_ref().map(ToString::to_string))
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for VideoWorker {
     fn drop(&mut self) {
-        self.cancel();
+        self.cancelled.store(true, Ordering::Release);
     }
 }
 
@@ -775,24 +838,18 @@ fn append_stderr(reason: String, stderr: &[u8]) -> String {
     }
 }
 
-/// Wait without holding the child lock across a blocking `wait`, so a stall
-/// cannot deadlock the timeout/cancel path that needs the same lock to kill it.
+/// Watch the encoder without making the UI wait for a pipe or process lock.
 #[cfg(not(target_arch = "wasm32"))]
-fn wait_for_video_child(
-    child: &std::sync::Arc<std::sync::Mutex<std::process::Child>>,
-) -> std::io::Result<std::process::ExitStatus> {
+fn wait_for_video_child(mut child: Child, cancelled: &AtomicBool) -> io::Result<ExitStatus> {
     loop {
-        let status = match child.lock() {
-            Ok(mut child) => child.try_wait(),
-            Err(_) => {
-                return Err(std::io::Error::other("ffmpeg process lock was poisoned"));
-            }
-        };
-        match status {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(error) => return Err(error),
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
         }
+        if cancelled.load(Ordering::Acquire) {
+            let _ = child.kill();
+            return child.wait();
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -816,123 +873,162 @@ fn read_bounded_stderr(mut stderr: impl std::io::Read) -> Vec<u8> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 fn run_video_worker(
-    receiver: std::sync::mpsc::Receiver<VideoWorkerMessage>,
-    mut stdin: Option<std::process::ChildStdin>,
-    child: std::sync::Arc<std::sync::Mutex<std::process::Child>>,
-    stderr: Option<std::thread::JoinHandle<Vec<u8>>>,
-    temporary: PathBuf,
-    destination: PathBuf,
-    result: std::sync::mpsc::Sender<Result<(), AnimationError>>,
-    failure: std::sync::Arc<std::sync::Mutex<Option<AnimationError>>>,
-) {
-    let mut outcome = Ok(());
-    while let Ok(message) = receiver.recv() {
-        match message {
-            VideoWorkerMessage::Frame(bytes) => {
-                let Some(pipe) = stdin.as_mut() else {
-                    outcome = Err(AnimationError::External(
-                        "ffmpeg stdin is missing".to_string(),
-                    ));
-                    break;
-                };
-                if let Err(error) = pipe.write_all(&bytes) {
-                    outcome = Err(AnimationError::External(format!(
-                        "ffmpeg rejected a frame: {error}"
-                    )));
-                    break;
-                }
-            }
-            VideoWorkerMessage::Finish => break,
-            VideoWorkerMessage::Cancel => {
-                outcome = Err(AnimationError::Cancelled);
-                break;
-            }
-        }
+    receiver: &mpsc::Receiver<VideoWorkerMessage>,
+    stdin: Option<ChildStdin>,
+    status: mpsc::Receiver<io::Result<ExitStatus>>,
+    stderr: Option<mpsc::Receiver<Vec<u8>>>,
+    stage: VideoStage,
+    cancelled: &AtomicBool,
+) -> Result<VideoStage, AnimationError> {
+    let write_result = write_video_frames(receiver, stdin, cancelled);
+    if write_result.is_err() {
+        cancelled.store(true, Ordering::Release);
     }
-    drop(stdin);
-    if outcome.is_err() {
-        if let Ok(mut child) = child.lock() {
-            let _ = child.kill();
+    let status = status.recv();
+    let outcome = write_result.and_then(|()| {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(AnimationError::Cancelled);
         }
-        let _ = wait_for_video_child(&child);
-        let stderr = stderr
-            .and_then(|handle| handle.join().ok())
-            .unwrap_or_default();
-        let _ = fs::remove_file(&temporary);
-        let outcome = match outcome {
-            Err(error) => Err(AnimationError::External(append_stderr(
-                error.to_string(),
-                &stderr,
-            ))),
-            Ok(()) => Ok(()),
-        };
-        if let Ok(mut slot) = failure.lock() {
-            *slot = Some(outcome.clone().err().unwrap_or(AnimationError::Cancelled));
+        let status = status
+            .map_err(|_| AnimationError::External("ffmpeg process watcher stopped".into()))?
+            .map_err(|error| {
+                AnimationError::External(format!("could not wait for ffmpeg: {error}"))
+            })?;
+        if !status.success() {
+            return Err(AnimationError::External(format!(
+                "ffmpeg exited with {status}"
+            )));
         }
-        let _ = result.send(outcome);
-        return;
-    }
+        validate_video_output(&stage.path)?;
+        Ok(stage)
+    });
 
-    let status = wait_for_video_child(&child);
-    let stderr = stderr
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default();
-    let outcome = match status {
-        Err(error) => Err(AnimationError::External(append_stderr(
-            format!("could not wait for ffmpeg: {error}"),
-            &stderr,
-        ))),
-        Ok(status) if !status.success() => Err(AnimationError::External(append_stderr(
-            format!("ffmpeg exited with {status}"),
-            &stderr,
-        ))),
-        Ok(_) => check_video_output(&temporary, &destination),
-    };
-    if let Err(error) = &outcome {
-        let _ = fs::remove_file(&temporary);
-        if let Ok(mut slot) = failure.lock() {
-            *slot = Some(error.clone());
+    outcome.map_err(|error| match error {
+        AnimationError::External(reason) => {
+            // An inherited stderr pipe must not hold finalization or stage
+            // cleanup hostage after the encoder itself has exited.
+            let stderr = stderr
+                .and_then(|receive| receive.recv_timeout(Duration::from_millis(100)).ok())
+                .unwrap_or_default();
+            AnimationError::External(append_stderr(reason, &stderr))
         }
-    }
-    let _ = result.send(outcome);
+        error => error,
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn check_video_output(temporary: &Path, destination: &Path) -> Result<(), AnimationError> {
-    let size = match fs::metadata(temporary) {
-        Ok(metadata) => metadata.len(),
-        Err(error) => {
-            return Err(AnimationError::Io(format!(
+fn write_video_frames(
+    receiver: &mpsc::Receiver<VideoWorkerMessage>,
+    stdin: Option<ChildStdin>,
+    cancelled: &AtomicBool,
+) -> Result<(), AnimationError> {
+    let mut pipe =
+        stdin.ok_or_else(|| AnimationError::External("ffmpeg stdin is missing".into()))?;
+    while let Ok(message) = receiver.recv() {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(AnimationError::Cancelled);
+        }
+        match message {
+            VideoWorkerMessage::Frame(bytes) => pipe.write_all(&bytes).map_err(|error| {
+                AnimationError::External(format!("ffmpeg rejected a frame: {error}"))
+            })?,
+            VideoWorkerMessage::Finish => return Ok(()),
+        }
+    }
+    // Dropping the sender or cancelling is never an implicit Finish.
+    Err(AnimationError::Cancelled)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_video_output(temporary: &Path) -> Result<(), AnimationError> {
+    let size = fs::metadata(temporary)
+        .map_err(|error| {
+            AnimationError::Io(format!(
                 "could not inspect {}: {error}",
                 temporary.display()
-            )));
-        }
-    };
+            ))
+        })?
+        .len();
+    if size == 0 {
+        return Err(AnimationError::Encoder(
+            "ffmpeg produced an empty output".into(),
+        ));
+    }
     if size > ANIMATION_MAX_BYTES {
         return Err(AnimationError::Encoder(format!(
             "video is {size} bytes; the limit is {ANIMATION_MAX_BYTES}"
         )));
     }
-    atomic_replace(temporary, destination)
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl VideoFrameSink {
     fn abort(&mut self, reason: String) -> AnimationError {
-        let detail = self
-            .worker
-            .as_ref()
-            .and_then(VideoWorker::failure_text)
-            .filter(|detail| !detail.is_empty());
-        if let Some(mut worker) = self.worker.take() {
-            worker.cancel();
+        if let Some(worker) = self.worker.take()
+            && let Ok(Err(error)) = worker.result.try_recv()
+        {
+            return error;
         }
-        self.finished = true;
-        match detail {
-            Some(detail) => AnimationError::External(append_stderr(reason, detail.as_bytes())),
-            None => AnimationError::External(reason),
+        AnimationError::External(reason)
+    }
+
+    fn poll_video_finish(&mut self, now: Instant) -> Poll<Result<(), AnimationError>> {
+        if self.frames == 0 {
+            return Poll::Ready(Err(self.abort("video animation contains no frames".into())));
+        }
+        let Some(worker) = self.worker.as_ref() else {
+            return Poll::Ready(Err(AnimationError::External(
+                "ffmpeg writer is missing".into(),
+            )));
+        };
+        if matches!(self.finish_phase, VideoFinishPhase::Idle) {
+            self.finish_phase = VideoFinishPhase::Sending(now + VIDEO_FLUSH_TIMEOUT);
+        }
+        if let VideoFinishPhase::Sending(deadline) = self.finish_phase {
+            if now >= deadline {
+                return Poll::Ready(Err(self.abort(
+                    "ffmpeg did not accept the final frame flush; the export was cancelled".into(),
+                )));
+            }
+            match worker.sender.try_send(VideoWorkerMessage::Finish) {
+                Ok(()) => self.finish_phase = VideoFinishPhase::Waiting(now + VIDEO_FINISH_TIMEOUT),
+                Err(mpsc::TrySendError::Full(_)) => return Poll::Pending,
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Poll::Ready(Err(
+                        self.abort("ffmpeg writer stopped unexpectedly".into())
+                    ));
+                }
+            }
+        }
+
+        let VideoFinishPhase::Waiting(deadline) = self.finish_phase else {
+            unreachable!("finalization is waiting after it accepts Finish");
+        };
+        if now >= deadline {
+            return Poll::Ready(Err(self.abort(format!(
+                "ffmpeg did not finish within {} s",
+                VIDEO_FINISH_TIMEOUT.as_secs(),
+            ))));
+        }
+        match worker.result.try_recv() {
+            Ok(result) => {
+                self.worker = None;
+                Poll::Ready(result.and_then(|stage| {
+                    if Instant::now() >= deadline {
+                        return Err(AnimationError::External(format!(
+                            "ffmpeg did not finish within {} s",
+                            VIDEO_FINISH_TIMEOUT.as_secs(),
+                        )));
+                    }
+                    atomic_replace(&stage.path, &self.destination)
+                }))
+            }
+            Err(mpsc::TryRecvError::Empty) => Poll::Pending,
+            Err(mpsc::TryRecvError::Disconnected) => Poll::Ready(Err(
+                self.abort("ffmpeg writer stopped without a result".into())
+            )),
         }
     }
 }
@@ -940,117 +1036,139 @@ impl VideoFrameSink {
 #[cfg(not(target_arch = "wasm32"))]
 impl FrameSink for VideoFrameSink {
     fn push_frame(&mut self, rgba: &[u8], width: u32, height: u32) -> Result<(), AnimationError> {
-        if self.finished {
+        let mut frame = rgba.to_vec();
+        while let Some(pending) = self.try_push_frame(frame, width, height)? {
+            frame = pending;
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
+    fn try_push_frame(
+        &mut self,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, AnimationError> {
+        if !matches!(self.finish_phase, VideoFinishPhase::Idle) {
             return Err(AnimationError::External(
-                "ffmpeg sink is already finished".to_string(),
+                "ffmpeg video is already finalizing".into(),
             ));
         }
         if width != self.spec.width || height != self.spec.height {
             return Err(AnimationError::InvalidSpec(format!(
                 "frame is {width}x{height}; the animation is {}x{}",
-                self.spec.width, self.spec.height
+                self.spec.width, self.spec.height,
             )));
         }
-        validate_frame(rgba, width, height)?;
+        validate_frame(&rgba, width, height)?;
         let expected_frames = frame_count(&self.spec)?;
         if self.frames >= expected_frames {
             return Err(AnimationError::External(format!(
-                "more than the scheduled {expected_frames} video frames were pushed"
+                "more than the scheduled {expected_frames} video frames were pushed",
             )));
         }
+        let Some(worker) = self.worker.as_ref() else {
+            return Err(AnimationError::External("ffmpeg writer is missing".into()));
+        };
+        let now = Instant::now();
         let reason = format!("ffmpeg is not consuming frame {}", self.frames + 1);
-        let worker = self
-            .worker
-            .as_ref()
-            .ok_or_else(|| AnimationError::External("ffmpeg writer is missing".to_string()))?;
-        let deadline = std::time::Instant::now() + VIDEO_PUSH_TIMEOUT;
-        let mut frame = VideoWorkerMessage::Frame(rgba.to_vec());
-        loop {
-            match worker.sender.try_send(frame) {
-                Ok(()) => break,
-                Err(std::sync::mpsc::TrySendError::Full(message)) => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(self.abort(format!(
-                            "{reason}; the encoder stalled and the export was cancelled"
-                        )));
-                    }
-                    frame = message;
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                    return Err(self.abort(format!("{reason}; the encoder stopped unexpectedly")));
-                }
+        if self.push_deadline.is_some_and(|deadline| now >= deadline) {
+            return Err(self.abort(format!(
+                "{reason}; the encoder stalled and the export was cancelled",
+            )));
+        }
+        let byte_count = rgba.len() as u64;
+        match worker.sender.try_send(VideoWorkerMessage::Frame(rgba)) {
+            Ok(()) => {
+                self.push_deadline = None;
+                self.frames += 1;
+                self.written = self.written.saturating_add(byte_count);
+                Ok(None)
+            }
+            Err(mpsc::TrySendError::Full(VideoWorkerMessage::Frame(frame))) => {
+                self.push_deadline.get_or_insert(now + VIDEO_PUSH_TIMEOUT);
+                Ok(Some(frame))
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(self.abort(format!("{reason}; the encoder stopped unexpectedly")))
+            }
+            Err(mpsc::TrySendError::Full(VideoWorkerMessage::Finish)) => {
+                unreachable!("only a frame was submitted")
             }
         }
-        self.frames += 1;
-        self.written = self.written.saturating_add(rgba.len() as u64);
-        Ok(())
     }
 
     fn bytes_written(&self) -> u64 {
         self.written
     }
 
+    fn poll_finish(&mut self) -> Option<Poll<Result<(), AnimationError>>> {
+        Some(self.poll_video_finish(Instant::now()))
+    }
+
     fn finish(mut self: Box<Self>) -> Result<(), AnimationError> {
-        if self.finished {
-            return Err(AnimationError::External(
-                "ffmpeg sink is already finished".to_string(),
-            ));
-        }
-        if self.frames == 0 {
-            let error = self.abort("video animation contains no frames".to_string());
-            return Err(error);
-        }
-        let Some(worker) = self.worker.as_mut() else {
-            return Err(self.abort("ffmpeg writer is missing".to_string()));
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut finish = VideoWorkerMessage::Finish;
         loop {
-            match worker.sender.try_send(finish) {
-                Ok(()) => break,
-                Err(std::sync::mpsc::TrySendError::Full(message)) => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(self.abort(
-                            "ffmpeg did not accept the final frame flush; the export was cancelled"
-                                .to_string(),
-                        ));
-                    }
-                    finish = message;
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                    return Err(self.abort("ffmpeg writer stopped unexpectedly".to_string()));
-                }
-            }
-        }
-        let received = worker.result.recv_timeout(VIDEO_FINISH_TIMEOUT);
-        self.finished = true;
-        match received {
-            Ok(result) => result,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                let error = self.abort(format!(
-                    "ffmpeg did not finish within {} s",
-                    VIDEO_FINISH_TIMEOUT.as_secs()
-                ));
-                Err(error)
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let error = self.abort("ffmpeg writer stopped without a result".to_string());
-                Err(error)
+            match self.poll_video_finish(Instant::now()) {
+                Poll::Ready(result) => return result,
+                Poll::Pending => thread::sleep(Duration::from_millis(5)),
             }
         }
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for VideoFrameSink {
-    fn drop(&mut self) {
-        if !self.finished {
-            if let Some(worker) = self.worker.take() {
-                drop(worker);
-            }
-            self.finished = true;
-        }
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod video_publication_tests {
+    use super::*;
+
+    #[test]
+    fn expired_finish_discards_a_ready_video_and_preserves_the_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("output.mp4");
+        fs::write(&destination, b"old video").unwrap();
+        let stage = VideoStage::create(&destination).unwrap();
+        let stage_path = stage.path.clone();
+        fs::write(&stage.path, b"validated staged video").unwrap();
+
+        let (sender, _commands) = mpsc::sync_channel(1);
+        let (send_result, result) = mpsc::channel();
+        assert!(send_result.send(Ok(stage)).is_ok());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let deadline = Instant::now();
+        let mut sink = VideoFrameSink {
+            spec: AnimationSpec {
+                format: AnimationFormat::Mp4,
+                ..AnimationSpec::default()
+            },
+            destination: destination.clone(),
+            frames: 1,
+            written: 1,
+            worker: Some(VideoWorker {
+                sender,
+                result,
+                cancelled: Arc::clone(&cancelled),
+            }),
+            push_deadline: None,
+            finish_phase: VideoFinishPhase::Waiting(deadline),
+        };
+
+        let Poll::Ready(Err(error)) = sink.poll_video_finish(deadline) else {
+            panic!("a ready result must fail after its deadline");
+        };
+        assert!(error.to_string().contains("did not finish"));
+        assert!(cancelled.load(Ordering::Acquire));
+        assert_eq!(fs::read(&destination).unwrap(), b"old video");
+        assert!(!stage_path.exists());
+
+        // A worker delivering another result after the receiver was abandoned
+        // cannot publish or leave its own sibling stage behind.
+        let late_stage = VideoStage::create(&destination).unwrap();
+        let late_path = late_stage.path.clone();
+        let rejected = send_result
+            .send(Ok(late_stage))
+            .expect_err("receiver dropped");
+        drop(rejected);
+        assert!(!late_path.exists());
+        assert_eq!(fs::read(destination).unwrap(), b"old video");
     }
 }

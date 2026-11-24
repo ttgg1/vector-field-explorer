@@ -331,3 +331,86 @@ fn the_animation_byte_cap_reports_its_limit() {
         AnimationError::Encoder("animation output exceeds the 16-byte limit".into())
     );
 }
+
+#[test]
+fn an_encoder_retry_reuses_the_rendered_frame() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use vector_field_explorer::animation::FrameSink;
+    use vector_field_explorer::animation_job::AnimationRenderer;
+
+    struct BackpressuredSink {
+        queue_full: bool,
+        accepted: Rc<RefCell<Vec<u8>>>,
+    }
+    impl FrameSink for BackpressuredSink {
+        fn push_frame(&mut self, _: &[u8], _: u32, _: u32) -> Result<(), AnimationError> {
+            panic!("the GUI must use the nonblocking submission path");
+        }
+
+        fn try_push_frame(
+            &mut self,
+            rgba: Vec<u8>,
+            _: u32,
+            _: u32,
+        ) -> Result<Option<Vec<u8>>, AnimationError> {
+            if self.queue_full {
+                self.queue_full = false;
+                return Ok(Some(rgba));
+            }
+            self.queue_full = true;
+            self.accepted.borrow_mut().push(rgba[0]);
+            Ok(None)
+        }
+
+        fn bytes_written(&self) -> u64 {
+            0
+        }
+
+        fn finish(self: Box<Self>) -> Result<(), AnimationError> {
+            Ok(())
+        }
+    }
+
+    struct NumberedFrames(u8);
+    impl AnimationRenderer for NumberedFrames {
+        fn render(
+            &mut self,
+            _: AnimationFrame,
+            width: u32,
+            height: u32,
+            _: [f64; 4],
+        ) -> Result<Vec<u8>, AnimationError> {
+            self.0 += 1;
+            Ok(vec![self.0; (width * height * 4) as usize])
+        }
+    }
+
+    let mut app = VfApp::new();
+    app.state.set_formula("sin(t), 0, 0".into());
+    let accepted = Rc::new(RefCell::new(Vec::new()));
+    let sink = BackpressuredSink {
+        queue_full: true,
+        accepted: Rc::clone(&accepted),
+    };
+    let mut job = AnimationJob::new(
+        AnimationSpec {
+            duration: 0.5,
+            ..spec()
+        },
+        app.animation_snapshot().unwrap(),
+        Box::new(sink),
+        None,
+    )
+    .unwrap();
+    let mut renderer = NumberedFrames(0);
+
+    for expected in [0, 1, 1, 2] {
+        job.pump(&mut renderer).unwrap();
+        assert_eq!(job.frames_done(), expected);
+    }
+    job.pump(&mut renderer).unwrap();
+    assert_eq!(job.state(), AnimationJobState::Done);
+    assert_eq!(renderer.0, 2);
+    assert_eq!(accepted.borrow().as_slice(), &[1, 2]);
+}

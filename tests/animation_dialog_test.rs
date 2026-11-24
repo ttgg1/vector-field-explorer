@@ -31,7 +31,14 @@ impl Harness {
     }
 
     fn frame(&mut self, events: Vec<egui::Event>) -> egui::FullOutput {
-        let mut frame = eframe::Frame::_new_kittest();
+        self.frame_with_native(events, &mut eframe::Frame::_new_kittest())
+    }
+
+    fn frame_with_native(
+        &mut self,
+        events: Vec<egui::Event>,
+        frame: &mut eframe::Frame,
+    ) -> egui::FullOutput {
         let mut out = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -41,7 +48,7 @@ impl Harness {
                 events,
                 ..Default::default()
             },
-            |ui| eframe::App::ui(&mut self.app, ui, &mut frame),
+            |ui| eframe::App::ui(&mut self.app, ui, frame),
         );
         out.textures_delta.clear();
         out
@@ -366,5 +373,348 @@ fn a_failed_start_is_retryable_but_invalid_fields_still_block() {
             .is_some_and(|error| error.contains("budget")),
         "the validation error is still shown: {:?}",
         h.app.animation.error
+    );
+}
+
+#[cfg(unix)]
+fn animation_gpu_frame() -> Option<eframe::Frame> {
+    use eframe::{egui_wgpu, wgpu};
+
+    if std::env::var_os("VFE_ANIMATION_GPU_PROBE").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        eprintln!("GPU not requested; set VFE_ANIMATION_GPU_PROBE=1 on a GPU host");
+        return None;
+    }
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    descriptor.backends.remove(wgpu::Backends::NOOP);
+    let instance = wgpu::Instance::new(descriptor);
+    let mut native = eframe::Frame::_new_kittest();
+    native.wgpu_render_state = Some(
+        pollster::block_on(egui_wgpu::RenderState::create(
+            &egui_wgpu::WgpuConfiguration::default(),
+            &instance,
+            None,
+            egui_wgpu::RendererOptions::default(),
+        ))
+        .expect("real native animation render state"),
+    );
+    Some(native)
+}
+
+#[cfg(unix)]
+fn executable(path: &std::path::Path, source: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::write(path, source).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn start_native_video(
+    h: &mut Harness,
+    spec: vector_field_explorer::animation::AnimationSpec,
+    output: &std::path::Path,
+    program: &std::path::Path,
+) {
+    use vector_field_explorer::animation::video_sink_with_program;
+    use vector_field_explorer::animation_job::AnimationJob;
+    use vector_field_explorer::export_provenance::ExportProvenance;
+
+    let snapshot = h.app.animation_snapshot().unwrap();
+    let sink =
+        video_sink_with_program(&spec, output, &ExportProvenance::default(), program).unwrap();
+    h.app
+        .test_begin_animation_job(AnimationJob::new(spec, snapshot, sink, None).unwrap());
+}
+
+#[cfg(unix)]
+fn wait_for_video(mut predicate: impl FnMut() -> bool) {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !predicate() {
+        assert!(Instant::now() < deadline, "video test did not settle");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+fn no_video_stages(directory: &std::path::Path) -> bool {
+    directory.read_dir().unwrap().all(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_none_or(|ext| ext != "tmp")
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_a_stalled_video_finalizer_keeps_the_existing_file() {
+    use std::fs;
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use vector_field_explorer::animation::{AnimationFormat, AnimationSpec};
+
+    let Some(mut native) = animation_gpu_frame() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("output.mp4");
+    fs::write(&output, b"previous output").unwrap();
+    let program = dir.path().join("gated-ffmpeg.sh");
+    executable(
+        &program,
+        r#"#!/bin/sh
+cat >/dev/null
+for last; do :; done
+printf 'encoded video' > "$last"
+touch "${0%/*}/staged"
+while [ ! -f "${0%/*}/release" ]; do sleep 0.01; done
+touch "${0%/*}/completed"
+"#,
+    );
+    let staged = dir.path().join("staged");
+    let release = dir.path().join("release");
+
+    let mut h = Harness::new(1200.0);
+    h.open_animation_dialog_from_menu();
+    h.app.clock.set_playing(true);
+    let spec = AnimationSpec {
+        duration: 0.1,
+        fps: 1,
+        width: 64,
+        height: 64,
+        format: AnimationFormat::Mp4,
+        ..AnimationSpec::default()
+    };
+    start_native_video(&mut h, spec.clone(), &output, &program);
+
+    // If the app update blocks waiting on the encoder, release the gate so
+    // the test fails promptly instead of waiting for the production timeout.
+    let watchdog = thread::spawn({
+        let staged = staged.clone();
+        let release = release.clone();
+        move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !staged.exists() && !release.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(600));
+            if !release.exists() {
+                let _ = fs::write(release, b"watchdog");
+            }
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    h.frame_with_native(vec![], &mut native);
+    while !staged.exists() && Instant::now() < deadline {
+        h.frame_with_native(vec![], &mut native);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(staged.exists(), "encoder reached its finalization gate");
+    assert!(
+        !release.exists(),
+        "the viewport update waited for encoder completion"
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"previous output");
+    let out = h.frame_with_native(vec![], &mut native);
+    let cancel = bounds(&out, "Cancel")
+        .expect("real dialog Cancel button")
+        .center();
+    h.frame_with_native(pointer(cancel, true), &mut native);
+    // Let the encoder finish successfully while the dialog still owns the
+    // click. The cancellation on pointer release must win over its result.
+    fs::write(&release, b"test completed").unwrap();
+    let completed = dir.path().join("completed");
+    wait_for_video(|| completed.exists());
+    assert_eq!(fs::read(&output).unwrap(), b"previous output");
+    h.frame_with_native(pointer(cancel, false), &mut native);
+    h.frame_with_native(vec![], &mut native);
+
+    assert!(h.app.animation_job.is_none());
+    assert!(h.app.clock.playing);
+    assert_eq!(
+        h.app.animation.status.as_deref(),
+        Some("Animation export cancelled.")
+    );
+    watchdog.join().unwrap();
+    assert_eq!(fs::read(&output).unwrap(), b"previous output");
+
+    let retry = dir.path().join("retry-ffmpeg.sh");
+    executable(
+        &retry,
+        r#"#!/bin/sh
+cat >/dev/null
+for last; do :; done
+printf 'retry output' > "$last"
+"#,
+    );
+    start_native_video(&mut h, spec, &output, &retry);
+    wait_for_video(|| {
+        h.frame_with_native(vec![], &mut native);
+        h.app.animation_job.is_none()
+    });
+    assert_eq!(fs::read(&output).unwrap(), b"retry output");
+    wait_for_video(|| no_video_stages(dir.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_a_video_with_a_full_encoder_queue_remains_reachable() {
+    use std::fs;
+    use vector_field_explorer::animation::{AnimationFormat, AnimationSpec};
+
+    let Some(mut native) = animation_gpu_frame() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("output.webm");
+    fs::write(&output, b"previous output").unwrap();
+    let program = dir.path().join("gated-ffmpeg.sh");
+    executable(
+        &program,
+        r#"#!/bin/sh
+touch "${0%/*}/waiting-for-input"
+while [ ! -f "${0%/*}/accept-input" ]; do sleep 0.01; done
+cat >/dev/null
+for last; do :; done
+printf 'should not publish' > "$last"
+"#,
+    );
+
+    let mut h = Harness::new(1200.0);
+    h.open_animation_dialog_from_menu();
+    let spec = AnimationSpec {
+        duration: 1.0,
+        fps: 12,
+        width: 512,
+        height: 512,
+        format: AnimationFormat::Webm,
+        ..AnimationSpec::default()
+    };
+    start_native_video(&mut h, spec, &output, &program);
+    wait_for_video(|| dir.path().join("waiting-for-input").exists());
+
+    let mut previous = 0;
+    let mut cancel = None;
+    for _ in 0..10 {
+        let out = h.frame_with_native(vec![], &mut native);
+        let job = h
+            .app
+            .animation_job
+            .as_ref()
+            .expect("export remains in progress");
+        assert!(
+            !job.state().is_terminal(),
+            "a full queue must not end the app update in failure"
+        );
+        assert!(
+            job.frames_done() < job.frames_total(),
+            "gated input cannot drain the queue"
+        );
+        if job.frames_done() == previous && previous > 0 {
+            cancel = bounds(&out, "Cancel").map(|rect| rect.center());
+            break;
+        }
+        previous = job.frames_done();
+    }
+    let cancel = cancel.expect("the real Cancel control remains reachable under backpressure");
+    h.frame_with_native(pointer(cancel, true), &mut native);
+    h.frame_with_native(pointer(cancel, false), &mut native);
+    h.frame_with_native(vec![], &mut native);
+
+    assert!(h.app.animation_job.is_none());
+    assert_eq!(
+        h.app.animation.status.as_deref(),
+        Some("Animation export cancelled.")
+    );
+    fs::write(dir.path().join("accept-input"), b"test completed").unwrap();
+    wait_for_video(|| no_video_stages(dir.path()));
+    assert_eq!(fs::read(output).unwrap(), b"previous output");
+}
+
+#[cfg(unix)]
+#[test]
+fn cancel_click_beats_a_video_result_ready_on_the_same_frame() {
+    use std::{cell::Cell, fs, path::PathBuf, rc::Rc, task::Poll};
+    use vector_field_explorer::animation::{
+        AnimationError, AnimationFormat, AnimationSpec, FrameSink,
+    };
+    use vector_field_explorer::animation_job::{AnimationJob, AnimationJobState};
+
+    struct ReadyOnRelease {
+        ready: Rc<Cell<bool>>,
+        destination: PathBuf,
+    }
+    impl FrameSink for ReadyOnRelease {
+        fn push_frame(&mut self, _: &[u8], _: u32, _: u32) -> Result<(), AnimationError> {
+            Ok(())
+        }
+
+        fn bytes_written(&self) -> u64 {
+            0
+        }
+
+        fn poll_finish(&mut self) -> Option<Poll<Result<(), AnimationError>>> {
+            if !self.ready.get() {
+                return Some(Poll::Pending);
+            }
+            fs::write(&self.destination, b"finished video").unwrap();
+            Some(Poll::Ready(Ok(())))
+        }
+
+        fn finish(self: Box<Self>) -> Result<(), AnimationError> {
+            panic!("the GUI must poll this encoder");
+        }
+    }
+
+    let Some(mut native) = animation_gpu_frame() else {
+        return;
+    };
+    let mut h = Harness::new(1200.0);
+    h.open_animation_dialog_from_menu();
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("output.mp4");
+    fs::write(&destination, b"previous video").unwrap();
+    let ready = Rc::new(Cell::new(false));
+    let spec = AnimationSpec {
+        duration: 0.1,
+        fps: 1,
+        width: 64,
+        height: 64,
+        format: AnimationFormat::Mp4,
+        ..AnimationSpec::default()
+    };
+    let job = AnimationJob::new(
+        spec,
+        h.app.animation_snapshot().unwrap(),
+        Box::new(ReadyOnRelease {
+            ready: Rc::clone(&ready),
+            destination: destination.clone(),
+        }),
+        None,
+    )
+    .unwrap();
+    h.app.test_begin_animation_job(job);
+
+    h.frame_with_native(vec![], &mut native);
+    let out = h.frame_with_native(vec![], &mut native);
+    assert_eq!(
+        h.app.animation_job.as_ref().unwrap().state(),
+        AnimationJobState::Writing
+    );
+    let cancel = bounds(&out, "Cancel")
+        .expect("real dialog Cancel button")
+        .center();
+    h.frame_with_native(pointer(cancel, true), &mut native);
+    ready.set(true);
+    h.frame_with_native(pointer(cancel, false), &mut native);
+    h.frame_with_native(vec![], &mut native);
+
+    assert_eq!(fs::read(destination).unwrap(), b"previous video");
+    assert_eq!(
+        h.app.animation.status.as_deref(),
+        Some("Animation export cancelled.")
     );
 }
