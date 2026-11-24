@@ -20,10 +20,8 @@ pub const PANEL_TITLE: &str = "Typeset formula";
 const CLOSE_LABEL: &str = "Close typeset formula";
 const RESET_LABEL: &str = "Reset position";
 const NOTE: &str = "Active formula - committed values substituted";
-/// Finding F1: in a non-Formula vector mode the bar is not the live editor, so
-/// the panel labels the committed formula neutrally instead of claiming it is
-/// the active input the user is editing.
-pub const NOTE_NON_FORMULA: &str = "Committed vector formula - not the live editor in this mode";
+/// Caption for a stored Formula shown separately from a non-Formula model.
+pub const NOTE_NON_FORMULA: &str = "Inactive Formula reference";
 const FALLBACK_LABEL: &str = "linear fallback";
 
 /// Session-only panel state: nothing here enters the scene or settings envelope.
@@ -188,8 +186,17 @@ fn format_number(value: f64) -> String {
     format!("{value}")
 }
 
-fn show_ode_rhs(ui: &mut Ui, state: &State, body_height: f32) {
+fn show_ode_equation(ui: &mut Ui, state: &State, body_height: f32) {
     let scene = &state.ode;
+    if scene.source == crate::ode::OdeSource::CurrentField {
+        // The Formula preview substitutes playback time; the solver integrates
+        // the field over its own time variable.
+        ui.label("Equation unavailable for ODE using Current field.");
+        if state.ode_error.is_some() && state.ode_solution.is_some() {
+            ui.weak("The trajectory comes from the last valid solve.");
+        }
+        return;
+    }
     if state.ode_solution.is_none() {
         ui.label("ODE RHS unavailable until the model has a valid solution.");
         return;
@@ -269,19 +276,14 @@ pub fn show_slide(
                     });
                 });
                 let body_height = (viewport.height() * 0.45).max(48.0);
-                if state.field_mode == FieldMode::Ode
-                    && state.ode.source == crate::ode::OdeSource::Equations
-                {
-                    show_ode_rhs(ui, state, body_height);
+                if state.field_mode == FieldMode::Ode {
+                    show_ode_equation(ui, state, body_height);
                     return;
                 }
-                // Finding F1: only claim "active formula" where the bar is the
-                // live editor. Other vector modes get a neutral label so the
-                // committed formula stays visible without being mistaken for
-                // the editable input.
                 let note = if state.field_mode == FieldMode::Formula {
                     NOTE
                 } else {
+                    ui.label("Active equation unavailable for this mode.");
                     NOTE_NON_FORMULA
                 };
                 ui.label(note);
