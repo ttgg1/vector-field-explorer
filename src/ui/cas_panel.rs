@@ -315,12 +315,10 @@ impl CasPanelState {
 
     /// Plot the current scalar result into the active scene.
     ///
-    /// Contours replace only the scalar-view layer that draws them and leave
-    /// the CAS input and the physics model source untouched. The potential
-    /// overlay reuses the shipped potential-gradient seam and leaves the
-    /// scalar source untouched. Both bind the current committed parameters,
-    /// simulated time and live slice; neither samples during this call beyond
-    /// the ordinary visible refresh.
+    /// The latest contour result owns the CAS contour layer. The potential
+    /// overlay uses the shared gradient sampler. Both follow committed
+    /// parameters, simulated time and the live slice, and leave the manual
+    /// scalar settings and the CAS input intact.
     pub fn apply_scene(
         &mut self,
         state: &mut State,
